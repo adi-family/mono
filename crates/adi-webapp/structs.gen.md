@@ -2412,6 +2412,8 @@ pub(crate) struct LlmBackendsForm {
     pub(crate) editing: RwSignal<String>,
     pub(crate) id: RwSignal<String>,
     pub(crate) label: RwSignal<String>,
+    pub(crate) kind: RwSignal<String>,
+    pub(crate) members: RwSignal<Vec<String>>,
     pub(crate) runtime: RwSignal<String>,
     pub(crate) model: RwSignal<String>,
     pub(crate) context_tokens: RwSignal<String>,

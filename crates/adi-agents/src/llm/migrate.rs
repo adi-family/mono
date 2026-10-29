@@ -227,6 +227,8 @@ fn extract(agent: &StoredAgent) -> (LlmBackendManifest, Vec<String>) {
     (
         LlmBackendManifest {
             label: String::new(),
+            kind: crate::llm::BackendKind::Single,
+            members: Vec::new(),
             runtime: agent.manifest.runtime().clone(),
             model,
             // Nothing on an agent ever recorded a context window, so there is none to carry. Left

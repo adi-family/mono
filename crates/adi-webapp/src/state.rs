@@ -1954,6 +1954,12 @@ pub(crate) struct LlmBackendsForm {
     pub(crate) editing: RwSignal<String>,
     pub(crate) id: RwSignal<String>,
     pub(crate) label: RwSignal<String>,
+    /// `"single"` (the default) or `"group"`. The runtime, login, model, dials and the two blocks
+    /// about running out all belong to `"single"` only; a `"group"` carries [`members`](Self::members)
+    /// in their place.
+    pub(crate) kind: RwSignal<String>,
+    /// Only for `kind` `"group"`: the ordered backend ids it tries, best first.
+    pub(crate) members: RwSignal<Vec<String>>,
     pub(crate) runtime: RwSignal<String>,
     pub(crate) model: RwSignal<String>,
     /// The context window in tokens, as typed. Text rather than a number so an empty field can mean
@@ -1998,6 +2004,8 @@ impl LlmBackendsForm {
             editing: RwSignal::new(String::new()),
             id: RwSignal::new(String::new()),
             label: RwSignal::new(String::new()),
+            kind: RwSignal::new("single".to_string()),
+            members: RwSignal::new(Vec::new()),
             runtime: RwSignal::new(String::new()),
             model: RwSignal::new(String::new()),
             context_tokens: RwSignal::new(String::new()),
@@ -2023,6 +2031,8 @@ impl LlmBackendsForm {
         self.editing.set(String::new());
         self.id.set(String::new());
         self.label.set(String::new());
+        self.kind.set("single".to_string());
+        self.members.set(Vec::new());
         self.runtime.set(String::new());
         self.model.set(String::new());
         self.context_tokens.set(String::new());
@@ -2053,6 +2063,8 @@ impl LlmBackendsForm {
         self.editing.set(backend.id.clone());
         self.id.set(backend.id.clone());
         self.label.set(backend.label.clone());
+        self.kind.set(if backend.kind.is_empty() { "single".to_string() } else { backend.kind.clone() });
+        self.members.set(backend.members.clone());
         self.runtime.set(backend.runtime.clone());
         self.model.set(backend.model.clone());
         self.context_tokens.set(match backend.context_tokens {

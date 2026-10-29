@@ -184,6 +184,24 @@ fn default_probe_prompt() -> String {
     "ok".to_string()
 }
 
+/// Which of the two shapes a definition takes. [`Single`](Self::Single) is everything above this
+/// line always was: a login, a model, the dials. [`Group`](Self::Group) is new — an ordered list
+/// of other backends, named by id, with none of a single backend's own fields. A definition is one
+/// or the other, never both, and [`LlmBackends::save`] refuses a manifest that disagrees with its
+/// own `kind`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackendKind {
+    /// A login, a model, the dials — everything this file described before groups existed, and
+    /// what a definition with no `kind` line is read as.
+    #[default]
+    Single,
+    /// An ordered list of other backends — [`members`](LlmBackendManifest::members) — tried best
+    /// first. A member may itself be a group: see `docs/llm-backends.md`'s "Groups" section for how
+    /// nesting expands at resolve time and why a cycle is refused at save time.
+    Group,
+}
+
 /// A backend definition, as stored. The id is the filename, so it cannot drift from what the file
 /// is called.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -193,8 +211,17 @@ pub struct LlmBackendManifest {
     /// panel; the id is what everything else refers to.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub label: String,
+    /// `single` (the default) or `group` — see [`BackendKind`]. Absent in every manifest written
+    /// before groups existed, which is read as `single`, exactly what it always was.
+    #[serde(skip_serializing_if = "is_single")]
+    pub kind: BackendKind,
+    /// Only meaningful when [`kind`](Self::kind) is [`Group`](BackendKind::Group): the ordered
+    /// backend ids this one tries, best first, in place of a login and model of its own.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub members: Vec<String>,
     /// Which runner answers the turn: the existing [`Backend`] enum (`pty:claude`, `harness:adi`,
-    /// …). This sits *above* the runner registry and changes nothing under it.
+    /// …). This sits *above* the runner registry and changes nothing under it. Unset — the
+    /// default — on a group, which has no runtime of its own.
     pub runtime: Backend,
     /// The model this backend runs. Empty leaves the runtime's own default in place.
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -241,6 +268,11 @@ fn is_zero(value: &u64) -> bool {
     *value == 0
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde's skip_serializing_if hands us a reference
+fn is_single(kind: &BackendKind) -> bool {
+    matches!(kind, BackendKind::Single)
+}
+
 impl adi_config::Timestamped for LlmBackendManifest {
     fn created_at(&self) -> u64 {
         self.created_at
@@ -255,6 +287,13 @@ pub struct LlmBackend {
 }
 
 impl LlmBackendManifest {
+    /// Whether this is a [`BackendKind::Group`] — an ordered list of other backends rather than a
+    /// login of its own.
+    #[must_use]
+    pub fn is_group(&self) -> bool {
+        self.kind == BackendKind::Group
+    }
+
     /// The key this backend's holds are recorded under: *who is paying*, independent of the model.
     ///
     /// Two backends naming the same settings file are the same subscription and must share a hold —
@@ -262,8 +301,14 @@ impl LlmBackendManifest {
     /// derivation is deliberately ordered, most specific first, so a backend that names both a
     /// settings file and a provider is keyed on the settings file rather than on the vaguer of the
     /// two.
+    ///
+    /// A group has no login of its own — each of its members has one — so this answers the empty
+    /// string for one rather than the misleading `runtime:` a blank runtime would otherwise read as.
     #[must_use]
     pub fn credential(&self) -> String {
+        if self.is_group() {
+            return String::new();
+        }
         if let Some(settings) = clean(self.settings.as_deref()) {
             return format!("settings:{}", expand_home(&settings));
         }
@@ -424,10 +469,11 @@ impl LlmBackends {
     ///
     /// # Errors
     /// [`Error::InvalidName`] for an id that cannot be a filename, [`Error::Arguments`] when the
-    /// definition is self-contradictory, or [`Error::Config`] when it cannot be written.
+    /// definition is self-contradictory — including a group whose members are missing or cyclic —
+    /// or [`Error::Config`] when it cannot be written.
     pub fn save(&self, id: &str, mut manifest: LlmBackendManifest) -> Result<LlmBackend> {
         crate::agent::validate_name(id)?;
-        validate(&manifest)?;
+        self.validate(id, &manifest)?;
         let now = adi_config::now_unix();
         let existing = self.get(id)?;
         manifest.created_at = existing
@@ -443,44 +489,156 @@ impl LlmBackends {
 
     /// Delete a backend definition, returning whether it existed.
     ///
-    /// The caller is expected to have checked which agents name it first — this store knows
-    /// nothing about agents, deliberately, because a backend that knew its users would be a login
+    /// Refused while a group still names this one as a member — a group that silently lost a
+    /// member would not be the ordered list its operator wrote down. The caller is still expected
+    /// to have checked which *agents* name it first: this store knows nothing about agents,
+    /// deliberately, because a backend that knew its users outside its own store would be a login
     /// record and the design has none.
     ///
     /// # Errors
-    /// [`Error::Config`] on a removal failure other than not-found.
+    /// [`Error::Arguments`] when a group still lists it. [`Error::Config`] on a removal failure
+    /// other than not-found.
     pub fn delete(&self, id: &str) -> Result<bool> {
         crate::agent::validate_name(id)?;
-        Ok(self.module().remove_manifest(id)?)
-    }
-}
-
-/// Reject a definition that cannot mean what it says. Kept small: this is configuration, and a
-/// store that argues with the operator about their own dials is worse than one that lets an odd
-/// setting through.
-fn validate(manifest: &LlmBackendManifest) -> Result<()> {
-    if manifest.runtime.to_string().is_empty() {
-        return Err(Error::Arguments(
-            "a backend needs a runtime (pty:claude, harness:adi, …)".into(),
-        ));
-    }
-    for rule in &manifest.limit_rules {
-        regex::Regex::new(&rule.pattern)
-            .map_err(|e| Error::Arguments(format!("limit rule `{}`: {e}", rule.pattern)))?;
-    }
-    for key in CREDENTIAL_KEYS {
-        if manifest.params.contains_key(key) {
+        let groups = self.groups_naming(id)?;
+        if !groups.is_empty() {
             return Err(Error::Arguments(format!(
-                "`{key}` is a credential, not a dial — set it as a field, not in params"
+                "`{id}` is still a member of {} — take it out of {} first",
+                groups.join(", "),
+                if groups.len() == 1 { "that group" } else { "those groups" }
             )));
         }
+        Ok(self.module().remove_manifest(id)?)
     }
-    if manifest.params.contains_key(MODEL_KEY) {
-        return Err(Error::Arguments(
-            "`model` is a field of its own, not a dial in params".into(),
-        ));
+
+    /// Which groups name `id` as a member, directly — not recursively through a group of groups,
+    /// since each of those would refuse its own member's deletion in turn before this one is ever
+    /// reached.
+    ///
+    /// # Errors
+    /// Whatever [`list`](Self::list) returns.
+    pub fn groups_naming(&self, id: &str) -> Result<Vec<String>> {
+        Ok(self
+            .list()?
+            .into_iter()
+            .filter(|b| b.manifest.is_group() && b.manifest.members.iter().any(|m| m == id))
+            .map(|b| b.id)
+            .collect())
     }
-    Ok(())
+
+    /// Re-point every group's member list naming `from` at `to` — the group-level counterpart of
+    /// an agent row's rename. Written back through the ordinary [`save`](Self::save), so a renamed
+    /// member list is re-validated exactly as a hand-edit of it would be.
+    ///
+    /// Returns how many groups were changed.
+    ///
+    /// # Errors
+    /// Whatever [`list`](Self::list) or [`save`](Self::save) returns.
+    pub fn rename_members(&self, from: &str, to: &str) -> Result<usize> {
+        let mut moved = 0;
+        for backend in self.list()? {
+            if !backend.manifest.is_group() || !backend.manifest.members.iter().any(|m| m == from) {
+                continue;
+            }
+            let mut manifest = backend.manifest;
+            for member in &mut manifest.members {
+                if member == from {
+                    *member = to.to_string();
+                }
+            }
+            self.save(&backend.id, manifest)?;
+            moved += 1;
+        }
+        Ok(moved)
+    }
+
+    /// Reject a definition that cannot mean what it says. Kept small for a single backend: this is
+    /// configuration, and a store that argues with the operator about their own dials is worse than
+    /// one that lets an odd setting through. A group gets one more check a single backend has no
+    /// need of: every member must exist, and none of them, however deep, may lead back to `id`.
+    ///
+    /// # Errors
+    /// [`Error::Arguments`] on any of the above.
+    fn validate(&self, id: &str, manifest: &LlmBackendManifest) -> Result<()> {
+        match manifest.kind {
+            BackendKind::Single => {
+                if manifest.runtime.to_string().is_empty() {
+                    return Err(Error::Arguments(
+                        "a backend needs a runtime (pty:claude, harness:adi, …)".into(),
+                    ));
+                }
+                if !manifest.members.is_empty() {
+                    return Err(Error::Arguments(
+                        "`members` belongs to a group — set `kind = \"group\"`, or drop \
+                         `members` from a single backend"
+                            .into(),
+                    ));
+                }
+            }
+            BackendKind::Group => {
+                if !manifest.runtime.to_string().is_empty() {
+                    return Err(Error::Arguments(
+                        "a group has no runtime of its own — it names other backends instead, \
+                         so leave `runtime` unset or set `kind = \"single\"`"
+                            .into(),
+                    ));
+                }
+                if manifest.members.is_empty() {
+                    return Err(Error::Arguments(
+                        "a group needs at least one member to try".into(),
+                    ));
+                }
+                self.walk_group(manifest, &mut vec![id.to_string()])?;
+            }
+        }
+        for rule in &manifest.limit_rules {
+            regex::Regex::new(&rule.pattern)
+                .map_err(|e| Error::Arguments(format!("limit rule `{}`: {e}", rule.pattern)))?;
+        }
+        for key in CREDENTIAL_KEYS {
+            if manifest.params.contains_key(key) {
+                return Err(Error::Arguments(format!(
+                    "`{key}` is a credential, not a dial — set it as a field, not in params"
+                )));
+            }
+        }
+        if manifest.params.contains_key(MODEL_KEY) {
+            return Err(Error::Arguments(
+                "`model` is a field of its own, not a dial in params".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Depth-first walk of a group's members, checking each one exists and none of them, however
+    /// deep, loops back to a group already on `path` — `path` starts as `[id]`, the save this is
+    /// validating, so a direct self-reference is caught the same way a longer loop is.
+    ///
+    /// # Errors
+    /// [`Error::Arguments`] naming a missing member, or the full chain of a cycle.
+    fn walk_group(&self, manifest: &LlmBackendManifest, path: &mut Vec<String>) -> Result<()> {
+        for member_id in &manifest.members {
+            if path.contains(member_id) {
+                let mut cycle = path.clone();
+                cycle.push(member_id.clone());
+                return Err(Error::Arguments(format!(
+                    "group members form a cycle: {}",
+                    cycle.join(" -> ")
+                )));
+            }
+            let Some(member) = self.get(member_id)? else {
+                return Err(Error::Arguments(format!(
+                    "member `{member_id}` names no such backend"
+                )));
+            };
+            if member.manifest.is_group() {
+                path.push(member_id.clone());
+                self.walk_group(&member.manifest, path)?;
+                path.pop();
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -723,5 +881,157 @@ mod tests {
             !LimitClass::Unknown.holds(),
             "an unclassified error must not take a backend out of every chain on a guess"
         );
+    }
+
+    // -- groups (ADI-MONO-206) ---------------------------------------------------------------
+
+    fn group(members: &[&str]) -> LlmBackendManifest {
+        LlmBackendManifest {
+            kind: BackendKind::Group,
+            members: members.iter().map(ToString::to_string).collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_group_round_trips_through_the_store() {
+        let store = scratch("group-round-trip");
+        store.save("anthropic", anthropic()).expect("save base");
+        store.save("team", group(&["anthropic"])).expect("save group");
+
+        let read = store.get("team").expect("get").expect("present");
+        assert!(read.manifest.is_group());
+        assert_eq!(read.manifest.members, vec!["anthropic".to_string()]);
+        assert_eq!(read.manifest.runtime, Backend::default(), "a group has no runtime");
+    }
+
+    /// `kind` is absent in the written file for a single backend — exactly the shape every
+    /// manifest written before groups existed already has — so an old file keeps reading as
+    /// `single` without this ever appearing in it.
+    #[test]
+    fn a_single_backend_writes_no_kind_line() {
+        let text = toml::to_string_pretty(&anthropic()).expect("toml");
+        assert!(!text.contains("kind"), "{text}");
+        assert!(!text.contains("members"), "{text}");
+    }
+
+    #[test]
+    fn a_group_needs_at_least_one_member() {
+        let store = scratch("group-empty");
+        let err = store.save("team", group(&[])).expect_err("refused");
+        assert!(err.to_string().contains("at least one member"), "{err}");
+    }
+
+    #[test]
+    fn a_group_with_a_runtime_set_is_refused() {
+        let store = scratch("group-runtime");
+        store.save("anthropic", anthropic()).expect("save base");
+        let manifest = LlmBackendManifest {
+            runtime: Backend::PtyClaude,
+            ..group(&["anthropic"])
+        };
+        let err = store.save("team", manifest).expect_err("refused");
+        assert!(err.to_string().contains("no runtime of its own"), "{err}");
+    }
+
+    #[test]
+    fn a_single_backend_with_members_set_is_refused() {
+        let store = scratch("single-members");
+        let manifest = LlmBackendManifest {
+            members: vec!["anthropic".into()],
+            ..anthropic()
+        };
+        let err = store.save("anthropic", manifest).expect_err("refused");
+        assert!(err.to_string().contains("belongs to a group"), "{err}");
+    }
+
+    #[test]
+    fn a_group_naming_a_missing_member_is_refused() {
+        let store = scratch("group-missing");
+        let err = store.save("team", group(&["nowhere"])).expect_err("refused");
+        assert!(err.to_string().contains("names no such backend"), "{err}");
+    }
+
+    #[test]
+    fn a_group_cannot_name_itself_as_a_member() {
+        let store = scratch("group-self");
+        let err = store.save("team", group(&["team"])).expect_err("refused");
+        assert!(err.to_string().contains("cycle"), "{err}");
+    }
+
+    /// The accept case: a group naming another group is composition, not an error.
+    #[test]
+    fn a_group_may_name_another_group() {
+        let store = scratch("group-of-groups");
+        store.save("anthropic", anthropic()).expect("save base");
+        store.save("inner", group(&["anthropic"])).expect("save inner group");
+        store.save("outer", group(&["inner"])).expect("accepted");
+    }
+
+    /// A two-node cycle, caught however the loop closes: `a` already exists naming `b` as a
+    /// member, and saving `b` to name `a` back closes the loop — named in full, both ends.
+    #[test]
+    fn a_two_group_cycle_is_refused_with_both_ends_named() {
+        let store = scratch("group-cycle-2");
+        store.save("anthropic", anthropic()).expect("save base");
+        // `a` cannot exist yet naming `b`, since `b` would not exist to validate against — so the
+        // cycle is built the only way it can be: `a` names a real backend first, then `b` names
+        // `a`, then `a` is *resaved* to also name `b`.
+        store.save("a", group(&["anthropic"])).expect("save a");
+        store.save("b", group(&["a"])).expect("save b");
+        let err = store.save("a", group(&["b"])).expect_err("refused");
+        let text = err.to_string();
+        assert!(text.contains("cycle"), "{text}");
+        assert!(text.contains('a') && text.contains('b'), "{text}");
+    }
+
+    #[test]
+    fn deleting_a_backend_still_named_by_a_group_is_refused() {
+        let store = scratch("group-delete-guard");
+        store.save("anthropic", anthropic()).expect("save base");
+        store.save("team", group(&["anthropic"])).expect("save group");
+        let err = store.delete("anthropic").expect_err("refused");
+        assert!(err.to_string().contains("team"), "{err}");
+        // Off the group, it deletes.
+        store.delete("team").expect("delete group");
+        assert!(store.delete("anthropic").expect("now deletable"));
+    }
+
+    #[test]
+    fn groups_naming_lists_every_group_that_lists_a_backend() {
+        let store = scratch("groups-naming");
+        store.save("anthropic", anthropic()).expect("save base");
+        store.save("fast", group(&["anthropic"])).expect("save fast");
+        store.save("slow", group(&["anthropic"])).expect("save slow");
+        let mut groups = store.groups_naming("anthropic").expect("query");
+        groups.sort();
+        assert_eq!(groups, vec!["fast".to_string(), "slow".to_string()]);
+        assert!(store.groups_naming("nobody").expect("query").is_empty());
+    }
+
+    #[test]
+    fn renaming_members_repoints_every_group_that_names_the_old_id() {
+        let store = scratch("rename-members");
+        store.save("anthropic", anthropic()).expect("save base");
+        store.save("team", group(&["anthropic"])).expect("save team");
+        store.save("solo", group(&["anthropic"])).expect("save solo");
+
+        // A rename is carried out by the caller as: save the new id, repoint everything naming the
+        // old one, then delete the old one — so by the time members are repointed the new id
+        // already exists, exactly as it would by the time this is called for real.
+        store.save("anthropic-opus", anthropic()).expect("save renamed");
+        let moved = store.rename_members("anthropic", "anthropic-opus").expect("rename");
+        assert_eq!(moved, 2);
+        let team = store.get("team").expect("get").expect("present");
+        assert_eq!(team.manifest.members, vec!["anthropic-opus".to_string()]);
+        let solo = store.get("solo").expect("get").expect("present");
+        assert_eq!(solo.manifest.members, vec!["anthropic-opus".to_string()]);
+    }
+
+    /// A group has no login of its own, so its credential is blank rather than the misleading
+    /// `runtime:` an unset runtime would otherwise read as.
+    #[test]
+    fn a_groups_credential_is_blank() {
+        assert_eq!(group(&["anthropic"]).credential(), "");
     }
 }

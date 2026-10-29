@@ -45,11 +45,12 @@ pub mod prober;
 pub mod settings;
 
 pub use backend::{
-    DEFAULT_HOLD, HoldScope, LimitClass, LimitRule, LlmBackend, LlmBackendManifest, LlmBackends,
-    Probe, Resume,
+    BackendKind, DEFAULT_HOLD, HoldScope, LimitClass, LimitRule, LlmBackend, LlmBackendManifest,
+    LlmBackends, Probe, Resume,
 };
 pub use chain::{
-    AgentBackendEntry, PinnedChain, ResolvedBackend, ResolvedChain, StartAt, catalog, validate_rows,
+    AgentBackendEntry, PinnedChain, ResolvedBackend, ResolvedChain, StartAt, catalog,
+    missing_members, validate_rows,
 };
 pub use classify::{Classification, classify};
 pub use failover::{Decision, Failure, decide};

@@ -147,6 +147,19 @@ pub fn test_manifest(
     manifest: &LlmBackendManifest,
     asker: Option<Asker<'_>>,
 ) -> TestResult {
+    // A group has no runtime of its own to ask anything through — it is a list of other backends,
+    // each testable on its own. Said plainly here rather than left to the generic "no runtime set"
+    // a group's always-empty `runtime` field would otherwise fall through to, which would read as
+    // a misconfigured backend rather than the different kind it actually is.
+    if manifest.is_group() {
+        return TestResult {
+            verdict: TestVerdict::Failed {
+                error: "this is a group — test one of its members instead".to_string(),
+            },
+            elapsed_ms: 0,
+            credential: String::new(),
+        };
+    }
     let (prompt, model) = test_prompt(manifest);
 
     let start = Instant::now();
@@ -548,6 +561,22 @@ mod tests {
         );
         assert!(
             matches!(&result.verdict, TestVerdict::Failed { error } if error.contains("no runtime set")),
+            "{result:?}"
+        );
+    }
+
+    /// A group is testable only one member at a time — asked directly, before dispatch ever reaches
+    /// the generic "no runtime set" a group's empty runtime would otherwise produce.
+    #[test]
+    fn a_group_refuses_the_test_by_name_rather_than_reading_as_an_unset_runtime() {
+        let group = LlmBackendManifest {
+            kind: crate::llm::BackendKind::Group,
+            members: vec!["anthropic".into()],
+            ..LlmBackendManifest::default()
+        };
+        let result = test_manifest(&scratch_config("group-test"), &group, None);
+        assert!(
+            matches!(&result.verdict, TestVerdict::Failed { error } if error.contains("group")),
             "{result:?}"
         );
     }

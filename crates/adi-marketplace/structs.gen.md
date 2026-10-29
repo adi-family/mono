@@ -67,6 +67,7 @@ pub struct ElementOutcome {
     pub id: Option<String>,
     pub renamed: bool,
     pub note: Option<String>,
+    pub started: Option<bool>,
 }
 ```
 
@@ -276,6 +277,7 @@ pub struct BundleElementRow {
     pub name: String,
     pub description: Option<String>,
     pub id: Option<String>,
+    pub started: Option<bool>,
 }
 ```
 

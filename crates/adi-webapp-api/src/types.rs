@@ -5450,8 +5450,11 @@ pub struct ProbeDto {
 /// One backend definition on the wire — a complete way to answer a turn, under a name somebody
 /// chose. Mirrors `adi_agents::llm::LlmBackendManifest`, with the live state the page shows.
 ///
-/// A backend is flat: it is **never** built on another backend. Reuse happens in an agent's
-/// ordered list, where a row may respell the model and the dials but never the login.
+/// A single backend is flat: it is **never** built on another single backend. The one exception
+/// is [`kind`](Self::kind) `"group"` — an ordered list of other backend ids,
+/// [`members`](Self::members), with none of a single backend's own fields. An agent's ordered
+/// list may still respell the model and the dials, but never the login, whichever kind the row
+/// names.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct LlmBackendDto {
     /// The name it is known by, which is its filename in `llm/backends/`.
@@ -5459,7 +5462,21 @@ pub struct LlmBackendDto {
     /// What to call it in the interface. Blank means show the id.
     #[serde(default)]
     pub label: String,
-    /// Which runtime answers the turn — `pty:claude`, `harness:adi`, and the rest.
+    /// `"single"` (the default) or `"group"`. A group carries none of the fields below except
+    /// [`members`](Self::members); a single backend carries none of `members`.
+    #[serde(default)]
+    pub kind: String,
+    /// Only meaningful when `kind` is `"group"`: the ordered backend ids this one tries, best
+    /// first, in place of a login and model of its own.
+    #[serde(default)]
+    pub members: Vec<String>,
+    /// Which groups name this backend as a member — the group-level counterpart of
+    /// [`used_by`](Self::used_by). Computed, not stored.
+    #[serde(default)]
+    pub member_of: Vec<String>,
+    /// Which runtime answers the turn — `pty:claude`, `harness:adi`, and the rest. Empty for a
+    /// group, which has no runtime of its own.
+    #[serde(default)]
     pub runtime: String,
     #[serde(default)]
     pub model: String,
@@ -5581,6 +5598,14 @@ pub struct SaveLlmBackend {
     pub id: String,
     #[serde(default)]
     pub label: String,
+    /// `"single"` (the default) or `"group"` — see [`LlmBackendDto::kind`].
+    #[serde(default)]
+    pub kind: String,
+    /// Only for `kind` `"group"`: the ordered member ids. Empty for a single backend.
+    #[serde(default)]
+    pub members: Vec<String>,
+    /// Required for `kind` `"single"`; left empty for a group, which has no runtime of its own.
+    #[serde(default)]
     pub runtime: String,
     #[serde(default)]
     pub model: String,

@@ -4317,6 +4317,8 @@ pub struct MarketplaceBundleElement {
     pub description: Option<String>,
     #[serde(default)]
     pub id: Option<String>,
+    #[serde(default)]
+    pub started: Option<bool>,
 }
 ```
 
@@ -4383,7 +4385,7 @@ pub struct InstallMarketplaceApp {
     pub new_project: Option<String>,
     #[serde(default)]
     pub name: String,
-    #[serde(default)]
+    #[serde(default = "default_start_true")]
     pub start: bool,
 }
 ```
@@ -5016,6 +5018,13 @@ pub struct LlmBackendDto {
     pub id: String,
     #[serde(default)]
     pub label: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub members: Vec<String>,
+    #[serde(default)]
+    pub member_of: Vec<String>,
+    #[serde(default)]
     pub runtime: String,
     #[serde(default)]
     pub model: String,
@@ -5136,6 +5145,11 @@ pub struct SaveLlmBackend {
     pub id: String,
     #[serde(default)]
     pub label: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub members: Vec<String>,
+    #[serde(default)]
     pub runtime: String,
     #[serde(default)]
     pub model: String,

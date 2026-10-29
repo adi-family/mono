@@ -625,17 +625,18 @@ mod tests {
             MarketplaceCommand::Install {
                 ref spec,
                 ref name,
-                start: false,
+                no_start: false,
                 project: None,
                 new_project: None,
             } if spec == "adi/crm" && name.as_deref() == Some("Sales CRM")
         ));
-        // The name is optional — the entry's own is the default — and starting is opt-in.
-        let cli =
-            Cli::try_parse_from(["marketplace", "install", "adi/crm", "--start"]).expect("install");
+        // The name is optional — the entry's own is the default — and starting is the default,
+        // opted out of with `--no-start`.
+        let cli = Cli::try_parse_from(["marketplace", "install", "adi/crm", "--no-start"])
+            .expect("install");
         assert!(matches!(
             cli.command,
-            MarketplaceCommand::Install { ref name, start: true, .. } if name.is_none()
+            MarketplaceCommand::Install { ref name, no_start: true, .. } if name.is_none()
         ));
 
         let cli = Cli::try_parse_from(["marketplace", "start", "crm"]).expect("start");

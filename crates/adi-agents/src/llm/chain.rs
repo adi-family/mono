@@ -214,11 +214,11 @@ impl ResolvedChain {
         let mut entries = Vec::new();
         let mut missing = Vec::new();
         for (index, row) in rows.iter().enumerate() {
-            let Some(manifest) = catalog.get(&row.backend) else {
-                missing.push(row.backend.clone());
-                continue;
-            };
-            entries.push(resolve_row(row, manifest, index + 1));
+            let mut seen = Vec::new();
+            let leaves = expand(&row.backend, catalog, &mut seen, &mut missing)?;
+            for (leaf_id, manifest) in leaves {
+                entries.push(resolve_row(row, leaf_id, manifest, index + 1));
+            }
         }
 
         if entries.is_empty() {
@@ -229,22 +229,38 @@ impl ResolvedChain {
         }
 
         if let Some(only) = only {
-            let kept = entries
-                .iter()
-                .find(|entry| entry.backend == only)
-                .cloned()
-                .ok_or_else(|| {
-                    Error::Arguments(format!("`only` names `{only}`, which this agent does not list"))
-                })?;
-            return Ok(Self {
-                entries: vec![kept],
-                missing,
-            });
+            // A direct match is a leaf — a single backend, or one named inside an expanded group —
+            // and keeps the old, exact behaviour. Falling back to the row it was *configured* under
+            // is what lets `only` name a group: every leaf that row expanded to, in its own order,
+            // which is the group's own internal failover with nothing else from the agent's list
+            // behind it.
+            let kept: Vec<ResolvedBackend> = if let Some(single) =
+                entries.iter().find(|entry| entry.backend == only)
+            {
+                vec![single.clone()]
+            } else if let Some(row_index) = rows.iter().position(|row| row.backend == only) {
+                entries
+                    .iter()
+                    .filter(|entry| entry.row == row_index + 1)
+                    .cloned()
+                    .collect()
+            } else {
+                return Err(Error::Arguments(format!(
+                    "`only` names `{only}`, which this agent does not list"
+                )));
+            };
+            return Ok(Self { entries: kept, missing });
         }
 
         if let Some(start_at) = start_at {
             let at = match start_at {
-                StartAt::Id(id) => entries.iter().position(|entry| &entry.backend == id),
+                StartAt::Id(id) => entries.iter().position(|entry| &entry.backend == id).or_else(|| {
+                    // Not a leaf directly — try the row it was *configured* under, which is how
+                    // `start_at` can name a group rather than one of its members by id.
+                    rows.iter()
+                        .position(|row| &row.backend == id)
+                        .and_then(|row_index| entries.iter().position(|entry| entry.row == row_index + 1))
+                }),
                 StartAt::Row(row) => entries.iter().position(|entry| entry.row == *row),
             }
             .ok_or_else(|| {
@@ -423,13 +439,79 @@ pub(crate) fn qualify_credential(credential: &str, user: Option<&str>) -> String
     }
 }
 
-/// Lay one row's overrides over its base backend.
+/// Expand one backend id into the ordered **single** backends it ultimately answers through —
+/// itself, if it already is one; each of its members, expanded the same way in order, if it is a
+/// group. A group naming another group is composition, not an error: `docs/llm-backends.md`'s
+/// "Groups" section is where that is decided.
+///
+/// `seen` is the chain of group ids from this row's own top-level backend down to here; a cycle
+/// among them is refused at save time ([`LlmBackends::save`](crate::llm::LlmBackends::save)), but
+/// this still refuses one defensively — a hand-edited store can still write one, and an error here
+/// beats looping forever. `missing` collects every id, at any depth, that names nothing in
+/// `catalog`, so a dangling reference inside a group is reported exactly like a dangling row is.
+///
+/// # Errors
+/// [`Error::Arguments`] on a cycle, named in full.
+fn expand<'a>(
+    id: &str,
+    catalog: &'a BTreeMap<String, LlmBackendManifest>,
+    seen: &mut Vec<String>,
+    missing: &mut Vec<String>,
+) -> Result<Vec<(&'a str, &'a LlmBackendManifest)>> {
+    let Some((key, manifest)) = catalog.get_key_value(id) else {
+        missing.push(id.to_string());
+        return Ok(Vec::new());
+    };
+    if !manifest.is_group() {
+        return Ok(vec![(key.as_str(), manifest)]);
+    }
+    if seen.iter().any(|s| s == id) {
+        let mut cycle = seen.clone();
+        cycle.push(id.to_string());
+        return Err(Error::Arguments(format!(
+            "group members form a cycle: {}",
+            cycle.join(" -> ")
+        )));
+    }
+    seen.push(id.to_string());
+    let mut out = Vec::new();
+    for member in &manifest.members {
+        out.extend(expand(member, catalog, seen, missing)?);
+    }
+    seen.pop();
+    Ok(out)
+}
+
+/// Every id, at any depth, that naming `id` would eventually fail to find in `catalog` — the
+/// reporting-only counterpart of [`expand`]'s own `missing` accumulator, usable on its own when a
+/// row's expansion coming up completely empty would otherwise make the strict
+/// [`ResolvedChain::resolve`] fail outright with a message rather than a value this page can read.
+///
+/// A cycle, if `catalog` somehow has one despite the save-time check, is not raised here: what
+/// members had already been found missing before the cycle was reached is still worth showing,
+/// and the cycle itself is loud enough wherever a real resolve is attempted.
+#[must_use]
+pub fn missing_members(id: &str, catalog: &BTreeMap<String, LlmBackendManifest>) -> Vec<String> {
+    let mut missing = Vec::new();
+    let _ = expand(id, catalog, &mut Vec::new(), &mut missing);
+    missing
+}
+
+/// Lay one row's overrides over one leaf backend — the base backend itself for an ordinary row, or
+/// one member of an expanded group for a row naming one.
 ///
 /// Precedence, low to high: the backend's own fields, then the row's overrides. The launch's own
 /// overrides ride on top later, through the existing [`RunOverrides`](crate::RunOverrides)
 /// mechanism, which is applied to the patched agent — so all three layers land in the same place
-/// and in the right order without this function knowing about the third.
-fn resolve_row(row: &AgentBackendEntry, manifest: &LlmBackendManifest, position: usize) -> ResolvedBackend {
+/// and in the right order without this function knowing about the third. A row naming a group
+/// applies its overrides to *every* leaf that group expands to — the natural reading of "what this
+/// row changes about the backend it names", whether that backend is one login or several.
+fn resolve_row(
+    row: &AgentBackendEntry,
+    leaf_id: &str,
+    manifest: &LlmBackendManifest,
+    position: usize,
+) -> ResolvedBackend {
     let mut arguments = manifest.arguments();
     for (key, value) in &row.overrides {
         // A row may not repoint the credential. Dropped rather than raised: an operator hand-editing
@@ -446,7 +528,7 @@ fn resolve_row(row: &AgentBackendEntry, manifest: &LlmBackendManifest, position:
         .unwrap_or_default()
         .to_string();
     ResolvedBackend {
-        backend: row.backend.clone(),
+        backend: leaf_id.to_string(),
         row: position,
         label: manifest.label.clone(),
         runtime: manifest.runtime.clone(),
@@ -495,6 +577,7 @@ pub fn catalog(backends: Vec<LlmBackend>) -> BTreeMap<String, LlmBackendManifest
 mod tests {
     use super::*;
     use crate::agent::{Agent, AgentManifest};
+    use crate::llm::backend::BackendKind;
 
     fn catalog_of(entries: &[(&str, LlmBackendManifest)]) -> BTreeMap<String, LlmBackendManifest> {
         entries
@@ -954,5 +1037,157 @@ mod tests {
             .expect("toml");
         let back: BTreeMap<String, Vec<AgentBackendEntry>> = toml::from_str(&text).expect("parse");
         assert_eq!(back["backends"], rows());
+    }
+
+    // -- groups (ADI-MONO-206) ---------------------------------------------------------------
+
+    fn group(members: &[&str]) -> LlmBackendManifest {
+        LlmBackendManifest {
+            kind: BackendKind::Group,
+            members: members.iter().map(ToString::to_string).collect(),
+            ..Default::default()
+        }
+    }
+
+    /// An agent row naming a group expands to every member, best first, in the group's own order —
+    /// exactly as if the agent had listed each of them as its own row.
+    #[test]
+    fn a_row_naming_a_group_expands_to_its_members_in_order() {
+        let mut catalog = three();
+        catalog.insert("team".to_string(), group(&["codex", "glm"]));
+        let rows = vec![AgentBackendEntry::new("anthropic"), AgentBackendEntry::new("team")];
+        let chain = ResolvedChain::resolve(&rows, &catalog, None, None).expect("resolve");
+        let ids: Vec<&str> = chain.entries.iter().map(|e| e.backend.as_str()).collect();
+        assert_eq!(ids, ["anthropic", "codex", "glm"]);
+        assert!(chain.missing.is_empty());
+    }
+
+    /// Both expanded leaves keep the configured row number of the group row they came from — one
+    /// configured row, several concrete entries, and a notice can still say which row that was.
+    #[test]
+    fn expanded_leaves_share_the_groups_configured_row_number() {
+        let mut catalog = three();
+        catalog.insert("team".to_string(), group(&["codex", "glm"]));
+        let rows = vec![AgentBackendEntry::new("anthropic"), AgentBackendEntry::new("team")];
+        let chain = ResolvedChain::resolve(&rows, &catalog, None, None).expect("resolve");
+        assert_eq!(chain.entries[0].row, 1);
+        assert_eq!(chain.entries[1].row, 2);
+        assert_eq!(chain.entries[2].row, 2);
+    }
+
+    /// A row's overrides apply to a group the same way they apply to a single backend: laid onto
+    /// every leaf it expands to, since that is what "this row's overrides" means when the row names
+    /// several concrete backends rather than one.
+    #[test]
+    fn a_rows_overrides_apply_to_every_leaf_of_an_expanded_group() {
+        let mut catalog = three();
+        catalog.insert("team".to_string(), group(&["codex", "glm"]));
+        let rows = vec![AgentBackendEntry {
+            backend: "team".into(),
+            overrides: [("thinking".to_string(), serde_json::json!("high"))]
+                .into_iter()
+                .collect(),
+        }];
+        let chain = ResolvedChain::resolve(&rows, &catalog, None, None).expect("resolve");
+        assert_eq!(chain.entries.len(), 2);
+        for entry in &chain.entries {
+            assert_eq!(entry.arguments["thinking"], serde_json::json!("high"), "{entry:?}");
+        }
+    }
+
+    /// A group naming another group is composition: it expands all the way down to single
+    /// backends, in order.
+    #[test]
+    fn a_group_of_groups_expands_all_the_way_down() {
+        let mut catalog = three();
+        catalog.insert("inner".to_string(), group(&["glm", "codex"]));
+        catalog.insert("outer".to_string(), group(&["anthropic", "inner"]));
+        let rows = vec![AgentBackendEntry::new("outer")];
+        let chain = ResolvedChain::resolve(&rows, &catalog, None, None).expect("resolve");
+        let ids: Vec<&str> = chain.entries.iter().map(|e| e.backend.as_str()).collect();
+        assert_eq!(ids, ["anthropic", "glm", "codex"]);
+    }
+
+    /// A member missing at any depth is reported the same way a missing top-level row is — the
+    /// chain still resolves on what is left, and says what it dropped.
+    #[test]
+    fn a_missing_member_at_any_depth_is_reported_not_an_error() {
+        let mut catalog = three();
+        catalog.insert("team".to_string(), group(&["codex", "ghost"]));
+        let rows = vec![AgentBackendEntry::new("team")];
+        let chain = ResolvedChain::resolve(&rows, &catalog, None, None).expect("resolve");
+        assert_eq!(chain.entries.len(), 1);
+        assert_eq!(chain.entries[0].backend, "codex");
+        assert_eq!(chain.missing, vec!["ghost".to_string()]);
+    }
+
+    /// `LlmBackends::save` refuses a cycle, but a hand-edited store can still write one — resolve
+    /// time still catches it rather than looping forever.
+    #[test]
+    fn a_cycle_discovered_at_resolve_time_is_an_error_not_an_infinite_loop() {
+        let mut catalog = three();
+        catalog.insert("a".to_string(), group(&["b"]));
+        catalog.insert("b".to_string(), group(&["a"]));
+        let rows = vec![AgentBackendEntry::new("a")];
+        let err = ResolvedChain::resolve(&rows, &catalog, None, None).expect_err("refused");
+        assert!(err.to_string().contains("cycle"), "{err}");
+    }
+
+    /// `start_at` naming a group rotates to its first member, with the rest of the agent's list —
+    /// including the rest of the group — still behind it.
+    #[test]
+    fn start_at_can_name_a_group_and_rotates_to_its_first_member() {
+        let mut catalog = three();
+        catalog.insert("team".to_string(), group(&["codex", "glm"]));
+        let rows = vec![AgentBackendEntry::new("anthropic"), AgentBackendEntry::new("team")];
+        let chain = ResolvedChain::resolve(&rows, &catalog, Some(&StartAt::Id("team".into())), None)
+            .expect("resolve");
+        let ids: Vec<&str> = chain.entries.iter().map(|e| e.backend.as_str()).collect();
+        assert_eq!(ids, ["codex", "glm", "anthropic"]);
+    }
+
+    /// `only` naming a group keeps the group's own internal order intact — its failover, not just
+    /// its first member — with nothing else from the agent's list behind it.
+    #[test]
+    fn only_naming_a_group_keeps_its_whole_order_with_nothing_else_behind_it() {
+        let mut catalog = three();
+        catalog.insert("team".to_string(), group(&["codex", "glm"]));
+        let rows = vec![AgentBackendEntry::new("anthropic"), AgentBackendEntry::new("team")];
+        let chain = ResolvedChain::resolve(&rows, &catalog, None, Some("team")).expect("resolve");
+        let ids: Vec<&str> = chain.entries.iter().map(|e| e.backend.as_str()).collect();
+        assert_eq!(ids, ["codex", "glm"]);
+    }
+
+    /// `only` naming one specific leaf still pins to exactly that leaf, even when it sits inside a
+    /// group — the direct match keeps its old, exact meaning.
+    #[test]
+    fn only_naming_a_leaf_inside_a_group_still_pins_to_just_that_leaf() {
+        let mut catalog = three();
+        catalog.insert("team".to_string(), group(&["codex", "glm"]));
+        let rows = vec![AgentBackendEntry::new("team")];
+        let chain = ResolvedChain::resolve(&rows, &catalog, None, Some("glm")).expect("resolve");
+        assert_eq!(chain.entries.len(), 1);
+        assert_eq!(chain.entries[0].backend, "glm");
+    }
+
+    /// `missing_members` is the reporting-only counterpart of `expand`'s own accumulator — it
+    /// works whether or not the row's own expansion comes up with anything at all, which is the
+    /// one case `ResolvedChain::resolve` cannot report on, because that case is exactly what makes
+    /// it fail outright instead of returning a value.
+    #[test]
+    fn missing_members_reports_nested_gaps_even_when_nothing_resolves() {
+        let mut catalog = three();
+        catalog.insert("team".to_string(), group(&["ghost"]));
+        assert_eq!(missing_members("team", &catalog), vec!["ghost".to_string()]);
+        assert!(
+            ResolvedChain::resolve(&[AgentBackendEntry::new("team")], &catalog, None, None).is_err(),
+            "the strict resolve has nothing left to try, and says so by failing",
+        );
+    }
+
+    #[test]
+    fn missing_members_is_empty_for_a_backend_that_resolves_cleanly() {
+        assert!(missing_members("anthropic", &three()).is_empty());
+        assert!(missing_members("nowhere", &three()) == vec!["nowhere".to_string()]);
     }
 }

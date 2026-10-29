@@ -14,6 +14,11 @@ there was no way to ask "does this backend actually work?" by hand for the vast 
 backends — every vendor-CLI one — without launching a real agent against it. See "The on-demand
 test" for what it is and how it differs from the prober.
 
+**Groups, built 2026-10-29 (ADI-MONO-206)**, revisit one of the original "out of scope for v1"
+calls: a backend definition is now one of two kinds, `single` (everything above) or `group` — a
+reusable, ordered list of other backends, nameable from an agent's own list exactly like a
+single backend. See "Groups" below for what it is and is not.
+
 ## The problem
 
 A model choice is currently welded to an agent definition. `adi-agent`, `adi-agent-glm` and
@@ -185,6 +190,56 @@ every turn:
 
 The chain is resolved once and pinned so that an agent or a backend edited mid-conversation
 does not change what a live chat is talking to.
+
+## Groups (ADI-MONO-206)
+
+**Shipped after v1** — the original draft of this document put "named, shareable chains" out
+of scope and declined it; the operator revisited that call, and this section is what shipped.
+The call that stands from v1 is narrower than the whole idea it first stood for: a *backend*
+still never inherits from another backend (one flat object, no `extends`). What groups add is
+a **second kind of backend definition**, so the reuse a chain already gave one agent is not
+locked to that one agent's own list.
+
+```toml
+# llm/backends/team-fast.toml — a group, not a login
+kind    = "group"
+members = ["anthropic", "codex", "glm"]
+```
+
+`kind` is `single` (the default — everything this document described before this section) or
+`group`. A group carries **only** `label` and `members`: no runtime, no login, no model, no
+dials, no limit rules, no probe — those belong to the single backends it names, not to the
+list itself. `LlmBackends::save` refuses a manifest that mixes the two (a group with a
+`runtime` set, or a single backend with `members` set).
+
+**A member may itself be a group.** Composition, not an error: an agent's row naming
+`team-fast` which names `team-fast-codex` which names `codex` expands, at resolve time, all the
+way down to the single backends at the leaves — in order, depth-first. That is deliberately
+*more* than a flat alias: it is how a `team-all-anthropic` can be built once out of
+`team-anthropic-opus` and `team-anthropic-sonnet`, and then named by every other group that
+wants "every Anthropic login" without re-listing each one.
+
+**Missing references and cycles are refused at save time**, named in full — `member
+"ghost" names no such backend`, or `group members form a cycle: a -> b -> a` — the same
+standard `docs/embedding-backends.md`'s same-model fallback check holds its own save to.
+Deleting a backend still named by a group is refused the same way a backend an agent still
+lists is: take it out of the group (or the agent) first. A hand-edited store can still land a
+stale reference or, in principle, a cycle; resolution refuses that defensively too rather than
+looping forever, and reports a missing member exactly as a dangling agent row is reported.
+
+**An agent's row may name a group.** It expands to every one of the group's leaves, in the
+group's own order, as if the agent had listed each of them — the row's own `overrides` apply
+to each one, the same way they apply to a single backend's own fields. `start_at` and `only`
+may still name a specific leaf directly (unchanged); naming the *group's* own id instead
+rotates to its first leaf (`start_at`) or pins to its whole internal order with nothing else
+from the agent's list behind it (`only`) — the group's own failover, isolated from the rest of
+the chain.
+
+**What a group is not.** It has no credential of its own (`credential()` answers the empty
+string, never the misleading `runtime:` an unset runtime would otherwise read as), no live
+hold (each leaf's hold is its own), and nothing to probe or test directly — `llm test
+<group-id>` reports plainly that it is a group rather than failing as a misconfigured backend
+with no runtime.
 
 ## Holds
 
@@ -385,6 +440,11 @@ context-shrink warning). A backend already on the list is not offered again, so 
 cannot build a chain that names one twice. The new-chat screen gains the `start_at` picker
 and the overrides.
 
+**The backend editor's first question, after groups,** is Single or Group. A single backend's
+form is unchanged; a group's is just its ordered members, with the same up/down/remove controls
+and an add-picker that excludes the group's own id. Both kinds sit in the one flat table, a
+group's row showing a member count where a single's shows its runtime and model.
+
 ## Migration
 
 - **Model configuration leaves the agent entirely.** `settings`, `provider`, `base_url` and
@@ -504,9 +564,12 @@ restart first — which, since the boot hook, is usually all there is to do.
 
 ## Out of scope for v1
 
-Inheritance between backends (`extends` — declined: configuration, not programming) ·
-named, shareable chains ("order presets" — could exist, declined) · listing one backend
-twice with different models as a *UI* feature (legal in a hand-edited file, never offered
-or documented) · context compaction on handoff · cost-aware routing (cheapest entry that
-can do the job) · per-project chain policy · sharing hold state between machines over the
-mesh.
+Inheritance between backends (`extends` — declined: configuration, not programming; still
+declined for a *single* backend after groups — see "Groups" above for what shipped instead) ·
+listing one backend twice with different models as a *UI* feature (legal in a hand-edited
+file, never offered or documented) · context compaction on handoff · cost-aware routing
+(cheapest entry that can do the job) · per-project chain policy · sharing hold state between
+machines over the mesh.
+
+~~Named, shareable chains ("order presets" — could exist, declined)~~ — shipped as **groups**,
+see above (ADI-MONO-206).

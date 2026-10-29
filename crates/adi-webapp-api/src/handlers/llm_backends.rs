@@ -16,6 +16,7 @@
 
 use adi_agents::llm::{
     Holds, LimitRule, LlmBackendManifest, LlmBackends, LlmSettings, Probe, ResolvedChain, catalog,
+    missing_members,
 };
 use adi_agents::{Agents, Backend, Error as AgentStoreError};
 
@@ -65,7 +66,14 @@ pub fn llm_backends(store: &Agents) -> Response {
             })
             .map(|agent| agent.name.clone())
             .collect();
-        out.push(backend_dto(backend, hold.as_ref(), used_by));
+        // Which groups name this one — the group-level counterpart of `used_by`, read the same way:
+        // straight off the definitions, rather than kept on the backend itself.
+        let member_of: Vec<String> = backends
+            .iter()
+            .filter(|group| group.manifest.is_group() && group.manifest.members.contains(&backend.id))
+            .map(|group| group.id.clone())
+            .collect();
+        out.push(backend_dto(backend, hold.as_ref(), used_by, member_of));
     }
 
     // The two things only a *pair* of records can say: a row naming nothing, and a chain that
@@ -79,10 +87,15 @@ pub fn llm_backends(store: &Agents) -> Response {
             continue;
         }
         for row in &agent.manifest.backends {
-            if !known.contains_key(&row.backend) {
+            // `missing_members` reports both the row's own id, if that names nothing at all, and
+            // anything missing *inside* it should it be a group — one call covers what used to be
+            // two separate checks, and it works even when every row on the agent comes up empty,
+            // which is exactly the case that makes `ResolvedChain::resolve` below fail outright
+            // rather than return anything to read.
+            for missing in missing_members(&row.backend, &known) {
                 dangling.push(DanglingRowDto {
                     agent: agent.name.clone(),
-                    backend: row.backend.clone(),
+                    backend: missing,
                 });
             }
         }
@@ -140,6 +153,9 @@ pub fn save_llm_backend(store: &Agents, body: &[u8]) -> Response {
         if let Err(e) = repoint_rows(store, &from, &id) {
             return Response::from(&e);
         }
+        if let Err(e) = registry.rename_members(&from, &id) {
+            return Response::from(&e);
+        }
         if let Err(e) = registry.delete(&from) {
             return Response::from(&e);
         }
@@ -149,8 +165,11 @@ pub fn save_llm_backend(store: &Agents, body: &[u8]) -> Response {
 
 /// `POST /api/llm/backends/delete` — remove a backend definition, then report the fresh registry.
 ///
-/// Refused while an agent still names it. A dangling row is not an error a run reports — the chain
-/// simply skips it — so deleting out from under one would take an agent's model away and say
+/// Refused while an agent still names it, or while a group still names it as a member — both
+/// checked here, as the same `409`, before [`LlmBackends::delete`] is ever called (which refuses
+/// the group case too, as a `400`, the backstop for a caller that skips this check — the CLI's own
+/// delete does). A dangling reference is not an error a run reports — the chain simply skips it —
+/// so deleting out from under one would take an agent's model (or a group's member) away and say
 /// nothing until it next tried to answer.
 #[must_use]
 pub fn delete_llm_backend(store: &Agents, body: &[u8]) -> Response {
@@ -174,6 +193,20 @@ pub fn delete_llm_backend(store: &Agents, body: &[u8]) -> Response {
         );
     }
     let registry = LlmBackends::with_config(store.config().clone());
+    match registry.groups_naming(id) {
+        Ok(groups) if !groups.is_empty() => {
+            return error(
+                409,
+                &format!(
+                    "{id} is still a member of {} — take it out of {} first",
+                    groups.join(", "),
+                    if groups.len() == 1 { "that group" } else { "those groups" }
+                ),
+            );
+        }
+        Ok(_) => {}
+        Err(e) => return Response::from(&e),
+    }
     match registry.delete(id) {
         Ok(true) => llm_backends(store),
         Ok(false) => error(404, &format!("no backend named {id}")),
@@ -267,6 +300,13 @@ pub fn test_llm_backend(store: &Agents, body: &[u8], user: Option<&str>) -> Resp
 fn manifest_from(req: SaveLlmBackend) -> LlmBackendManifest {
     LlmBackendManifest {
         label: req.label.trim().to_string(),
+        kind: from_wire(&req.kind),
+        members: req
+            .members
+            .into_iter()
+            .map(|m| m.trim().to_string())
+            .filter(|m| !m.is_empty())
+            .collect(),
         runtime: Backend::from(req.runtime.trim()),
         model: req.model.trim().to_string(),
         context_tokens: req.context_tokens,
@@ -315,11 +355,15 @@ fn backend_dto(
     backend: &adi_agents::llm::LlmBackend,
     hold: Option<&adi_agents::llm::Hold>,
     used_by: Vec<String>,
+    member_of: Vec<String>,
 ) -> LlmBackendDto {
     let m = &backend.manifest;
     LlmBackendDto {
         id: backend.id.clone(),
         label: m.label.clone(),
+        kind: wire(&m.kind),
+        members: m.members.clone(),
+        member_of,
         runtime: m.runtime.to_string(),
         model: m.model.clone(),
         context_tokens: m.context_tokens,
@@ -423,10 +467,13 @@ fn now_unix() -> u64 {
 }
 
 impl FromBody for SaveLlmBackend {
-    const EXPECTED: &'static str = "expected JSON body { \"id\": \"…\", \"runtime\": \"pty:claude|harness:adi|…\", \"model\"?: \"…\", … } with a non-empty id and runtime";
+    const EXPECTED: &'static str = "expected JSON body { \"id\": \"…\", \"kind\": \"single\", \"runtime\": \"pty:claude|harness:adi|…\", \"model\"?: \"…\", … } with a non-empty id, or { \"id\": \"…\", \"kind\": \"group\", \"members\": [\"…\"] } for a group";
 
+    // `runtime` is no longer required here: a group validly sends none, and the deeper
+    // `LlmBackends::save` already refuses a single backend with no runtime, or a group with no
+    // members, by name — one check rather than two that could disagree.
     fn is_complete(&self) -> bool {
-        !self.id.trim().is_empty() && !self.runtime.trim().is_empty()
+        !self.id.trim().is_empty()
     }
 }
 
@@ -449,7 +496,11 @@ impl FromBody for TestLlmBackend {
 
     fn is_complete(&self) -> bool {
         !self.id.trim().is_empty()
-            || self.draft.as_ref().is_some_and(|d| !d.runtime.trim().is_empty())
+            || self.draft.as_ref().is_some_and(|d| {
+                // A group draft names no runtime at all — `test_manifest` itself answers that
+                // test with a plain "this is a group" verdict rather than refusing the request.
+                d.kind.trim() == "group" || !d.runtime.trim().is_empty()
+            })
     }
 }
 
@@ -725,5 +776,150 @@ mod tests {
             test_llm_backend(&store, br#"{"draft":{"id":"x","runtime":""}}"#, None).status,
             400
         );
+    }
+
+    // -- groups (ADI-MONO-206) ---------------------------------------------------------------
+
+    fn save_group(store: &Agents, id: &str, members: &[&str]) -> Response {
+        save_llm_backend(
+            store,
+            json!({ "id": id, "kind": "group", "members": members }).to_string().as_bytes(),
+        )
+    }
+
+    #[test]
+    fn a_group_round_trips_through_the_registry() {
+        let store = scratch();
+        save(&store, "anthropic", "claude-opus-5", "~/.claude/a.json");
+        let Response { status, body } = save_group(&store, "team", &["anthropic"]);
+        assert_eq!(status, 200, "{body}");
+
+        let v: Value = serde_json::from_str(&body).unwrap();
+        let group = v["backends"].as_array().unwrap().iter().find(|b| b["id"] == "team").unwrap();
+        assert_eq!(group["kind"], "group");
+        assert_eq!(group["members"], json!(["anthropic"]));
+        assert_eq!(group["runtime"], "", "a group has no runtime");
+    }
+
+    /// A group's own save needs no `runtime` at all — the relaxed `is_complete` check this
+    /// relies on must not let a single backend through without one; `a_body_naming_no_runtime_is_a_400`
+    /// pins that half, this pins the other.
+    #[test]
+    fn a_group_save_with_no_runtime_is_accepted() {
+        let store = scratch();
+        save(&store, "anthropic", "claude-opus-5", "~/.claude/a.json");
+        assert_eq!(save_group(&store, "team", &["anthropic"]).status, 200);
+    }
+
+    #[test]
+    fn a_group_naming_a_missing_member_is_a_400() {
+        let store = scratch();
+        let Response { status, body } = save_group(&store, "team", &["nowhere"]);
+        assert_eq!(status, 400, "{body}");
+        assert!(body.contains("no such backend"), "{body}");
+    }
+
+    #[test]
+    fn a_group_cycle_is_a_400_naming_the_loop() {
+        let store = scratch();
+        let Response { status, body } = save_group(&store, "team", &["team"]);
+        assert_eq!(status, 400, "{body}");
+        assert!(body.contains("cycle"), "{body}");
+    }
+
+    /// A nested group member that no longer exists is surfaced as a dangling reference against
+    /// the agent that listed the *group* — not just a plain top-level row.
+    #[test]
+    fn a_dangling_member_inside_a_group_is_reported_against_the_agent_that_lists_the_group() {
+        let store = scratch();
+        save(&store, "anthropic", "claude-opus-5", "~/.claude/a.json");
+        save_group(&store, "team", &["anthropic"]);
+        agent_with_rows(&store, "reviewer", &["team"]);
+
+        // Remove the member out from under the group by writing the file directly — the API
+        // itself refuses this (`delete` guards it), so a hand-edited store is the only way one
+        // goes missing, and that is exactly the case this reports rather than crashes on.
+        LlmBackends::with_config(store.config().clone()).delete("anthropic").unwrap_err();
+        std::fs::remove_file(
+            LlmBackends::with_config(store.config().clone())
+                .dir()
+                .join("anthropic.toml"),
+        )
+        .unwrap();
+
+        let v: Value = serde_json::from_str(&llm_backends(&store).body).unwrap();
+        let dangling = v["dangling"].as_array().unwrap();
+        assert_eq!(dangling.len(), 1, "{v}");
+        assert_eq!(dangling[0]["agent"], "reviewer");
+        assert_eq!(dangling[0]["backend"], "anthropic");
+    }
+
+    #[test]
+    fn a_group_still_named_by_another_group_is_not_deleted() {
+        let store = scratch();
+        save(&store, "anthropic", "claude-opus-5", "~/.claude/a.json");
+        save_group(&store, "inner", &["anthropic"]);
+        save_group(&store, "outer", &["inner"]);
+
+        let Response { status, body } = delete_llm_backend(&store, br#"{"id":"inner"}"#);
+        assert_eq!(status, 409, "{body}");
+        assert!(body.contains("outer"), "{body}");
+    }
+
+    /// `member_of` is the group-level counterpart of `used_by` — read the same way, straight off
+    /// the definitions.
+    #[test]
+    fn member_of_lists_every_group_naming_a_backend() {
+        let store = scratch();
+        save(&store, "anthropic", "claude-opus-5", "~/.claude/a.json");
+        save_group(&store, "fast", &["anthropic"]);
+        save_group(&store, "slow", &["anthropic"]);
+
+        let v: Value = serde_json::from_str(&llm_backends(&store).body).unwrap();
+        let backend = v["backends"].as_array().unwrap().iter().find(|b| b["id"] == "anthropic").unwrap();
+        let mut member_of: Vec<&str> =
+            backend["member_of"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+        member_of.sort_unstable();
+        assert_eq!(member_of, ["fast", "slow"]);
+    }
+
+    /// A rename carries every group that named the old id, the same as it carries every agent
+    /// row.
+    #[test]
+    fn a_rename_carries_every_group_that_named_it() {
+        let store = scratch();
+        save(&store, "glm", "glm-4.6", "~/.claude/glm.json");
+        save_group(&store, "team", &["glm"]);
+
+        let Response { status, body } = save_llm_backend(
+            &store,
+            json!({"id": "zai", "runtime": "harness:adi", "model": "glm-4.6",
+                   "settings": "~/.claude/glm.json", "rename_from": "glm"})
+            .to_string()
+            .as_bytes(),
+        );
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(
+            LlmBackends::with_config(store.config().clone())
+                .get("team")
+                .unwrap()
+                .unwrap()
+                .manifest
+                .members,
+            vec!["zai".to_string()]
+        );
+    }
+
+    /// A group draft is testable (always a `200`), but answers plainly that it is a group rather
+    /// than reading as a misconfigured single backend with no runtime.
+    #[test]
+    fn testing_a_group_draft_answers_that_it_is_a_group() {
+        let store = scratch();
+        let Response { status, body } =
+            test_llm_backend(&store, br#"{"draft":{"id":"team","kind":"group","members":["x"]}}"#, None);
+        assert_eq!(status, 200, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["verdict"], "failed", "{body}");
+        assert!(v["message"].as_str().unwrap().contains("group"), "{body}");
     }
 }

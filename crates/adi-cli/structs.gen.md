@@ -949,8 +949,12 @@ pub(crate) enum LlmCommand {
     },
     Save {
         id: String,
+        #[arg(long, default_value = "single")]
+        kind: String,
+        #[arg(long = "member")]
+        members: Vec<String>,
         #[arg(long)]
-        runtime: String,
+        runtime: Option<String>,
         #[arg(long)]
         label: Option<String>,
         #[arg(long)]
@@ -1210,8 +1214,8 @@ pub(crate) enum MarketplaceCommand {
         spec: String,
         #[arg(long, value_name = "NAME")]
         name: Option<String>,
-        #[arg(long)]
-        start: bool,
+        #[arg(long = "no-start")]
+        no_start: bool,
         #[arg(long, value_name = "ID")]
         project: Option<String>,
         #[arg(long = "new-project", value_name = "NAME", conflicts_with = "project")]

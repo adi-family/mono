@@ -168,6 +168,14 @@ fn describe(
         }
         .into_any();
     };
+    if b.kind == "group" {
+        // A group has no runtime or model of its own to describe — it expands into its own
+        // members at resolve time, best first, with this row's overrides laid onto every one of
+        // them.
+        let n = b.members.len();
+        let text = format!("group \u{00b7} {n} member{}", if n == 1 { "" } else { "s" });
+        return view! { <span class="adi-agents__chain-meta">{text}</span> }.into_any();
+    }
     let model = overrides
         .get(MODEL)
         .and_then(|v| v.as_str().map(str::to_string))

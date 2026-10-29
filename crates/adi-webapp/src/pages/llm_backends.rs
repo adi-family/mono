@@ -20,7 +20,7 @@ use adi_webapp_api::types::{
     AgentFieldOwner, AgentFormField, AgentFormFieldKind, AgentFormSpec, ContextWarningDto,
     LimitRuleDto, LlmBackendDto, LlmBackendsDto, ProbeDto, SaveLlmBackend, SaveLlmSettings,
 };
-use adi_ui::{Row as TableRow, Table};
+use adi_ui::{Icon, Lucide, Row as TableRow, Table};
 use leptos::prelude::*;
 
 use wasm_bindgen_futures::spawn_local;
@@ -175,17 +175,26 @@ fn rows_view(state: State, form: LlmBackendsForm) -> AnyView {
             });
             let delete_id = b.id.clone();
             let used_by = b.used_by.len();
+            let member_of = b.member_of.len();
             let delete = menu_item(state, "Delete", true, move || {
                 let id = delete_id.clone();
-                // The server refuses this while an agent still lists it; saying so here saves the
-                // round trip and, more to the point, names the consequence before the click.
-                let question = if used_by == 0 {
-                    format!("Delete the backend {id}?")
-                } else {
-                    format!(
+                // The server refuses this while an agent still lists it, or while a group still
+                // names it as a member; saying so here saves the round trip and, more to the
+                // point, names the consequence before the click.
+                let question = match (used_by, member_of) {
+                    (0, 0) => format!("Delete the backend {id}?"),
+                    (0, _) => format!(
+                        "{id} is still a member of {member_of} group(s), which will refuse the \
+                         delete. Try anyway?"
+                    ),
+                    (_, 0) => format!(
                         "{id} is still listed by {used_by} agent(s), which will refuse the \
                          delete. Try anyway?"
-                    )
+                    ),
+                    (_, _) => format!(
+                        "{id} is still listed by {used_by} agent(s) and {member_of} group(s), \
+                         which will refuse the delete. Try anyway?"
+                    ),
                 };
                 if !confirm(&question) {
                     return;
@@ -219,6 +228,23 @@ fn name_of(b: &LlmBackendDto) -> String {
 /// One backend's cell under `col`. Matching the header text — the same key the sort uses — is what
 /// lets the user hide and reorder columns without the row builder knowing about it.
 fn cell(col: &str, b: &LlmBackendDto) -> AnyView {
+    // A group has none of a single backend's own login, model, dials, context or live hold — it
+    // is a list, not a subscription — so most columns read as a plain dash rather than the blank
+    // a group's always-empty fields would otherwise draw. `Runtime` is the one column that still
+    // says something about a group: how many members it has.
+    if b.kind == "group" {
+        match col {
+            "Runtime" => {
+                let n = b.members.len();
+                let text = format!("group \u{00b7} {n} member{}", if n == 1 { "" } else { "s" });
+                return view! { <span class="adi-mono adi-muted">{text}</span> }.into_any();
+            }
+            "Login" | "Model" | "Dials" | "Context" | "Status" => {
+                return view! { <span class="adi-muted">"\u{2014}"</span> }.into_any();
+            }
+            _ => {} // "Backend" and "Used by" read the same whichever kind this is.
+        }
+    }
     match col {
         "Runtime" => view! { <span class="adi-mono adi-muted">{b.runtime.clone()}</span> }.into_any(),
         "Login" => view! {
@@ -442,19 +468,25 @@ fn editor_view(state: State, form: LlmBackendsForm) -> AnyView {
             }>
                 <div class="adi-form adi-form--first">
                     <TextField id="llmb-id" label="Name" mono=true placeholder="anthropic"
-                        hint="What agents list it by, and its filename in llm/backends/. \
-                              Renaming it re-points every agent row that names it."
+                        hint="What agents (or other groups) list it by, and its filename in \
+                              llm/backends/. Renaming it re-points every agent row and group \
+                              member that names it."
                         value=form.id />
                     <TextField id="llmb-label" label="Shown as" placeholder="Anthropic \u{b7} Opus"
                         field_class="adi-field--grow" value=form.label />
-                    {runtime_picker(schema, form)}
+                    {kind_picker(form)}
+                    {move || (form.kind.get() == "single").then(|| runtime_picker(schema, form))}
                 </div>
 
-                {move || runtime_sections(form, schema)}
+                {move || if form.kind.get() == "group" {
+                    group_members_view(state, form)
+                } else {
+                    runtime_sections(form, schema)
+                }}
 
                 <div class="adi-form">
                     <button class="adi-btn adi-btn--primary" type="submit"
-                        prop:disabled=move || form.busy.get() || form.runtime.get().is_empty()>
+                        prop:disabled=move || form.busy.get() || !form_is_fillable(form)>
                         {move || if form.editing.get().is_empty() { "Add backend" } else { "Save backend" }}
                     </button>
                     <button class="adi-btn adi-btn--ghost" type="button"
@@ -473,6 +505,39 @@ fn editor_view(state: State, form: LlmBackendsForm) -> AnyView {
             </form>
             {flash_view(state.flash)}
         </section>
+    }
+    .into_any()
+}
+
+/// Whether the form, as it stands, has enough to submit — a runtime for a single backend, at
+/// least one member for a group. Mirrors the two checks `LlmBackends::save` makes, so the button
+/// disables for the same reason a save would otherwise be refused.
+fn form_is_fillable(form: LlmBackendsForm) -> bool {
+    if form.kind.get() == "group" {
+        !form.members.get().is_empty()
+    } else {
+        !form.runtime.get().is_empty()
+    }
+}
+
+/// The first question of all: a single backend (a login, a model, its dials) or a group (an
+/// ordered list of other backends). Everything else on the form depends on this.
+fn kind_picker(form: LlmBackendsForm) -> AnyView {
+    view! {
+        <div class="adi-field">
+            <label class="adi-field__label" for="llmb-kind">"Kind"</label>
+            {field_hint(
+                "A single backend is a login and a model. A group is an ordered list of other \
+                 backends, tried best first \u{2014} the same order an agent's own list uses, \
+                 reusable across every agent that wants it."
+            )}
+            <select class="adi-input" id="llmb-kind"
+                prop:value=move || form.kind.get()
+                on:change=move |ev| form.kind.set(event_target_value(&ev))>
+                <option value="single">"Single backend"</option>
+                <option value="group">"Group of backends"</option>
+            </select>
+        </div>
     }
     .into_any()
 }
@@ -535,6 +600,178 @@ fn runtime_sections(form: LlmBackendsForm, schema: Memo<Option<AgentFormSpec>>) 
         {probe_view(form)}
     }
     .into_any()
+}
+
+// ------------------------------------------------------------------ groups
+
+/// The group's whole configuration: the ordered members, and the picker that adds to it. A group
+/// carries nothing else — no login, no model, no dials, no limit rules, no probe — because each of
+/// those belongs to the single backends it names, not to the list itself.
+fn group_members_view(state: State, form: LlmBackendsForm) -> AnyView {
+    view! {
+        <div class="adi-field">
+            <span class="adi-field__label">"Members"</span>
+            {field_hint(
+                "Tried best first, the same order an agent's own list uses. A member may itself \
+                 be a group \u{2014} it expands to its own members in place, in order \u{2014} \
+                 but it may not, directly or through another group, lead back here."
+            )}
+            {move || group_rows_view(state, form)}
+            {move || group_add_view(state, form)}
+        </div>
+    }
+    .into_any()
+}
+
+/// The ordered list itself, or the line that says there is none yet.
+fn group_rows_view(state: State, form: LlmBackendsForm) -> AnyView {
+    let members = form.members.get();
+    if members.is_empty() {
+        return view! {
+            <p class="adi-hint">"No members yet \u{2014} add one below."</p>
+        }
+        .into_any();
+    }
+    let registry = llm_registry(state);
+    let total = members.len();
+    view! {
+        <ol class="adi-agents__chain">
+            {members.iter().enumerate()
+                .map(|(i, id)| group_row_view(form, i, id, total, &registry))
+                .collect::<Vec<_>>()}
+        </ol>
+    }
+    .into_any()
+}
+
+/// One member: its position, what it is, and the three things you can do to it. Up/down buttons
+/// rather than drag — reordering a handful of members is the common edit, and these work from a
+/// keyboard and on a touch screen alike.
+fn group_row_view(
+    form: LlmBackendsForm,
+    i: usize,
+    id: &str,
+    total: usize,
+    registry: &[LlmBackendDto],
+) -> AnyView {
+    let id = id.to_string();
+    let known = registry.iter().find(|b| b.id == id);
+    let (first, last) = (i == 0, i + 1 >= total);
+    view! {
+        <li class="adi-agents__chain-row">
+            <span class="adi-agents__chain-pos adi-tabnums">{(i + 1).to_string()}</span>
+            <span class="adi-agents__chain-name adi-mono">{id.clone()}</span>
+            {describe_member(known)}
+            <span class="adi-spacer"></span>
+            <button class="adi-btn adi-btn--icon-sm" type="button" title="move up"
+                prop:disabled=first
+                on:click=move |_| form.members.update(|m| move_member(m, i, i.saturating_sub(1)))>
+                <Icon icon=Lucide::ArrowUp label="Move up"/>
+            </button>
+            <button class="adi-btn adi-btn--icon-sm" type="button" title="move down"
+                prop:disabled=last
+                on:click=move |_| form.members.update(|m| move_member(m, i, i + 1))>
+                <Icon icon=Lucide::ArrowDown label="Move down"/>
+            </button>
+            <button class="adi-btn adi-btn--icon-sm" type="button" title="remove this member"
+                on:click=move |_| { form.members.update(|m| { m.remove(i); }); }>
+                <Icon icon=Lucide::X label="Remove"/>
+            </button>
+        </li>
+    }
+    .into_any()
+}
+
+/// What a member actually is, in one line: its kind, its runtime (or its own member count, if it
+/// is a group), and the model where it has one. Named plainly when the registry does not have it
+/// — a dangling member is reported here exactly as a dangling agent row is on the agent page.
+fn describe_member(known: Option<&LlmBackendDto>) -> AnyView {
+    let Some(b) = known else {
+        return view! {
+            <span class="adi-agents__chain-gone" title="no backend of this name is registered">
+                "not found \u{2014} this member is skipped"
+            </span>
+        }
+        .into_any();
+    };
+    if b.kind == "group" {
+        let text = format!("group of {}", b.members.len());
+        return view! { <span class="adi-agents__chain-meta">{text}</span> }.into_any();
+    }
+    let mut parts = vec![b.runtime.clone()];
+    if !b.model.is_empty() {
+        parts.push(b.model.clone());
+    }
+    view! { <span class="adi-agents__chain-meta">{parts.join(" \u{00b7} ")}</span> }.into_any()
+}
+
+/// The picker that adds one member, offering every backend this group does not already name and
+/// is not itself — the escape hatch against the one cycle the client can check cheaply. A deeper
+/// cycle through another group is still possible to type here; the save refuses it by name.
+fn group_add_view(state: State, form: LlmBackendsForm) -> AnyView {
+    let registry = llm_registry(state);
+    if registry.is_empty() {
+        return view! {
+            <p class="adi-hint">"No backends are registered yet \u{2014} save one of those first."</p>
+        }
+        .into_any();
+    }
+    let self_id = form.id.get();
+    let members = form.members.get();
+    let free: Vec<LlmBackendDto> = registry
+        .into_iter()
+        .filter(|b| b.id != self_id && !members.iter().any(|m| m == &b.id))
+        .collect();
+    if free.is_empty() {
+        return view! {
+            <p class="adi-hint">"Every other registered backend is already a member."</p>
+        }
+        .into_any();
+    }
+    let first = free[0].id.clone();
+    let picked = RwSignal::new(first);
+    view! {
+        <div class="adi-agents__chain-add">
+            <select class="adi-input" aria-label="Member to add"
+                prop:value=move || picked.get()
+                on:change=move |ev| picked.set(event_target_value(&ev))>
+                {free.into_iter().map(|b| {
+                    let label = if b.label.is_empty() { b.id.clone() } else {
+                        format!("{} \u{2014} {}", b.id, b.label)
+                    };
+                    view! { <option value=b.id.clone()>{label}</option> }
+                }).collect::<Vec<_>>()}
+            </select>
+            <button class="adi-btn" type="button"
+                on:click=move |_| {
+                    let id = picked.get_untracked();
+                    if id.is_empty() {
+                        return;
+                    }
+                    form.members.update(|m| {
+                        if !m.contains(&id) {
+                            m.push(id);
+                        }
+                    });
+                }>"Add member"</button>
+        </div>
+    }
+    .into_any()
+}
+
+/// The registry as this page reads it — empty until `/api/llm/backends` has landed.
+fn llm_registry(state: State) -> Vec<LlmBackendDto> {
+    state.llm_backends.get().map(|b| b.backends).unwrap_or_default()
+}
+
+/// Move the member at `from` to `to`, keeping every other member's order. Out-of-range indices are
+/// left alone rather than clamped: a click that landed nowhere should change nothing.
+fn move_member(members: &mut Vec<String>, from: usize, to: usize) {
+    if from >= members.len() || to >= members.len() || from == to {
+        return;
+    }
+    let member = members.remove(from);
+    members.insert(to, member);
 }
 
 // ------------------------------------------------------------------- login
@@ -1156,6 +1393,27 @@ fn body_from_form(state: State, form: LlmBackendsForm) -> Result<SaveLlmBackend,
     if id.is_empty() {
         return Err("Give the backend a name.".to_string());
     }
+    let editing = form.editing.get();
+    let renaming = !editing.is_empty() && editing != id;
+
+    // A group sends none of a single backend's own fields — whatever is still sitting in those
+    // signals from before a kind switch is not this save's business, and the server's own
+    // `LlmBackends::save` refuses a group carrying any of them anyway.
+    if form.kind.get() == "group" {
+        let members = form.members.get();
+        if members.is_empty() {
+            return Err("A group needs at least one member.".to_string());
+        }
+        return Ok(SaveLlmBackend {
+            id,
+            label: form.label.get().trim().to_string(),
+            kind: "group".to_string(),
+            members,
+            rename_from: renaming.then_some(editing),
+            ..SaveLlmBackend::default()
+        });
+    }
+
     let runtime = form.runtime.get().trim().to_string();
     let spec = spec(state);
     let params = dial_params(form, spec.as_ref())?;
@@ -1178,11 +1436,11 @@ fn body_from_form(state: State, form: LlmBackendsForm) -> Result<SaveLlmBackend,
         login("base_url", form.base_url.get()),
         login("api_key_env", form.api_key_env.get()),
     );
-    let editing = form.editing.get();
-    let renaming = !editing.is_empty() && editing != id;
     Ok(SaveLlmBackend {
         id: id.clone(),
         label: form.label.get().trim().to_string(),
+        kind: "single".to_string(),
+        members: Vec::new(),
         runtime,
         model: form.model.get().trim().to_string(),
         context_tokens: form.context_tokens.get().trim().parse().unwrap_or(0),
@@ -1203,7 +1461,7 @@ fn body_from_form(state: State, form: LlmBackendsForm) -> Result<SaveLlmBackend,
             model: Some(form.probe_model.get().trim().to_string()),
             prompt: form.probe_prompt.get().trim().to_string(),
         }),
-        rename_from: renaming.then(|| editing.clone()),
+        rename_from: renaming.then_some(editing),
     })
 }
 
@@ -1453,7 +1711,7 @@ fn short(credential: &str) -> String {
 mod tests {
     use super::{
         AgentFieldOwner, AgentFormField, AgentFormFieldKind, AgentFormSpec, SWEEP_CHOICES,
-        declared_dials, dial_value, fields_for, parse_params, short, tokens,
+        declared_dials, dial_value, fields_for, move_member, parse_params, short, tokens,
     };
 
     fn field(name: &str, owner: AgentFieldOwner, ids: &[&str], providers: &[&str]) -> AgentFormField {
@@ -1598,5 +1856,32 @@ mod tests {
     #[test]
     fn the_sweep_choices_offer_switching_it_off() {
         assert!(SWEEP_CHOICES.iter().any(|(secs, _)| *secs == 0));
+    }
+
+    // -- groups (ADI-MONO-206) ---------------------------------------------------------------
+
+    #[test]
+    fn moving_a_member_down_keeps_everything_else_in_order() {
+        let mut members = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        move_member(&mut members, 0, 2);
+        assert_eq!(members, vec!["b".to_string(), "c".to_string(), "a".to_string()]);
+    }
+
+    #[test]
+    fn moving_a_member_up_keeps_everything_else_in_order() {
+        let mut members = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        move_member(&mut members, 2, 0);
+        assert_eq!(members, vec!["c".to_string(), "a".to_string(), "b".to_string()]);
+    }
+
+    /// A move that lands nowhere — out of range, or onto the member it started from — changes
+    /// nothing, the same rule the agent chain editor's own `move_row` follows.
+    #[test]
+    fn a_member_move_that_lands_nowhere_changes_nothing() {
+        let mut members = vec!["a".to_string(), "b".to_string()];
+        move_member(&mut members, 1, 1);
+        move_member(&mut members, 0, 9);
+        move_member(&mut members, 9, 0);
+        assert_eq!(members, vec!["a".to_string(), "b".to_string()]);
     }
 }

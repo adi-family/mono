@@ -11,8 +11,8 @@
 
 use adi_core::Adi;
 use adi_core::llm::{
-    Hold, HoldKey, Holds, LimitRule, LlmBackend, LlmBackendManifest, LlmBackends, LlmSettings,
-    Probe, Prober, Verdict, holds::clock, migrate, test_backend,
+    BackendKind, Hold, HoldKey, Holds, LimitRule, LlmBackend, LlmBackendManifest, LlmBackends,
+    LlmSettings, Probe, Prober, Verdict, holds::clock, migrate, test_backend,
 };
 use clap::Subcommand;
 
@@ -42,10 +42,18 @@ pub(crate) enum LlmCommand {
     Save {
         /// The id agents name in their rows. Also the filename, so it is a single path segment.
         id: String,
+        /// `single` (the default — a login, a model, the dials) or `group` (an ordered list of
+        /// other backends, given with `--member`). The two never mix: a group has no runtime,
+        /// model, login or dials of its own.
+        #[arg(long, default_value = "single")]
+        kind: String,
+        /// Only for `--kind group`: one member, best first. Repeatable; store order is try order.
+        #[arg(long = "member")]
+        members: Vec<String>,
         /// Which runner answers the turn: `harness:adi`, `harness:claude-sdk`, `pty:claude`,
-        /// `process:codex`, …
+        /// `process:codex`, … Required for `--kind single`; a group has none of its own.
         #[arg(long)]
-        runtime: String,
+        runtime: Option<String>,
         /// What a human calls it, shown in the panel.
         #[arg(long)]
         label: Option<String>,
@@ -173,6 +181,8 @@ pub(crate) fn run_llm(adi: Adi, command: LlmCommand) -> Result<(), String> {
                         serde_json::json!({
                             "id": backend.id,
                             "label": backend.manifest.label,
+                            "kind": kind_str(backend.manifest.kind),
+                            "members": backend.manifest.members,
                             "runtime": backend.manifest.runtime.to_string(),
                             "model": backend.manifest.model,
                             "credential": backend.manifest.credential(),
@@ -186,6 +196,10 @@ pub(crate) fn run_llm(adi: Adi, command: LlmCommand) -> Result<(), String> {
                 println!("No backends yet. Create one with `adi-mono llm save <id> --runtime …`.");
             } else {
                 for backend in &backends {
+                    if backend.manifest.is_group() {
+                        println!("{} — group: {}", backend.id, backend.manifest.members.join(" -> "));
+                        continue;
+                    }
                     let held = live_hold(&holds, &backend.manifest)
                         .map_or_else(String::new, |hold| format!("  [{}]", hold.describe()));
                     println!(
@@ -207,6 +221,8 @@ pub(crate) fn run_llm(adi: Adi, command: LlmCommand) -> Result<(), String> {
         }
         LlmCommand::Save {
             id,
+            kind,
+            members,
             runtime,
             label,
             model,
@@ -227,7 +243,13 @@ pub(crate) fn run_llm(adi: Adi, command: LlmCommand) -> Result<(), String> {
             }
             let manifest = LlmBackendManifest {
                 label: clean(label).unwrap_or_default(),
-                runtime: runtime.trim().into(),
+                kind: parse_kind(&kind)?,
+                members: members
+                    .into_iter()
+                    .map(|m| m.trim().to_string())
+                    .filter(|m| !m.is_empty())
+                    .collect(),
+                runtime: clean(runtime).unwrap_or_default().into(),
                 model: clean(model).unwrap_or_default(),
                 context_tokens: context_tokens.unwrap_or_default(),
                 settings: clean(settings),
@@ -246,24 +268,36 @@ pub(crate) fn run_llm(adi: Adi, command: LlmCommand) -> Result<(), String> {
                 .map_err(|e| e.to_string())?;
             if let Some(from) = from {
                 let moved = repoint_rows(adi, &from, &saved.id)?;
+                let moved_groups = registry
+                    .rename_members(&from, &saved.id)
+                    .map_err(|e| e.to_string())?;
                 registry.delete(&from).map_err(|e| e.to_string())?;
                 println!(
-                    "Renamed {from} to {}, and re-pointed {moved} agent row{}.",
+                    "Renamed {from} to {}, re-pointed {moved} agent row{} and {moved_groups} group{}.",
                     saved.id,
                     if moved == 1 { "" } else { "s" },
+                    if moved_groups == 1 { "" } else { "s" },
                 );
             }
-            println!(
-                "Saved backend {} — {} on {}.",
-                saved.id,
-                blank(&saved.manifest.model, "the runtime's default model"),
-                saved.manifest.runtime,
-            );
-            if saved.manifest.limit_rules.is_empty() {
+            if saved.manifest.is_group() {
                 println!(
-                    "It has no limit rules, so it will never reroute: every failure on it reads as \
-                     unknown and stops the conversation."
+                    "Saved group {} — tries {}, in order.",
+                    saved.id,
+                    saved.manifest.members.join(" -> "),
                 );
+            } else {
+                println!(
+                    "Saved backend {} — {} on {}.",
+                    saved.id,
+                    blank(&saved.manifest.model, "the runtime's default model"),
+                    saved.manifest.runtime,
+                );
+                if saved.manifest.limit_rules.is_empty() {
+                    println!(
+                        "It has no limit rules, so it will never reroute: every failure on it reads \
+                         as unknown and stops the conversation."
+                    );
+                }
             }
         }
         LlmCommand::Delete { id } => {
@@ -539,6 +573,11 @@ fn live_hold(holds: &Holds, manifest: &LlmBackendManifest) -> Option<Hold> {
 fn print_backend(backend: &LlmBackend, holds: &Holds) {
     let m = &backend.manifest;
     println!("{} — {}", backend.id, blank(&m.label, "(no label)"));
+    if m.is_group() {
+        println!("kind            group");
+        println!("members         {}", m.members.join(" -> "));
+        return;
+    }
     println!("runtime         {}", m.runtime);
     println!("model           {}", blank(&m.model, "(the runtime's own)"));
     println!("credential      {}", m.credential());
@@ -623,6 +662,23 @@ fn repoint_rows(adi: Adi, from: &str, to: &str) -> Result<usize, String> {
         moved += 1;
     }
     Ok(moved)
+}
+
+/// Read `--kind` as the enum it names — `single` or `group`, either case, trimmed.
+fn parse_kind(value: &str) -> Result<BackendKind, String> {
+    match value.trim().to_lowercase().as_str() {
+        "single" => Ok(BackendKind::Single),
+        "group" => Ok(BackendKind::Group),
+        other => Err(format!("--kind must be `single` or `group`, not `{other}`")),
+    }
+}
+
+/// `--kind`'s own spelling, back out — what `llm backends --json` and `llm show --json` report.
+fn kind_str(kind: BackendKind) -> &'static str {
+    match kind {
+        BackendKind::Single => "single",
+        BackendKind::Group => "group",
+    }
 }
 
 /// Read `--limit-rules` as the same JSON array the file and the API take.
@@ -740,5 +796,50 @@ mod tests {
         let only_prompt = probe(None, Some("ping".into())).expect("a probe");
         assert_eq!(only_prompt.model, None, "probed on the backend's own model");
         assert_eq!(only_prompt.prompt, "ping");
+    }
+
+    // -- groups (ADI-MONO-206) ---------------------------------------------------------------
+
+    /// `--kind` defaults to `single`, so every save command written before groups existed still
+    /// parses exactly as it always did.
+    #[test]
+    fn save_defaults_to_kind_single_with_no_members() {
+        let LlmCommand::Save { kind, members, runtime, .. } =
+            parse(&["save", "anthropic", "--runtime", "pty:claude"])
+        else {
+            panic!("expected save");
+        };
+        assert_eq!(kind, "single");
+        assert!(members.is_empty());
+        assert_eq!(runtime, Some("pty:claude".to_string()));
+    }
+
+    /// A group save takes no runtime at all and an ordered, repeatable `--member`.
+    #[test]
+    fn a_group_save_takes_members_and_no_runtime() {
+        let LlmCommand::Save { kind, members, runtime, .. } = parse(&[
+            "save", "team", "--kind", "group", "--member", "codex", "--member", "glm",
+        ]) else {
+            panic!("expected save");
+        };
+        assert_eq!(kind, "group");
+        assert_eq!(members, vec!["codex".to_string(), "glm".to_string()]);
+        assert_eq!(runtime, None);
+    }
+
+    #[test]
+    fn parse_kind_accepts_either_case_and_refuses_anything_else() {
+        assert_eq!(parse_kind("single").unwrap(), BackendKind::Single);
+        assert_eq!(parse_kind("GROUP").unwrap(), BackendKind::Group);
+        assert_eq!(parse_kind(" group ").unwrap(), BackendKind::Group);
+        let err = parse_kind("chain").unwrap_err();
+        assert!(err.contains("single") && err.contains("group"), "{err}");
+    }
+
+    #[test]
+    fn kind_str_is_the_inverse_of_parse_kind() {
+        for kind in [BackendKind::Single, BackendKind::Group] {
+            assert_eq!(parse_kind(kind_str(kind)).unwrap(), kind);
+        }
     }
 }

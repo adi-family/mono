@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-158 structs · 42 enums · 5 type aliases across 61 files.
+158 structs · 43 enums · 5 type aliases across 61 files.
 
 ## Index
 
@@ -33,7 +33,7 @@
 - [`src/lease.rs`](#srcleasers) — `LeaseRef`, `LeaseCapability`, `Readiness`
 - [`src/lib.rs`](#srclibrs) — `TurnGuard`, `Agents`, `Pending`, `SimBlock`, `SimResult`, `SimTurn`
 - [`src/limits.rs`](#srclimitsrs) — `RunLimits`, `SpawnPolicy`, `RunLoad`
-- [`src/llm/backend.rs`](#srcllmbackendrs) — `LimitClass`, `HoldScope`, `Resume`, `LimitRule`, `Probe`, `LlmBackendManifest`, `LlmBackend`, `LlmBackends`
+- [`src/llm/backend.rs`](#srcllmbackendrs) — `LimitClass`, `HoldScope`, `Resume`, `LimitRule`, `Probe`, `BackendKind`, `LlmBackendManifest`, `LlmBackend`, `LlmBackends`
 - [`src/llm/chain.rs`](#srcllmchainrs) — `AgentBackendEntry`, `StartAt`, `ResolvedBackend`, `ResolvedChain`, `PinnedChain`
 - [`src/llm/classify.rs`](#srcllmclassifyrs) — `Classification`
 - [`src/llm/failover.rs`](#srcllmfailoverrs) — `Decision`, `Failure`
@@ -1730,6 +1730,20 @@ pub struct Probe {
 }
 ```
 
+### enum `BackendKind`
+
+Which of the two shapes a definition takes. `Single` is everything above this line always was: a login, a model, the dials. `Group` is new — an ordered list of other backends, named by id, with none of a single backend's own fields. A definition is one or the other, never both, and `LlmBackends::save` refuses a manifest that disagrees with its own `kind`.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackendKind {
+    #[default]
+    Single,
+    Group,
+}
+```
+
 ### struct `LlmBackendManifest`
 
 A backend definition, as stored. The id is the filename, so it cannot drift from what the file is called.
@@ -1740,6 +1754,10 @@ A backend definition, as stored. The id is the filename, so it cannot drift from
 pub struct LlmBackendManifest {
     #[serde(skip_serializing_if = "String::is_empty")]
     pub label: String,
+    #[serde(skip_serializing_if = "is_single")]
+    pub kind: BackendKind,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub members: Vec<String>,
     pub runtime: Backend,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub model: String,
