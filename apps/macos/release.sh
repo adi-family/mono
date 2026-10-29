@@ -40,6 +40,31 @@ case "$STEP" in
     *) echo "usage: $(basename "$0") [build|notarize]" >&2; exit 2 ;;
 esac
 
+# `stapler staple`/`validate` fetch the notarization ticket from
+# api.apple-cloudkit.com, and that lookup has come back flaky right after a
+# notarization "Accepted" result — NSURLErrorDomain -1005 / Error 68, seen three
+# times in CI on this exact step. That reads as ticket-propagation lag on
+# Apple's side, not a build problem, so retry with backoff rather than failing
+# the release on it. Still fails closed: non-zero if every attempt is spent.
+retry_apple() {
+    local desc="$1"; shift
+    local delays=(30 60 90 120 150) attempt=1 max=6
+    while true; do
+        echo "==> $desc (attempt $attempt/$max)"
+        if "$@"; then
+            return 0
+        fi
+        if [ "$attempt" -ge "$max" ]; then
+            echo "✗ $desc failed after $max attempts" >&2
+            return 1
+        fi
+        local delay="${delays[$((attempt - 1))]}"
+        echo "   ...failed, retrying in ${delay}s"
+        sleep "$delay"
+        attempt=$((attempt + 1))
+    done
+}
+
 # Auto-load local credentials (gitignored) if present, so this can run standalone.
 if [ -f "$SCRIPT_DIR/.env" ]; then set -a; . "$SCRIPT_DIR/.env"; set +a; fi
 
@@ -85,8 +110,7 @@ if [ -n "${AC_USER:-}" ] && [ -n "${AC_PASS:-}" ]; then
     xcrun notarytool submit "$APPZIP" \
         --apple-id "$AC_USER" --team-id "$TEAM_ID" --password "$AC_PASS" --wait
     rm -f "$APPZIP"
-    echo "==> stapling the app"
-    xcrun stapler staple "$APP"
+    retry_apple "stapling the app" xcrun stapler staple "$APP"
 
     echo "==> repackaging the DMG around the stapled app"
     "$SCRIPT_DIR/dmg/make-dmg.sh" "$APP" "$DMG"
@@ -95,13 +119,12 @@ if [ -n "${AC_USER:-}" ] && [ -n "${AC_PASS:-}" ]; then
     echo "==> notarizing the DMG (uploads to Apple; waits for the result)"
     xcrun notarytool submit "$DMG" \
         --apple-id "$AC_USER" --team-id "$TEAM_ID" --password "$AC_PASS" --wait
-    echo "==> stapling the DMG"
-    xcrun stapler staple "$DMG"
+    retry_apple "stapling the DMG" xcrun stapler staple "$DMG"
 
     echo "✓ notarized + stapled (app AND dmg): $DMG"
     echo "==> verifying"
-    xcrun stapler validate "$APP"
-    xcrun stapler validate "$DMG"
+    retry_apple "validating the app's staple" xcrun stapler validate "$APP"
+    retry_apple "validating the DMG's staple" xcrun stapler validate "$DMG"
     spctl -a -t open --context context:primary-signature -v "$DMG" || true
 else
     echo "==> signing the DMG (no notarization — AC_USER/AC_PASS unset)"

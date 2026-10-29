@@ -284,7 +284,22 @@ jobs:
       - name: Confirm the DMG is stapled
         run: |
           # release.sh warns and continues when notarization is skipped; a release must not.
-          xcrun stapler validate apps/macos/build/ADI.dmg
+          # Same retry as release.sh's own staple/validate calls: api.apple-cloudkit.com's
+          # ticket lookup has come back flaky right after notarization "Accepted"
+          # (NSURLErrorDomain -1005 / Error 68), seen three times in CI at this exact step.
+          delays=(30 60 90 120 150)
+          attempt=1
+          max=6
+          until xcrun stapler validate apps/macos/build/ADI.dmg; do
+            if [ "$attempt" -ge "$max" ]; then
+              echo "✗ staple validation failed after $max attempts" >&2
+              exit 1
+            fi
+            delay="${delays[$((attempt - 1))]}"
+            echo "   ...failed (attempt $attempt/$max), retrying in ${delay}s"
+            sleep "$delay"
+            attempt=$((attempt + 1))
+          done
 
       - uses: actions/upload-artifact@v4
         with:
@@ -297,7 +312,7 @@ jobs:
   linux:
     needs: [version, webapp]
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     env:
       ADI_VERSION: ${{ needs.version.outputs.version }}
     steps:
