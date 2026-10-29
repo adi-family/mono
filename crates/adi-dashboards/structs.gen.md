@@ -4,13 +4,13 @@
 
 > The on-disk contract of a dashboard directory: its manifest, its hive file and hostname, and the bundle it becomes when it travels.
 
-9 structs · 2 enums · 1 type alias across 3 files.
+10 structs · 2 enums · 1 type alias across 3 files.
 
 ## Index
 
 - [`src/bundle.rs`](#srcbundlers) — `BundleFile`, `DashboardBundle`, `DecodedFiles`, `BundleError`, `CollectError`
 - [`src/hive.rs`](#srchivers) — `HiveFile`, `HiveService`, `HiveRunner`, `HiveScript`, `HiveProxy`
-- [`src/manifest.rs`](#srcmanifestrs) — `Manifest`, `Widget`
+- [`src/manifest.rs`](#srcmanifestrs) — `Manifest`, `CreatedFrom`, `Widget`
 
 ---
 
@@ -199,7 +199,20 @@ pub struct Manifest {
     #[serde(default)]
     pub widget: BTreeMap<String, Widget>,
     #[serde(default)]
-    pub created_from: Option<String>,
+    pub created_from: Option<CreatedFrom>,
+}
+```
+
+### struct `CreatedFrom`
+
+`[created_from]` in a dashboard's `config.toml` — see `Manifest::created_from`.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct CreatedFrom {
+    pub template: String,
+    #[serde(default)]
+    pub command: Option<String>,
 }
 ```
 

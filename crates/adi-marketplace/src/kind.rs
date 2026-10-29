@@ -1,5 +1,6 @@
-//! The eight kinds a bundle element may be — agents, tools, dashboards, LLM and embedding
-//! backends, hive services, triggers, a project scaffold (`docs/marketplace-bundles.md`).
+//! The nine kinds a bundle element may be — agents, tools, dashboards, LLM and embedding
+//! backends, hive services, triggers, a project scaffold, a dashboard template
+//! (`docs/marketplace-bundles.md`).
 //!
 //! Each kind carries two spellings, and they are deliberately not the same word:
 //!
@@ -14,7 +15,7 @@ use std::fmt;
 
 use serde::de::Error as _;
 
-/// One of the eight platform surfaces a bundle may carry an element for.
+/// One of the nine platform surfaces a bundle may carry an element for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Kind {
     Agent,
@@ -25,11 +26,12 @@ pub enum Kind {
     Service,
     Trigger,
     Project,
+    Template,
 }
 
 impl Kind {
     /// Every kind, in the order the repository layout table lists them.
-    pub const ALL: [Kind; 8] = [
+    pub const ALL: [Kind; 9] = [
         Kind::Agent,
         Kind::Tool,
         Kind::Dashboard,
@@ -38,6 +40,7 @@ impl Kind {
         Kind::Service,
         Kind::Trigger,
         Kind::Project,
+        Kind::Template,
     ];
 
     /// The word `elements[].kind` publishes.
@@ -52,6 +55,7 @@ impl Kind {
             Kind::Service => "service",
             Kind::Trigger => "trigger",
             Kind::Project => "project",
+            Kind::Template => "template",
         }
     }
 
@@ -68,6 +72,7 @@ impl Kind {
             Kind::Service => "services",
             Kind::Trigger => "triggers",
             Kind::Project => "project",
+            Kind::Template => "templates",
         }
     }
 

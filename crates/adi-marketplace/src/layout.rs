@@ -156,6 +156,13 @@ fn element_name(kind: Kind, entry: &fs::DirEntry) -> Option<String> {
             (dir.is_dir() && DASHBOARD_FILES.iter().all(|f| dir.join(f).is_file()))
                 .then(|| file_name.to_string())
         }
+        // A template is a directory carrying `template.toml` — the one file every template folder
+        // must have (`adi_templates::TEMPLATE_FILE`); an optional `files/` beside it travels with
+        // whatever else is in the directory, same as a dashboard's own files do.
+        Kind::Template => {
+            let dir = entry.path();
+            (dir.is_dir() && dir.join("template.toml").is_file()).then(|| file_name.to_string())
+        }
         // The singleton is read directly by `read_layout`, off `config.toml` rather than off a
         // directory listing — it has no per-entry name to derive.
         Kind::Project => None,

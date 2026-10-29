@@ -9,7 +9,8 @@ use adi_webapp_api::types::{
     AgentBackendRowDto, AgentGoal, AgentPeek, AgentRef, AgentRunInfo, AgentRuns, AgentSimState,
     AgentStep, AgentTokens, AgentsState, AllAgentRuns, ChannelAllowlistDto, ChannelConnected,
     ChannelConnectionDto, ChannelTargetDto, ChannelsState,
-    DashboardsState, DbExecResult, DbQueryResult, DbState, DbTablesState, DirListing,
+    DashboardTemplatesState, DashboardsState, DbExecResult, DbQueryResult, DbState, DbTablesState,
+    DirListing,
     EmbeddingBackendDto, EmbeddingBackendsDto, FileEntry, FleetDashboards, FleetNodes, FleetState,
     Health, HiveState, KnowledgeBaseDto, KnowledgeNoteDto, KnowledgeNotes,
     KnowledgeResults, KnowledgeState, LimitRuleDto, LlmBackendDto, LlmBackendsDto,
@@ -178,6 +179,9 @@ pub(crate) struct State {
     pub(crate) usage_events: RwSignal<Option<UsageEventsState>>,
     /// The dashboards listing (`/dashboards`).
     pub(crate) dashboards: RwSignal<Option<DashboardsState>>,
+    /// Every dashboard template this machine has (`/api/dashboards/templates`), for the create
+    /// form's picker — which greys out a template whose `requires` this machine does not meet.
+    pub(crate) dashboard_templates: RwSignal<Option<DashboardTemplatesState>>,
     /// The apps marketplace (`/marketplace`): configured sources and the cached entries. Read
     /// from the store on the server, so it loads offline; the one call that leaves the machine
     /// is the page's Sync button, never this signal's refresh.
@@ -509,6 +513,7 @@ impl State {
             shared_assets: RwSignal::new(None),
             usage_events: RwSignal::new(None),
             dashboards: RwSignal::new(None),
+            dashboard_templates: RwSignal::new(None),
             marketplace: RwSignal::new(None),
             fleet_dashboards: RwSignal::new(None),
             fleet_dashboards_busy: RwSignal::new(false),
@@ -3216,6 +3221,14 @@ pub(crate) fn subscriptions(
         subs.push(Sub::get("/api/fleet", move |f: FleetState| {
             set_if_changed(s.fleet, f);
         }));
+        // Local to this machine, never the node the panel-wide picker is pointed at — a
+        // marketplace install landing a template folder shows up here on its own.
+        subs.push(Sub::get(
+            "/api/dashboards/templates",
+            move |t: DashboardTemplatesState| {
+                set_if_changed(s.dashboard_templates, t);
+            },
+        ));
     }
     if route == Route::PortsManager {
         // The registry's leases, and the scan of what is actually listening.
@@ -3520,6 +3533,12 @@ pub(crate) async fn load(s: State) {
             "/api/dashboards",
             s.dashboards,
             fetch::dashboards().await,
+        );
+        took(
+            s,
+            "/api/dashboards/templates",
+            s.dashboard_templates,
+            fetch::dashboard_templates().await,
         );
     }
     if path == Route::Marketplace.path() {

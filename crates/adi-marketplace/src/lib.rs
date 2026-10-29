@@ -117,6 +117,14 @@ impl Marketplace {
     pub fn dashboards_dir(&self) -> std::path::PathBuf {
         self.config.module("dashboards").dir().to_path_buf()
     }
+
+    /// The dashboard-templates root (ADI-MONO-199) — `~/.adi/mono/templates/`. Always this
+    /// machine's own, whatever `Scope` an install names: a template is a shell command every
+    /// dashboard creation on this machine can run, not a project's own thing to carry.
+    #[must_use]
+    pub fn templates_dir(&self) -> std::path::PathBuf {
+        self.config.module("templates").dir().to_path_buf()
+    }
 }
 
 impl Default for Marketplace {

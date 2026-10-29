@@ -8,8 +8,9 @@ use adi_webapp_api::types::{
     AgentReviewStarted, AgentRunOverrides, AgentRunResult, AgentRuns, AgentSimBlock, AgentSimState,
     AgentSimTurn, AgentSteps, AgentTokens, AgentsState, AllAgentRuns, AllowChannel,
     AnswerRun, ApiError, ChannelAllowlistDto, ChannelConnected, ChannelConnectionDto, ChannelProviderStatus,
-    ChannelRef, ChannelTargetDto, ChannelsState, CloseGoal, CompleteTask, ConnectChannel, Dashboard,
-    DashboardRef, DashboardTransferred, DashboardsState, DbExecResult,
+    ChannelRef, ChannelTargetDto, ChannelsState, CloseGoal, CompleteTask, ConnectChannel,
+    DashboardCreated, DashboardRef, DashboardTemplatesState, DashboardTransferred, DashboardsState,
+    DbExecResult,
     DbQuery, DbQueryResult, DbSchema, DbScope, DbState, DbTablesState, DiagnosticReport,
     DirListing, EmbeddingBackendRef, EmbeddingBackendsDto, FileContent, FilesRef, FleetDashboards,
     FleetGrantRef, FleetInstructions, FleetJoinRef, FleetNodes, FleetRef, FleetRename, FleetState,
@@ -1442,9 +1443,17 @@ pub async fn update_marketplace_bundle(
     .await
 }
 
-/// Scaffold a new dashboard; the supervisor starts it within a few seconds.
-pub async fn create_dashboard(body: NewDashboard) -> Result<Dashboard, String> {
+/// Run a template's command to create a new dashboard; the supervisor starts it within a few
+/// seconds. The response also carries the command that ran and what it printed
+/// ([`DashboardCreated`]), which the create form does not show today but a future "what just
+/// happened" panel could.
+pub async fn create_dashboard(body: NewDashboard) -> Result<DashboardCreated, String> {
     post("/api/dashboards/create", &body).await
+}
+
+/// Every dashboard template this machine has, with which `requires` CLIs it is missing.
+pub async fn dashboard_templates() -> Result<DashboardTemplatesState, String> {
+    get("/api/dashboards/templates").await
 }
 
 /// Archive a dashboard: park its hive file so the supervisor stops both bun services, and hide

@@ -1755,6 +1755,7 @@ pub(crate) struct State {
     pub(crate) shared_assets: RwSignal<Option<SharedAssetsState>>,
     pub(crate) usage_events: RwSignal<Option<UsageEventsState>>,
     pub(crate) dashboards: RwSignal<Option<DashboardsState>>,
+    pub(crate) dashboard_templates: RwSignal<Option<DashboardTemplatesState>>,
     pub(crate) marketplace: RwSignal<Option<MarketplaceState>>,
     pub(crate) fleet_dashboards: RwSignal<Option<FleetDashboards>>,
     pub(crate) fleet_dashboards_busy: RwSignal<bool>,
