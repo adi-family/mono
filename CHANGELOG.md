@@ -20,6 +20,19 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.34.0 — 2026-10-29
+
+### Added
+
+- **Dashboards are created from templates now — plain, reviewable folders you can swap or
+  self-host.** Creating a dashboard runs a named *template* (a folder with a `template.toml`
+  and a command) instead of a compiled-in scaffold, so what you get is editable and
+  inspectable from the start. Two ship seeded — a dependency-free `dashboard-plain` and a
+  `dashboard-vite-react` — and a template is an ordinary marketplace bundle, so you can
+  install more from the marketplace or point at your own bundle repo. The panel's
+  dashboard-create flow and `POST /api/dashboards/create` take a template;
+  `GET /api/dashboards/templates` lists them with any missing `requires` CLI. (ADI-MONO-199)
+
 ### Fixed
 
 - **Codex-backed agents signed in with ChatGPT now survive a follow-up turn (ADI-MONO-211).**
@@ -59,6 +72,13 @@ extraction script cares about.
 
 ### Changed
 
+- **Installing a marketplace bundle now starts its services instead of leaving them
+  parked.** A bundle with a hive service (the VS Code bundle's `openvscode-server`, say)
+  used to install and then sit there with no visible way to run it; Install now brings its
+  services up as part of the install. One that can't start — no build for this OS, a port
+  already taken — is reported on its own and does not fail the install, and a never-started
+  service shows an inline Start button and a running marker. `adi-mono marketplace install`
+  starts by default now; pass `--no-start` (which replaces the old `--start`) to opt out.
 - **Commercial use is no longer free for small organisations.** The licence used to let a
   business under $1,000,000 in revenue and under 10 employees use adi commercially — and embed it
   or run it as a service — without a licence. That band is gone: commercial use by a business of
