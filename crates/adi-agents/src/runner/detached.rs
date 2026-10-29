@@ -2299,11 +2299,33 @@ mod tests {
     fn check_parses_each_engines_own_arguments() {
         let claude = DetachedRunner::new(Backend::HarnessClaudeSdk);
         assert!(claude.check(&spec(json!({ "model": "opus" }))).is_ok());
+        // A key this engine does not own (here a Codex-only arg) is ignored, not rejected: one
+        // `[arguments]` table feeds a chain that may span runtimes, and each engine reads only its
+        // own keys.
+        assert!(
+            claude
+                .check(&spec(json!({ "skip_git_repo_check": true })))
+                .is_ok()
+        );
+        // A bad *value* for a key it does own is still rejected.
         assert!(matches!(
-            claude.check(&spec(json!({ "temperature": 0.2 }))),
+            claude.check(&spec(json!({ "max_turns": "lots" }))),
             Err(Error::Arguments(_))
         ));
         assert!(claude.check(&spec(Value::Null)).is_ok());
+
+        // The solver scenario that motivated the fix: a Codex row carries `allowed_tools` (owned by
+        // its Claude fallback row) in the one shared table. The Codex engine ignores it rather than
+        // failing the pre-run gate, and reads its own `skip_git_repo_check`.
+        let codex = DetachedRunner::new(Backend::ProcessCodex);
+        assert!(
+            codex
+                .check(&spec(json!({
+                    "allowed_tools": "Read Edit Write Glob Grep",
+                    "skip_git_repo_check": true,
+                })))
+                .is_ok()
+        );
 
         let adi = DetachedRunner::new(Backend::HarnessAdi);
         assert!(matches!(
