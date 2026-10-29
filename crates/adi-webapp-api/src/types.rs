@@ -4462,9 +4462,11 @@ pub struct Dashboard {
     /// when it names none. The client draws it only if the name is in its own icon set.
     #[serde(default)]
     pub icon: Option<String>,
-    /// Which scaffold it was created from — `None` means the original dependency-free one.
-    /// Purely informational, same as in `config.toml`: nothing reads this to decide how the
-    /// dashboard behaves. `#[serde(default)]` so a payload from a server that predates it still
+    /// The template id it was created from — `None` means either the original dependency-free
+    /// scaffold or a dashboard created before templates existed. Just the id: `config.toml`'s
+    /// `[created_from]` also keeps the exact command, which this DTO does not carry. Purely
+    /// informational, same as in `config.toml`: nothing reads this to decide how the dashboard
+    /// behaves. `#[serde(default)]` so a payload from a server that predates it still
     /// deserializes.
     #[serde(default)]
     pub created_from: Option<String>,
@@ -4495,10 +4497,11 @@ pub struct NewDashboard {
     /// The project to file the new dashboard under (its id), or `None` to leave it unfiled.
     #[serde(default)]
     pub project: Option<String>,
-    /// Which scaffold to create: `"dashboard"` (dependency-free) or `"vite-react"`. Absent or
-    /// empty keeps the original default, so every caller written before templates existed goes
-    /// on getting the same dashboard it always did. An unrecognised value is a 400 naming the
-    /// valid ones — see `adi_dashboards::TEMPLATES`.
+    /// Which template to create from — an id naming a folder under
+    /// `~/.adi/mono/templates/`. Absent or empty means `"plain"` (the dependency-free scaffold),
+    /// so every caller written before templates existed goes on getting the same dashboard it
+    /// always did. An unrecognised value is a 400 naming the templates this machine actually has
+    /// — see `GET /api/dashboards/templates`.
     #[serde(default)]
     pub template: Option<String>,
 }
@@ -4507,6 +4510,35 @@ pub struct NewDashboard {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DashboardsState {
     pub dashboards: Vec<Dashboard>,
+}
+
+/// `POST /api/dashboards/create`'s response: the dashboard just created, plus the command that
+/// created it and what it printed — so a create that visibly worked can still be audited, and a
+/// template author can tell a quiet success from one that printed something worth reading.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DashboardCreated {
+    pub dashboard: Dashboard,
+    pub command: String,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+/// `GET /api/dashboards/templates` — every template under `~/.adi/mono/templates/`, with whether
+/// this machine has what its `command` needs. The create form offers these, greying out a
+/// template whose `missing_requires` is not empty.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DashboardTemplate {
+    pub id: String,
+    pub label: String,
+    /// Every `requires` CLI this template names that is not on this machine's `PATH`, in the
+    /// order the template names them. Empty means every requirement is met.
+    pub missing_requires: Vec<String>,
+}
+
+/// `GET /api/dashboards/templates`'s response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DashboardTemplatesState {
+    pub templates: Vec<DashboardTemplate>,
 }
 
 /// Request body naming a dashboard — `POST /api/dashboards/archive` and `/unarchive`. Both

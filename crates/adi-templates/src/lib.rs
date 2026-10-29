@@ -19,5 +19,5 @@
 mod run;
 mod toml_file;
 
-pub use run::{Env, RunError, RunOutcome, create};
+pub use run::{Env, RunError, RunOutcome, create, missing_requires};
 pub use toml_file::{DEFAULT_TEMPLATE, Template, list_templates, read_template, seed_defaults};

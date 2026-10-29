@@ -688,6 +688,7 @@ dependencies = [
  "adi-projects",
  "adi-secrets",
  "adi-tasks",
+ "adi-templates",
  "adi-tools",
  "adi-triggers",
  "adi-update",

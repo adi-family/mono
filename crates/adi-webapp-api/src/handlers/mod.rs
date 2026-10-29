@@ -303,6 +303,23 @@ mod tests {
         assert_eq!(status, 400);
     }
 
+    /// A local stand-in for the real `plain` template — `seed_defaults` only ever writes a
+    /// template folder that is missing, so writing this one first keeps a test that only cares
+    /// about archive/delete off the network `bun create` the real one runs. Writes just enough
+    /// of a one-origin `hive.yaml` for the archive/restore park-and-return mechanics to have
+    /// something to move.
+    fn seed_plain_template(cfg: &adi_config::Config) {
+        let dir = cfg.module("templates").dir().join("plain");
+        std::fs::create_dir_all(&dir).expect("template dir");
+        let command = r#"mkdir -p "$ADI_DASHBOARD_DIR/.adi" && printf 'version: "1"\nservices:\n  frontend:\n    proxy:\n      host: %s\n    runner: {type: script, script: {run: "true", working_dir: .}}\n  backend:\n    proxy:\n      host: %s\n      path: /api\n    runner: {type: script, script: {run: "true", working_dir: .}}\n' "$ADI_DASHBOARD_HOST" "$ADI_DASHBOARD_HOST" > "$ADI_DASHBOARD_DIR/.adi/hive.yaml""#;
+        let escaped = command.replace('\\', "\\\\").replace('"', "\\\"");
+        std::fs::write(
+            dir.join("template.toml"),
+            format!("label = \"Plain\"\nengine = \"bash\"\ncommand = \"{escaped}\"\n"),
+        )
+        .expect("template.toml");
+    }
+
     /// An isolated config rooted in a temp dir, so a dashboards test never touches the real store.
     fn temp_dashboards_cfg() -> adi_config::Config {
         let root = std::env::temp_dir().join(format!(
@@ -318,12 +335,13 @@ mod tests {
     fn dashboard_archive_parks_hive_and_restore_returns_it() {
         let cfg = temp_dashboards_cfg();
         let ports = temp_manager();
+        seed_plain_template(&cfg);
 
         // Scaffold one dashboard; its live hive file is what the supervisor globs.
         let Response { status, body } = create_dashboard(&cfg, &ports, br#"{"name":"Metrics"}"#);
         assert_eq!(status, 200, "{body}");
         let v: Value = serde_json::from_str(&body).unwrap();
-        let id = v["id"].as_str().unwrap().to_string();
+        let id = v["dashboard"]["id"].as_str().unwrap().to_string();
         let dir = cfg.module("dashboards").dir().join(&id);
         assert!(dir.join(".adi/hive.yaml").is_file());
 
@@ -391,10 +409,11 @@ mod tests {
     fn dashboard_delete_requires_archived_then_removes_dir() {
         let cfg = temp_dashboards_cfg();
         let ports = temp_manager();
+        seed_plain_template(&cfg);
 
         let Response { body, .. } = create_dashboard(&cfg, &ports, br#"{"name":"Metrics"}"#);
         let v: Value = serde_json::from_str(&body).unwrap();
-        let id = v["id"].as_str().unwrap().to_string();
+        let id = v["dashboard"]["id"].as_str().unwrap().to_string();
         let dir = cfg.module("dashboards").dir().join(&id);
         let ref_body = format!(r#"{{"id":{}}}"#, serde_json::to_string(&id).unwrap());
 

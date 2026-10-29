@@ -20,17 +20,17 @@ use std::path::{Path, PathBuf};
 
 use adi_config::Config;
 use adi_dashboards::{
-    BundleError, CollectError, DashboardBundle, HIVE_ARCHIVED, HIVE_LIVE, MAX_BUNDLE_FILES,
-    Manifest, TEMPLATE_DASHBOARD, TEMPLATE_VITE_REACT, TEMPLATES, WIDGET_DIR, dashboard_host,
-    declared_host, decode_bundle, has_widgets, hive_yaml, hive_yaml_vite_react, is_current,
-    is_known_template, parse_hive, preferred_host, read_manifest,
-    valid_id, write_import, write_manifest,
+    BundleError, CollectError, CreatedFrom, DashboardBundle, HIVE_ARCHIVED, HIVE_LIVE,
+    MAX_BUNDLE_FILES, Manifest, WIDGET_DIR, dashboard_host, declared_host, decode_bundle,
+    has_widgets, hive_yaml, is_current, parse_hive, preferred_host, read_manifest, valid_id,
+    write_import, write_manifest,
 };
 use adi_ports_manager::Ports;
 use adi_projects::Projects;
 
 use crate::types::{
-    Dashboard, DashboardRef, DashboardsState, NewDashboard, SetDashboardProject, UsedPort,
+    Dashboard, DashboardCreated, DashboardRef, DashboardTemplate, DashboardTemplatesState,
+    DashboardsState, NewDashboard, SetDashboardProject, UsedPort,
 };
 
 use super::response::{FromBody, Response, error, ok_json};
@@ -50,11 +50,20 @@ static FRONTEND_INDEX_HTML: std::sync::LazyLock<String> = std::sync::LazyLock::n
         1,
     )
 });
+/// Only [`scaffold`] (test-only — see there) still writes this worked example; a module file,
+/// once written, is a user's or an agent's and migration never reads `modules/` at all.
+#[cfg(test)]
 const FRONTEND_MODULE_STATUS: &str =
     include_str!("../../templates/dashboard/frontend/modules/status.ts");
 const BACKEND_INDEX_TS: &str = include_str!("../../templates/dashboard/backend/index.ts");
+/// Only [`scaffold`] (test-only — see there) still writes this worked example; a route file,
+/// once written, is a user's or an agent's and migration never reads `routes/` at all.
+#[cfg(test)]
 const BACKEND_ROUTE_STATUS: &str =
     include_str!("../../templates/dashboard/backend/routes/status.ts");
+/// Only [`scaffold`] (test-only — see there) still writes this; migration never rewrites a
+/// dashboard's README.
+#[cfg(test)]
 const README: &str = include_str!("../../templates/dashboard/README.md");
 /// The widget entry point (`widget/index.ts`), written into a dashboard that has a `widget/`
 /// directory. `design/tokens.css` is spliced into its `TOKENS` constant, as a JS string literal,
@@ -68,65 +77,15 @@ static WIDGET_INDEX_TS: std::sync::LazyLock<String> = std::sync::LazyLock::new(|
     )
 });
 
-// MARK: the vite-react scaffold (ADI-MONO-186) — a second template beside the dependency-free
-// one above, for an app whose UI or API has outgrown one file per panel / one file per route.
-// Its files are written once, at [`scaffold_vite_react`], and never rewritten after that (see
-// [`is_vite_react`], ADI-MONO-193) — unlike the dependency-free scaffold, there is no migration
-// path for this one at all.
-const VITE_FRONTEND_PACKAGE_JSON: &str =
-    include_str!("../../templates/vite-react/frontend/package.json");
-const VITE_FRONTEND_VITE_CONFIG_TS: &str =
-    include_str!("../../templates/vite-react/frontend/vite.config.ts");
-const VITE_FRONTEND_TSCONFIG_JSON: &str =
-    include_str!("../../templates/vite-react/frontend/tsconfig.json");
-const VITE_FRONTEND_TSCONFIG_APP_JSON: &str =
-    include_str!("../../templates/vite-react/frontend/tsconfig.app.json");
-const VITE_FRONTEND_TSCONFIG_NODE_JSON: &str =
-    include_str!("../../templates/vite-react/frontend/tsconfig.node.json");
-const VITE_FRONTEND_COMPONENTS_JSON: &str =
-    include_str!("../../templates/vite-react/frontend/components.json");
-const VITE_FRONTEND_INDEX_HTML: &str =
-    include_str!("../../templates/vite-react/frontend/index.html");
-const VITE_FRONTEND_MAIN_TSX: &str =
-    include_str!("../../templates/vite-react/frontend/src/main.tsx");
-const VITE_FRONTEND_APP_TSX: &str = include_str!("../../templates/vite-react/frontend/src/App.tsx");
-const VITE_FRONTEND_INDEX_CSS: &str =
-    include_str!("../../templates/vite-react/frontend/src/index.css");
-const VITE_FRONTEND_VITE_ENV_DTS: &str =
-    include_str!("../../templates/vite-react/frontend/src/vite-env.d.ts");
-const VITE_FRONTEND_UTILS_TS: &str =
-    include_str!("../../templates/vite-react/frontend/src/lib/utils.ts");
-const VITE_FRONTEND_API_TS: &str = include_str!("../../templates/vite-react/frontend/src/lib/api.ts");
-const VITE_FRONTEND_BUTTON_TSX: &str =
-    include_str!("../../templates/vite-react/frontend/src/components/ui/button.tsx");
-const VITE_FRONTEND_CARD_TSX: &str =
-    include_str!("../../templates/vite-react/frontend/src/components/ui/card.tsx");
-const VITE_FRONTEND_HOME_TSX: &str =
-    include_str!("../../templates/vite-react/frontend/src/pages/Home.tsx");
-const VITE_FRONTEND_ADI_DB_DTS: &str =
-    include_str!("../../templates/vite-react/frontend/src/types/adi-db.d.ts");
-const VITE_BACKEND_PACKAGE_JSON: &str =
-    include_str!("../../templates/vite-react/backend/package.json");
-const VITE_BACKEND_TSCONFIG_JSON: &str =
-    include_str!("../../templates/vite-react/backend/tsconfig.json");
-const VITE_BACKEND_INDEX_TS: &str = include_str!("../../templates/vite-react/backend/src/index.ts");
-const VITE_BACKEND_APP_TS: &str = include_str!("../../templates/vite-react/backend/src/app.ts");
-const VITE_BACKEND_ROUTE_STATUS: &str =
-    include_str!("../../templates/vite-react/backend/src/routes/status.ts");
-const VITE_BACKEND_ROUTE_ECHO: &str =
-    include_str!("../../templates/vite-react/backend/src/routes/echo.ts");
-const VITE_BACKEND_ROUTE_NOTES: &str =
-    include_str!("../../templates/vite-react/backend/src/routes/notes.ts");
-const VITE_BACKEND_ROUTE_STATUS_TEST: &str =
-    include_str!("../../templates/vite-react/backend/src/routes/status.test.ts");
-const VITE_README: &str = include_str!("../../templates/vite-react/README.md");
-
-/// `POST /api/dashboards/create` — scaffold a new dashboard and let the supervisor pick it up.
+/// `POST /api/dashboards/create` — run a template's command and let the supervisor pick the
+/// result up.
 ///
-/// Writing the files is the whole job: the per-user dashboards hive re-reads its imports every
-/// few seconds, so it leases the ports and starts both bun servers on its own. The response
-/// therefore carries no ports yet — poll `GET /api/dashboards` (or let the page refresh) and
-/// they appear once the supervisor has reconciled.
+/// The template creates the whole dashboard, including its own `.adi/hive.yaml` — this handler
+/// writes only `config.toml` (name, description, `[created_from]`) once the command has
+/// succeeded. The per-user dashboards hive re-reads its imports every few seconds, so it leases
+/// ports and starts both bun servers on its own; the response therefore carries no ports yet —
+/// poll `GET /api/dashboards` (or let the page refresh) and they appear once the supervisor has
+/// reconciled.
 #[must_use]
 pub fn create_dashboard(cfg: &Config, ports: &Ports, body: &[u8]) -> Response {
     let req: NewDashboard = match serde_json::from_slice(body) {
@@ -137,23 +96,34 @@ pub fn create_dashboard(cfg: &Config, ports: &Ports, body: &[u8]) -> Response {
     if name.is_empty() {
         return error(400, "name must not be empty");
     }
-    let template = req
+    let template_id = req
         .template
         .as_deref()
         .map(str::trim)
         .filter(|t| !t.is_empty())
-        .unwrap_or(TEMPLATE_DASHBOARD);
-    if !is_known_template(template) {
+        .unwrap_or(adi_templates::DEFAULT_TEMPLATE);
+
+    let templates_dir = cfg.module("templates").dir().to_path_buf();
+    if let Err(e) = adi_templates::seed_defaults(&templates_dir) {
+        return error(500, &format!("could not seed the templates directory: {e}"));
+    }
+    let available = adi_templates::list_templates(&templates_dir);
+    let Some(template) = available.iter().find(|t| t.id == template_id) else {
         return error(
             400,
             &format!(
-                "unknown template {template:?}; valid templates are: {}",
-                TEMPLATES.join(", ")
+                "unknown template {template_id:?}; valid templates are: {}",
+                available.iter().map(|t| t.id.as_str()).collect::<Vec<_>>().join(", ")
             ),
         );
-    }
+    };
 
     let module = cfg.module("dashboards");
+    // `bash -c`'s cwd, so it has to exist before anything is spawned — unlike every other writer
+    // in this file, which only ever has to create the one dashboard directory it is writing into.
+    if let Err(e) = std::fs::create_dir_all(module.dir()) {
+        return error(500, &format!("could not create the dashboards directory: {e}"));
+    }
     // The id is a slug of the name, not a UUID: it is the directory, the port-lease key, and what
     // a manifest would have to name to install this dashboard on another machine — and a UUID is
     // unusable as the last of those and expensive as the first two. See `adi_config::mint`.
@@ -168,33 +138,81 @@ pub fn create_dashboard(cfg: &Config, ports: &Ports, body: &[u8]) -> Response {
         .map(str::trim)
         .filter(|p| !p.is_empty());
     let description = req.description.as_deref().unwrap_or("").trim();
-    let scaffolded = if template == TEMPLATE_VITE_REACT {
-        scaffold_vite_react(&dir, name, description, project)
-    } else {
-        scaffold(&dir, name, description, project)
-    };
-    if let Err(e) = scaffolded {
-        // A half-written directory would be picked up by the supervisor as a broken service,
-        // so clear it rather than leave the tree in a state nobody asked for.
-        let _ = std::fs::remove_dir_all(&dir);
-        return error(500, &format!("could not create dashboard: {e}"));
-    }
+    let host = dashboard_host(&dir, name);
 
-    // Dependencies installed on create, and a failed install reported rather than swallowed
-    // (one of VR-1's fixed decisions): a vite-react dashboard's `package.json` is useless
-    // without `node_modules`, and leaving that for the first visit to discover would surface as
-    // "the dashboard is broken" rather than as a create that plainly failed.
-    if template == TEMPLATE_VITE_REACT {
-        for sub in ["frontend", "backend"] {
-            if let Err(e) = bun_install(&dir.join(sub)) {
-                let _ = std::fs::remove_dir_all(&dir);
-                return error(500, &format!("could not create dashboard: {e}"));
-            }
+    let outcome = adi_templates::create(
+        template,
+        adi_templates::Env {
+            dashboards_root: module.dir(),
+            dashboard_dir: &dir,
+            dashboard_id: &id,
+            dashboard_host: &host,
+            template_dir: &templates_dir.join(&template.id),
+        },
+    );
+    let outcome = match outcome {
+        Ok(outcome) => outcome,
+        // Refused before anything ran: the template or this machine can't do what was asked, not
+        // a failure of the command itself — nothing to clean up.
+        Err(e @ (adi_templates::RunError::UnknownEngine(_)
+        | adi_templates::RunError::MissingRequires(_))) => {
+            return error(400, &format!("could not create dashboard: {e}"));
         }
+        Err(e) => {
+            // Command failure -> the dashboard dir is removed and the response carries the
+            // command's output (ADI-MONO-199's decision) — a half-run template would otherwise be
+            // picked up by the supervisor as a broken service.
+            let _ = std::fs::remove_dir_all(&dir);
+            return error(500, &format!("could not create dashboard: {e}"));
+        }
+    };
+
+    if let Err(e) = write_manifest(
+        &dir,
+        &Manifest {
+            name: Some(name.to_string()),
+            description: Some(description.to_string()),
+            project: project.map(str::to_string),
+            archived_at: None,
+            moved_to: None,
+            icon: None,
+            widget: std::collections::BTreeMap::new(),
+            created_from: Some(CreatedFrom {
+                template: template.id.clone(),
+                command: Some(template.command.clone()),
+            }),
+        },
+    ) {
+        return error(500, &format!("the template ran, but writing config.toml failed: {e}"));
     }
 
     super::usage_events::dashboard_created(cfg, "blank");
-    ok_json(&read_dashboard(&dir, ports, &[]))
+    let dashboard = read_dashboard(&dir, ports, &[]);
+    ok_json(&DashboardCreated {
+        dashboard,
+        command: template.command.clone(),
+        stdout: outcome.stdout,
+        stderr: outcome.stderr,
+    })
+}
+
+/// `GET /api/dashboards/templates` — every template under `~/.adi/mono/templates/`, seeding the
+/// two the platform ships first if the directory does not have them yet.
+#[must_use]
+pub fn dashboard_templates(cfg: &Config) -> Response {
+    let templates_dir = cfg.module("templates").dir().to_path_buf();
+    if let Err(e) = adi_templates::seed_defaults(&templates_dir) {
+        return error(500, &format!("could not seed the templates directory: {e}"));
+    }
+    let templates = adi_templates::list_templates(&templates_dir)
+        .into_iter()
+        .map(|t| DashboardTemplate {
+            missing_requires: adi_templates::missing_requires(&t),
+            id: t.id,
+            label: t.label,
+        })
+        .collect();
+    ok_json(&DashboardTemplatesState { templates })
 }
 
 /// `POST /api/dashboards/archive` — soft-remove a dashboard, then report the fresh listing.
@@ -356,7 +374,10 @@ fn now_secs() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
-/// Write the full scaffold into `dir`. Any error leaves the caller to clean up.
+/// Write the full dependency-free scaffold into `dir` — test-only now (ADI-MONO-199/201): the
+/// create path runs a template's command instead, but every migration test still needs a
+/// current-shaped dependency-free dashboard to migrate *from*, and this is how they build one.
+#[cfg(test)]
 fn scaffold(
     dir: &Path,
     name: &str,
@@ -406,158 +427,6 @@ fn scaffold(
     let host = dashboard_host(dir, name);
     std::fs::write(dir.join(".adi").join(HIVE_LIVE), hive_yaml(dir, &host))?;
     Ok(())
-}
-
-/// Write the full vite-react scaffold into `dir` — the frontend and backend Bun packages, their
-/// one worked example each, and a manifest naming [`TEMPLATE_VITE_REACT`] purely for a human to
-/// read in `config.toml`; [`is_vite_react`] is what actually tells this shape apart from the
-/// dependency-free one. Does **not** run `bun install`; the caller does that once the files are
-/// down, and reports a failure rather than leaving a dashboard that looks created but cannot run.
-fn scaffold_vite_react(
-    dir: &Path,
-    name: &str,
-    description: &str,
-    project: Option<&str>,
-) -> std::io::Result<()> {
-    let frontend = dir.join("frontend");
-    let backend = dir.join("backend");
-    std::fs::create_dir_all(frontend.join("src").join("lib"))?;
-    std::fs::create_dir_all(frontend.join("src").join("components").join("ui"))?;
-    std::fs::create_dir_all(frontend.join("src").join("pages"))?;
-    std::fs::create_dir_all(frontend.join("src").join("types"))?;
-    std::fs::create_dir_all(backend.join("src").join("routes"))?;
-    std::fs::create_dir_all(dir.join(".adi"))?;
-
-    for (path, contents) in [
-        (frontend.join("package.json"), VITE_FRONTEND_PACKAGE_JSON),
-        (frontend.join("vite.config.ts"), VITE_FRONTEND_VITE_CONFIG_TS),
-        (frontend.join("tsconfig.json"), VITE_FRONTEND_TSCONFIG_JSON),
-        (
-            frontend.join("tsconfig.app.json"),
-            VITE_FRONTEND_TSCONFIG_APP_JSON,
-        ),
-        (
-            frontend.join("tsconfig.node.json"),
-            VITE_FRONTEND_TSCONFIG_NODE_JSON,
-        ),
-        (
-            frontend.join("components.json"),
-            VITE_FRONTEND_COMPONENTS_JSON,
-        ),
-        (frontend.join("index.html"), VITE_FRONTEND_INDEX_HTML),
-        (frontend.join("src").join("main.tsx"), VITE_FRONTEND_MAIN_TSX),
-        (frontend.join("src").join("App.tsx"), VITE_FRONTEND_APP_TSX),
-        (frontend.join("src").join("index.css"), VITE_FRONTEND_INDEX_CSS),
-        (
-            frontend.join("src").join("vite-env.d.ts"),
-            VITE_FRONTEND_VITE_ENV_DTS,
-        ),
-        (
-            frontend.join("src").join("lib").join("utils.ts"),
-            VITE_FRONTEND_UTILS_TS,
-        ),
-        (
-            frontend.join("src").join("lib").join("api.ts"),
-            VITE_FRONTEND_API_TS,
-        ),
-        (
-            frontend
-                .join("src")
-                .join("components")
-                .join("ui")
-                .join("button.tsx"),
-            VITE_FRONTEND_BUTTON_TSX,
-        ),
-        (
-            frontend
-                .join("src")
-                .join("components")
-                .join("ui")
-                .join("card.tsx"),
-            VITE_FRONTEND_CARD_TSX,
-        ),
-        (
-            frontend.join("src").join("pages").join("Home.tsx"),
-            VITE_FRONTEND_HOME_TSX,
-        ),
-        (
-            frontend.join("src").join("types").join("adi-db.d.ts"),
-            VITE_FRONTEND_ADI_DB_DTS,
-        ),
-        (backend.join("package.json"), VITE_BACKEND_PACKAGE_JSON),
-        (backend.join("tsconfig.json"), VITE_BACKEND_TSCONFIG_JSON),
-        (backend.join("src").join("index.ts"), VITE_BACKEND_INDEX_TS),
-        (backend.join("src").join("app.ts"), VITE_BACKEND_APP_TS),
-        (
-            backend.join("src").join("routes").join("status.ts"),
-            VITE_BACKEND_ROUTE_STATUS,
-        ),
-        (
-            backend.join("src").join("routes").join("echo.ts"),
-            VITE_BACKEND_ROUTE_ECHO,
-        ),
-        (
-            backend.join("src").join("routes").join("notes.ts"),
-            VITE_BACKEND_ROUTE_NOTES,
-        ),
-        (
-            backend.join("src").join("routes").join("status.test.ts"),
-            VITE_BACKEND_ROUTE_STATUS_TEST,
-        ),
-    ] {
-        std::fs::write(path, contents)?;
-    }
-
-    let id = dir
-        .file_name()
-        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-    std::fs::write(
-        dir.join("README.md"),
-        VITE_README.replace("{{NAME}}", name).replace("{{ID}}", &id),
-    )?;
-
-    write_manifest(
-        dir,
-        &Manifest {
-            name: Some(name.to_string()),
-            description: Some(description.to_string()),
-            project: project.map(str::to_string),
-            archived_at: None,
-            moved_to: None,
-            icon: None,
-            widget: std::collections::BTreeMap::new(),
-            created_from: Some(TEMPLATE_VITE_REACT.to_string()),
-        },
-    )?;
-    let host = dashboard_host(dir, name);
-    std::fs::write(
-        dir.join(".adi").join(HIVE_LIVE),
-        hive_yaml_vite_react(&host),
-    )?;
-    Ok(())
-}
-
-/// Run `bun install` in `dir`, surfacing a failure rather than letting it pass silently (one of
-/// VR-1's fixed decisions). A vite-react dashboard's `package.json` is useless without
-/// `node_modules`, and a create call that reported success anyway would be worse than one that
-/// plainly refused.
-///
-/// # Errors
-/// A message naming `dir` and bun's own stderr (or the reason bun could not be run at all).
-fn bun_install(dir: &Path) -> Result<(), String> {
-    let output = std::process::Command::new("bun")
-        .arg("install")
-        .current_dir(dir)
-        .output()
-        .map_err(|e| format!("could not run `bun install` in {}: {e}", dir.display()))?;
-    if output.status.success() {
-        return Ok(());
-    }
-    Err(format!(
-        "`bun install` in {} failed: {}",
-        dir.display(),
-        String::from_utf8_lossy(&output.stderr).trim()
-    ))
 }
 
 /// The word a dashboard's id falls back to when its name has nothing sluggable in it.
@@ -720,7 +589,9 @@ pub fn export_bundle(cfg: &Config, id: &str) -> Result<DashboardBundle, Response
         host: declared_host(&dir),
         icon: manifest.icon,
         widget: manifest.widget,
-        template: manifest.created_from,
+        // The bundle's wire format keeps its own simpler field — just the template id, never the
+        // command (ADI-MONO-193's decision 4: the two are allowed to diverge on purpose).
+        template: manifest.created_from.map(|c| c.template),
         files,
     })
 }
@@ -808,13 +679,18 @@ pub fn import_dashboard(
             widget: bundle.widget,
             // Purely informational, same as everywhere else this field lives — which scaffold
             // the landed copy actually is gets decided from what is on disk, never from this.
-            // Only a name this build recognises is kept, so a bundle from newer software naming
-            // a scaffold we have never heard of does not leave a nonsense value behind.
+            // No command travels with an import (only the sending machine ran one) — and no
+            // check against this machine's own templates directory either: a template this
+            // machine has never heard of is still worth remembering the name of.
             created_from: bundle
                 .template
                 .as_deref()
-                .filter(|t| adi_dashboards::is_known_template(t))
-                .map(str::to_string),
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .map(|template| CreatedFrom {
+                    template: template.to_string(),
+                    command: None,
+                }),
         },
     ) {
         return error(500, &format!("writing the dashboard manifest: {e}"));
@@ -964,7 +840,7 @@ fn read_dashboard(dir: &Path, ports: &Ports, live: &[UsedPort]) -> Dashboard {
         icon: manifest.icon,
         dir: dir.display().to_string(),
         id,
-        created_from: manifest.created_from,
+        created_from: manifest.created_from.map(|c| c.template),
     }
 }
 
@@ -991,7 +867,7 @@ fn ts_stems(dir: &Path) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adi_dashboards::{BundleFile, is_current_vite_react, is_one_origin};
+    use adi_dashboards::{BundleFile, is_one_origin};
     use base64::Engine as _;
 
     /// A dashboards root of this test's own, under the system temp dir — never the user's store.
@@ -1961,16 +1837,17 @@ mod tests {
     #[test]
     fn creating_a_dashboard_writes_the_current_shape() {
         let (cfg, ports) = store("create");
+        write_template(&cfg, "plain", &[], MINIMAL_ONE_ORIGIN_COMMAND);
         let body = br#"{"name":"Nosh","description":"a dashboard"}"#;
 
         let res = create_dashboard(&cfg, &ports, body);
         assert_eq!(res.status, 200, "{}", res.body);
 
-        let created: Dashboard = serde_json::from_str(&res.body).expect("dashboard DTO");
-        let dir = PathBuf::from(&created.dir);
+        let created: DashboardCreated = serde_json::from_str(&res.body).expect("DashboardCreated");
+        let dir = PathBuf::from(&created.dashboard.dir);
         assert!(is_one_origin(&hive_of(&dir)));
         // The create response is a row the panel renders straight away, so it carries the host too.
-        assert_eq!(created.host.as_deref(), Some("nosh.adi"));
+        assert_eq!(created.dashboard.host.as_deref(), Some("nosh.adi"));
         assert_eq!(
             declared_host(&dir).as_deref(),
             Some("nosh.adi"),
@@ -1978,42 +1855,59 @@ mod tests {
         );
     }
 
-    // MARK: the vite-react template (ADI-MONO-187)
+    // MARK: dashboard templates (ADI-MONO-199/201) — running
+    // ~/.adi/mono/templates/<id>/template.toml's command, never the compiled-in scaffold.
+
+    /// A bash one-liner that writes just enough of a one-origin `hive.yaml` to pass
+    /// [`is_one_origin`] — standing in for a real template's own init script, so these tests never
+    /// touch the network or need `bun` on the box running them.
+    const MINIMAL_ONE_ORIGIN_COMMAND: &str = r#"mkdir -p "$ADI_DASHBOARD_DIR/.adi" && printf 'version: "1"\nservices:\n  frontend:\n    proxy:\n      host: %s\n    runner: {type: script, script: {run: "true", working_dir: .}}\n  backend:\n    proxy:\n      host: %s\n      path: /api\n    runner: {type: script, script: {run: "true", working_dir: .}}\n' "$ADI_DASHBOARD_HOST" "$ADI_DASHBOARD_HOST" > "$ADI_DASHBOARD_DIR/.adi/hive.yaml""#;
+
+    /// Write a local `template.toml` straight into `cfg`'s templates module, bypassing
+    /// `adi_templates::seed_defaults` (which only ever writes a folder that is missing) — every
+    /// test below exercises `create_dashboard`'s own logic against a command that is nothing but
+    /// a shell one-liner, never the real `bun create ...` network call the shipped templates run.
+    fn write_template(cfg: &Config, id: &str, requires: &[&str], command: &str) {
+        let dir = cfg.module("templates").dir().join(id);
+        std::fs::create_dir_all(&dir).expect("template dir");
+        let requires_toml = requires
+            .iter()
+            .map(|r| format!("\"{r}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        // A TOML basic (double-quoted) string, not a literal one: these test commands carry `"`
+        // of their own (`"$ADI_DASHBOARD_DIR"`), which a literal string cannot escape at all.
+        let escaped_command = command.replace('\\', "\\\\").replace('"', "\\\"");
+        std::fs::write(
+            dir.join("template.toml"),
+            format!(
+                "id = \"{id}\"\nlabel = \"{id}\"\nengine = \"bash\"\nrequires = [{requires_toml}]\ncommand = \"{escaped_command}\"\n"
+            ),
+        )
+        .expect("template.toml");
+    }
 
     #[test]
-    fn the_default_template_is_unchanged_whether_omitted_or_named_explicitly() {
-        let (cfg, ports) = store("default-template-omitted");
-        let omitted = create_dashboard(&cfg, &ports, br#"{"name":"Nosh"}"#);
-        assert_eq!(omitted.status, 200, "{}", omitted.body);
-        let omitted: Dashboard = serde_json::from_str(&omitted.body).expect("dashboard DTO");
-        assert_eq!(omitted.created_from, None, "no caller asked for a template");
-        assert!(PathBuf::from(&omitted.dir).join("frontend").join("index.ts").exists());
-        assert!(!PathBuf::from(&omitted.dir).join("frontend").join("package.json").exists());
+    fn omitted_template_means_plain() {
+        let (cfg, ports) = store("omitted-template-is-plain");
+        write_template(&cfg, "plain", &[], MINIMAL_ONE_ORIGIN_COMMAND);
 
-        let (cfg, ports) = store("default-template-named");
-        let named = create_dashboard(&cfg, &ports, br#"{"name":"Nosh","template":"dashboard"}"#);
-        assert_eq!(named.status, 200, "{}", named.body);
-        let named: Dashboard = serde_json::from_str(&named.body).expect("dashboard DTO");
-        // The manifest stays exactly as it always was for this template — `None`, whether a
-        // caller named it or left it to the default — which is what "unchanged" means for a
-        // dashboard already on disk: it is bit-for-bit indistinguishable from one created before
-        // templates existed at all.
-        assert_eq!(named.created_from, None);
-        assert_eq!(
-            std::fs::read_to_string(PathBuf::from(&named.dir).join("frontend").join("index.ts"))
-                .expect("entry point"),
-            FRONTEND_INDEX_TS,
-            "naming the default template explicitly scaffolds the exact same files"
-        );
+        let res = create_dashboard(&cfg, &ports, br#"{"name":"Nosh"}"#);
+        assert_eq!(res.status, 200, "{}", res.body);
+        let created: DashboardCreated = serde_json::from_str(&res.body).expect("DashboardCreated");
+        assert_eq!(created.dashboard.created_from.as_deref(), Some("plain"));
     }
 
     #[test]
     fn an_unknown_template_is_refused_naming_the_valid_ones() {
         let (cfg, ports) = store("unknown-template");
+        write_template(&cfg, "plain", &[], "true");
+        write_template(&cfg, "vite-react", &[], "true");
+
         let res = create_dashboard(&cfg, &ports, br#"{"name":"Nosh","template":"svelte"}"#);
         assert_eq!(res.status, 400, "{}", res.body);
         assert!(res.body.contains("svelte"), "{}", res.body);
-        for valid in TEMPLATES {
+        for valid in ["plain", "vite-react"] {
             assert!(res.body.contains(valid), "{}: {}", valid, res.body);
         }
         // Refused before anything was written.
@@ -2025,94 +1919,149 @@ mod tests {
     }
 
     #[test]
-    fn the_vite_react_template_scaffolds_its_own_shape() {
-        let root = scratch("vite-react-scaffold");
-        let dir = root.join("nosh");
-        scaffold_vite_react(&dir, "Nosh", "a vite-react dashboard", None).expect("scaffold");
-
-        // Its own hive shape — two services, each rooted in its own package directory — never
-        // the dependency-free one's `working_dir: .`.
-        let hive = hive_of(&dir);
-        assert!(is_one_origin(&hive));
-        assert!(is_current_vite_react(&hive));
-        assert!(
-            !is_current(&dir, &hive),
-            "the dependency-free migration must not recognise this shape as its own"
+    fn a_missing_required_cli_refuses_before_running_and_names_it() {
+        let (cfg, ports) = store("missing-requires");
+        write_template(
+            &cfg,
+            "local",
+            &["definitely-not-a-real-cli-xyz"],
+            "echo should never run",
         );
 
-        // Its own package-per-service layout, not the dependency-free scaffold's bare scripts.
-        assert!(dir.join("frontend").join("package.json").exists());
-        assert!(dir.join("backend").join("package.json").exists());
-        assert!(dir.join("frontend").join("src").join("vite-env.d.ts").exists());
-        assert!(dir.join("backend").join("src").join("routes").join("notes.ts").exists());
-        // The frontend never resolves @adi/db for real — only the stub `paths` remaps to.
-        assert!(dir.join("frontend").join("src").join("types").join("adi-db.d.ts").exists());
-        let tsconfig_app = std::fs::read_to_string(
-            dir.join("frontend").join("tsconfig.app.json"),
+        let res = create_dashboard(&cfg, &ports, br#"{"name":"Nosh","template":"local"}"#);
+        assert_eq!(res.status, 400, "{}", res.body);
+        assert!(res.body.contains("definitely-not-a-real-cli-xyz"), "{}", res.body);
+        assert!(
+            std::fs::read_dir(cfg.module("dashboards").dir())
+                .map(|mut e| e.next().is_none())
+                .unwrap_or(true),
+            "refused before anything was written"
+        );
+    }
+
+    #[test]
+    fn a_failing_command_removes_the_dashboard_directory_and_reports_the_output() {
+        let (cfg, ports) = store("command-failure");
+        write_template(
+            &cfg,
+            "local",
+            &[],
+            r#"mkdir -p "$ADI_DASHBOARD_DIR" && echo trouble 1>&2 && exit 3"#,
+        );
+
+        let res = create_dashboard(&cfg, &ports, br#"{"name":"Nosh","template":"local"}"#);
+        assert_eq!(res.status, 500, "{}", res.body);
+        assert!(res.body.contains("trouble"), "{}", res.body);
+        assert!(
+            std::fs::read_dir(cfg.module("dashboards").dir())
+                .map(|mut e| e.next().is_none())
+                .unwrap_or(true),
+            "the half-created directory must be removed"
+        );
+    }
+
+    #[test]
+    fn a_successful_create_records_the_exact_command_in_created_from() {
+        let (cfg, ports) = store("created-from-command");
+        write_template(&cfg, "local", &[], r#"mkdir -p "$ADI_DASHBOARD_DIR""#);
+
+        let res = create_dashboard(&cfg, &ports, br#"{"name":"Nosh","template":"local"}"#);
+        assert_eq!(res.status, 200, "{}", res.body);
+        let created: DashboardCreated = serde_json::from_str(&res.body).expect("DashboardCreated");
+        assert_eq!(created.command, r#"mkdir -p "$ADI_DASHBOARD_DIR""#);
+
+        let raw = std::fs::read_to_string(
+            PathBuf::from(&created.dashboard.dir).join("config.toml"),
         )
-        .expect("tsconfig.app.json");
-        assert!(tsconfig_app.contains(r#""@adi/db": ["./src/types/adi-db.d.ts"]"#), "{tsconfig_app}");
-        assert!(!dir.join("frontend").join("index.ts").exists());
-        assert!(!dir.join("backend").join("index.ts").exists());
+        .expect("config.toml");
+        assert!(raw.contains("[created_from]"), "{raw}");
+        assert!(raw.contains("template = \"local\""), "{raw}");
+        assert!(raw.contains(r#"command = 'mkdir -p "$ADI_DASHBOARD_DIR"'"#), "{raw}");
+    }
 
-        let manifest = read_manifest(&dir);
-        assert_eq!(manifest.created_from.as_deref(), Some(TEMPLATE_VITE_REACT));
+    #[test]
+    fn creating_a_dashboard_passes_its_id_and_derived_host_to_the_template() {
+        let (cfg, ports) = store("create-env");
+        write_template(
+            &cfg,
+            "local",
+            &[],
+            r#"mkdir -p "$ADI_DASHBOARD_DIR" && printf '%s|%s' "$ADI_DASHBOARD_ID" "$ADI_DASHBOARD_HOST" > "$ADI_DASHBOARD_DIR/env.txt""#,
+        );
 
-        // The typed RPC path: a route file registers at "/", `app.ts` mounts it, the frontend's
-        // client imports the type by relative path — all present, none of it absolute.
-        let app_ts = std::fs::read_to_string(dir.join("backend").join("src").join("app.ts"))
-            .expect("app.ts");
-        assert!(app_ts.contains(r#".route("/status", statusRoute)"#), "{app_ts}");
-        let api_ts =
-            std::fs::read_to_string(dir.join("frontend").join("src").join("lib").join("api.ts"))
-                .expect("api.ts");
-        assert!(api_ts.contains(r#"hc<AppType>("/api")"#), "{api_ts}");
-        for needle in ["127.0.0.1", "localhost", "http://"] {
-            assert!(!api_ts.contains(needle), "the client must not mention {needle}");
-        }
+        let res = create_dashboard(&cfg, &ports, br#"{"name":"Nosh","template":"local"}"#);
+        assert_eq!(res.status, 200, "{}", res.body);
+        let created: DashboardCreated = serde_json::from_str(&res.body).expect("DashboardCreated");
+        let dir = PathBuf::from(&created.dashboard.dir);
+        let id = dir.file_name().expect("id").to_string_lossy().into_owned();
+
+        let env = std::fs::read_to_string(dir.join("env.txt")).expect("env.txt");
+        assert_eq!(env, format!("{id}|nosh.adi"), "$ADI_DASHBOARD_ID and $ADI_DASHBOARD_HOST");
+    }
+
+    #[test]
+    fn listing_templates_seeds_the_two_defaults_and_reports_missing_requires() {
+        let (cfg, _ports) = store("list-templates");
+        let res = dashboard_templates(&cfg);
+        assert_eq!(res.status, 200, "{}", res.body);
+        let state: DashboardTemplatesState = serde_json::from_str(&res.body).expect("state");
+        let ids: Vec<&str> = state.templates.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, vec!["plain", "vite-react"]);
+        // bun is required by both — whatever this is missing or not, both templates agree.
+        assert_eq!(
+            state.templates[0].missing_requires,
+            state.templates[1].missing_requires
+        );
+    }
+
+    /// A vite-react-shaped dashboard directory, built by hand rather than through a real `bun
+    /// create` — just enough for [`is_vite_react`] (`frontend/package.json`) and
+    /// [`is_one_origin`] (a two-service, same-host hive file) to recognise it, since that shape,
+    /// not its exact file contents, is all migration is ever allowed to look at.
+    fn vite_react_shaped(root: &Path, id: &str, host: &str) -> PathBuf {
+        let dir = root.join(id);
+        std::fs::create_dir_all(dir.join("frontend").join("src")).expect("frontend dir");
+        std::fs::create_dir_all(dir.join("backend").join("src")).expect("backend dir");
+        std::fs::create_dir_all(dir.join(".adi")).expect("hive dir");
+        std::fs::write(dir.join("frontend").join("package.json"), "{}\n").expect("package.json");
+        std::fs::write(
+            dir.join("backend").join("src").join("index.ts"),
+            "// agent-authored, pre-migration-guard fixture\n",
+        )
+        .expect("backend entry");
+        std::fs::write(
+            dir.join(".adi").join(HIVE_LIVE),
+            format!(
+                "version: \"1\"\nservices:\n  frontend:\n    proxy:\n      host: {host}\n    runner:\n      type: script\n      script:\n        run: bun x vite\n        working_dir: frontend\n  backend:\n    proxy:\n      host: {host}\n      path: /api\n    runner:\n      type: script\n      script:\n        run: bun --watch src/index.ts\n        working_dir: backend\n"
+            ),
+        )
+        .expect("hive file");
+        write_manifest(
+            &dir,
+            &Manifest {
+                name: Some(id.to_string()),
+                created_from: Some(CreatedFrom {
+                    template: "vite-react".to_string(),
+                    command: None,
+                }),
+                ..Manifest::default()
+            },
+        )
+        .expect("manifest");
+        dir
     }
 
     #[test]
     fn migration_leaves_a_vite_react_dashboards_files_untouched() {
         let root = scratch("vite-react-migrate");
-        let dir = root.join("nosh");
-        scaffold_vite_react(&dir, "Nosh", "", None).expect("scaffold");
+        let dir = vite_react_shaped(&root, "nosh", "nosh.adi");
 
-        // Every generated file, left as an agent's edit or an earlier generation would have left
-        // it — including the four that once carried a restamping marker (ADI-MONO-193: the
-        // platform creates a vite-react dashboard's files once and never rewrites them again,
-        // so none of this is migration's to touch).
         let edits = [
-            (
-                dir.join("backend").join("src").join("app.ts"),
-                "// agent's own routing\n",
-            ),
-            (
-                dir.join("frontend").join("package.json"),
-                "{\"name\":\"agent-edited\"}\n",
-            ),
-            (
-                dir.join("frontend")
-                    .join("src")
-                    .join("pages")
-                    .join("Home.tsx"),
-                "// agent's own page\n",
-            ),
+            (dir.join("backend").join("src").join("app.ts"), "// agent's own routing\n"),
+            (dir.join("frontend").join("package.json"), "{\"name\":\"agent-edited\"}\n"),
             (
                 dir.join("backend").join("src").join("index.ts"),
                 "// some earlier generation\n",
-            ),
-            (
-                dir.join("frontend").join("vite.config.ts"),
-                "// some earlier generation\n",
-            ),
-            (
-                dir.join("frontend").join("src").join("main.tsx"),
-                "// some earlier generation\n",
-            ),
-            (
-                dir.join("frontend").join("index.html"),
-                "<!doctype html><html><head></head></html>\n",
             ),
         ];
         for (path, contents) in &edits {
@@ -2139,12 +2088,14 @@ mod tests {
 
         // A vite-react dashboard whose manifest carries no `created_from` at all — the decision
         // this guards: migration must still recognise it from disk, not go looking for the field.
-        let vite = root.join("new");
-        scaffold_vite_react(&vite, "New", "", None).expect("scaffold");
+        let vite = vite_react_shaped(&root, "new", "new.adi");
         let mut manifest = read_manifest(&vite);
         manifest.created_from = None;
         write_manifest(&vite, &manifest).expect("strip created_from");
 
+        let entry_before =
+            std::fs::read_to_string(vite.join("backend").join("src").join("index.ts"))
+                .expect("entry");
         migrate(&vite, "New");
         assert!(
             !vite.join("frontend").join("index.ts").exists(),
@@ -2154,7 +2105,7 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(vite.join("backend").join("src").join("index.ts"))
                 .expect("entry"),
-            VITE_BACKEND_INDEX_TS,
+            entry_before,
             "migrate must not have touched a vite-react dashboard"
         );
 
@@ -2166,7 +2117,7 @@ mod tests {
             std::fs::read_to_string(dep_free.join("frontend").join("index.ts")).expect("entry"),
             FRONTEND_INDEX_TS
         );
-        assert!(!dep_free.join("frontend").join("src").join("main.tsx").exists());
+        assert!(!dep_free.join("frontend").join("src").exists());
     }
 
     #[test]
@@ -2174,15 +2125,14 @@ mod tests {
         let (cfg, ports) = store("no-created-from");
         let root = cfg.module("dashboards").dir().to_path_buf();
         std::fs::create_dir_all(&root).expect("dashboards root");
-        let dir = root.join("nosh");
-        scaffold_vite_react(&dir, "Nosh", "", None).expect("scaffold");
+        let dir = vite_react_shaped(&root, "nosh", "nosh.adi");
 
         // Strip the field entirely, the way an owner editing `config.toml` by hand might.
         let raw = std::fs::read_to_string(dir.join("config.toml")).expect("config.toml");
         assert!(raw.contains("created_from"), "{raw}");
         let stripped = raw
             .lines()
-            .filter(|line| !line.starts_with("created_from"))
+            .take_while(|line| !line.trim_start().starts_with("[created_from]"))
             .collect::<Vec<_>>()
             .join("\n");
         std::fs::write(dir.join("config.toml"), stripped).expect("strip the field");

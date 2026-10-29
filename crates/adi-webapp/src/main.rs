@@ -979,6 +979,8 @@ fn App() -> impl IntoView {
         shared_assets: RwSignal::new(None),
         usage_events: RwSignal::new(None),
         dashboards,
+        // No dashboards create form on the workbench shell either.
+        dashboard_templates: RwSignal::new(None),
         marketplace,
         // The workbench shell has no dashboards rail, so nothing here ever asks the fleet what it
         // runs — the signals exist because `State` is one shape, not because this page fills them.

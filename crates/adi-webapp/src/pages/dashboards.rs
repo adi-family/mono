@@ -103,7 +103,7 @@ pub(crate) fn dashboards_view(state: State, form: DashboardsForm) -> AnyView {
                 <TextField id="dash-name" label="Name" placeholder="Metrics" value=form.name />
                 <TextField id="dash-desc" label="Description" placeholder="What it is for"
                     value=form.description wide=true field_class="adi-field--grow" />
-                {template_picker(form)}
+                {template_picker(state, form)}
                 <button class="adi-btn adi-btn--primary" type="submit"
                     prop:disabled=move || form.busy.get()>
                     "New dashboard"
@@ -118,20 +118,41 @@ pub(crate) fn dashboards_view(state: State, form: DashboardsForm) -> AnyView {
     .into_any()
 }
 
-/// Which scaffold the create form asks for. An empty value is the dependency-free default —
-/// offered first and selected by default, so the common case needs no choice at all.
-fn template_picker(form: DashboardsForm) -> AnyView {
+/// Which template the create form asks for, populated from `GET /api/dashboards/templates`
+/// (`state.dashboard_templates`). An empty value leaves it to the server's own default (`plain`);
+/// a template whose `requires` this machine does not meet is listed but disabled, naming what it
+/// is missing, rather than left off the list entirely — so an operator who installs the missing
+/// CLI sees the same picker start working, not a template that silently reappeared.
+fn template_picker(state: State, form: DashboardsForm) -> AnyView {
     view! {
         <div class="adi-field">
             <label class="adi-field__label" for="dash-template">"Template"</label>
             <select class="adi-input" id="dash-template"
                 on:change=move |ev| form.template.set(event_target_value(&ev))>
                 <option value="" selected=move || form.template.get().is_empty()>
-                    "Dependency-free (bun, no build step)"
+                    "Default"
                 </option>
-                <option value="vite-react" selected=move || form.template.get() == "vite-react">
-                    "Vite + React (TypeScript, Tailwind, shadcn/ui)"
-                </option>
+                {move || {
+                    state.dashboard_templates.get().map(|t| t.templates).unwrap_or_default()
+                        .into_iter()
+                        .map(|template| {
+                            let missing = !template.missing_requires.is_empty();
+                            let label = if missing {
+                                format!("{} (needs {})", template.label, template.missing_requires.join(", "))
+                            } else {
+                                template.label
+                            };
+                            let id = template.id;
+                            let selected_id = id.clone();
+                            view! {
+                                <option value=id prop:disabled=missing
+                                    selected=move || form.template.get() == selected_id>
+                                    {label}
+                                </option>
+                            }
+                        })
+                        .collect_view()
+                }}
             </select>
         </div>
     }
