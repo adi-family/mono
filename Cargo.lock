@@ -410,6 +410,7 @@ dependencies = [
  "adi-hive",
  "adi-projects",
  "adi-secrets",
+ "adi-templates",
  "adi-tools",
  "adi-triggers",
  "hex",

@@ -294,6 +294,7 @@ struct Stores {
     secrets: adi_secrets::Secrets,
     dashboards_dir: PathBuf,
     parked_services_dir: PathBuf,
+    templates_dir: PathBuf,
 }
 ```
 
@@ -561,7 +562,7 @@ pub struct Updated {
 
 ### enum `Kind`
 
-One of the eight platform surfaces a bundle may carry an element for.
+One of the nine platform surfaces a bundle may carry an element for.
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -574,6 +575,7 @@ pub enum Kind {
     Service,
     Trigger,
     Project,
+    Template,
 }
 ```
 

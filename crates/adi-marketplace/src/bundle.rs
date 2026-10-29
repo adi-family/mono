@@ -751,6 +751,10 @@ pub fn uninstall_element(
             None
         }
         Kind::Service => uninstall_service(market, &addr.marketplace, &addr.slug, scope, &ledger, &element)?,
+        Kind::Template => {
+            uninstall_template(&market.templates_dir(), &element.id)?;
+            None
+        }
     };
 
     ledger.elements.remove(idx);
@@ -1035,7 +1039,8 @@ fn live_missing_secrets(config: &adi_config::Config, ledger: &Ledger) -> Vec<Str
                     missing.insert(name.to_string());
                 }
             }
-            Kind::Tool | Kind::Dashboard | Kind::Service | Kind::Trigger | Kind::Project => {}
+            Kind::Tool | Kind::Dashboard | Kind::Service | Kind::Trigger | Kind::Project
+            | Kind::Template => {}
         }
     }
     missing.into_iter().collect()
@@ -1054,6 +1059,7 @@ struct Stores {
     secrets: adi_secrets::Secrets,
     dashboards_dir: PathBuf,
     parked_services_dir: PathBuf,
+    templates_dir: PathBuf,
 }
 
 impl Stores {
@@ -1074,6 +1080,7 @@ impl Stores {
             secrets: adi_secrets::Secrets::with_config(config.clone()),
             dashboards_dir: market.dashboards_dir(),
             parked_services_dir: services_dir(market, marketplace, slug, scope),
+            templates_dir: market.templates_dir(),
         }
     }
 
@@ -1106,6 +1113,7 @@ impl Stores {
             Kind::Service => land_service(&self.parked_services_dir, root, el),
             Kind::Trigger => land_trigger(&self.triggers, root, el, project),
             Kind::Project => land_project(&self.projects, root, el, bundle_slug),
+            Kind::Template => land_template(&self.templates_dir, root, el),
         }
     }
 
@@ -1141,6 +1149,7 @@ impl Stores {
                  there is no in-place update for it in adi_projects — left as it stands"
                     .to_string(),
             ),
+            Kind::Template => reland_template(&self.templates_dir, root, layout_el, ledger_el, forced),
         }
     }
 }
@@ -1682,6 +1691,18 @@ fn uninstall_dashboard(dashboards_dir: &Path, id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Uninstall a dashboard template: delete `~/.adi/mono/templates/<id>/` outright. Nothing is
+/// running for a template the way a dashboard's bun services are — it is a folder naming a
+/// command, so removing it is the whole job (ADI-MONO-199's own rule: deleting the folder removes
+/// the template).
+fn uninstall_template(templates_dir: &Path, id: &str) -> Result<()> {
+    let dest = templates_dir.join(id);
+    if dest.is_dir() {
+        std::fs::remove_dir_all(&dest)?;
+    }
+    Ok(())
+}
+
 /// Uninstall a hive service: drop it from wherever it is — the parked fragment file if it was never
 /// started, the target hive.yaml's `services` mapping if it was — and say so when it was a
 /// `runner.docker` service whose container survives regardless.
@@ -2069,6 +2090,92 @@ fn reland_dashboard(
         if let Err(e) = std::fs::write(&path, bytes) {
             return Relanded::Failed(e.to_string());
         }
+    }
+
+    let fingerprint = fingerprint_dashboard_files(&new_files);
+    Relanded::Ok {
+        changed: fingerprint != ledger_el.fingerprint,
+        note: forced_note(live_fp != ledger_el.fingerprint),
+        fingerprint,
+    }
+}
+
+/// Install a dashboard template (ADI-MONO-199/202): copy its whole directory — the required
+/// `template.toml`, plus any `files/` beside it a local template keeps — into
+/// `~/.adi/mono/templates/<id>/`.
+///
+/// Always mints past a name this machine already has a template under, the same way a dashboard
+/// does and unlike `Tool`/`Llm`/`Embedding`'s refuse-unless-project-scoped: nothing references a
+/// template *by id* the way an agent's config references a tool, so a second copy under a
+/// numbered id costs nothing and a flat refusal would only be in the way.
+fn land_template(templates_dir: &Path, root: &Path, el: &LayoutElement) -> Landed {
+    let name = el.name.clone().unwrap_or_default();
+    let src = root.join(&el.path);
+    let mut files = Vec::new();
+    let mut rel = PathBuf::new();
+    let mut total = 0_u64;
+    if let Err(e) = adi_dashboards::collect_files(&src, &mut rel, &mut files, &mut total) {
+        return Landed::Failed(e.to_string());
+    }
+
+    let id = adi_config::mint(&name, "template", |candidate| templates_dir.join(candidate).exists());
+    let dest = templates_dir.join(&id);
+    let decoded = match adi_dashboards::decode_bundle(&dest, &files) {
+        Ok(d) => d,
+        Err(e) => return Landed::Failed(e.to_string()),
+    };
+    if let Err(e) = adi_dashboards::write_import(&dest, &decoded) {
+        return Landed::Failed(e.to_string());
+    }
+    if adi_templates::read_template(&dest).is_none() {
+        let _ = std::fs::remove_dir_all(&dest);
+        return Landed::Failed(format!("{name} does not have a readable template.toml"));
+    }
+
+    Landed::Ok {
+        fingerprint: fingerprint_dashboard_files(&files),
+        renamed: id != name,
+        id,
+        note: None,
+    }
+}
+
+/// `update`'s own fast-forward of an already-landed template's files — a full mirror, like
+/// [`reland_dashboard`] without that one's carve-out: a template has no generated file of the
+/// panel's own to protect, every byte of it came from the repository.
+fn reland_template(
+    templates_dir: &Path,
+    root: &Path,
+    layout_el: &LayoutElement,
+    ledger_el: &LedgerElement,
+    forced: bool,
+) -> Relanded {
+    let dest = templates_dir.join(&ledger_el.id);
+    let mut live_files = Vec::new();
+    let mut live_rel = PathBuf::new();
+    let mut live_total = 0_u64;
+    if let Err(e) = adi_dashboards::collect_files(&dest, &mut live_rel, &mut live_files, &mut live_total)
+    {
+        return Relanded::Failed(e.to_string());
+    }
+    let live_fp = fingerprint_dashboard_files(&live_files);
+    if live_fp != ledger_el.fingerprint && !forced {
+        return Relanded::Skipped(drift_note());
+    }
+
+    let src = root.join(&layout_el.path);
+    let mut new_files = Vec::new();
+    let mut new_rel = PathBuf::new();
+    let mut new_total = 0_u64;
+    if let Err(e) = adi_dashboards::collect_files(&src, &mut new_rel, &mut new_files, &mut new_total) {
+        return Relanded::Failed(e.to_string());
+    }
+    let decoded = match adi_dashboards::decode_bundle(&dest, &new_files) {
+        Ok(d) => d,
+        Err(e) => return Relanded::Failed(e.to_string()),
+    };
+    if let Err(e) = adi_dashboards::write_import(&dest, &decoded) {
+        return Relanded::Failed(e.to_string());
     }
 
     let fingerprint = fingerprint_dashboard_files(&new_files);
@@ -2525,6 +2632,22 @@ mod tests {
         std::fs::create_dir_all(root.join("project")).expect("dir");
         std::fs::write(root.join("project").join("config.toml"), format!("name = \"{name}\"\n"))
             .expect("project");
+    }
+
+    /// A template directory, `templates/<name>/`, carrying `template.toml` plus one file under
+    /// `files/` — the shape `adi_templates::seed_defaults` never writes itself but a local
+    /// template is free to (ADI-MONO-199's own `$ADI_TEMPLATE_DIR` contract).
+    fn write_template(root: &Path, name: &str) {
+        let dir = root.join("templates").join(name);
+        std::fs::create_dir_all(dir.join("files")).expect("dir");
+        std::fs::write(
+            dir.join("template.toml"),
+            format!(
+                "label = \"{name}\"\nengine = \"bash\"\ncommand = 'cp \"$ADI_TEMPLATE_DIR/files/README.md\" \"$ADI_DASHBOARD_DIR/\"'\n"
+            ),
+        )
+        .expect("template.toml");
+        std::fs::write(dir.join("files").join("README.md"), "hello\n").expect("files/README.md");
     }
 
     /// Sync a source called `adi` whose one bundle is `slug`, standing at `commit` of `repo`.
@@ -3345,6 +3468,105 @@ mod tests {
             bundle_dir_of(&market, "uninst-sib-bundle").exists(),
             "the clone is kept while a sibling remains"
         );
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    // MARK: the `template` kind (ADI-MONO-199/202)
+
+    #[test]
+    fn a_template_bundle_lands_under_mono_templates() {
+        let (market, ..) = fixture("tpl-land", "tpl-land-bundle", |root| {
+            write_template(root, "my-template");
+        });
+        let installed =
+            unwrap_bundle(install(&market, "adi/tpl-land-bundle", "", false, &Scope::Global).expect("install"));
+        let outcome = outcome_of(&installed, Kind::Template, "my-template");
+        let id = outcome.id.clone().expect("landed");
+        assert_eq!(id, "my-template");
+
+        let dest = market.templates_dir().join(&id);
+        let template = adi_templates::read_template(&dest).expect("template.toml parses");
+        assert_eq!(template.id, "my-template");
+        assert!(template.command.contains("ADI_TEMPLATE_DIR"), "{}", template.command);
+        assert_eq!(
+            std::fs::read_to_string(dest.join("files").join("README.md")).expect("files/ travels"),
+            "hello\n"
+        );
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    #[test]
+    fn a_template_name_collision_mints_past_it_like_a_dashboard_not_a_tool() {
+        let (market, ..) = fixture("tpl-collide", "tpl-collide-bundle", |root| {
+            write_template(root, "plain");
+        });
+        std::fs::create_dir_all(market.templates_dir().join("plain")).expect("seed a stranger");
+        std::fs::write(
+            market.templates_dir().join("plain").join("template.toml"),
+            "label = \"Mine\"\nengine = \"bash\"\ncommand = \"true\"\n",
+        )
+        .expect("stranger template.toml");
+
+        let installed = unwrap_bundle(
+            install(&market, "adi/tpl-collide-bundle", "", false, &Scope::Global).expect("install"),
+        );
+        let outcome = outcome_of(&installed, Kind::Template, "plain");
+        let id = outcome.id.clone().expect("minted rather than refused");
+        assert_ne!(id, "plain");
+        assert!(outcome.renamed);
+        // The stranger is untouched.
+        assert_eq!(
+            adi_templates::read_template(&market.templates_dir().join("plain")).expect("stranger").label,
+            "Mine"
+        );
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    #[test]
+    fn updating_a_template_bundle_fast_forwards_its_files() {
+        let (market, repo, _first) = fixture("tpl-upd", "tpl-upd-bundle", |root| {
+            write_template(root, "my-template");
+        });
+        let installed = unwrap_bundle(
+            install(&market, "adi/tpl-upd-bundle", "", false, &Scope::Global).expect("install"),
+        );
+        let id = outcome_of(&installed, Kind::Template, "my-template").id.clone().expect("id");
+
+        advance(&market, "tpl-upd-bundle", &repo, |root| {
+            std::fs::write(
+                root.join("templates").join("my-template").join("files").join("README.md"),
+                "goodbye\n",
+            )
+            .expect("edit upstream");
+        });
+        let done = update(&market, "adi", "tpl-upd-bundle", &Scope::Global, &[]).expect("update");
+        let outcome = done
+            .elements
+            .iter()
+            .find(|e| e.kind == Kind::Template && e.name == "my-template")
+            .expect("outcome");
+        assert!(outcome.changed, "{outcome:?}");
+
+        assert_eq!(
+            std::fs::read_to_string(market.templates_dir().join(&id).join("files").join("README.md"))
+                .expect("files/ fast-forwarded"),
+            "goodbye\n"
+        );
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    #[test]
+    fn uninstalling_a_template_removes_its_whole_directory() {
+        let (market, ..) = fixture("tpl-uninst", "tpl-uninst-bundle", |root| {
+            write_template(root, "my-template");
+        });
+        unwrap_bundle(install(&market, "adi/tpl-uninst-bundle", "", false, &Scope::Global).expect("install"));
+        assert!(market.templates_dir().join("my-template").is_dir());
+
+        let done = uninstall_element(&market, "adi/tpl-uninst-bundle/templates/my-template", &Scope::Global)
+            .expect("uninstall");
+        assert!(done.bundle_removed);
+        assert!(!market.templates_dir().join("my-template").exists());
         let _ = std::fs::remove_dir_all(market.config().root());
     }
 
