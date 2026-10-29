@@ -540,6 +540,7 @@ const SHARED_GETS: &[&str] = &[
     "/api/agents",
     "/api/agents/runs/all",
     "/api/dashboards",
+    "/api/dashboards/templates",
     "/api/db",
     "/api/fleet",
     "/api/fleet/nodes",
@@ -1103,6 +1104,7 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/dashboards/create") => {
             handlers::create_dashboard(projects.config(), ports, &req.body)
         }
+        ("GET", "/api/dashboards/templates") => handlers::dashboard_templates(projects.config()),
         ("POST", "/api/dashboards/archive") => {
             let live = scan::listening_ports();
             handlers::archive_dashboard(projects.config(), ports, &live, &req.body)

@@ -57,6 +57,7 @@ fn watchable(method: &str, path: &str) -> Option<Duration> {
             "/api/agents"
             | "/api/agents/runs/all"
             | "/api/dashboards"
+            | "/api/dashboards/templates"
             | "/api/db"
             | "/api/fleet"
             | "/api/fleet/nodes"

@@ -457,6 +457,21 @@ fn is_vite_react(dir: &Path) -> bool {
     dir.join("frontend").join("package.json").is_file()
 }
 
+/// Whether `dir` was created by running a template's own command (ADI-MONO-199/201) rather than
+/// the compiled-in scaffold this function otherwise migrates — decided from disk, exactly like
+/// [`is_vite_react`] and for the same reason never from the manifest's `created_from`.
+///
+/// A `plain`-template dashboard is otherwise **shaped identically** to a pre-template one (the
+/// public `dashboard-plain` repo is a port of the same scaffold, stamp comments and all
+/// deliberately dropped): without this, the very first listing after creating one would see
+/// `frontend/index.html` missing the generation stamp and "fix" it straight back to the
+/// compiled-in file, the one rewrite ADI-MONO-199 promises never happens. Every template this
+/// platform ships writes its own `scripts/` directory (its init step) — a directory the compiled
+/// scaffold never had reason to create — so that is the disk fact this checks.
+fn is_templated(dir: &Path) -> bool {
+    dir.join("scripts").is_dir()
+}
+
 /// Bring a dashboard's generated files up to the current templates, in place, the next time it is
 /// read or listed. There is no separate migration command: a dashboard is a directory, and the
 /// listing is the only thing guaranteed to visit every one of them.
@@ -469,11 +484,11 @@ fn is_vite_react(dir: &Path) -> bool {
 /// and routes under `frontend/modules/` and `backend/routes/` are what a user or an agent authored,
 /// and are never read here, let alone written.
 ///
-/// A vite-react dashboard's files are created once and never rewritten after that (no migration
-/// path exists for that scaffold at all) — this is the guard that keeps this function's rewrites
-/// from ever reaching one.
+/// A vite-react dashboard's files, or any template-created dashboard's, are created once and
+/// never rewritten after that (no migration path exists for either) — this is the guard that
+/// keeps this function's rewrites from ever reaching one.
 fn migrate(dir: &Path, name: &str) {
-    if is_vite_react(dir) {
+    if is_vite_react(dir) || is_templated(dir) {
         return;
     }
     migrate_hive(dir, name);
@@ -2077,6 +2092,49 @@ mod tests {
                 std::fs::read_to_string(path).expect("file"),
                 *contents,
                 "{} was rewritten",
+                path.display()
+            );
+        }
+    }
+
+    /// Found by a real end-to-end run on the dev flavour (ADI-MONO-199/203, TP-4): a `plain`
+    /// dashboard created from `adi-family/dashboard-plain` is otherwise shaped *exactly* like a
+    /// pre-template one — same `frontend/index.ts` + `backend/index.ts`, no `frontend/package.json`
+    /// — because the public repo is a port of the same scaffold with its stamp comments
+    /// deliberately dropped. Without [`is_templated`], the very first listing rewrote
+    /// `frontend/index.html` straight back to the compiled-in, stamped file.
+    #[test]
+    fn migration_leaves_a_templated_plain_dashboards_files_untouched() {
+        let root = scratch("templated-plain-migrate");
+        let dir = root.join("nosh");
+        std::fs::create_dir_all(dir.join("frontend").join("modules")).expect("frontend");
+        std::fs::create_dir_all(dir.join("backend").join("routes")).expect("backend");
+        std::fs::create_dir_all(dir.join("scripts")).expect("scripts — the templated-ness signal");
+        std::fs::create_dir_all(dir.join(".adi")).expect("hive dir");
+        std::fs::write(dir.join("scripts").join("adi-init.ts"), "// writes .adi/hive.yaml\n")
+            .expect("init script");
+        let host = dashboard_host(&dir, "Nosh");
+        std::fs::write(dir.join(".adi").join(HIVE_LIVE), hive_yaml(&dir, &host)).expect("hive");
+
+        // Unstamped on purpose — exactly what the public repo ships, and exactly what used to look
+        // "behind" to `restamp_entry_point`.
+        let unstamped = [
+            (dir.join("frontend").join("index.ts"), "// the repo's own frontend entry\n"),
+            (dir.join("frontend").join("index.html"), "<!doctype html><html></html>\n"),
+            (dir.join("backend").join("index.ts"), "// the repo's own backend entry\n"),
+        ];
+        for (path, contents) in &unstamped {
+            std::fs::write(path, contents).expect("write");
+        }
+
+        migrate(&dir, "Nosh");
+        migrate(&dir, "Nosh");
+
+        for (path, contents) in &unstamped {
+            assert_eq!(
+                std::fs::read_to_string(path).expect("file"),
+                *contents,
+                "{} was rewritten to the compiled-in scaffold",
                 path.display()
             );
         }
