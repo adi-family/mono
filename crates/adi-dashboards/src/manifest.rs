@@ -50,14 +50,25 @@ pub struct Manifest {
     /// it can read whether or not the app is running — framing a widget is what starts it.
     #[serde(default)]
     pub widget: BTreeMap<String, Widget>,
-    /// Which scaffold this dashboard was created from — `None` (or any value a newer scaffold
-    /// doesn't recognise) means the original dependency-free template; `"vite-react"` means the
-    /// Vite + React one. Purely informational: read by no code. Which scaffold a dashboard
-    /// actually is gets decided from what is on disk (the shape of its `.adi/hive.yaml`, or
-    /// whether `frontend/package.json` exists) — never from this field, which a dashboard's own
-    /// owner is free to edit or clear without changing how it behaves.
+    /// Which template created this dashboard, and the exact command that did — written once, at
+    /// creation, by the caller that ran the template's command (never by this crate). Purely
+    /// informational: read by no code. Which scaffold a dashboard actually is gets decided from
+    /// what is on disk (the shape of its `.adi/hive.yaml`, or whether `frontend/package.json`
+    /// exists) — never from this field, which a dashboard's own owner is free to edit or clear
+    /// without changing how it behaves.
     #[serde(default)]
-    pub created_from: Option<String>,
+    pub created_from: Option<CreatedFrom>,
+}
+
+/// `[created_from]` in a dashboard's `config.toml` — see [`Manifest::created_from`].
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct CreatedFrom {
+    /// The template id, e.g. `"vite-react"` or `"plain"`.
+    pub template: String,
+    /// The exact command that was run — absent for a dashboard that arrived by import, where
+    /// only the template id travels (see [`crate::bundle::DashboardBundle::template`]).
+    #[serde(default)]
+    pub command: Option<String>,
 }
 
 /// One widget an app offers: a page on the app's own origin that the home screen frames.
@@ -78,22 +89,6 @@ pub struct Widget {
     /// A word rather than an enum so a manifest written for a newer screen still parses here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<String>,
-}
-
-/// What `adi-webapp-api`'s create handler scaffolds when a request names no template at all — the
-/// original dependency-free scaffold, kept as the default so every existing caller and every
-/// dashboard created before templates existed goes on meaning the same thing.
-pub const TEMPLATE_DASHBOARD: &str = "dashboard";
-/// The Vite + React scaffold (`crates/adi-webapp-api/templates/vite-react` in the platform repo).
-pub const TEMPLATE_VITE_REACT: &str = "vite-react";
-/// Every template id a create or import request may name, in the order offered to a human (a
-/// template picker lists these, in this order).
-pub const TEMPLATES: &[&str] = &[TEMPLATE_DASHBOARD, TEMPLATE_VITE_REACT];
-
-/// Whether `id` is a template this build knows how to scaffold.
-#[must_use]
-pub fn is_known_template(id: &str) -> bool {
-    TEMPLATES.contains(&id)
 }
 
 /// Read a dashboard directory's `config.toml` manifest, degrading a missing or malformed file to
@@ -123,7 +118,6 @@ pub fn write_manifest(dir: &Path, manifest: &Manifest) -> std::io::Result<()> {
         ("archived_at", manifest.archived_at.map(|ts| ts.to_string())),
         ("moved_to", manifest.moved_to.as_deref().map(toml_string)),
         ("icon", manifest.icon.as_deref().map(toml_string)),
-        ("created_from", manifest.created_from.as_deref().map(toml_string)),
     ] {
         if let Some(value) = value {
             out.push_str(key);
@@ -133,6 +127,14 @@ pub fn write_manifest(dir: &Path, manifest: &Manifest) -> std::io::Result<()> {
         }
     }
     // Tables last: in TOML a bare key after a `[table]` header belongs to that table.
+    if let Some(created_from) = &manifest.created_from {
+        use std::fmt::Write as _;
+        out.push_str("\n[created_from]\n");
+        let _ = writeln!(out, "template = {}", toml_string(&created_from.template));
+        if let Some(command) = &created_from.command {
+            let _ = writeln!(out, "command = {}", toml_literal_string(command));
+        }
+    }
     for (id, widget) in &manifest.widget {
         out.push_str(&format!("\n[widget.{}]\n", toml_key(id)));
         for (key, value) in [
@@ -155,6 +157,18 @@ fn toml_string(value: &str) -> String {
         .replace('"', "\\\"")
         .replace('\n', "\\n");
     format!("\"{escaped}\"")
+}
+
+/// Quote a value as a TOML literal string (`'...'`) when it has nothing a literal string
+/// forbids (a `'` or a newline), the same way `template.toml`'s own `command` is written — so a
+/// command carrying `"$VAR"` round-trips with no escaping to read. Falls back to a basic string
+/// otherwise, since a literal string cannot represent one at all.
+fn toml_literal_string(value: &str) -> String {
+    if value.contains('\'') || value.contains('\n') {
+        toml_string(value)
+    } else {
+        format!("'{value}'")
+    }
 }
 
 /// A table key as TOML accepts it: bare when it is only the characters a bare key allows, quoted
@@ -222,7 +236,13 @@ mod tests {
                 moved_to: Some("laptop-b".to_string()),
                 icon: Some("receipt".to_string()),
                 widget: BTreeMap::new(),
-                created_from: Some("vite-react".to_string()),
+                created_from: Some(CreatedFrom {
+                    template: "vite-react".to_string(),
+                    command: Some(
+                        r#"bun create adi-family/dashboard-vite-react "$ADI_DASHBOARD_DIR""#
+                            .to_string(),
+                    ),
+                }),
             },
         )
         .expect("write");
@@ -232,7 +252,37 @@ mod tests {
         assert!(raw.contains("archived_at = 1786839320\n"), "{raw}");
         assert!(raw.contains("moved_to = \"laptop-b\"\n"), "{raw}");
         assert!(raw.contains("icon = \"receipt\"\n"), "{raw}");
-        assert!(raw.contains("created_from = \"vite-react\"\n"), "{raw}");
+        assert!(raw.contains("[created_from]\n"), "{raw}");
+        assert!(raw.contains("template = \"vite-react\"\n"), "{raw}");
+        assert!(
+            raw.contains(r#"command = 'bun create adi-family/dashboard-vite-react "$ADI_DASHBOARD_DIR"'"#),
+            "the command is a TOML literal string, unescaped: {raw}"
+        );
+
+        let back = read_manifest(&dir);
+        assert_eq!(back.created_from.as_ref().map(|c| c.template.as_str()), Some("vite-react"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_created_from_with_a_quote_in_its_command_falls_back_to_a_basic_string() {
+        let dir = scratch("created-from-quote");
+        write_manifest(
+            &dir,
+            &Manifest {
+                created_from: Some(CreatedFrom {
+                    template: "local".to_string(),
+                    command: Some("echo 'it's quoted'".to_string()),
+                }),
+                ..Manifest::default()
+            },
+        )
+        .expect("write");
+        let back = read_manifest(&dir);
+        assert_eq!(
+            back.created_from.and_then(|c| c.command),
+            Some("echo 'it's quoted'".to_string())
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
