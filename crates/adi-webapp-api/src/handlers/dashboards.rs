@@ -434,19 +434,34 @@ const ID_FALLBACK: &str = "dashboard";
 
 // MARK: migration — replacing generated files with the current templates
 
-/// The generation stamp each generated entry point carries, near the top of its own file. Bump one
-/// when you change the template beside it, and every dashboard picks the change up on the next
-/// listing.
+/// The generation stamp each generated entry point carries, near the top of its own file. Bump the
+/// version in [`FRONTEND_ENTRY_STAMP`] & co. when you change the template beside it, and every
+/// dashboard that already carries *some* version of the matching prefix picks the change up on the
+/// next listing.
 ///
-/// A stamp names what the **current** template has, and [`restamp_entry_point`] migrates on its
-/// *absence*. That inversion is the whole mechanism. The alternative — a marker naming what the
-/// old file had — needs a fresh constant and a fresh migration call per change, and worse, cannot
-/// catch a file that a *previous* migration wrote, so the second change in a row never lands
-/// anywhere. One stamp covers every generation there has ever been, including the ones migration
-/// itself produced, and including files written before stamps existed at all.
+/// A stamp names what the **current** template has, and [`restamp_entry_point`] migrates a file
+/// carrying an older one on that absence. That inversion is the whole mechanism. The alternative —
+/// a marker naming what the old file had — needs a fresh constant and a fresh migration call per
+/// change, and worse, cannot catch a file that a *previous* migration wrote, so the second change
+/// in a row never lands anywhere. One stamp covers every generation there has ever been, including
+/// the ones migration itself produced.
+///
+/// Each stamp's own *prefix* (the same string with the trailing version number dropped) is the
+/// other half of the mechanism, and the one that actually decides whether a file is ours to
+/// rewrite at all: [`restamp_entry_point`] only ever touches a file that already carries the
+/// prefix of *some* generation. A file with no stamp at all — a template-created dashboard's entry
+/// point, deliberately unstamped since no template this platform ships is migrated — is never
+/// ours, whatever else is true of its shape (ADI-MONO-199/203: a `plain`-template dashboard is
+/// otherwise shaped identically to a pre-template one, and a weaker disk signal here (originally,
+/// "does `scripts/` exist") would silently stop migrating any of the 25 real dashboards an agent
+/// happened to add a `scripts/` directory to).
+const SHELL_STAMP_PREFIX: &str = "<!-- adi-shell:";
 const SHELL_STAMP: &str = "<!-- adi-shell: 3";
+const FRONTEND_ENTRY_STAMP_PREFIX: &str = "// adi-frontend-entry:";
 const FRONTEND_ENTRY_STAMP: &str = "// adi-frontend-entry: 1";
+const BACKEND_ENTRY_STAMP_PREFIX: &str = "// adi-backend-entry:";
 const BACKEND_ENTRY_STAMP: &str = "// adi-backend-entry: 1";
+const WIDGET_ENTRY_STAMP_PREFIX: &str = "// adi-widget-entry:";
 const WIDGET_ENTRY_STAMP: &str = "// adi-widget-entry: 1";
 
 /// Whether `dir` is a **vite-react** dashboard — decided from what is actually on disk, never
@@ -455,21 +470,6 @@ const WIDGET_ENTRY_STAMP: &str = "// adi-widget-entry: 1";
 /// Bun package of its own.
 fn is_vite_react(dir: &Path) -> bool {
     dir.join("frontend").join("package.json").is_file()
-}
-
-/// Whether `dir` was created by running a template's own command (ADI-MONO-199/201) rather than
-/// the compiled-in scaffold this function otherwise migrates — decided from disk, exactly like
-/// [`is_vite_react`] and for the same reason never from the manifest's `created_from`.
-///
-/// A `plain`-template dashboard is otherwise **shaped identically** to a pre-template one (the
-/// public `dashboard-plain` repo is a port of the same scaffold, stamp comments and all
-/// deliberately dropped): without this, the very first listing after creating one would see
-/// `frontend/index.html` missing the generation stamp and "fix" it straight back to the
-/// compiled-in file, the one rewrite ADI-MONO-199 promises never happens. Every template this
-/// platform ships writes its own `scripts/` directory (its init step) — a directory the compiled
-/// scaffold never had reason to create — so that is the disk fact this checks.
-fn is_templated(dir: &Path) -> bool {
-    dir.join("scripts").is_dir()
 }
 
 /// Bring a dashboard's generated files up to the current templates, in place, the next time it is
@@ -484,27 +484,31 @@ fn is_templated(dir: &Path) -> bool {
 /// and routes under `frontend/modules/` and `backend/routes/` are what a user or an agent authored,
 /// and are never read here, let alone written.
 ///
-/// A vite-react dashboard's files, or any template-created dashboard's, are created once and
-/// never rewritten after that (no migration path exists for either) — this is the guard that
-/// keeps this function's rewrites from ever reaching one.
+/// A vite-react dashboard's files are created once and never rewritten after that (no migration
+/// path exists for that scaffold at all) — this is the guard that keeps this function's rewrites
+/// from ever reaching one. A template-created dependency-free dashboard needs no such guard here:
+/// [`restamp_entry_point`]'s own prefix check already leaves an unstamped file alone.
 fn migrate(dir: &Path, name: &str) {
-    if is_vite_react(dir) || is_templated(dir) {
+    if is_vite_react(dir) {
         return;
     }
     migrate_hive(dir, name);
     let frontend = dir.join("frontend");
     restamp_entry_point(
         &frontend.join("index.ts"),
+        FRONTEND_ENTRY_STAMP_PREFIX,
         FRONTEND_ENTRY_STAMP,
         FRONTEND_INDEX_TS,
     );
     restamp_entry_point(
         &frontend.join("index.html"),
+        SHELL_STAMP_PREFIX,
         SHELL_STAMP,
         &FRONTEND_INDEX_HTML,
     );
     restamp_entry_point(
         &dir.join("backend").join("index.ts"),
+        BACKEND_ENTRY_STAMP_PREFIX,
         BACKEND_ENTRY_STAMP,
         BACKEND_INDEX_TS,
     );
@@ -522,24 +526,29 @@ fn migrate_widget_entry(dir: &Path) {
     }
     let entry = dir.join(WIDGET_DIR).join("index.ts");
     if entry.exists() {
-        restamp_entry_point(&entry, WIDGET_ENTRY_STAMP, &WIDGET_INDEX_TS);
+        restamp_entry_point(&entry, WIDGET_ENTRY_STAMP_PREFIX, WIDGET_ENTRY_STAMP, &WIDGET_INDEX_TS);
     } else {
         let _ = std::fs::write(entry, WIDGET_INDEX_TS.as_str());
     }
 }
 
-/// Replace one generated entry point with the current template while it does not spell `stamp`.
-/// Idempotent: the stamp is there once the first pass has run.
+/// Replace one generated entry point with the current template — but only when it is recognisably
+/// **ours** to begin with: it has to carry `prefix`, some generation of this file's own stamp,
+/// before this ever touches it. Idempotent: once rewritten, the file carries `stamp` (the current,
+/// full one), which is also a `prefix` match, so a second pass is a no-op.
 ///
 /// It replaces a hand-edited entry point rather than leaving it be, which is the documented
 /// contract for these three files — the scaffold README marks each "do not edit", and everything a
 /// dashboard actually does lives in `frontend/modules/` and `backend/routes/`, which migration
-/// never reads.
-fn restamp_entry_point(path: &Path, stamp: &str, template: &str) {
+/// never reads. But a file that never carried `prefix` at all was never one of these three files
+/// as this platform generates them — a template-created dashboard's entry point, deliberately
+/// unstamped — and `prefix` is what tells the two apart from disk, the same way [`is_vite_react`]
+/// tells vite-react apart: never from the manifest's `created_from`.
+fn restamp_entry_point(path: &Path, prefix: &str, stamp: &str, template: &str) {
     let Ok(current) = std::fs::read_to_string(path) else {
         return;
     };
-    if current.contains(stamp) {
+    if current.contains(stamp) || !current.contains(prefix) {
         return;
     }
     let _ = std::fs::write(path, template);
@@ -923,6 +932,15 @@ mod tests {
     /// A dashboard exactly as the pre-one-origin scaffold left it: a hive file with no `proxy:`
     /// anywhere, entry points that still resolve and inject the backend's port, and one authored
     /// panel and route to prove migration keeps its hands off them.
+    ///
+    /// Each entry point carries an **old generation** of its own stamp (version `0` — this
+    /// codebase has only ever shipped version `1`; the `0` here is purely a fixture's stand-in for
+    /// "stamped, but behind"). That is deliberate, not incidental: [`restamp_entry_point`] only
+    /// ever rewrites a file that already carries *some* generation of its stamp prefix — one with
+    /// no stamp at all is a template-created dashboard's, never ours, and is left alone (found on
+    /// a real dev-flavour run, ADI-MONO-199/203). A genuinely stamp-less dashboard is not a
+    /// real case to simulate any more: every one of this machine's own 24-and-counting existing
+    /// dashboards already carries the current stamp by the time this change landed.
     fn legacy_dashboard(root: &Path, id: &str, name: &str) -> PathBuf {
         let dir = root.join(id);
         std::fs::create_dir_all(dir.join("frontend").join("modules")).expect("frontend dir");
@@ -936,17 +954,17 @@ mod tests {
         .expect("hive file");
         std::fs::write(
             dir.join("frontend").join("index.ts"),
-            "const p = await backendPort(); // reads ports/registry.json\n",
+            "// adi-frontend-entry: 0\nconst p = await backendPort(); // reads ports/registry.json\n",
         )
         .expect("frontend entry");
         std::fs::write(
             dir.join("frontend").join("index.html"),
-            "<script>const api = `http://127.0.0.1:${config.backendPort}`;</script>\n",
+            "<!-- adi-shell: 0 --><script>const api = `http://127.0.0.1:${config.backendPort}`;</script>\n",
         )
         .expect("shell");
         std::fs::write(
             dir.join("backend").join("index.ts"),
-            "const CORS = { \"access-control-allow-origin\": \"*\" };\n",
+            "// adi-backend-entry: 0\nconst CORS = { \"access-control-allow-origin\": \"*\" };\n",
         )
         .expect("backend entry");
         std::fs::write(
@@ -1118,13 +1136,28 @@ mod tests {
         // A hand-edited entry point is *replaced*, not preserved — the deliberate cost of
         // migrating on the current template's stamp rather than on the old file's shape. These
         // three files are generated ("do not edit" in the scaffold README); what a dashboard
-        // actually does lives in modules/ and routes/, which the test below covers.
+        // actually does lives in modules/ and routes/, which the test below covers. Keeping some
+        // generation of the stamp is what keeps this file ours to restamp at all — see the next
+        // assertion for the one way out of it.
         let entry = dir.join("frontend").join("index.ts");
-        std::fs::write(&entry, "// mine now\n").expect("hand edit");
+        std::fs::write(&entry, "// adi-frontend-entry: 0\n// mine now\n").expect("hand edit, stamp kept");
         migrate(&dir, "Nosh");
         assert_eq!(
             std::fs::read_to_string(&entry).expect("entry point"),
             FRONTEND_INDEX_TS
+        );
+
+        // The one way out: strip the stamp line entirely, and the file opts out of migration for
+        // good — the same disk fact that keeps a template-created dashboard's own entry points
+        // (never stamped at all) from being clobbered (ADI-MONO-199/203). This is the deliberate
+        // cost of that fix, not an oversight: "replaced, not preserved" above now means "replaced
+        // unless you remove the one marker that says it's ours."
+        std::fs::write(&entry, "// mine now, and I deleted the marker\n").expect("hand edit, no stamp");
+        migrate(&dir, "Nosh");
+        assert_eq!(
+            std::fs::read_to_string(&entry).expect("entry point"),
+            "// mine now, and I deleted the marker\n",
+            "a file with no stamp at all is no longer ours to touch"
         );
     }
 
@@ -1143,16 +1176,28 @@ mod tests {
         let root = scratch("stamps");
         let dir = legacy_dashboard(&root, "dddd", "Nosh");
         // Three unrelated files, so a stamp that matched the wrong one would show up as a file
-        // left behind rather than as a passing test.
-        for (path, template) in [
-            (dir.join("frontend").join("index.ts"), FRONTEND_INDEX_TS),
+        // left behind rather than as a passing test. Each one keeps *some* generation of its own
+        // stamp prefix — a stale file with no stamp at all is a different case entirely (see
+        // `migration_leaves_a_templated_plain_dashboards_files_untouched`), not what this test is
+        // about.
+        for (path, stale, template) in [
+            (
+                dir.join("frontend").join("index.ts"),
+                "// adi-frontend-entry: 0\n// some earlier generation\n",
+                FRONTEND_INDEX_TS,
+            ),
             (
                 dir.join("frontend").join("index.html"),
+                "<!-- adi-shell: 0 -->\n<!doctype html>\n",
                 FRONTEND_INDEX_HTML.as_str(),
             ),
-            (dir.join("backend").join("index.ts"), BACKEND_INDEX_TS),
+            (
+                dir.join("backend").join("index.ts"),
+                "// adi-backend-entry: 0\n// some earlier generation\n",
+                BACKEND_INDEX_TS,
+            ),
         ] {
-            std::fs::write(&path, "// some earlier generation\n").expect("stale entry point");
+            std::fs::write(&path, stale).expect("stale entry point");
             migrate(&dir, "Nosh");
             assert_eq!(
                 std::fs::read_to_string(&path).expect("entry point"),
@@ -1170,8 +1215,13 @@ mod tests {
         let shell = dir.join("frontend").join("index.html");
         // A shell that is current in every *other* respect — one origin already, so the
         // pre-one-origin marker would never have fired on it — and behind only on the shell's
-        // own generation. This is the case a legacy-marker migration cannot express.
-        std::fs::write(&shell, "<!doctype html><html><head></head></html>\n").expect("old shell");
+        // own generation (kept, so it is still recognisably ours to restamp at all). This is the
+        // case a legacy-marker migration cannot express.
+        std::fs::write(
+            &shell,
+            "<!-- adi-shell: 0 --><!doctype html><html><head></head></html>\n",
+        )
+        .expect("old shell");
 
         migrate(&dir, "Nosh");
 
@@ -2101,15 +2151,21 @@ mod tests {
     /// dashboard created from `adi-family/dashboard-plain` is otherwise shaped *exactly* like a
     /// pre-template one — same `frontend/index.ts` + `backend/index.ts`, no `frontend/package.json`
     /// — because the public repo is a port of the same scaffold with its stamp comments
-    /// deliberately dropped. Without [`is_templated`], the very first listing rewrote
-    /// `frontend/index.html` straight back to the compiled-in, stamped file.
+    /// deliberately dropped. An earlier fix guarded on `scripts/` existing (the public repo's own
+    /// init step) — reverted on review: a folder name is too weak a signal, since an agent adding a
+    /// `scripts/` directory to one of the real, pre-template dashboards for an unrelated reason
+    /// would have silently turned its migration off. [`restamp_entry_point`]'s own prefix check
+    /// (ignoring a file with no stamp of *any* generation) is the disk fact that actually
+    /// distinguishes the two, and needs nothing at the top of `migrate` at all.
     #[test]
     fn migration_leaves_a_templated_plain_dashboards_files_untouched() {
         let root = scratch("templated-plain-migrate");
         let dir = root.join("nosh");
         std::fs::create_dir_all(dir.join("frontend").join("modules")).expect("frontend");
         std::fs::create_dir_all(dir.join("backend").join("routes")).expect("backend");
-        std::fs::create_dir_all(dir.join("scripts")).expect("scripts — the templated-ness signal");
+        // A `scripts/` directory, same as the real public repos ship — present on purpose, to prove
+        // it is no longer what this depends on.
+        std::fs::create_dir_all(dir.join("scripts")).expect("scripts");
         std::fs::create_dir_all(dir.join(".adi")).expect("hive dir");
         std::fs::write(dir.join("scripts").join("adi-init.ts"), "// writes .adi/hive.yaml\n")
             .expect("init script");
@@ -2138,6 +2194,27 @@ mod tests {
                 path.display()
             );
         }
+    }
+
+    /// The other side of the same fix: a `scripts/` directory must not *also* exempt a real,
+    /// pre-template dashboard that happens to have gained one for an unrelated reason (an agent's
+    /// own helper script, say) — it is still migrated, because its entry points still carry an
+    /// old generation of this platform's own stamp.
+    #[test]
+    fn a_scripts_directory_does_not_exempt_an_old_stamped_dashboard_from_migration() {
+        let root = scratch("old-stamped-with-scripts-dir");
+        let dir = legacy_dashboard(&root, "ffff", "Nosh");
+        std::fs::create_dir_all(dir.join("scripts")).expect("an unrelated scripts dir");
+        std::fs::write(dir.join("scripts").join("backup.sh"), "#!/bin/sh\necho hi\n")
+            .expect("unrelated script");
+
+        migrate(&dir, "Nosh");
+
+        assert_eq!(
+            std::fs::read_to_string(dir.join("frontend").join("index.ts")).expect("entry"),
+            FRONTEND_INDEX_TS,
+            "a scripts/ dir must not have exempted this real, pre-template dashboard"
+        );
     }
 
     #[test]
