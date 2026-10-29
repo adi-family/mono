@@ -94,6 +94,11 @@ pub struct ElementOutcome {
     /// Anything worth telling the operator about this one element: why it was blocked, that a
     /// repository-versioned stamp was dropped, that it failed outright.
     pub note: Option<String>,
+    /// For a service element started as part of installing it (`start_it`): `Some(true)` when its
+    /// block was copied into a live hive, `Some(false)` when starting it was attempted and
+    /// refused, and `None` for an element that is not a service, did not land, or was installed
+    /// without `start_it`.
+    pub started: Option<bool>,
 }
 
 /// What installing a general (non-legacy) bundle answers with.
@@ -308,12 +313,13 @@ enum Relanded {
 /// element of it): read the pinned tree, land every element the selection names into its real
 /// store location, and record what happened.
 ///
-/// `name` and `start_it` are the legacy single-dashboard bundle's own knobs — what to call the
-/// copy, and whether to start it in the same act — passed straight through to
-/// [`crate::install::install`] when the tree turns out to be that shape. Neither means anything
-/// for a general bundle: an element lands under its published name, never the operator's (decision
-/// #3's own reasoning), and "start" is a per-kind question this function's own [`BundleInstalled`]
-/// has no single answer for.
+/// `name` is the legacy single-dashboard bundle's own knob — what to call the copy — passed
+/// straight through to [`crate::install::install`] when the tree turns out to be that shape, and
+/// meaningless for a general bundle, whose every element lands under its published name (decision
+/// #3's own reasoning). `start_it` applies to both shapes: a legacy app is started in the same
+/// act, and a general bundle's hive service elements are copied live once everything has landed —
+/// best-effort, so a service that refuses to start is reported on its own element rather than
+/// failing the whole install.
 ///
 /// # Errors
 /// [`Error::BadSpec`] / [`Error::BadAddress`] for a malformed address, [`Error::UnknownSource`] /
@@ -422,6 +428,7 @@ pub fn install(
                      own project scaffold is only used when you install it globally",
                     scope.project().unwrap_or_default()
                 )),
+                started: None,
             });
             continue;
         }
@@ -434,6 +441,7 @@ pub fn install(
                 id: Some(already.id.clone()),
                 renamed: false,
                 note: Some("already installed by an earlier call — left as it stands".to_string()),
+                started: None,
             });
             continue;
         }
@@ -459,6 +467,32 @@ pub fn install(
     }
 
     write_ledger(market, &addr.marketplace, &addr.slug, scope, &ledger)?;
+
+    // Starting on install. A hive service arrives parked; when the caller asked to start it — the
+    // panel's default, and the CLI without `--no-start` — copy each landed service's block into
+    // its hive the way `start_service` does, best-effort. A service that refuses to start (no
+    // build for this OS, a port already taken) is reported on its own element and never fails the
+    // whole install, exactly as the legacy single-dashboard path has always treated `start_it`.
+    if start_it {
+        for outcome in &mut outcomes {
+            if outcome.kind != Kind::Service || outcome.id.is_none() {
+                continue;
+            }
+            let spec =
+                format!("{}/{}/{}/{}", addr.marketplace, addr.slug, Kind::Service, outcome.name);
+            match start_service(market, &spec, scope) {
+                Ok(_) => outcome.started = Some(true),
+                Err(e) => {
+                    outcome.started = Some(false);
+                    let failed = format!("installed, but did not start: {e}");
+                    outcome.note = Some(match outcome.note.take() {
+                        Some(prev) => format!("{prev}; {failed}"),
+                        None => failed,
+                    });
+                }
+            }
+        }
+    }
 
     let notes = missing_secrets
         .iter()
@@ -900,6 +934,10 @@ pub struct BundleElementRow {
     pub description: Option<String>,
     /// The id it landed as, for a row inside a [`BundleInstall`]. Always `None` in the catalogue.
     pub id: Option<String>,
+    /// For a service row inside an install: `Some(true)` when its block is live in a hive,
+    /// `Some(false)` when it is still parked and has never been started. `None` for a non-service
+    /// row, and for every row in the catalogue — "is it running" is a question about one install.
+    pub started: Option<bool>,
 }
 
 /// A general bundle's status for the listing — `None` only when there is truly nothing to say:
@@ -937,6 +975,7 @@ pub fn status(market: &Marketplace, marketplace: &str, slug: &str, entry: &Bundl
             name: if *kind == Kind::Project { slug.to_string() } else { el.name().to_string() },
             description: el.description().map(str::to_string),
             id: None,
+            started: None,
         })
         .collect();
     for (_, ledger) in &ledgers {
@@ -950,6 +989,7 @@ pub fn status(market: &Marketplace, marketplace: &str, slug: &str, entry: &Bundl
                     name: el.name.clone(),
                     description: None,
                     id: None,
+                    started: None,
                 });
             }
         }
@@ -960,6 +1000,7 @@ pub fn status(market: &Marketplace, marketplace: &str, slug: &str, entry: &Bundl
     let installs = ledgers
         .into_iter()
         .map(|(scope, ledger)| {
+            let parked = services_dir(market, marketplace, slug, &scope);
             let mut rows: Vec<BundleElementRow> = ledger
                 .elements
                 .iter()
@@ -968,6 +1009,10 @@ pub fn status(market: &Marketplace, marketplace: &str, slug: &str, entry: &Bundl
                     name: el.name.clone(),
                     description: description_of(el.kind, &el.name),
                     id: Some(el.id.clone()),
+                    // A service parks at `<id>.yaml` until something starts it; once started the
+                    // parked file is gone. That file's presence is the whole truth of "running?".
+                    started: (el.kind == Kind::Service)
+                        .then(|| !parked.join(format!("{}.yaml", el.id)).is_file()),
                 })
                 .collect();
             sort_rows(&mut rows);
@@ -1161,6 +1206,7 @@ fn fold(kind: Kind, name: String, landed: Landed) -> (ElementOutcome, Option<Led
                 id: Some(id.clone()),
                 renamed,
                 note,
+                started: None,
             },
             Some(LedgerElement {
                 kind,
@@ -1176,6 +1222,7 @@ fn fold(kind: Kind, name: String, landed: Landed) -> (ElementOutcome, Option<Led
                 id: None,
                 renamed: false,
                 note: Some(reason),
+                started: None,
             },
             None,
         ),
@@ -1186,6 +1233,7 @@ fn fold(kind: Kind, name: String, landed: Landed) -> (ElementOutcome, Option<Led
                 id: None,
                 renamed: false,
                 note: Some(format!("did not install: {reason}")),
+                started: None,
             },
             None,
         ),

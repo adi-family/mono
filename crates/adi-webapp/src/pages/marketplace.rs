@@ -378,6 +378,9 @@ fn bundle_elements(app: &MarketplaceApp) -> Vec<MarketplaceBundleElement> {
                 name: el.name.clone(),
                 description: el.description.clone(),
                 id: None,
+                // A catalogue row from the manifest preview: "running?" is a question about one
+                // install, which this is not.
+                started: None,
             })
             .collect(),
     }
@@ -660,7 +663,7 @@ fn hero_action(form: MarketplaceForm, app: &MarketplaceApp) -> AnyView {
     let note = if legacy {
         "you name your copy"
     } else if installs == 0 {
-        "nothing runs until you start it"
+        "it starts as soon as you install it"
     } else {
         "a second copy, in a project of its own"
     };
@@ -1005,10 +1008,10 @@ fn install_block(
     .into_any()
 }
 
-/// One element inside an install: what it landed as, and — in the row's `\u{22ef}` — the acts that
-/// only make sense for something already here (§8: row actions in a menu, never a destructive word
-/// repeated down a column). A hive service, which arrives parked, gets Start there too; Start is
-/// idempotent on one already started, so offering it always costs nothing.
+/// One element inside an install: what it landed as, its running state when it has one, and — in
+/// the row's `\u{22ef}` — Uninstall (§8: a destructive word never repeated down a column). A hive
+/// service arrives parked, so until something runs it the row carries a plain inline Start; once it
+/// is running the button gives way to a "running" marker, and Start is idempotent regardless.
 fn installed_row(
     state: State,
     form: MarketplaceForm,
@@ -1019,6 +1022,9 @@ fn installed_row(
 ) -> AnyView {
     let spec = element_spec(&el.kind, &el.name);
     let is_service = el.kind == "services";
+    // A service arrives parked; `started` is `Some(false)` until something runs it and `Some(true)`
+    // once its block is live in a hive. Every other kind has nothing to start, and reports `None`.
+    let running = el.started == Some(true);
     let (m, s) = (marketplace.to_string(), slug.to_string());
     let scope_key = project.clone().unwrap_or_default();
     let start_key = format!("start-service:{m}/{s}/{spec}/{scope_key}");
@@ -1031,14 +1037,29 @@ fn installed_row(
         None => String::new(),
     };
 
-    let mut items = Vec::new();
-    if is_service {
-        items.push(menu_item(state, "Start", false, move || {
-            run(state, form, start_key.clone(),
-                fetch::start_marketplace_service(sm.clone(), ss.clone(), sname.clone(), sp.clone()));
-        }));
-    }
-    items.push(menu_item(state, "Uninstall", true, move || {
+    // A parked service gets a visible Start, the way a legacy copy does — the one safe act a row
+    // needs often belongs inline, not folded into the `\u{22ef}`. Once it is running there is
+    // nothing left to press, so the button gives way to a plain marker.
+    let busy = form.busy;
+    let start_btn = (is_service && !running).then(move || {
+        view! {
+            <button class="adi-btn" type="button"
+                prop:disabled=move || busy.get().is_some()
+                on:click=move |_| {
+                    run(state, form, start_key.clone(),
+                        fetch::start_marketplace_service(sm.clone(), ss.clone(), sname.clone(), sp.clone()));
+                }>
+                "Start"
+            </button>
+        }
+    });
+    let state_marker = match (is_service, el.started) {
+        (true, Some(true)) => Some(view! { <span class="adi-market__state">"running"</span> }.into_any()),
+        (true, Some(false)) => Some(view! { <span class="adi-market__state">"not running"</span> }.into_any()),
+        _ => None,
+    };
+
+    let items = vec![menu_item(state, "Uninstall", true, move || {
         if confirm(&format!(
             "Uninstall {confirm_spec}{where_}? Its siblings in this install are untouched, and so \
              is any other copy of this bundle."
@@ -1046,13 +1067,14 @@ fn installed_row(
             run(state, form, uninstall_key.clone(),
                 fetch::uninstall_marketplace_element(um.clone(), us.clone(), uspec.clone(), up.clone()));
         }
-    }));
+    })];
 
     view! {
         <li class="adi-market__element is-installed">
             {element_about(el)}
+            {state_marker}
             <span class="adi-spacer"></span>
-            {row_actions(state, format!("market:{m}/{s}/{spec}/{scope_key}"), (), items)}
+            {row_actions(state, format!("market:{m}/{s}/{spec}/{scope_key}"), start_btn, items)}
         </li>
     }
     .into_any()
@@ -1661,6 +1683,7 @@ mod tests {
             name: name.to_string(),
             description: None,
             id: id.map(str::to_string),
+            started: None,
         }
     }
 

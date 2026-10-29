@@ -142,6 +142,7 @@ fn bundle_element(e: adi_marketplace::bundle::BundleElementRow) -> MarketplaceBu
         name: e.name,
         description: e.description,
         id: e.id,
+        started: e.started,
     }
 }
 
@@ -325,11 +326,23 @@ fn install_message(done: &adi_marketplace::BundleOutcome) -> String {
 /// One element's own outcome, as a phrase: `agents/sales-bot → sales-bot`, or the note when it
 /// did not land.
 fn element_outcome_line(e: &adi_marketplace::ElementOutcome) -> String {
-    match (&e.id, &e.note) {
-        (Some(id), _) if !e.renamed => format!("{}/{} → {id}", e.kind, e.name),
-        (Some(id), _) => format!("{}/{} → {id} (renamed)", e.kind, e.name),
-        (None, Some(note)) => format!("{}/{}: {note}", e.kind, e.name),
-        (None, None) => format!("{}/{}: did not land", e.kind, e.name),
+    let landed = match &e.id {
+        Some(id) if !e.renamed => format!("{}/{} → {id}", e.kind, e.name),
+        Some(id) => format!("{}/{} → {id} (renamed)", e.kind, e.name),
+        None => format!(
+            "{}/{}: {}",
+            e.kind,
+            e.name,
+            e.note.as_deref().unwrap_or("did not land")
+        ),
+    };
+    match (e.started, &e.id, &e.note) {
+        (Some(true), _, _) => format!("{landed} (started)"),
+        // A landed service that refused to start carries the reason in its note; the id branch
+        // above does not print a note, so surface it here rather than losing it.
+        (Some(false), Some(_), Some(note)) => format!("{landed} — {note}"),
+        (Some(false), _, _) => format!("{landed} (did not start)"),
+        (None, _, _) => landed,
     }
 }
 
@@ -718,7 +731,7 @@ mod tests {
     }
 
     #[test]
-    fn an_install_takes_the_name_it_was_given_and_starts_nothing() {
+    fn an_install_takes_the_name_it_was_given_and_starts_it_by_default() {
         let (cfg, commit) = seeded("install");
 
         let res = install_marketplace_app(
@@ -728,11 +741,12 @@ mod tests {
         assert_eq!(res.status, 200, "{}", res.body);
         let done: MarketplaceDone = serde_json::from_str(&res.body).expect("done");
         assert!(done.message.contains("Sales CRM"), "{}", done.message);
-        assert!(done.message.contains("not started"), "{}", done.message);
+        // Start-on-install is the default now — it comes up without anyone asking.
+        assert!(done.message.contains("running"), "{}", done.message);
         let install = &done.state.apps[0].installs[0];
         assert_eq!(install.id, "sales-crm");
         assert_eq!(install.commit, commit);
-        assert!(!install.started);
+        assert!(install.started);
         assert!(!install.outdated);
 
         // A second copy is ordinary, and it is a second row rather than a refusal.
@@ -750,6 +764,21 @@ mod tests {
             "an unnamed copy takes the entry's own name: {:?}",
             done.state.apps[0].installs
         );
+        let _ = std::fs::remove_dir_all(cfg.root());
+    }
+
+    #[test]
+    fn an_install_can_be_asked_to_land_inert() {
+        let (cfg, _commit) = seeded("install-inert");
+
+        let res = install_marketplace_app(
+            &cfg,
+            br#"{"marketplace":"adi","slug":"crm","name":"Sales CRM","start":false}"#,
+        );
+        assert_eq!(res.status, 200, "{}", res.body);
+        let done: MarketplaceDone = serde_json::from_str(&res.body).expect("done");
+        assert!(done.message.contains("not started"), "{}", done.message);
+        assert!(!done.state.apps[0].installs[0].started);
         let _ = std::fs::remove_dir_all(cfg.root());
     }
 
@@ -787,8 +816,11 @@ mod tests {
     #[test]
     fn start_goes_through_the_door_and_flips_the_state() {
         let (cfg, _commit) = seeded("start");
-        let landed =
-            install_marketplace_app(&cfg, br#"{"marketplace":"adi","slug":"crm","name":"CRM"}"#);
+        // Installed inert on purpose, so this exercises the Start endpoint's own transition.
+        let landed = install_marketplace_app(
+            &cfg,
+            br#"{"marketplace":"adi","slug":"crm","name":"CRM","start":false}"#,
+        );
         assert_eq!(landed.status, 200, "{}", landed.body);
         let live = cfg
             .module("dashboards")
@@ -1096,7 +1128,11 @@ mod tests {
     #[test]
     fn starting_a_parked_service_lands_it_in_the_global_hive() {
         let (cfg, _commit) = seeded_bundle("start-service");
-        let _ = install_marketplace_app(&cfg, br#"{"marketplace":"adi","slug":"crm-suite"}"#);
+        // Land inert, so the service is genuinely parked before the Start endpoint moves it.
+        let _ = install_marketplace_app(
+            &cfg,
+            br#"{"marketplace":"adi","slug":"crm-suite","start":false}"#,
+        );
 
         let res = start_marketplace_service(
             &cfg,
@@ -1121,6 +1157,32 @@ mod tests {
             .status,
             404
         );
+        let _ = std::fs::remove_dir_all(cfg.root());
+    }
+
+    #[test]
+    fn installing_a_bundle_starts_its_services_by_default() {
+        let (cfg, _commit) = seeded_bundle("bundle-autostart");
+        let res = install_marketplace_app(&cfg, br#"{"marketplace":"adi","slug":"crm-suite"}"#);
+        assert_eq!(res.status, 200, "{}", res.body);
+
+        // The service came up as part of the install: its block is live in the global hive.yaml,
+        // and the catalogue row for it reports running.
+        let hive = cfg.module("hive").raw_path("hive.yaml");
+        assert!(
+            std::fs::read_to_string(&hive)
+                .unwrap_or_default()
+                .contains("redis.adi"),
+            "the service auto-started into the global hive.yaml"
+        );
+        let v: serde_json::Value = serde_json::from_str(&marketplace(&cfg).body).expect("json");
+        let redis = v["apps"][0]["bundle"]["installs"][0]["elements"]
+            .as_array()
+            .expect("elements")
+            .iter()
+            .find(|e| e["name"] == "redis")
+            .expect("redis row");
+        assert_eq!(redis["started"], true, "redis reports running: {redis}");
         let _ = std::fs::remove_dir_all(cfg.root());
     }
 
