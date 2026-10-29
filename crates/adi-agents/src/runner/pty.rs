@@ -375,8 +375,16 @@ mod tests {
         let claude = PtyRunner::new(Backend::PtyClaude);
         assert!(claude.check(&spec(json!({ "model": "opus" }))).is_ok());
         assert!(claude.check(&spec(Value::Null)).is_ok());
+        // A key this engine does not own is ignored (one shared `[arguments]` table, a chain that
+        // may span runtimes)...
+        assert!(
+            claude
+                .check(&spec(json!({ "skip_git_repo_check": true })))
+                .is_ok()
+        );
+        // ...but a bad value for a key it owns is still rejected.
         assert!(matches!(
-            claude.check(&spec(json!({ "output_format": "json" }))),
+            claude.check(&spec(json!({ "permission_mode": "nonsense" }))),
             Err(Error::Arguments(_))
         ));
         assert!(matches!(

@@ -33,6 +33,14 @@ extraction script cares about.
   resume it, rather than that only surfacing at the later turn. A conversation already stuck
   this way stays stuck — start a new one. A codex-cli newer than 0.163 is still refused until
   it has been checked and added to the range.
+- **An agent whose backend chain spans runtimes now runs — a Codex row with a Claude
+  fallback no longer dies on the other's arguments.** A v3 agent carries one `[arguments]`
+  table, but each backend row reads it through its own runtime's argument schema, and those
+  schemas were strict: a key one runtime owns (Claude's `allowed_tools`, Codex's
+  `skip_git_repo_check`) read as an *unknown field* to another and aborted the run — an
+  argument error, so failover did not even reroute to the next row. Each runtime now ignores
+  the keys it does not own and reads only its own, so a mixed chain and its fallback just work.
+  A genuine typo — a key no runtime owns — is still caught when the agent is saved.
 - **Backgrounding `adi-mono agents run` no longer costs a second wake (ADI-MONO-163).** A job
   started with `Bash(background: true)` registers an await of its own, watching the job's
   process exit. When the command running inside it is itself something that starts a second,

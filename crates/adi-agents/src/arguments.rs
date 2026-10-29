@@ -1,4 +1,11 @@
-//! Strict argument schemas for the built-in agent backends.
+//! Argument schemas for the built-in agent backends.
+//!
+//! Each struct reads only the keys its own runtime owns and *ignores* the rest. A v3 agent has one
+//! `[arguments]` table but a backend chain that may span runtimes — a Codex row and a Claude row
+//! reading the same table — so a key one runtime owns (`allowed_tools` for Claude,
+//! `skip_git_repo_check` for Codex) must not abort another. That is why these are no longer
+//! `deny_unknown_fields`; typos (a key no runtime owns) are caught at save by [`validate_builtin`]
+//! instead, against the union of every runtime's schema.
 //!
 //! Third-party backends should define their own serializable argument struct and use it as the
 //! type parameter in [`crate::AgentManifest`]. These built-in types exist so ADI's executors never
@@ -122,29 +129,84 @@ string_enum! {
     }
 }
 
-/// Validate arguments for every backend whose executor ships with this crate. Unknown/plugin
-/// backends own their argument type and are validated when they convert or call
-/// [`crate::Agents::get_typed`].
+/// Validate an agent's arguments against the built-in runtimes.
+///
+/// One agent carries one `[arguments]` table, but its backend chain may span runtimes, and each
+/// runtime reads only the keys it owns (the structs are no longer `deny_unknown_fields`). So a key
+/// is legitimate when *any* built-in runtime recognises it — `allowed_tools` for a Claude row,
+/// `skip_git_repo_check` for a Codex row — and a key no runtime owns is a typo. Each runtime's
+/// deserialiser still type-checks the keys it does own, so a bad *value* is rejected by its owner.
+///
+/// A plugin/unknown *starting* runtime (a non-empty [`Backend::Other`]) owns its own argument type
+/// and is validated when it converts, so it is left alone here. A v3 chained agent derives its
+/// runtime and so reads as the *empty* `Other` — that one is validated against the union below.
 pub(crate) fn validate_builtin(manifest: &StoredAgentManifest) -> AgentResult<()> {
-    match manifest.runtime() {
-        Backend::PtyClaude => manifest.typed_arguments::<PtyClaudeArguments>().map(drop),
-        Backend::ProcessClaude => manifest
-            .typed_arguments::<ProcessClaudeArguments>()
-            .map(drop),
-        Backend::PtyCodex => manifest.typed_arguments::<PtyCodexArguments>().map(drop),
-        Backend::ProcessCodex => manifest
-            .typed_arguments::<ProcessCodexArguments>()
-            .map(drop),
-        Backend::HarnessClaudeSdk => manifest
-            .typed_arguments::<HarnessClaudeSdkArguments>()
-            .map(drop),
-        Backend::HarnessAdi => manifest.typed_arguments::<HarnessAdiArguments>().map(drop),
-        Backend::Other(_) => Ok(()),
+    if matches!(manifest.runtime(), Backend::Other(id) if !id.is_empty()) {
+        return Ok(());
+    }
+    let value = manifest.arguments_value();
+    let Some(object) = value.as_object() else {
+        return Ok(());
+    };
+    if object.is_empty() {
+        return Ok(());
+    }
+
+    let runtimes = [
+        Backend::PtyClaude,
+        Backend::ProcessClaude,
+        Backend::PtyCodex,
+        Backend::ProcessCodex,
+        Backend::HarnessClaudeSdk,
+        Backend::HarnessAdi,
+    ];
+    let mut recognised = std::collections::BTreeSet::new();
+    for runtime in &runtimes {
+        recognised.extend(recognised_keys(runtime, &value)?);
+    }
+    for key in object.keys() {
+        if !recognised.contains(key) {
+            return Err(crate::Error::Arguments(format!(
+                "`{key}` is not a recognised argument for any of this agent's runtimes"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The keys of `value` that `runtime`'s typed arguments recognise.
+///
+/// Deserialising into the runtime's struct ignores keys it does not own (the structs are lenient)
+/// and so reads only its own; re-serialising then reports which of those survived. Deserialising
+/// also type-checks every key the runtime *does* own, so a bad value surfaces here as an error
+/// rather than as a silent drop at run time.
+fn recognised_keys(runtime: &Backend, value: &serde_json::Value) -> AgentResult<Vec<String>> {
+    fn keys_of<T>(value: &serde_json::Value) -> AgentResult<Vec<String>>
+    where
+        T: serde::de::DeserializeOwned + Serialize,
+    {
+        let typed: T = serde_json::from_value(value.clone())
+            .map_err(|e| crate::Error::Arguments(e.to_string()))?;
+        let back =
+            serde_json::to_value(&typed).map_err(|e| crate::Error::Arguments(e.to_string()))?;
+        Ok(back
+            .as_object()
+            .map(|o| o.keys().cloned().collect())
+            .unwrap_or_default())
+    }
+    match runtime {
+        Backend::PtyClaude => keys_of::<PtyClaudeArguments>(value),
+        Backend::ProcessClaude => keys_of::<ProcessClaudeArguments>(value),
+        Backend::PtyCodex => keys_of::<PtyCodexArguments>(value),
+        Backend::ProcessCodex => keys_of::<ProcessCodexArguments>(value),
+        Backend::HarnessClaudeSdk => keys_of::<HarnessClaudeSdkArguments>(value),
+        Backend::HarnessAdi => keys_of::<HarnessAdiArguments>(value),
+        Backend::Other(_) => Ok(Vec::new()),
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct PtyClaudeArguments {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_prompt: Option<String>,
@@ -168,7 +230,7 @@ pub struct PtyClaudeArguments {
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct ProcessClaudeArguments {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_prompt: Option<String>,
@@ -204,7 +266,7 @@ pub struct ProcessClaudeArguments {
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct PtyCodexArguments {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_prompt: Option<String>,
@@ -225,7 +287,7 @@ pub struct PtyCodexArguments {
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct ProcessCodexArguments {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_prompt: Option<String>,
@@ -260,7 +322,7 @@ pub struct ProcessCodexArguments {
 /// harness turn cap (`max_turns`) and the adi-mono command scope (`tools`), and drops the
 /// process-only options (`output_format`, `max_budget_usd`, `add_dir`).
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct HarnessClaudeSdkArguments {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_prompt: Option<String>,
@@ -316,7 +378,7 @@ pub struct HarnessClaudeSdkArguments {
 /// (only the ones matching the chosen provider are ever set). Every provider is implemented, so an
 /// agent is runnable as soon as it names one.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct HarnessAdiArguments {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_prompt: Option<String>,
@@ -551,19 +613,77 @@ mod tests {
         assert!(err.to_string().contains("non-negative integer"), "{err}");
     }
 
+    /// Run-time decode is lenient: a key one runtime owns is ignored by another, so one shared
+    /// `[arguments]` table can feed a chain that spans runtimes. Typos are caught at save by
+    /// `validate_builtin`, not here.
     #[test]
-    fn harness_backends_reject_unknown_fields() {
+    fn runtime_decode_ignores_other_runtimes_arguments() {
+        // The Claude SDK struct ignores Codex-only keys...
+        let claude: HarnessClaudeSdkArguments = serde_json::from_value(serde_json::json!({
+            "system_prompt": "hi",
+            "allowed_tools": "Read Edit",
+            "skip_git_repo_check": true,
+            "sandbox": "read-only",
+        }))
+        .expect("the Claude SDK struct ignores Codex-only keys");
+        assert_eq!(claude.allowed_tools.as_deref(), Some("Read Edit"));
+
+        // ...and the Codex struct ignores Claude-only keys.
+        let codex: ProcessCodexArguments = serde_json::from_value(serde_json::json!({
+            "system_prompt": "hi",
+            "allowed_tools": "Read Edit",
+            "skip_git_repo_check": true,
+        }))
+        .expect("the Codex struct ignores Claude-only keys");
+        assert!(codex.skip_git_repo_check);
+        assert_eq!(codex.system_prompt.as_deref(), Some("hi"));
+    }
+
+    fn manifest_v3(arguments: serde_json::Value) -> StoredAgentManifest {
+        StoredAgentManifest {
+            // No `backend` line: a v3 chained agent derives its runtime, reading as the empty
+            // `Other`, which `validate_builtin` checks against the union of the built-in schemas.
+            backend: None,
+            arguments: arguments
+                .as_object()
+                .expect("object")
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    /// The whole point of the fix: a chained agent carrying one row's Claude key and another row's
+    /// Codex key validates, because each is owned by *some* built-in runtime.
+    #[test]
+    fn validate_builtin_accepts_each_rows_arguments() {
+        let agent = manifest_v3(serde_json::json!({
+            "system_prompt": "hi",
+            "allowed_tools": "Read Edit",
+            "skip_git_repo_check": true,
+        }));
+        validate_builtin(&agent).expect("cross-runtime arguments are accepted");
+    }
+
+    /// A key no runtime owns is still a typo, named in the error.
+    #[test]
+    fn validate_builtin_rejects_a_typo() {
+        let agent = manifest_v3(serde_json::json!({
+            "system_prompt": "hi",
+            "max_truns": 4,
+        }));
+        let err = validate_builtin(&agent).expect_err("an unrecognised key is rejected");
+        assert!(err.to_string().contains("max_truns"), "{err}");
+    }
+
+    /// A bad *value* for an owned key is rejected by its owning runtime, even across the union.
+    #[test]
+    fn validate_builtin_rejects_a_bad_value_for_an_owned_key() {
+        let agent = manifest_v3(serde_json::json!({ "max_turns": "lots" }));
         assert!(
-            serde_json::from_value::<HarnessClaudeSdkArguments>(serde_json::json!({
-                "temperature": 0.2,
-            }))
-            .is_err()
-        );
-        assert!(
-            serde_json::from_value::<HarnessAdiArguments>(serde_json::json!({
-                "output_format": "json",
-            }))
-            .is_err()
+            validate_builtin(&agent).is_err(),
+            "a non-numeric max_turns is rejected"
         );
     }
 
