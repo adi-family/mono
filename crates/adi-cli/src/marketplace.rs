@@ -47,10 +47,11 @@ pub(crate) enum MarketplaceCommand {
         /// under its own published name.
         #[arg(long, value_name = "NAME")]
         name: Option<String>,
-        /// Start it as part of installing it, rather than leaving it inert. Only meaningful for a
-        /// legacy single-dashboard bundle.
-        #[arg(long)]
-        start: bool,
+        /// Do not start what you install — leave everything inert, to be started later with
+        /// `marketplace start`. By default an install starts what it lands: a legacy app's servers
+        /// come up, and a general bundle's hive services are copied live.
+        #[arg(long = "no-start")]
+        no_start: bool,
         /// File everything this install lands under a project you already have, by id. The
         /// recommended destination: it is the only way to hold the same bundle twice, and it keeps
         /// the bundle's tools, agents and triggers running in that project's own directory and
@@ -146,12 +147,12 @@ pub(crate) fn run_marketplace(command: MarketplaceCommand) -> Result<(), String>
         MarketplaceCommand::Install {
             spec,
             name,
-            start,
+            no_start,
             project,
             new_project,
         } => {
             let scope = destination(&market, project.as_deref(), new_project.as_deref())?;
-            install(&market, &spec, name.as_deref().unwrap_or(""), start, &scope)
+            install(&market, &spec, name.as_deref().unwrap_or(""), !no_start, &scope)
         }
         MarketplaceCommand::Uninstall { spec, project } => {
             uninstall(&market, &spec, &scope_of(project.as_deref())?)
@@ -448,15 +449,23 @@ fn install(
         adi_marketplace::BundleOutcome::Bundle(done) => {
             println!("{}/{} — installed {scope}:", done.marketplace, done.slug);
             for element in &done.elements {
-                match (&element.id, &element.note) {
-                    (Some(id), _) if !element.renamed => {
-                        println!("  {}/{} → {id}", element.kind, element.name);
+                let landed = match &element.id {
+                    Some(id) if !element.renamed => {
+                        format!("{}/{} → {id}", element.kind, element.name)
                     }
-                    (Some(id), _) => {
-                        println!("  {}/{} → {id} (renamed)", element.kind, element.name)
-                    }
-                    (None, Some(note)) => println!("  {}/{}: {note}", element.kind, element.name),
-                    (None, None) => println!("  {}/{}: did not land", element.kind, element.name),
+                    Some(id) => format!("{}/{} → {id} (renamed)", element.kind, element.name),
+                    None => format!(
+                        "{}/{}: {}",
+                        element.kind,
+                        element.name,
+                        element.note.as_deref().unwrap_or("did not land")
+                    ),
+                };
+                match (element.started, &element.id, &element.note) {
+                    (Some(true), _, _) => println!("  {landed} (started)"),
+                    (Some(false), Some(_), Some(note)) => println!("  {landed} — {note}"),
+                    (Some(false), _, _) => println!("  {landed} (did not start)"),
+                    (None, _, _) => println!("  {landed}"),
                 }
             }
             for note in &done.notes {

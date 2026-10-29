@@ -7,6 +7,12 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+/// The serde default for [`InstallMarketplaceApp::start`]: installing something is asking for it,
+/// so an install starts what it lands unless the caller explicitly says not to.
+fn default_start_true() -> bool {
+    true
+}
+
 /// `GET /api/health` — liveness plus identity and uptime.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Health {
@@ -4743,6 +4749,11 @@ pub struct MarketplaceBundleElement {
     /// The id it landed as, or `None` when it is declared but not installed here.
     #[serde(default)]
     pub id: Option<String>,
+    /// For a service row inside an install: `true` when it is running (its block is live in a
+    /// hive), `false` when it is still parked and has never been started. `None` for a non-service
+    /// row, and for every catalogue row — "is it running" is a fact about one install.
+    #[serde(default)]
+    pub started: Option<bool>,
 }
 
 /// One picture or clip in an app's gallery. The kind is resolved by the store — off the entry's
@@ -4813,9 +4824,11 @@ pub struct InstallMarketplaceApp {
     /// afterwards like any dashboard's, and the id and hostname are minted from it.
     #[serde(default)]
     pub name: String,
-    /// Whether to start it as part of the install. Off by default: an app's backend is somebody
-    /// else's TypeScript, and running it is a choice somebody makes.
-    #[serde(default)]
+    /// Whether to start it as part of the install. On by default: installing something is asking
+    /// for it, so a general bundle's hive services are copied live and a legacy app's servers come
+    /// up in the same act. Set it `false` to land everything inert and start it later with
+    /// `marketplace start`. Starting an app does run its code — somebody else's TypeScript — here.
+    #[serde(default = "default_start_true")]
     pub start: bool,
 }
 
