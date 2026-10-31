@@ -42,7 +42,7 @@ targets:
         # 2026-09-02: the reviewer's token was refused by a paste parser that only accepted the
         # exact string it was minted as. 4 carries the fix for that. `Info.plist` reads both of
         # these through $(...) rather than repeating them.
-        CURRENT_PROJECT_VERSION: 4
+        CURRENT_PROJECT_VERSION: 5
         MARKETING_VERSION: 0.1.0
         TARGETED_DEVICE_FAMILY: "1,2"
 
