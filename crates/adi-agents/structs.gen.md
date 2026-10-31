@@ -3338,6 +3338,8 @@ pub struct SessionRecord {
     pub outcome: Option<RunOutcome>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lease: Option<crate::LeaseRef>,
+    #[serde(default)]
+    pub launching: bool,
 }
 ```
 

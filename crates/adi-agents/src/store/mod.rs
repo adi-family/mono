@@ -88,7 +88,7 @@ const EVENT_SOURCE: &str = "agents";
 /// The columns of a record, in the order [`record::from_row`] reads them.
 const RECORD_COLUMNS: &str = "agent, id, backend, cwd, message, started_at, last_activity, \
                               hidden, runner_state, outcome, runner, starred, launched_by, \
-                              overrides, title, chain, chain_at, lease";
+                              overrides, title, chain, chain_at, lease, launching";
 
 /// The sessions under one root.
 ///
@@ -342,6 +342,10 @@ impl SessionStore {
             // caller — every automation, every launch with no mesh identity attached — leaves
             // this `None`, which reads as "server values only".
             lease: None,
+            // Set by `mark_launching` immediately after, by the one caller that is actually about
+            // to attempt a `send` (`Agents::launch_run`) — every other caller of `create`/
+            // `create_as` opens a record with nothing racing to finish it, and leaves this `false`.
+            launching: false,
         };
         self.conn()?
             .execute(
@@ -879,6 +883,48 @@ impl SessionStore {
                 rusqlite::params![agent, id, instructions],
             )
             .map_err(|e| db::sql_err("freeze the owner instructions of", e))?;
+        Ok(())
+    }
+
+    /// Mark a just-created session as still launching: its record exists, but nothing has reached
+    /// far enough into a runner's `send` to write anything into its
+    /// [`runner_state`](SessionRecord::runner_state) (ADI-MONO-218). Until
+    /// [`clear_launching`](Self::clear_launching)
+    /// undoes it, a listing reads this session as running even though its runner would otherwise
+    /// say it is not — which is the whole point: a child that has not been spawned yet, or a pid
+    /// not yet written, must not be mistaken for a run that already finished.
+    ///
+    /// Called only from the one launch path that is about to attempt a `send`. A session opened
+    /// directly through [`create`](Self::create)/[`create_as`](Self::create_as) by anything else
+    /// is never marked, and reads exactly as it always has.
+    ///
+    /// # Errors
+    /// Returns database errors.
+    pub(crate) fn mark_launching(&self, agent: &str, id: &str) -> Result<()> {
+        self.conn()?
+            .execute(
+                "UPDATE sessions SET launching = 1 WHERE agent = ?1 AND id = ?2",
+                rusqlite::params![agent, id],
+            )
+            .map_err(|e| db::sql_err("mark the launch of", e))?;
+        Ok(())
+    }
+
+    /// The other half of [`mark_launching`](Self::mark_launching): the attempt to start this
+    /// session is over, whichever way it came out — a `send` that succeeded, one that failed and
+    /// recorded [`LAUNCH_FAILED`](crate::LAUNCH_FAILED), or a launch that chose to park a queued
+    /// message instead of sending at all. From here a listing goes back to judging this session by
+    /// its runner alone.
+    ///
+    /// # Errors
+    /// Returns database errors.
+    pub(crate) fn clear_launching(&self, agent: &str, id: &str) -> Result<()> {
+        self.conn()?
+            .execute(
+                "UPDATE sessions SET launching = 0 WHERE agent = ?1 AND id = ?2",
+                rusqlite::params![agent, id],
+            )
+            .map_err(|e| db::sql_err("clear the launch mark of", e))?;
         Ok(())
     }
 

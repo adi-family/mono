@@ -89,6 +89,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     lease_cap     TEXT,
     lease_cap_secret TEXT,
     lease_wait_notified_turn INTEGER,
+    launching     INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (agent, id)
 );
 CREATE INDEX IF NOT EXISTS sessions_newest
@@ -265,6 +266,12 @@ const MIGRATIONS: &[&str] = &[
     // because the two events are published independently and must not suppress each other. NULL
     // for every session ever opened before this existed and for one never parked on a lease.
     "ALTER TABLE sessions ADD COLUMN lease_wait_notified_turn INTEGER",
+    // Whether this session's record exists but nothing has yet written into its runner state —
+    // the window between `create_as` and the runner's first pid write that `note_finished` must
+    // read as "running", not "stopped" (ADI-MONO-218). `NOT NULL DEFAULT 0` for the same reason
+    // `starred` has one: every session ever opened before this existed had, by the time this
+    // migration could run against it, long since finished launching one way or another.
+    "ALTER TABLE sessions ADD COLUMN launching INTEGER NOT NULL DEFAULT 0",
 ];
 
 // One connection per thread per database.

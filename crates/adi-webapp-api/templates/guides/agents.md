@@ -151,7 +151,11 @@ question you ask the store rather than a stack of logs.
   second either way — it starts the run and hands back that wake itself — so backgrounding it buys
   nothing and costs a second, pointless wake when the launcher process exits almost immediately.
 - The ending is noticed by whoever looks first — the panel's poll, this command, a trigger's child
-  — and written down exactly once, so the event does not repeat.
+  — and written down exactly once, so the event does not repeat. A run still being launched — its
+  session opened, its engine not yet spawned — reads as running rather than finished for exactly
+  that reason: a listing landing in that gap must not mistake "nothing to report yet" for "already
+  over" (ADI-MONO-218). One still stuck there a full minute later, almost always because whatever
+  was launching it died first, is recorded honestly as `launch_lost`.
 - `unknown` means the run stopped without leaving anything an engine parser could read. That is the
   one case worth opening the log for.
 

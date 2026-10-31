@@ -121,6 +121,21 @@ const MANIFEST_EXT: &str = "toml";
 /// this reason" from "there was no model — the command could not be spawned".
 const LAUNCH_FAILED: &str = "launch_failed";
 
+/// The `terminal_reason` of a run whose grace to get a pid into its state slot ran out with
+/// nothing ever having started ([`note_finished`](Agents::note_finished), ADI-MONO-218) —
+/// distinct from [`LAUNCH_FAILED`], which means a runner's `send` actually ran and said why. This
+/// means `send` never got that far: most likely the process driving the launch died between
+/// [`create_as`](store::SessionStore::create_as) and the runner's first pid write.
+const LAUNCH_LOST: &str = "launch_lost";
+
+/// How long a session may sit [`launching`](store::SessionRecord::launching) with no pid before
+/// [`note_finished`](Agents::note_finished) gives up on it and records [`LAUNCH_LOST`] rather than
+/// waiting forever (ADI-MONO-218). The window the race actually needs is the time to spawn a
+/// child and write its pid — milliseconds — so this is generous on purpose: wide enough that no
+/// real launch, however loaded the machine, trips it, narrow enough that a launcher that really
+/// did die between `create_as` and `send` leaves nothing stuck for long.
+const LAUNCHING_GRACE_MS: u64 = 60_000;
+
 /// The `terminal_reason` of a turn refused because its lease had no live value and the effective
 /// `missing` is `"fail"` (`docs/byo-credentials.md` §10, ADI-MONO-181 P2.7,
 /// [`fail_turn_for_missing_lease`](Agents::fail_turn_for_missing_lease)) — its own word, distinct
@@ -1155,14 +1170,30 @@ impl Agents {
             .ok_or_else(|| Error::NotRunnable(agent.manifest.runtime().to_string()))
     }
 
-    /// Whether this session's work is still in flight, asked of whichever runner started it.
+    /// Whether this session's work is still in flight, asked of whichever runner started it, or it
+    /// is still within its grace to get a pid into its state slot at all (ADI-MONO-218).
     ///
     /// The record's own backend, not the agent's current one: re-pointing an agent at another
     /// engine must not make its existing runs unreadable, which is the whole reason the backend is
     /// a field of the session rather than a directory it lives in.
     fn session_is_alive(store: &SessionStore, record: &SessionRecord) -> bool {
-        runner_of(record)
-            .is_some_and(|runner| runner.is_alive(&store.session(&record.agent, &record.id)))
+        Self::still_launching(record)
+            || runner_of(record)
+                .is_some_and(|runner| runner.is_alive(&store.session(&record.agent, &record.id)))
+    }
+
+    /// Whether `record` is marked [`launching`](store::SessionRecord::launching) and is still
+    /// within [`LAUNCHING_GRACE_MS`] of having been created — the window
+    /// [`mark_launching`](SessionStore::mark_launching) opens and
+    /// [`clear_launching`](SessionStore::clear_launching) closes, during which a listing must read
+    /// a session as running whatever its runner says, because nothing has been spawned for the
+    /// runner to have an opinion about yet (ADI-MONO-218).
+    ///
+    /// Past the grace this reads `false` even for a still-`launching` record: that is exactly the
+    /// case [`note_finished`](Self::note_finished) treats as lost rather than running, and nothing
+    /// else should disagree with it about which is which.
+    fn still_launching(record: &SessionRecord) -> bool {
+        record.launching && now_ms().saturating_sub(record.started_at) < LAUNCHING_GRACE_MS
     }
 
     /// What is running right now, totalled and divided between projects — one walk of the session
@@ -1493,6 +1524,12 @@ impl Agents {
             message,
             launched_by.unwrap_or_default(),
         )?;
+        // From here until `send_or_note_failure` below clears it (or the lease-wait branch does,
+        // just below, for the one path that never reaches `send` at all), this run reads as
+        // running even though no runner has anything to say about it yet. Without this, a listing
+        // that lands in this exact window sees "not running, no outcome" and records this run's
+        // ending before it has even started (ADI-MONO-218).
+        store.mark_launching(&agent.name, &record.id)?;
         // The launch was allowed to proceed above only because `spawn_policy` is still `observe` —
         // logged and published now that there is a run id to name, so an operator can see what
         // switching to `enforce` would have stopped before doing it.
@@ -1549,6 +1586,10 @@ impl Agents {
             && let Some(lease::Readiness::Wait { user, names }) =
                 lease.as_ref().map(|l| lease::readiness(Some(l), &self.config, &agent.manifest.secrets, self.lease_values()))
         {
+            // This run is never going to call `send` at all — it is parked on the queue instead,
+            // and already protected from `note_finished` by that (`Pending::blocks`). Clear the
+            // mark rather than leave it to time out at the grace and be misread as a lost launch.
+            store.clear_launching(&agent.name, &record.id)?;
             store.enqueue(&agent.name, &record.id, message, images, markers, QueueMode::Regular)?;
             self.note_waiting_on_unlock(&store, &agent.name, &record.id, &user, &names);
             return Ok(Launch::Process {
@@ -2450,7 +2491,12 @@ impl Agents {
         message: &str,
     ) -> Result<()> {
         let session = store.session(agent, run_id);
-        let error = match runner.send(spec, &session, message) {
+        let result = runner.send(spec, &session, message);
+        // The attempt is over, whichever way it came out — clear the mark `launch_run` left
+        // before the caller even learns the result (ADI-MONO-218). A reply's `run_id` was never
+        // marked in the first place, so this is a no-op for every call that is not a fresh launch.
+        let _ = store.clear_launching(agent, run_id);
+        let error = match result {
             Ok(()) => return Ok(()),
             Err(error) => error,
         };
@@ -2922,30 +2968,37 @@ impl Agents {
         store
             .list(&agent.name)
             .into_iter()
-            .map(|record| RunInfo {
-                capabilities: session_capabilities(&record),
-                // From the record just listed: liveness reads the runner's state slot, which is a
-                // column that row already carried — and it is asked of the runner that started
-                // *this* session, which is not always the one the listing was opened with.
-                running: runner_of(&record)
-                    .as_deref()
-                    .unwrap_or(runner)
-                    .is_alive(&store.session_as_listed(&record)),
-                state: RunLifecycle::Running,
-                run_id: record.id,
-                started_at: record.started_at,
-                last_activity: record.last_activity,
-                message: record.message,
-                title: record.title,
-                hidden: record.hidden,
-                starred: record.starred,
-                launched_by: record.launched_by,
-                overrides: record
-                    .overrides
-                    .as_ref()
-                    .map(RunOverrides::summary)
-                    .unwrap_or_default(),
-                outcome: record.outcome,
+            .map(|record| {
+                // Still within its grace to get a pid written (ADI-MONO-218) reads as running
+                // whatever the runner below would otherwise say — there is nothing for it to have
+                // an opinion about yet. Otherwise liveness reads the runner's state slot, which is
+                // a column the record just listed already carried — and it is asked of the runner
+                // that started *this* session, which is not always the one the listing was opened
+                // with.
+                let running = Self::still_launching(&record)
+                    || runner_of(&record)
+                        .as_deref()
+                        .unwrap_or(runner)
+                        .is_alive(&store.session_as_listed(&record));
+                RunInfo {
+                    capabilities: session_capabilities(&record),
+                    running,
+                    state: RunLifecycle::Running,
+                    run_id: record.id,
+                    started_at: record.started_at,
+                    last_activity: record.last_activity,
+                    message: record.message,
+                    title: record.title,
+                    hidden: record.hidden,
+                    starred: record.starred,
+                    launched_by: record.launched_by,
+                    overrides: record
+                        .overrides
+                        .as_ref()
+                        .map(RunOverrides::summary)
+                        .unwrap_or_default(),
+                    outcome: record.outcome,
+                }
             })
             .collect()
     }
@@ -2969,17 +3022,29 @@ impl Agents {
     /// now would tell a launcher the run is done when what actually happened is that its *turn*
     /// stopped. Skipped here, it is simply looked at again on the next listing, exactly like a run
     /// that is still genuinely mid-turn.
+    ///
+    /// A run reaching this loop still marked [`launching`](store::SessionRecord::launching)
+    /// (ADI-MONO-218) is the one case that is not read off its log at all: `!r.running` already
+    /// ruled out [`Self::still_launching`], so a `launching` record here can only mean its grace
+    /// ran out with no pid ever written — nobody is left to report how it ended, because nothing
+    /// ever started, and [`LAUNCH_LOST`] says exactly that instead of whatever an empty log would
+    /// otherwise be read as.
     fn note_finished(&self, agent: &StoredAgent, runs: &mut [RunInfo], pending: &Pending) {
         let store = self.sessions();
         for run in runs
             .iter_mut()
             .filter(|r| !r.running && r.outcome.is_none() && !pending.blocks(&r.run_id))
         {
-            let Some(runner) = store
-                .get(&agent.name, &run.run_id)
-                .as_ref()
-                .and_then(runner_of)
-            else {
+            let Some(record) = store.get(&agent.name, &run.run_id) else {
+                continue;
+            };
+            if record.launching {
+                let outcome = launch_lost_outcome(record.started_at);
+                self.record_and_announce(&store, &agent.name, &run.run_id, &outcome);
+                run.outcome = Some(outcome);
+                continue;
+            }
+            let Some(runner) = runner_of(&record) else {
                 continue;
             };
             let session = store.session(&agent.name, &run.run_id);
@@ -2990,27 +3055,7 @@ impl Agents {
                 run.started_at,
                 store::now_ms(),
             );
-            // Only the writer announces. A database error is not a reason to hold a listing up:
-            // the run stays outcome-less and the next look tries again. The claim and the event it
-            // announces are made atomic here (ADI-MONO-149).
-            let recorded = self
-                .with_event(|| {
-                    let recorded = store
-                        .record_outcome(&agent.name, &run.run_id, &outcome)
-                        .unwrap_or(false);
-                    let event = recorded.then(|| AgentRunFinished {
-                        agent: agent.name.clone(),
-                        run_id: run.run_id.clone(),
-                        terminal_reason: outcome.terminal_reason.clone(),
-                        is_error: outcome.is_error,
-                        duration_ms: outcome.duration_ms,
-                        active_ms: outcome.active_ms,
-                        cost_micro_usd: outcome.cost_micro_usd,
-                        result_head: outcome.result_head.clone(),
-                    });
-                    Ok((recorded, event))
-                })
-                .unwrap_or(false);
+            let recorded = self.record_and_announce(&store, &agent.name, &run.run_id, &outcome);
             if recorded {
                 // Hung off the same `true`, and that is the point: the one process that recorded the
                 // ending is the one that acts on it, so sixteen watchers of a spent backend produce
@@ -3019,6 +3064,37 @@ impl Agents {
             }
             run.outcome = Some(outcome);
         }
+    }
+
+    /// Claim the one write of `outcome` onto `run_id` and publish `adi.agents.run.finished` for
+    /// it, atomically (ADI-MONO-149) — the common tail [`note_finished`](Self::note_finished)
+    /// takes whether the ending it found was read off a live log or is
+    /// [`launch_lost_outcome`]'s own. Returns whether this call won the claim, same as
+    /// [`record_outcome`](SessionStore::record_outcome): only the writer announces, and a
+    /// database error is not a reason to hold a listing up — the run stays outcome-less and the
+    /// next look tries again.
+    fn record_and_announce(
+        &self,
+        store: &SessionStore,
+        agent: &str,
+        run_id: &str,
+        outcome: &store::RunOutcome,
+    ) -> bool {
+        self.with_event(|| {
+            let recorded = store.record_outcome(agent, run_id, outcome).unwrap_or(false);
+            let event = recorded.then(|| AgentRunFinished {
+                agent: agent.to_string(),
+                run_id: run_id.to_string(),
+                terminal_reason: outcome.terminal_reason.clone(),
+                is_error: outcome.is_error,
+                duration_ms: outcome.duration_ms,
+                active_ms: outcome.active_ms,
+                cost_micro_usd: outcome.cost_micro_usd,
+                result_head: outcome.result_head.clone(),
+            });
+            Ok((recorded, event))
+        })
+        .unwrap_or(false)
     }
 
     /// Publish `adi.agents.run.idle` for every run this listing finds waiting on something of its
@@ -4054,6 +4130,18 @@ fn session_dir(config: &Config, record: &SessionRecord) -> PathBuf {
     } else {
         record.cwd.clone()
     }
+}
+
+/// The outcome [`Agents::note_finished`] writes for a run whose grace to get a pid into its state
+/// slot ran out with nothing ever having started (ADI-MONO-218) — no log to read, because nothing
+/// ever wrote one, so this is built directly rather than through
+/// [`RunOutcome::of`](store::RunOutcome::of)'s empty-answer, no-metrics path, which is exactly the
+/// shape that used to be misread as a normal, uneventful ending.
+fn launch_lost_outcome(started_at: u64) -> store::RunOutcome {
+    let mut outcome = store::RunOutcome::of(None, "", started_at, store::now_ms());
+    outcome.terminal_reason = Some(LAUNCH_LOST.to_string());
+    outcome.is_error = true;
+    outcome
 }
 
 /// This session's events, folded into one turn's content: its timeline in order, its answer, and
@@ -8999,6 +9087,94 @@ mod tests {
                 .iter()
                 .any(|e| e.record.name == AgentRunFinished::NAME),
             "now it really is",
+        );
+    }
+
+    /// ADI-MONO-218: the race `launch_run` leaves open between `create_as` and a runner's first
+    /// pid write. A listing that lands in that exact window — modeled here by `mark_launching`,
+    /// the same call `launch_run` makes right after `create_as`, with nothing yet written to the
+    /// runner state — must not record an outcome or publish `adi.agents.run.finished` for a run
+    /// that has not even started. Once the window closes (`clear_launching`, the same call
+    /// `send_or_note_failure` makes once `send` returns) and the run really ends, the next listing
+    /// must publish exactly one `run.finished`, carrying the real ending rather than the empty one
+    /// the race used to steal it with.
+    #[test]
+    fn a_listing_mid_launch_does_not_steal_the_real_ending() {
+        let store = scratch("launching-race");
+        store.save("watcher", spec("harness:adi")).expect("save");
+        let agent = store.get("watcher").expect("get").expect("present");
+        let sessions = store.sessions();
+        let record = sessions
+            .create("watcher", Backend::HarnessAdi, "/tmp", "go")
+            .expect("create");
+        // Exactly what `launch_run` does immediately after `create_as`, before anything calls
+        // `send` — the window this test has to land a listing inside of.
+        sessions.mark_launching("watcher", &record.id).expect("mark");
+
+        let runs = store.runs(&agent);
+        assert_eq!(runs.len(), 1);
+        assert!(
+            runs[0].running,
+            "mid-launch reads as running, not finished"
+        );
+        assert!(
+            runs[0].outcome.is_none(),
+            "a listing mid-launch must not record an outcome"
+        );
+        assert!(
+            adi_events::Events::with_config(store.config().clone())
+                .catch_up("test", 100)
+                .expect("catch up")
+                .iter()
+                .all(|e| e.record.name != AgentRunFinished::NAME),
+            "nothing here is finished yet",
+        );
+
+        // The runner's own first state write lands, and the attempt concludes — exactly what
+        // `send` and then `send_or_note_failure` do for a real launch.
+        sessions
+            .set_runner_state("watcher", &record.id, serde_json::json!({}))
+            .expect("state");
+        sessions
+            .clear_launching("watcher", &record.id)
+            .expect("clear");
+
+        // The run really ends now.
+        let mut log = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(sessions.log_path("watcher", &record.id))
+            .expect("open the log");
+        turn_events::answer(&mut log, "the real answer");
+        turn_events::metrics(
+            &mut log,
+            &TurnMetrics {
+                terminal_reason: Some("completed".to_string()),
+                ..TurnMetrics::default()
+            },
+        );
+
+        let runs = store.runs(&agent);
+        assert_eq!(runs[0].state, RunLifecycle::Finished);
+        let outcome = runs[0]
+            .outcome
+            .as_ref()
+            .expect("the real ending is recorded");
+        assert_eq!(
+            outcome.terminal_reason.as_deref(),
+            Some("completed"),
+            "the real ending, not a launch-lost or empty one"
+        );
+        let finished: Vec<_> = adi_events::Events::with_config(store.config().clone())
+            .catch_up("test", 100)
+            .expect("catch up")
+            .into_iter()
+            .filter(|e| e.record.name == AgentRunFinished::NAME)
+            .collect();
+        assert_eq!(
+            finished.len(),
+            1,
+            "exactly one run.finished, for the real ending"
         );
     }
 

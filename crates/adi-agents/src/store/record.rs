@@ -119,6 +119,17 @@ pub struct SessionRecord {
     /// by whatever *started* it, not by whatever today's server policy or mesh identity says.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lease: Option<crate::LeaseRef>,
+    /// Whether this session is between [`create_as`](super::SessionStore::create_as) and the
+    /// runner's first write into [`runner_state`](Self::runner_state) — set by
+    /// [`mark_launching`](super::SessionStore::mark_launching), cleared by
+    /// [`clear_launching`](super::SessionStore::clear_launching) once the attempt is over,
+    /// whichever way (ADI-MONO-218).
+    ///
+    /// `false` for every session not opened through the one launch path that calls either — a
+    /// session built directly by [`create`](super::SessionStore::create), most of all in a test
+    /// exercising something else, is simply never in this window.
+    #[serde(default)]
+    pub launching: bool,
 }
 
 /// What became of a run: the engine's own verdict, its telemetry, and the head of what it said.
@@ -233,6 +244,7 @@ pub(super) fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRecor
     let chain: Option<String> = row.get(15)?;
     let chain_at: i64 = row.get(16)?;
     let lease: Option<String> = row.get(17)?;
+    let launching: i64 = row.get(18)?;
     Ok(SessionRecord {
         agent: row.get(0)?,
         id: row.get(1)?,
@@ -277,6 +289,7 @@ pub(super) fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRecor
         // "no lease", which is a session running on the server's values — the strictly safer
         // misreading, never the other way round.
         lease: lease.and_then(|t| serde_json::from_str(&t).ok()),
+        launching: launching != 0,
     })
 }
 

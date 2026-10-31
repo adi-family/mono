@@ -1116,6 +1116,7 @@ mod tests {
             runner_state: None,
             outcome: None,
             lease: None,
+            launching: false,
         }
     }
 

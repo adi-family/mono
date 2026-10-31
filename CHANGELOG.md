@@ -22,6 +22,18 @@ extraction script cares about.
 
 ### Fixed
 
+- **A run could be declared finished before it had even started (ADI-MONO-218).** A launch opens
+  its session record before the engine it names has actually been spawned, and a listing that
+  landed in that gap — which the app's own poll does twice a second — used to see "not running, no
+  outcome yet" and record an empty ending for it right there: no `terminal_reason`, no answer, a
+  run that lasted a handful of milliseconds. Because an ending is only ever recorded once, the
+  run's *real* ending then had nowhere left to go — it was never written down, never announced,
+  and the launcher's own follow-up wake had already been spent on the bogus event. A run now reads
+  as running for as long as it is between that record being opened and the engine's own state
+  being written, however it is driven; one still stuck there a full minute after opening — most
+  likely because whatever was launching it died before it got that far — is recorded honestly, as
+  `launch_lost`, rather than being read as an uneventful finish.
+
 - **An await that lost its race is no longer silently dropped (ADI-MONO-216).** `agents run`'s own
   follow-up wake, and a `background` job's own exit wake, are registered *after* the thing they
   watch is already started — so a run or job fast enough to finish first used to leave nothing to

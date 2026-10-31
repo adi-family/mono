@@ -261,12 +261,16 @@ fn backoff_secs(attempts: u32) -> u64 {
 /// No verdict at all — [`RunInfo::outcome`] absent, or present with no `terminal_reason` — is read
 /// as the platform having lost the run out from under it (a kill, a restart) rather than the task's
 /// own doing, because an engine that actually got to finish always leaves one. `api_error` is the
-/// platform's load, not the task's fault, either. Everything else, `launch_failed` above all,
-/// counts.
+/// platform's load, not the task's fault, either. Everything else, `launch_failed` and
+/// `launch_lost` (ADI-MONO-218) above all, counts.
 fn fold_outcome(row: &mut DispatchRow, info: &RunInfo) {
     match info.outcome.as_ref().and_then(|o| o.terminal_reason.as_deref()) {
         None | Some("api_error") => {}
-        Some(reason) if reason == crate::LAUNCH_FAILED => {
+        // Neither ever reached an engine: `launch_failed` means `send` ran and said why,
+        // `launch_lost` means the launcher died before `send` was even called. Both are the
+        // platform failing to start the task rather than the task itself failing, so both are
+        // weighed against the tighter budget.
+        Some(reason) if reason == crate::LAUNCH_FAILED || reason == crate::LAUNCH_LOST => {
             row.attempts += 1;
             row.launch_failures += 1;
         }
