@@ -20,6 +20,21 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.35.0 — 2026-10-31
+
+### Added
+
+- **LLM backends can be grouped — one named, ordered list of backends you point many agents at
+  instead of repeating the same chain everywhere.** A backend now comes in two kinds: a *single*
+  backend (as before) or a *group*, an ordered list of other backend ids — which may themselves be
+  groups, so you can compose them. An agent's chain row that names a group expands, in order, to
+  the group's own backends, with that row's overrides (failover, holds, model) laid onto each — a
+  group is a reusable shorthand, not a new kind of runtime. ADI keeps the references honest: a
+  cycle or a missing member is refused when you save, with the whole chain named; a backend a group
+  still lists can't be deleted (the same guard as a backend an agent still uses), and renaming one
+  repoints every group that names it. Drive it from `adi-mono llm` (`--kind group` with a
+  repeatable `--member`) or the backend editor's new Kind picker and ordered members list.
+
 ### Fixed
 
 - **A run could be declared finished before it had even started (ADI-MONO-218).** A launch opens
