@@ -4,11 +4,11 @@
 
 > The wire contract and server handlers for the adi webapp: serde DTO types (compiled everywhere, incl. wasm) plus the /api/* logic over adi-ports-manager behind the `server` feature.
 
-355 structs · 20 enums · 1 type alias across 14 files.
+356 structs · 20 enums · 1 type alias across 14 files.
 
 ## Index
 
-- [`src/handlers/agents.rs`](#srchandlersagentsrs) — `FleetSender`, `RunCaps`, `RunFilter`, `Waiting`, `Awaiting`
+- [`src/handlers/agents.rs`](#srchandlersagentsrs) — `FleetSender`, `RunCaps`, `RunFilter`, `ProjectGrouping`, `Waiting`, `Awaiting`
 - [`src/handlers/fleet.rs`](#srchandlersfleetrs) — `DroppedSources`, `DroppedSource`
 - [`src/handlers/guides.rs`](#srchandlersguidesrs) — `Guide`, `Shipped`
 - [`src/handlers/knowledge.rs`](#srchandlersknowledgers) — `EditNote`
@@ -61,6 +61,18 @@ pub enum RunFilter {
     Mine,
     Me,
     Starred,
+}
+```
+
+### struct `ProjectGrouping`
+
+The rail's `?group=project` request: the project registry the headings are named from, and — when `group_limit` is sent — a page **per project** instead of one page across the whole index, so a project with only old sessions still shows its newest few rather than none at all.
+
+```rust
+pub struct ProjectGrouping<'a> {
+    pub projects: &'a adi_projects::Projects,
+    pub per_group: Option<usize>,
+    pub more: BTreeMap<String, usize>,
 }
 ```
 
@@ -2751,6 +2763,8 @@ pub struct RunGroup {
     pub project: Option<String>,
     pub label: String,
     pub agents: Vec<String>,
+    #[serde(default)]
+    pub total: usize,
 }
 ```
 

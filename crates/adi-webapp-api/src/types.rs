@@ -2978,8 +2978,10 @@ pub struct AllAgentRuns {
     pub asking_user: Option<String>,
     /// The sessions rail's project grouping, worked out here rather than by the client:
     /// `?group=project` answers with one entry per project that still holds a session after every
-    /// narrowing and the `?limit=` cut, in the order the rail draws them — projects by display
-    /// name, then agents in no project last. Empty, and omitted from the wire, when the request did
+    /// narrowing and the cut, in the order the rail draws them — projects by display name, then
+    /// agents in no project last. `&group_limit=N` makes that cut N sessions per project rather
+    /// than `?limit=` across the index, and `&group_more=<project>:<n>,…` widens single projects
+    /// (`~` naming agents in no project). Empty, and omitted from the wire, when the request did
     /// not ask; an older server that has never heard of `?group=` answers empty too, which the
     /// client reads as "this source could not say".
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2998,6 +3000,10 @@ pub struct RunGroup {
     pub label: String,
     /// The agents whose sessions sit under this heading, each named once.
     pub agents: Vec<String>,
+    /// How many sessions the project holds after the `?hidden=`/`?filter=` narrowings but before
+    /// any cut — what tells a client this heading has more behind its own Load more.
+    #[serde(default)]
+    pub total: usize,
 }
 
 /// A zero capability profile — the `serde` default when an older/absent response omits `caps`.

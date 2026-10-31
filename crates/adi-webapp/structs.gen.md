@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-109 structs · 35 enums · 5 type aliases across 44 files.
+112 structs · 35 enums · 5 type aliases across 44 files.
 
 ## Index
 
@@ -24,7 +24,7 @@
 - [`src/new_ui/sites.rs`](#srcnew_uisitesrs) — `Site`, `Sites`
 - [`src/new_ui/widgets.rs`](#srcnew_uiwidgetsrs) — `Size`, `Declared`, `Config`, `Entry`
 - [`src/new_ui/windows.rs`](#srcnew_uiwindowsrs) — `Win`, `Place`, `AppRef`, `ChatRef`, `Desk`, `Snap`, `Gesture`, `Edge`
-- [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `PtyPhase`, `RunState`, `FoldedBlock`, `StoredRunSettings`, `PickerOption`, `SessionRow`, `RailBand`, `ProjectBands`, `RailLayout`, `RowFace`, `RowId`, `SessionRef`, `PendingWalk`
+- [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `PtyPhase`, `RunState`, `FoldedBlock`, `StoredRunSettings`, `PickerOption`, `SessionRow`, `RailBand`, `ProjectBands`, `ProjectMeta`, `RailLayout`, `SectionHead`, `RowFace`, `RowId`, `SessionRef`, `PendingWalk`
 - [`src/pages/agents/mod.rs`](#srcpagesagentsmodrs) — `AgentsFilter`
 - [`src/pages/analytics.rs`](#srcpagesanalyticsrs) — `Busy`, `AgentStats`, `Day`
 - [`src/pages/facts.rs`](#srcpagesfactsrs) — `TxView`, `FactsData`, `FactsConsole`
@@ -48,7 +48,7 @@
 - [`src/pages/system.rs`](#srcpagessystemrs) — `Outage`, `ReportState`, `SystemWatch`
 - [`src/pages/workspaces.rs`](#srcpagesworkspacesrs) — `WorkspaceForm`, `NewHookForm`, `TermPhase`
 - [`src/routing.rs`](#srcroutingrs) — `Route`, `ProjectSection`, `WorkflowTab`
-- [`src/state.rs`](#srcstaters) — `State`, `Tables`, `SessionFilter`, `SessionGroup`, `ChatDrawer`, `StoreBrowser`, `RowMenu`, `SessionMenu`, `StoreMenu`, `StoreDraft`, `FilesState`, `ProjectsForm`, `TasksForm`, `DashboardsForm`, `MarketplaceForm`, `Destination`, `ToolsForm`, `SecretsForm`, `KnowledgeConsole`, `DbConsole`, `ToolEditor`, `ToolRunView`, `AgentsForm`, `MetaForm`, `TriggersForm`, `TriggersLogView`, `HookLogView`, `TermWatch`, `HookEditor`, `AgentsWatch`, `Form`, `MeshForm`, `FleetForm`, `LlmBackendsForm`, `WorkflowsConsole`, `EmbeddingsConsole`, `ChannelsConsole`, `FleetUnlock`, `Status`, `Simulate`, `Flash`, `LastAgent`, `SessionSources`
+- [`src/state.rs`](#srcstaters) — `RailGrouping`, `State`, `Tables`, `SessionFilter`, `SessionGroup`, `ChatDrawer`, `StoreBrowser`, `RowMenu`, `SessionMenu`, `StoreMenu`, `StoreDraft`, `FilesState`, `ProjectsForm`, `TasksForm`, `DashboardsForm`, `MarketplaceForm`, `Destination`, `ToolsForm`, `SecretsForm`, `KnowledgeConsole`, `DbConsole`, `ToolEditor`, `ToolRunView`, `AgentsForm`, `MetaForm`, `TriggersForm`, `TriggersLogView`, `HookLogView`, `TermWatch`, `HookEditor`, `AgentsWatch`, `Form`, `MeshForm`, `FleetForm`, `LlmBackendsForm`, `WorkflowsConsole`, `EmbeddingsConsole`, `ChannelsConsole`, `FleetUnlock`, `Status`, `Simulate`, `Flash`, `LastAgent`, `SessionSources`
 - [`src/ui.rs`](#srcuirs) — `LogPhase`
 - [`src/update.rs`](#srcupdaters) — `UpdateWatch`
 - [`src/voice.rs`](#srcvoicers) — `AgentChat`, `PickerArgs`, `Session`, `RealtimeLive`
@@ -851,6 +851,7 @@ struct RailBand {
     label: String,
     node: Option<String>,
     rows: Vec<SessionRow>,
+    project: Option<(String, usize)>,
 }
 ```
 
@@ -863,6 +864,17 @@ struct RailBand {
 struct ProjectBands {
     order: Vec<String>,
     of: HashMap<(Option<String>, String), String>,
+    meta: HashMap<String, ProjectMeta>,
+}
+```
+
+### struct `ProjectMeta`
+
+```rust
+struct ProjectMeta {
+    key: String,
+    total: usize,
+    cap: usize,
 }
 ```
 
@@ -878,7 +890,20 @@ enum RailLayout {
         sourced: bool,
     },
     Blocks(Vec<(String, Option<String>, bool)>),
-    Sections(Vec<(String, usize)>),
+    Sections(Vec<SectionHead>),
+}
+```
+
+### struct `SectionHead`
+
+One heading of a project-grouped rail, as `RailLayout::Sections` carries it.
+
+```rust
+#[derive(Clone, PartialEq, Eq)]
+struct SectionHead {
+    label: String,
+    total: usize,
+    more: Option<(String, usize)>,
 }
 ```
 
@@ -1731,6 +1756,18 @@ pub(crate) enum WorkflowTab {
 
 ## `src/state.rs`
 
+### struct `RailGrouping`
+
+Everything about the rail's grouping that goes into its request path: the grouping, and — for `SessionGroup::Project` — how far past `PROJECT_PAGE` each project has been widened, keyed as the server keys it (`RunGroup::project`, or `~` for no project).
+
+```rust
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub(crate) struct RailGrouping {
+    pub(crate) group: SessionGroup,
+    pub(crate) more: BTreeMap<String, usize>,
+}
+```
+
 ### struct `State`
 
 Signals a data refresh writes to; `Copy` (each field is an arena handle) so it threads cheaply through async tasks and event handlers.
@@ -1780,6 +1817,7 @@ pub(crate) struct State {
     pub(crate) session_menu: RwSignal<Option<SessionMenu>>,
     pub(crate) show_hidden: RwSignal<bool>,
     pub(crate) rail_collapsed_bands: RwSignal<BTreeSet<String>>,
+    pub(crate) rail_project_more: RwSignal<BTreeMap<String, usize>>,
     pub(crate) session_filter: RwSignal<SessionFilter>,
     pub(crate) session_filter_menu: RwSignal<Option<(i32, i32)>>,
     pub(crate) session_group: RwSignal<SessionGroup>,

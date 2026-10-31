@@ -43,7 +43,7 @@ use adi_webapp_api::types::{
     WorkspacesState, WriteFile, WriteToolScript,
 };
 
-use crate::state::{SessionFilter, SessionGroup};
+use crate::state::{PROJECT_PAGE, RailGrouping, SessionFilter};
 use gloo_net::http::{Request, Response};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -792,7 +792,7 @@ pub fn all_runs_path(limit: Option<usize>) -> String {
 pub async fn all_agent_runs_visible(
     limit: Option<usize>,
     filter: SessionFilter,
-    group: SessionGroup,
+    group: &RailGrouping,
 ) -> Result<AllAgentRuns, String> {
     get(&all_visible_runs_path(limit, filter, group)).await
 }
@@ -803,7 +803,7 @@ pub async fn all_agent_runs_visible_on(
     node: &str,
     limit: Option<usize>,
     filter: SessionFilter,
-    group: SessionGroup,
+    group: &RailGrouping,
 ) -> Result<AllAgentRuns, String> {
     get_on(Some(node), &all_visible_runs_path(limit, filter, group)).await
 }
@@ -813,7 +813,7 @@ pub async fn all_agent_runs_visible_on(
 pub fn all_visible_runs_path(
     limit: Option<usize>,
     filter: SessionFilter,
-    group: SessionGroup,
+    group: &RailGrouping,
 ) -> String {
     // `SessionFilter::All` sends no parameter, so the default rail keeps the exact path it always
     // had â and so watches the same live topic (keyed on the full path) every other tab already
@@ -822,11 +822,26 @@ pub fn all_visible_runs_path(
         .query_value()
         .map(|f| format!("&filter={f}"))
         .unwrap_or_default();
-    // The grouping likewise: only `SessionGroup::Project` sends one, since only it is the server's.
-    let group = group
-        .query_value()
-        .map(|g| format!("&group={g}"))
-        .unwrap_or_default();
+    // The grouping likewise: only `SessionGroup::Project` sends one, since only it is the server's —
+    // with its per-project page, and each project's own widening in key order, so one rail state
+    // is always spelled as one path (and so one live topic).
+    let group = match group.group.query_value() {
+        Some(g) => {
+            let more = group
+                .more
+                .iter()
+                .map(|(key, n)| format!("{key}:{n}"))
+                .collect::<Vec<_>>()
+                .join(",");
+            let more = if more.is_empty() {
+                String::new()
+            } else {
+                format!("&group_more={more}")
+            };
+            format!("&group={g}&group_limit={PROJECT_PAGE}{more}")
+        }
+        None => String::new(),
+    };
     match limit {
         Some(n) => format!("/api/agents/runs/all?limit={n}&hidden=false{filter}{group}"),
         None => format!("/api/agents/runs/all?hidden=false{filter}{group}"),
