@@ -21,8 +21,8 @@ use crate::types::{
     AgentTokenSite, AgentTokenSource, AgentTokenSplit, AgentTokens, AgentToolStatus, AgentTurn,
     AgentTurnMetrics, AgentsState, AllAgentRuns, AnswerRun, CanSpawnRuleDto, CloseGoal, GoalsOf,
     HideRun, IgnoreAwait, PendingAsk, PendingAsks, ProjectRunLimit, PromptsOf, QueueMode, RenameRun,
-    ReplyToRun, ReviewRun, RunAgent, RunRef, RunState, RunSteps, SaveAgent, SecretRef,
-    SetAutoTitle, SetGoal, SetRunLimit, SetSpawnPolicy, SimulateAgent, SimulateTurn,
+    ReplyToRun, ReviewRun, RunAgent, RunGroup, RunRef, RunState, RunSteps, SaveAgent,
+    SecretRef, SetAutoTitle, SetGoal, SetRunLimit, SetSpawnPolicy, SimulateAgent, SimulateTurn,
     SpawnRefusalDto, SpawnRuleEdit, SpawnedByDto, StarRun, TranscriptView, TurnMarker,
     UnqueueFromRun,
 };
@@ -1414,12 +1414,17 @@ impl RunFilter {
     }
 }
 
+///
+/// `group` is the rail's `?group=project`: given the project registry, the answer also carries
+/// [`AllAgentRuns::groups`] — see [`project_groups`]. `None` leaves it empty, as every other caller
+/// wants.
 #[must_use]
 pub fn all_agent_runs(
     store: &Agents,
     limit: Option<usize>,
     hidden: Option<bool>,
     filter: Option<RunFilter>,
+    group: Option<&adi_projects::Projects>,
     sender: Option<FleetSender<'_>>,
 ) -> Response {
     match store.list() {
@@ -1459,14 +1464,82 @@ pub fn all_agent_runs(
             if let Some(limit) = limit {
                 runs = newest(runs, limit);
             }
+            // After the cut, so a heading is never drawn for a project whose sessions all fell
+            // behind Load more.
+            let groups = group
+                .map(|projects| {
+                    let names = project_names(projects);
+                    project_groups(&agents, &runs, &names)
+                })
+                .unwrap_or_default();
             ok_json(&AllAgentRuns {
                 agents: runs,
                 total,
                 asking_user: who.map(ToString::to_string),
+                groups,
             })
         }
         Err(e) => Response::from(&e),
     }
+}
+
+/// Every registered project's display name, keyed by id — archived ones included, since an agent can
+/// still be filed under one. A registry that cannot be read yields an empty map, and every group then
+/// falls back to its bare id rather than failing the rail's poll.
+fn project_names(projects: &adi_projects::Projects) -> BTreeMap<String, String> {
+    projects
+        .list()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|p| (p.id.clone(), p.display_name().to_string()))
+        .collect()
+}
+
+/// The `?group=project` bands: each agent that still has a session in `runs` filed under its
+/// manifest's project, projects ordered by display name (case-insensitive), then agents in no
+/// project as the last band.
+///
+/// "No project" goes last rather than first because it is where the root agent and every global
+/// helper live — on most machines the busiest band, and one that would otherwise push every
+/// project's heading below the fold. An interactive agent is kept even with no runs: its live
+/// terminal is a row the client draws without a run record.
+fn project_groups(
+    agents: &[StoredAgent],
+    runs: &[AgentRuns],
+    names: &BTreeMap<String, String>,
+) -> Vec<RunGroup> {
+    let project_of: std::collections::HashMap<&str, Option<&str>> = agents
+        .iter()
+        .map(|a| {
+            let project = a
+                .manifest
+                .project
+                .as_deref()
+                .filter(|p| !p.trim().is_empty());
+            (a.name.as_str(), project)
+        })
+        .collect();
+    let mut by_project: BTreeMap<Option<&str>, Vec<String>> = BTreeMap::new();
+    for ar in runs
+        .iter()
+        .filter(|ar| ar.interactive || !ar.runs.is_empty())
+    {
+        let project = project_of.get(ar.name.as_str()).copied().flatten();
+        by_project.entry(project).or_default().push(ar.name.clone());
+    }
+    let mut groups: Vec<RunGroup> = by_project
+        .into_iter()
+        .map(|(project, agents)| RunGroup {
+            label: match project {
+                Some(id) => names.get(id).cloned().unwrap_or_else(|| id.to_string()),
+                None => "No project".to_string(),
+            },
+            project: project.map(str::to_string),
+            agents,
+        })
+        .collect();
+    groups.sort_by_cached_key(|g| (g.project.is_none(), g.label.to_lowercase()));
+    groups
 }
 
 /// The username behind this specific request — the mesh credential's own name
@@ -4547,6 +4620,64 @@ mod tests {
         }
     }
 
+    /// `?group=project`: projects by display name, a project no longer registered under its bare
+    /// id, "No project" last whatever it sorts as — and an agent with nothing left on the page
+    /// draws no band at all.
+    #[test]
+    fn project_groups_order_by_name_and_put_no_project_last() {
+        let filed = |name: &str, project: Option<&str>| StoredAgent {
+            name: name.to_string(),
+            manifest: StoredAgentManifest {
+                project: project.map(str::to_string),
+                ..Default::default()
+            },
+        };
+        let agents = vec![
+            filed("root", None),
+            filed("web", Some("p-web")),
+            filed("api", Some("p-api")),
+            filed("api-2", Some("p-api")),
+            filed("ghost", Some("gone")),
+            filed("idle", Some("p-idle")),
+        ];
+        let runs = vec![
+            listing("root", &[1]),
+            listing("web", &[2]),
+            listing("api", &[3]),
+            listing("api-2", &[4]),
+            listing("ghost", &[5]),
+            listing("idle", &[]),
+        ];
+        let names: BTreeMap<String, String> = [
+            ("p-web", "Website"),
+            ("p-api", "backend"),
+            ("p-idle", "Idle"),
+        ]
+        .into_iter()
+        .map(|(id, name)| (id.to_string(), name.to_string()))
+        .collect();
+
+        let groups = project_groups(&agents, &runs, &names);
+        let seen: Vec<(&str, Vec<&str>)> = groups
+            .iter()
+            .map(|g| {
+                (
+                    g.label.as_str(),
+                    g.agents.iter().map(String::as_str).collect(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                ("backend", vec!["api", "api-2"]),
+                ("gone", vec!["ghost"]),
+                ("Website", vec!["web"]),
+                ("No project", vec!["root"]),
+            ]
+        );
+    }
+
     fn kept(agents: &[AgentRuns]) -> Vec<&str> {
         agents
             .iter()
@@ -4656,14 +4787,14 @@ mod tests {
                 .expect("open a session");
         }
 
-        let Response { status, body } = all_agent_runs(&store, Some(2), None, None, None);
+        let Response { status, body } = all_agent_runs(&store, Some(2), None, None, None, None);
         assert_eq!(status, 200);
         let page: AllAgentRuns = serde_json::from_str(&body).expect("an index");
         assert_eq!(page.total, 5, "what exists, not what was sent");
         assert_eq!(page.agents.iter().map(|a| a.runs.len()).sum::<usize>(), 2);
 
         // And no limit is the whole history, for the pages that read all of it.
-        let Response { body, .. } = all_agent_runs(&store, None, None, None, None);
+        let Response { body, .. } = all_agent_runs(&store, None, None, None, None, None);
         let all: AllAgentRuns = serde_json::from_str(&body).expect("an index");
         assert_eq!(all.total, 5);
         assert_eq!(all.agents.iter().map(|a| a.runs.len()).sum::<usize>(), 5);

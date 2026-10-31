@@ -1038,6 +1038,7 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
             req.query_param("hidden").and_then(|v| v.parse().ok()),
             req.query_param("filter")
                 .and_then(handlers::RunFilter::from_query),
+            (req.query_param("group") == Some("project")).then_some(projects),
             fleet_sender(req),
         ),
         ("POST", "/api/agents/run/peek") => handlers::peek_run(agents, &req.body),

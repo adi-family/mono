@@ -2976,6 +2976,28 @@ pub struct AllAgentRuns {
     /// parameter never touches (`docs/sessions.md`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asking_user: Option<String>,
+    /// The sessions rail's project grouping, worked out here rather than by the client:
+    /// `?group=project` answers with one entry per project that still holds a session after every
+    /// narrowing and the `?limit=` cut, in the order the rail draws them — projects by display
+    /// name, then agents in no project last. Empty, and omitted from the wire, when the request did
+    /// not ask; an older server that has never heard of `?group=` answers empty too, which the
+    /// client reads as "this source could not say".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<RunGroup>,
+}
+
+/// One project's band of the sessions rail — see [`AllAgentRuns::groups`]. A session belongs to the
+/// project its agent is filed under, so a band is a list of agents rather than of runs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunGroup {
+    /// The project id, or `None` for agents filed under no project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    /// What the band's heading says: the project's display name, its id for one that is no longer
+    /// registered, or "No project".
+    pub label: String,
+    /// The agents whose sessions sit under this heading, each named once.
+    pub agents: Vec<String>,
 }
 
 /// A zero capability profile — the `serde` default when an older/absent response omits `caps`.

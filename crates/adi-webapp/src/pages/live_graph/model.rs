@@ -999,6 +999,7 @@ mod tests {
         let agents = vec![agent("one"), agent("two"), agent("three")];
         let all = AllAgentRuns {
             asking_user: None,
+            groups: Vec::new(),
             total: 3,
             agents: vec![
                 runs("one", vec![run("r1", LAUNCHED_BY_HUMAN)]),
@@ -1108,6 +1109,7 @@ mod tests {
         let agents = vec![agent("one")];
         let all = AllAgentRuns {
             asking_user: None,
+            groups: Vec::new(),
             total: 1,
             agents: vec![runs("one", vec![run("r1", "human:igor")])],
         };
@@ -1132,6 +1134,7 @@ mod tests {
         let agents = vec![agent("hub"), agent("mid"), agent("kid")];
         let all = AllAgentRuns {
             asking_user: None,
+            groups: Vec::new(),
             total: 6,
             agents: vec![
                 runs("hub", vec![at("h", LAUNCHED_BY_HUMAN, 10)]),
@@ -1258,6 +1261,7 @@ mod tests {
             .collect();
         let all = AllAgentRuns {
             asking_user: None,
+            groups: Vec::new(),
             total: rs.len(),
             agents: vec![runs("one", rs)],
         };
@@ -1295,6 +1299,7 @@ mod tests {
     fn a_chat_of_a_deleted_agent_is_still_drawn() {
         let all = AllAgentRuns {
             asking_user: None,
+            groups: Vec::new(),
             total: 1,
             agents: vec![runs("gone", vec![run("r1", LAUNCHED_BY_HUMAN)])],
         };
@@ -1319,6 +1324,7 @@ mod tests {
         rs.reverse();
         let all = AllAgentRuns {
             asking_user: None,
+            groups: Vec::new(),
             total: rs.len(),
             agents: vec![runs("one", rs)],
         };
@@ -1348,6 +1354,7 @@ mod tests {
         child.last_activity = 9_000;
         let all = AllAgentRuns {
             asking_user: None,
+            groups: Vec::new(),
             total: 2,
             agents: vec![
                 runs("starter", vec![starter]),
@@ -1375,6 +1382,7 @@ mod tests {
         (child.started_at, child.last_activity) = (60, 60);
         let all = AllAgentRuns {
             asking_user: None,
+            groups: Vec::new(),
             total: 4,
             agents: vec![
                 runs("one", vec![early, mid, late]),
@@ -1409,6 +1417,7 @@ mod tests {
             .collect();
         let all = AllAgentRuns {
             asking_user: None,
+            groups: Vec::new(),
             total: 6,
             agents: vec![runs("one", vec![spawner]), runs("two", workers)],
         };
@@ -1461,6 +1470,7 @@ mod tests {
         (worker.started_at, worker.last_activity) = (200, 200);
         let all = AllAgentRuns {
             asking_user: None,
+            groups: Vec::new(),
             total: 8,
             agents: vec![runs("one", launcher_runs), runs("two", vec![worker])],
         };
@@ -1494,6 +1504,7 @@ mod tests {
         (worker.started_at, worker.last_activity) = (10, 10);
         let all = AllAgentRuns {
             asking_user: None,
+            groups: Vec::new(),
             total: 2,
             agents: vec![runs("one", vec![late]), runs("two", vec![worker])],
         };
@@ -1512,6 +1523,7 @@ mod tests {
     fn every_launcher_lands_on_its_own_root() {
         let all = AllAgentRuns {
             asking_user: None,
+            groups: Vec::new(),
             total: 3,
             agents: vec![runs(
                 "one",
@@ -1535,6 +1547,7 @@ mod tests {
     fn a_cycle_between_two_agents_still_lays_out() {
         let all = AllAgentRuns {
             asking_user: None,
+            groups: Vec::new(),
             total: 2,
             agents: vec![
                 runs("one", vec![run("r1", "agent:two")]),
@@ -1583,6 +1596,7 @@ mod tests {
             &[],
             &AllAgentRuns {
                 asking_user: None,
+                groups: Vec::new(),
                 agents: Vec::new(),
                 total: 0,
             },
@@ -1604,6 +1618,7 @@ mod tests {
         let agents: Vec<AgentDto> = (0..80).map(|i| agent(&format!("a{i}"))).collect();
         let all = AllAgentRuns {
             asking_user: None,
+            groups: Vec::new(),
             total: 80 * 50,
             agents: (0..80)
                 .map(|i| {

@@ -260,7 +260,8 @@ fn Home() -> impl IntoView {
             // below, which is what asks in the ordinary case anyway.
             let limit = Some(state::source_limit_untracked(state, None));
             let filter = state.session_filter.get_untracked();
-            if let Ok(c) = fetch::all_agent_runs_visible(limit, filter).await
+            let group = state.session_group.get_untracked();
+            if let Ok(c) = fetch::all_agent_runs_visible(limit, filter, group).await
                 && state.all_chats.get_untracked().as_ref() != Some(&c)
             {
                 state.all_chats.set(Some(c));
@@ -327,6 +328,9 @@ fn Home() -> impl IntoView {
         // (`fetch::all_visible_runs_path`), so switching it has to tear down the old subscription
         // and open the one that asks the newly-narrowed question — of this machine and of each node.
         let filter = state.session_filter.get();
+        // And the grouping: `SessionGroup::Project` is banded by the server, so it is part of the
+        // path too.
+        let group = state.session_group.get();
         let mut subs = state::chat_subscriptions(watch);
         // The node menu's own list: which paired nodes this machine holds a password for. Local
         // and cheap — it asks no node anything — so it rides the socket with everything else.
@@ -380,7 +384,7 @@ fn Home() -> impl IntoView {
         // Only this machine's own page, and only what the main list may draw — a hidden run stays
         // out server-side (`docs/sessions.md`).
         subs.push(live::Sub::get(
-            fetch::all_visible_runs_path(local_limit, filter),
+            fetch::all_visible_runs_path(local_limit, filter, group),
             move |c: adi_webapp_api::types::AllAgentRuns| {
                 if state.all_chats.get_untracked().as_ref() != Some(&c) {
                     state.all_chats.set(Some(c));
@@ -424,7 +428,7 @@ fn Home() -> impl IntoView {
             let for_chats = node.clone();
             subs.push(live::Sub::get_on(
                 Some(node),
-                fetch::all_visible_runs_path(node_limit, filter),
+                fetch::all_visible_runs_path(node_limit, filter, group),
                 move |c: adi_webapp_api::types::AllAgentRuns| {
                     state.rail_node_chats.update(|m| {
                         if m.get(&for_chats) != Some(&c) {
