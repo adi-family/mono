@@ -20,6 +20,17 @@ extraction script cares about.
 
 ## Unreleased
 
+### Fixed
+
+- **An await that lost its race is no longer silently dropped (ADI-MONO-216).** `agents run`'s own
+  follow-up wake, and a `background` job's own exit wake, are registered *after* the thing they
+  watch is already started — so a run or job fast enough to finish first used to leave nothing to
+  wake the conversation: the event had already come and gone before anything was watching for it,
+  or (for a job) garbage collection mistook the one real wake for an already-covered, redundant one
+  and retired it unseen. Both now get one real chance to notice what they missed — a short replay
+  of the event log's own recent tail, and an actual run of a job's own check before it is ever
+  written off as dead — so the wake still fires, once, with what actually happened.
+
 ## 1.34.0 — 2026-10-29
 
 ### Added

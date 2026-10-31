@@ -68,6 +68,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use adi_config::{Config, now_unix};
+use adi_events::Events;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -106,6 +107,24 @@ const MAX_CHECK_OUTPUT: usize = 4_000;
 /// conversation's awaits don't sit in the store for ever; reaching it drops the await quietly
 /// (see [`Await::expiry_wakes`]).
 const DEFAULT_LIFETIME_SECS: u64 = 7 * 24 * 60 * 60;
+
+/// How long after registration an await is still checked against the event log's recent tail —
+/// see [`already_published`] (ADI-MONO-216).
+///
+/// An await's own patterns only ever see events published *after* it exists: [`on_event`] is fed
+/// by a live dispatcher that hands each event to whatever is pending at the moment it arrives, and
+/// an await registered a beat too late for that moment is invisible to it forever after. The gap is
+/// real whenever the thing being waited on is acted on first and subscribed to second — launching a
+/// run, starting a background job — because the action can finish before the follow-up write lands.
+/// Bounded to a short window rather than checked for ever: past it, [`on_event`]'s own push delivery
+/// has had every chance to see anything that actually happened since, and an await that old
+/// replaying the whole tail on every tick would be paying for a race that is no longer possible.
+const REPLAY_WINDOW_SECS: u64 = 60;
+
+/// How far back [`already_published`] reads the event log, in rows rather than time — cheap
+/// regardless of retention (the app keeps events for up to 30 days), because this is an indexed
+/// range scan bounded by row count, not a scan of however much history happens to still be on disk.
+const REPLAY_LOOKBACK: u64 = 5_000;
 
 /// How many consecutive "not yet"s from a poll's own check are worth a warning (ADI-MONO-129).
 ///
@@ -964,27 +983,21 @@ pub fn on_event(agents: &Agents, name: &str, payload: &str) -> Vec<Woken> {
 /// Called by the app on its own clock — once a second is plenty, since the coarsest thing here is a
 /// whole second.
 ///
-/// Garbage collection (ADI-MONO-129 (2)) rides along here rather than waiting for `at`: an await
-/// whose subject already ended is worth retiring the moment that is noticed, whatever its own
-/// schedule says, which is exactly the one a broken check would otherwise never reach on its own.
+/// Garbage collection (ADI-MONO-129 (2)) rides along here rather than waiting for `at`: a job an
+/// await is watching may have already exited — see [`dead_job_subject`]. And a fresh await's own
+/// patterns may already have a match sitting in the event log — see [`already_published`]
+/// (ADI-MONO-216). Both are "candidates [`consider`] would otherwise never be asked to look at",
+/// checked here rather than left to `at` or to [`on_event`]'s own live delivery.
 #[must_use]
 pub fn tick(agents: &Agents) -> Vec<Woken> {
     let store = Awaits::with_config(agents.config().clone());
     let now = now_unix();
     let mut woken = Vec::new();
     for a in store.list() {
-        // Retired, not delivered (ADI-MONO-165): the job's own exit-wake already covers this —
-        // or would have, if anything still needed telling — so waking the run here would cost it
-        // a whole turn to be told exactly that.
         if let Some(job) = dead_job_subject(agents, &a) {
-            store.retire_quietly(
-                &a,
-                &format!(
-                    "job {} had already exited before this await's own check could run; its own \
-                     exit-wake already covers it",
-                    job.id
-                ),
-            );
+            if let Some(w) = consider_dead_job(agents, &store, &a, &job) {
+                woken.push(w);
+            }
             continue;
         }
         if a.expires_at.is_some_and(|deadline| now >= deadline) {
@@ -995,6 +1008,21 @@ pub fn tick(agents: &Agents) -> Vec<Woken> {
             if let Some(w) = wake(agents, &store, &a, Cause::Expired, None) {
                 woken.push(w);
             }
+            continue;
+        }
+        if now.saturating_sub(a.created_at) <= REPLAY_WINDOW_SECS
+            && let Some((name, payload)) = already_published(agents, &a)
+            && let Some(w) = consider(
+                agents,
+                &store,
+                &a,
+                Cause::Event {
+                    name: &name,
+                    payload: &payload,
+                },
+            )
+        {
+            woken.push(w);
             continue;
         }
         if a.at.is_some_and(|deadline| now >= deadline)
@@ -1008,17 +1036,73 @@ pub fn tick(agents: &Agents) -> Vec<Woken> {
 
 /// The background job `a`'s own [`check`](Await::check) names, if that job has already exited.
 ///
-/// A job already wakes its conversation on its own when it ends ([`jobs::done_check`]); an await
-/// that still names the same job by id in a hand-written check is at best a second wake for
-/// something already covered, and at worst — a check that can never read "yes" once the job is gone,
-/// which is the bug this exists for — a run parked until [`Await::expires_at`] on a wake that was
-/// never coming. Scoped to `a`'s own agent and conversation, the same as everything else an await
-/// touches.
+/// A hand-written check watching a job by id is, at best, a second wake for something `Bash`'s own
+/// `background` path already covers, and at worst — a check that can never read "yes" once the job
+/// is gone, which is the bug ADI-MONO-129 exists for — a run parked until [`Await::expires_at`] on a
+/// wake that was never coming. Either way [`tick`] still asks the check for real before deciding
+/// which: see its own call site. Scoped to `a`'s own agent and conversation, the same as everything
+/// else an await touches.
 fn dead_job_subject(agents: &Agents, a: &Await) -> Option<jobs::Job> {
     let check = a.check.as_deref()?;
     let agent_dir = agents.sessions().agent_dir(&a.agent);
     let job = jobs::referenced_in(&agent_dir, &a.conv, check)?;
     jobs::has_exited(&job).then_some(job)
+}
+
+/// `a`'s one chance to wake for real now that [`dead_job_subject`] has found its job already gone:
+/// run its own check once more, deliver the wake if it agrees, or retire quietly if it still does
+/// not (ADI-MONO-129's "a check that can never read yes").
+///
+/// Deliberately not [`consider`] (ADI-MONO-216): that function's own "not yet" branch rearms a
+/// polling deadline, which is right for a candidate arriving on schedule but wrong here — a check
+/// asked only because its subject died gets exactly one more look, not a fresh interval to keep
+/// missing in. A `background` job that finished between being started and its own wake landing in
+/// the store used to be retired by this same GC sweep without ever being asked — this is that ask.
+fn consider_dead_job(agents: &Agents, store: &Awaits, a: &Await, job: &jobs::Job) -> Option<Woken> {
+    // `dead_job_subject` already required a check to exist before finding `job` by name in it.
+    let Some(check) = a.check.as_deref() else {
+        return None;
+    };
+    let outcome = run_check(a, check, Cause::Timer, CHECK_TIMEOUT_MS);
+    if outcome.passed {
+        return wake(agents, store, a, Cause::Timer, Some(&outcome.output));
+    }
+    // Retired, not delivered (ADI-MONO-165): a wake whose only content is "this was redundant" (or
+    // "this check was never going to agree") still costs the run a whole turn to read.
+    store.retire_quietly(
+        a,
+        &format!(
+            "job {} had already exited, and this await's own check still did not agree it was \
+             done — it was never going to",
+            job.id
+        ),
+    );
+    None
+}
+
+/// The oldest already-published event the event log holds that `a` wants, if `a` is young enough
+/// for that to mean anything (ADI-MONO-216) — see [`REPLAY_WINDOW_SECS`].
+///
+/// [`on_event`] only ever sees an event at the moment a live dispatcher hands it one, so an event
+/// published in the gap between whatever acted (launching a run, starting a background job) and
+/// this await's own registration landing on disk is otherwise invisible to it forever: by the time
+/// `a` exists, that event has already been and gone. Reading the log's own tail is this await's one
+/// chance to notice what it would have caught had it been subscribed in time.
+///
+/// Oldest match, not newest: if more than one of `a`'s patterns already fired, the run should be
+/// told about the one that actually happened first.
+fn already_published(agents: &Agents, a: &Await) -> Option<(String, String)> {
+    if a.events.is_empty() {
+        return None;
+    }
+    let log = Events::with_config(agents.config().clone());
+    let head = log.head().ok()?;
+    let from = head.saturating_sub(REPLAY_LOOKBACK);
+    log.after(from, (REPLAY_LOOKBACK + 1) as usize)
+        .ok()?
+        .into_iter()
+        .find(|row| a.wants(&row.record.name, &row.record.payload))
+        .map(|row| (row.record.name, row.record.payload))
 }
 
 /// Put one candidate to the await's check, and wake it if the check agrees (or there is none).
@@ -2214,6 +2298,164 @@ mod tests {
                 "every not-yet counts"
             );
         }
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// ADI-MONO-216: the race Igor reported, for a background job. `background` starts the job
+    /// *first* and only then registers the wake that watches it (the order has to be that way
+    /// round — see that function's own doc) — so a job fast enough to exit in the gap between the
+    /// two leaves `register` writing an await whose subject is already gone before anyone has asked
+    /// its check even once. Before this fix `tick` read that shape as [`dead_job_subject`]'s "already
+    /// covered elsewhere" and retired it unseen; nothing elsewhere had covered it, because this
+    /// *is* the job's one wake.
+    #[cfg(unix)]
+    #[test]
+    fn tick_wakes_a_background_jobs_own_await_even_if_the_job_had_already_exited_before_it_registered()
+     {
+        use crate::backends::shell::Shell;
+
+        let store = scratch("job-raced-registration");
+        let agents = Agents::with_config(store.config().clone());
+        let agent_dir = agents.sessions().agent_dir("watcher");
+        let shell = Shell::new(&agent_dir, "conv-1");
+        let job =
+            jobs::start(&agent_dir, "conv-1", &shell, &agent_dir, "echo done").expect("start");
+        for _ in 0..100 {
+            if job.exit.exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(
+            job.exit.exists(),
+            "the job settles before the await below exists"
+        );
+
+        // Exactly `background`'s own shape: `check` is `jobs::done_check`, registered only now.
+        let saved = register(
+            &store,
+            "watcher",
+            "conv-1",
+            &Request {
+                note: "you started this in the background".into(),
+                every_seconds: Some(jobs::LOOK_EVERY_SECONDS),
+                check: Some(jobs::done_check(&job)),
+                cwd: agent_dir.display().to_string(),
+                ..Request::default()
+            },
+        )
+        .expect("register");
+
+        let woken = tick(&agents);
+        assert_eq!(
+            woken.len(),
+            1,
+            "the job's only wake must fire, not be retired as redundant: {woken:?}"
+        );
+        assert_eq!(woken[0].id, saved.id);
+        assert_eq!(woken[0].cause, "timer");
+        assert!(
+            store.get(&saved.id).is_none(),
+            "claimed once it fired, same as any other wake"
+        );
+        assert!(
+            store
+                .retired_for_conversation("watcher", "conv-1")
+                .is_empty(),
+            "this was a real wake, not a dead one"
+        );
+
+        // Fires once: a second sweep over an empty store has nothing left to claim.
+        assert!(tick(&agents).is_empty());
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// ADI-MONO-216: the race Igor reported, for an event. `follow_up` registers a run's wake
+    /// *after* the run has already been launched, so a run fast enough to finish in that gap
+    /// publishes `adi.agents.run.finished` before any await exists to catch it — [`on_event`] only
+    /// ever hands an event to awaits pending at the moment it arrives, so a subscriber a beat late
+    /// would otherwise never see it. `tick`'s own replay of the log's recent tail is this await's
+    /// one chance to notice what it missed.
+    #[test]
+    fn tick_wakes_an_await_whose_event_already_fired_before_it_registered() {
+        let store = scratch("event-raced-registration");
+        let agents = Agents::with_config(store.config().clone());
+        let events = Events::with_config(store.config().clone());
+
+        // The event fires first — nothing is watching for it yet.
+        events
+            .emit_event(&AgentRunFinished::new("r-42", "worker", false))
+            .expect("emit");
+
+        // Only now does the launcher's own wake land in the store, scoped to the one run_id.
+        let saved = register(
+            &store,
+            "watcher",
+            "conv-1",
+            &Request {
+                note: "the run you started ended".into(),
+                events: vec![AgentRunFinished::NAME.into()],
+                when: [("run_id".to_string(), "r-42".to_string())]
+                    .into_iter()
+                    .collect(),
+                ..Request::default()
+            },
+        )
+        .expect("register");
+
+        let woken = tick(&agents);
+        assert_eq!(
+            woken.len(),
+            1,
+            "the already-published event must still wake it: {woken:?}"
+        );
+        assert_eq!(woken[0].id, saved.id);
+        assert_eq!(woken[0].cause, "event");
+        assert!(store.get(&saved.id).is_none(), "claimed once it fired");
+
+        // Fires exactly once: a second sweep sees nothing left pending.
+        assert!(tick(&agents).is_empty());
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// The replay in [`already_published`] must still respect `when`: a stranger's run finishing in
+    /// the same gap is not this await's to claim, before or after it was subscribed.
+    #[test]
+    fn tick_replay_still_scopes_a_wake_to_the_one_run_it_named() {
+        let store = scratch("event-raced-scoped");
+        let agents = Agents::with_config(store.config().clone());
+        let events = Events::with_config(store.config().clone());
+
+        events
+            .emit_event(&AgentRunFinished::new("r-43", "worker", false))
+            .expect("emit a stranger's ending");
+
+        let saved = register(
+            &store,
+            "watcher",
+            "conv-1",
+            &Request {
+                note: "the run you started ended".into(),
+                events: vec![AgentRunFinished::NAME.into()],
+                when: [("run_id".to_string(), "r-42".to_string())]
+                    .into_iter()
+                    .collect(),
+                ..Request::default()
+            },
+        )
+        .expect("register");
+
+        assert!(
+            tick(&agents).is_empty(),
+            "a stranger's ending in the replay window is still not this run's"
+        );
+        assert_eq!(
+            store.get(&saved.id).as_ref(),
+            Some(&saved),
+            "left pending for its own run"
+        );
 
         let _ = std::fs::remove_dir_all(store.dir());
     }
