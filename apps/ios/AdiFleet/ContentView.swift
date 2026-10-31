@@ -124,6 +124,14 @@ struct ContentView: View {
                             Task { await model.forget(node) }
                         }
                     }
+                    // Long-press offers the same unpair the swipe does: a node is a row, and a row
+                    // people press and hold is one they expect a menu on. Both call `forget`, which
+                    // drops the node locally and takes its password out of the Keychain with it.
+                    .contextMenu {
+                        Button("Unpair", role: .destructive) {
+                            Task { await model.forget(node) }
+                        }
+                    }
 
                 ForEach(model.dashboards[node.petname] ?? []) { dashboard in
                     DashboardRow(node: node, dashboard: dashboard) { sharing = $0 }
@@ -276,7 +284,7 @@ private struct DashboardRow: View {
     var body: some View {
         if let service = dashboard.service {
             NavigationLink(value: Route(node: node, service: service, share: !dashboard.allowed)) {
-                ServiceLabel(icon: .layoutDashboard, title: dashboard.name, subtitle: subtitle)
+                ServiceLabel(icon: .layoutDashboard, title: dashboard.name)
             }
             .contextMenu {
                 Button {
@@ -289,23 +297,8 @@ private struct DashboardRow: View {
         } else {
             // Nothing to route to: a dashboard with no `<label>.adi` host of its own is reachable
             // on the node and nowhere else (`docs/fleet.md` §4).
-            ServiceLabel(icon: .layoutDashboard, title: dashboard.name, subtitle: subtitle, ink: ADI.ink3)
+            ServiceLabel(icon: .layoutDashboard, title: dashboard.name, ink: ADI.ink3)
         }
-    }
-
-    /// The one thing worth saying about this dashboard, in the order it matters: it cannot be
-    /// opened, it has not been shared, it is not running, or what it is for.
-    private var subtitle: String? {
-        if dashboard.service == nil {
-            return "No address on \(node.petname) yet, so there is nothing to open"
-        }
-        if !dashboard.allowed {
-            return "Not shared with this phone yet — tap to ask \(node.petname)"
-        }
-        if !dashboard.running {
-            return "Not running on \(node.petname)"
-        }
-        return dashboard.description
     }
 }
 
