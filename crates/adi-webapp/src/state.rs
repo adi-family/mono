@@ -643,14 +643,34 @@ pub(crate) enum SessionGroup {
     /// operator wanted from the moment there is a second machine to tell apart.
     #[default]
     Machine,
+    /// One heading per project the session's agent is filed under, projects by name and "No
+    /// project" last. The banding is the **server's** (`?group=project`, `AllAgentRuns::groups`):
+    /// only it reads the agent manifests and the project registry, so the client draws the bands it
+    /// is handed rather than re-deriving them.
+    ///
+    /// Drawn as sections of one scrolling list rather than as [`Self::Machine`]'s equal-height
+    /// blocks: a fleet has two or three machines, but a store can have a dozen projects, and a
+    /// dozen fixed-height blocks on a 264px rail is a dozen two-row windows.
+    Project,
 }
 
 impl SessionGroup {
     /// What the menu item says.
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Self::Flat => "One list",
+            Self::Flat => "Disabled",
             Self::Machine => "Machine",
+            Self::Project => "Project",
+        }
+    }
+
+    /// The `group=` value that asks the server to band the index this way, or `None` for the
+    /// groupings the client draws on its own — which send no parameter, so their request path (and
+    /// so their live topic) is the one the rail has always used.
+    pub(crate) fn query_value(self) -> Option<&'static str> {
+        match self {
+            Self::Flat | Self::Machine => None,
+            Self::Project => Some("project"),
         }
     }
 
@@ -658,19 +678,23 @@ impl SessionGroup {
     pub(crate) fn hint(self) -> &'static str {
         match self {
             Self::Flat => {
-                "every session in one list, whatever machine it is on \u{2014} what is stopped on \
-                 you first, then what is running, then the rest"
+                "no grouping: every session in one list, whatever machine it is on \u{2014} what \
+                 is stopped on you first, then what is running, then the rest"
             }
             Self::Machine => {
                 "band the rail by the machine each session is on, this machine first \u{2014} \
                  inside a band the order is the same one, and with a single machine selected \
                  there is no heading to draw"
             }
+            Self::Project => {
+                "head the rail by the project each session's agent belongs to, sessions in no \
+                 project last \u{2014} one scrolling list, the same order inside every heading"
+            }
         }
     }
 
     /// Every option the menu offers, in the order it offers them.
-    pub(crate) const ALL: [Self; 2] = [Self::Flat, Self::Machine];
+    pub(crate) const ALL: [Self; 3] = [Self::Flat, Self::Machine, Self::Project];
 }
 
 /// A side rail of the chat home, when it is showing as a drawer over the conversation.
@@ -2970,6 +2994,7 @@ pub(crate) fn toggle_session_source(s: State, watch: AgentsWatch, node: Option<S
 pub(crate) fn refresh_rail_node(s: State, node: String) {
     let limit = Some(source_limit_untracked(s, Some(&node)));
     let filter = s.session_filter.get_untracked();
+    let group = s.session_group.get_untracked();
     wasm_bindgen_futures::spawn_local(async move {
         // Still selected? A slow answer for a node ticked and un-ticked in the same second must not
         // resurrect a row for a source the rail no longer shows.
@@ -2986,7 +3011,7 @@ pub(crate) fn refresh_rail_node(s: State, node: String) {
             }
             Err(e) => s.flash.set(Some(Flash::err(format!("{node}: {e}")))),
         }
-        if let Ok(c) = fetch::all_agent_runs_visible_on(&node, limit, filter).await
+        if let Ok(c) = fetch::all_agent_runs_visible_on(&node, limit, filter, group).await
             && s.session_nodes.get_untracked().contains(&node)
         {
             s.rail_node_chats.update(|m| {

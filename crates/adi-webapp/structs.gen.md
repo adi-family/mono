@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-108 structs · 35 enums · 5 type aliases across 44 files.
+109 structs · 35 enums · 5 type aliases across 44 files.
 
 ## Index
 
@@ -24,7 +24,7 @@
 - [`src/new_ui/sites.rs`](#srcnew_uisitesrs) — `Site`, `Sites`
 - [`src/new_ui/widgets.rs`](#srcnew_uiwidgetsrs) — `Size`, `Declared`, `Config`, `Entry`
 - [`src/new_ui/windows.rs`](#srcnew_uiwindowsrs) — `Win`, `Place`, `AppRef`, `ChatRef`, `Desk`, `Snap`, `Gesture`, `Edge`
-- [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `PtyPhase`, `RunState`, `FoldedBlock`, `StoredRunSettings`, `PickerOption`, `SessionRow`, `RailBand`, `RailLayout`, `RowFace`, `RowId`, `SessionRef`, `PendingWalk`
+- [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `PtyPhase`, `RunState`, `FoldedBlock`, `StoredRunSettings`, `PickerOption`, `SessionRow`, `RailBand`, `ProjectBands`, `RailLayout`, `RowFace`, `RowId`, `SessionRef`, `PendingWalk`
 - [`src/pages/agents/mod.rs`](#srcpagesagentsmodrs) — `AgentsFilter`
 - [`src/pages/analytics.rs`](#srcpagesanalyticsrs) — `Busy`, `AgentStats`, `Day`
 - [`src/pages/facts.rs`](#srcpagesfactsrs) — `TxView`, `FactsData`, `FactsConsole`
@@ -854,6 +854,18 @@ struct RailBand {
 }
 ```
 
+### struct `ProjectBands`
+
+`SessionGroup::Project`'s bands, as the selected sources' servers drew them: which heading each `(source, agent)` sits under, and the order the headings go in.
+
+```rust
+#[derive(Default)]
+struct ProjectBands {
+    order: Vec<String>,
+    of: HashMap<(Option<String>, String), String>,
+}
+```
+
 ### enum `RailLayout`
 
 Which of the rail's layouts is on screen — everything about the session list *except* its rows.
@@ -866,6 +878,7 @@ enum RailLayout {
         sourced: bool,
     },
     Blocks(Vec<(String, Option<String>, bool)>),
+    Sections(Vec<(String, usize)>),
 }
 ```
 
@@ -1865,6 +1878,7 @@ pub(crate) enum SessionGroup {
     Flat,
     #[default]
     Machine,
+    Project,
 }
 ```
 

@@ -126,6 +126,7 @@ pub(crate) fn live_graph_view(
             state.all_chats.with(|chats| {
                 let none = AllAgentRuns {
                     asking_user: None,
+                    groups: Vec::new(),
                     agents: Vec::new(),
                     total: 0,
                 };

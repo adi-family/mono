@@ -43,7 +43,7 @@ use adi_webapp_api::types::{
     WorkspacesState, WriteFile, WriteToolScript,
 };
 
-use crate::state::SessionFilter;
+use crate::state::{SessionFilter, SessionGroup};
 use gloo_net::http::{Request, Response};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -792,8 +792,9 @@ pub fn all_runs_path(limit: Option<usize>) -> String {
 pub async fn all_agent_runs_visible(
     limit: Option<usize>,
     filter: SessionFilter,
+    group: SessionGroup,
 ) -> Result<AllAgentRuns, String> {
-    get(&all_visible_runs_path(limit, filter)).await
+    get(&all_visible_runs_path(limit, filter, group)).await
 }
 
 /// [`all_agent_runs_visible`], for one paired node's own sessions — the sessions rail's per-source
@@ -802,13 +803,18 @@ pub async fn all_agent_runs_visible_on(
     node: &str,
     limit: Option<usize>,
     filter: SessionFilter,
+    group: SessionGroup,
 ) -> Result<AllAgentRuns, String> {
-    get_on(Some(node), &all_visible_runs_path(limit, filter)).await
+    get_on(Some(node), &all_visible_runs_path(limit, filter, group)).await
 }
 
 /// The rail's own page of the index — see [`all_agent_runs_visible`]. Its own path function, for
 /// the same reason [`all_runs_path`] has one: the live channel keys a subscription by this string.
-pub fn all_visible_runs_path(limit: Option<usize>, filter: SessionFilter) -> String {
+pub fn all_visible_runs_path(
+    limit: Option<usize>,
+    filter: SessionFilter,
+    group: SessionGroup,
+) -> String {
     // `SessionFilter::All` sends no parameter, so the default rail keeps the exact path it always
     // had â and so watches the same live topic (keyed on the full path) every other tab already
     // does, rather than opening a second one that answers the same question.
@@ -816,9 +822,14 @@ pub fn all_visible_runs_path(limit: Option<usize>, filter: SessionFilter) -> Str
         .query_value()
         .map(|f| format!("&filter={f}"))
         .unwrap_or_default();
+    // The grouping likewise: only `SessionGroup::Project` sends one, since only it is the server's.
+    let group = group
+        .query_value()
+        .map(|g| format!("&group={g}"))
+        .unwrap_or_default();
     match limit {
-        Some(n) => format!("/api/agents/runs/all?limit={n}&hidden=false{filter}"),
-        None => format!("/api/agents/runs/all?hidden=false{filter}"),
+        Some(n) => format!("/api/agents/runs/all?limit={n}&hidden=false{filter}{group}"),
+        None => format!("/api/agents/runs/all?hidden=false{filter}{group}"),
     }
 }
 

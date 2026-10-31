@@ -5699,14 +5699,87 @@ struct RailBand {
 /// renumbers it, and so does folding a block shut or open.
 fn rail_bands(state: State, watch: AgentsWatch) -> (Vec<RailBand>, SessionFilter) {
     let (rows, filter) = session_rows(state, watch);
+    let group = state.session_group.get();
+    let projects = if group == SessionGroup::Project {
+        project_bands(state)
+    } else {
+        ProjectBands::default()
+    };
     (
         grouped_bands(
-            state.session_group.get(),
+            group,
             activity_bands(rows),
-            &state.rail_collapsed_bands.get(),
+            &rail_folded(state, true),
+            &projects,
         ),
         filter,
     )
+}
+
+/// The blocks folded shut, as [`grouped_bands`] and [`drawn_rows`] read them — empty unless the rail
+/// is grouped by machine, the one grouping drawn as foldable blocks. Without that, a project that
+/// happened to share a label with a machine folded earlier would lose its rows and its numbers
+/// while still being drawn open.
+fn rail_folded(state: State, tracked: bool) -> std::collections::BTreeSet<String> {
+    let (group, folded) = if tracked {
+        (state.session_group.get(), state.rail_collapsed_bands.get())
+    } else {
+        (
+            state.session_group.get_untracked(),
+            state.rail_collapsed_bands.get_untracked(),
+        )
+    };
+    if group == SessionGroup::Machine {
+        folded
+    } else {
+        std::collections::BTreeSet::new()
+    }
+}
+
+/// The heading of agents filed under no project — the server's word for it as well
+/// (`project_groups` in `adi-webapp-api`), and where a row lands when no source could say.
+const NO_PROJECT: &str = "No project";
+
+/// [`SessionGroup::Project`]'s bands, as the selected sources' servers drew them: which heading
+/// each `(source, agent)` sits under, and the order the headings go in.
+///
+/// Read off [`AllAgentRuns::groups`] rather than worked out here — the server is the one that reads
+/// the agent manifests and the project registry. With several sources a project's heading is
+/// shared by label: this machine's headings first in its own order, then any heading only a node
+/// has, and [`NO_PROJECT`] after all of them, as each server already puts it last on its own.
+#[derive(Default)]
+struct ProjectBands {
+    order: Vec<String>,
+    of: HashMap<(Option<String>, String), String>,
+}
+
+fn project_bands(state: State) -> ProjectBands {
+    let mut bands = ProjectBands::default();
+    let mut add = |node: Option<&str>, all: &AllAgentRuns| {
+        for g in &all.groups {
+            if g.project.is_some() && !bands.order.contains(&g.label) {
+                bands.order.push(g.label.clone());
+            }
+            for agent in &g.agents {
+                bands
+                    .of
+                    .insert((node.map(str::to_string), agent.clone()), g.label.clone());
+            }
+        }
+    };
+    if state.session_local.get()
+        && let Some(all) = state.all_chats.get()
+    {
+        add(None, &all);
+    }
+    let node_chats = state.rail_node_chats.get();
+    for node in state.session_nodes.get() {
+        if let Some(all) = node_chats.get(&node) {
+            add(Some(&node), all);
+        }
+    }
+    bands.order.push(NO_PROJECT.to_string());
+    bands
 }
 
 /// The five activity bands arranged the way `group` asks for, empty bands dropped, and the first
@@ -5728,6 +5801,7 @@ fn grouped_bands(
     group: SessionGroup,
     banded: [Vec<SessionRow>; 5],
     collapsed: &std::collections::BTreeSet<String>,
+    projects: &ProjectBands,
 ) -> Vec<RailBand> {
     let mut bands: Vec<RailBand> = match group {
         // One band, unlabelled: the activity partitions concatenated back in their own order, which
@@ -5760,12 +5834,47 @@ fn grouped_bands(
                 rows,
             })
             .collect(),
+        // Dealt out of the activity bands for the same reason, into the server's headings in the
+        // server's order. A row no source has placed — a node too old to answer `?group=`, or the
+        // open conversation before its index has arrived — goes under "No project" rather than
+        // under a heading of its own.
+        SessionGroup::Project => {
+            let mut rows_of: Vec<Vec<SessionRow>> = vec![Vec::new(); projects.order.len()];
+            for row in banded.into_iter().flatten() {
+                let label = projects
+                    .of
+                    .get(&(row.node.clone(), row.agent.clone()))
+                    .map_or(NO_PROJECT, String::as_str);
+                let at = projects
+                    .order
+                    .iter()
+                    .position(|l| l == label)
+                    .unwrap_or(projects.order.len() - 1);
+                rows_of[at].push(row);
+            }
+            projects
+                .order
+                .iter()
+                .cloned()
+                .zip(rows_of)
+                .map(|(label, rows)| RailBand {
+                    label,
+                    node: None,
+                    rows,
+                })
+                .collect()
+        }
     };
     bands.retain(|b| !b.rows.is_empty());
     // One machine on screen, so there is nothing to tell it apart *from*: the heading would name
     // the only source there is, on the rail of the machine you are reading it on. Dropped after the
     // empty bands, since a ticked node still loading must not make the local band look like company.
-    if let [only] = bands.as_mut_slice() {
+    //
+    // Not for a project: a lone project heading still says which project every row is in, which
+    // nothing else on the row does.
+    if group != SessionGroup::Project
+        && let [only] = bands.as_mut_slice()
+    {
         only.label = String::new();
     }
     // A block folded shut draws no rows, so nothing in it is reachable by a hotkey — skipped here
@@ -5855,6 +5964,9 @@ enum RailLayout {
     Single { sourced: bool },
     /// A block per band: its label, its source, and whether it is folded shut.
     Blocks(Vec<(String, Option<String>, bool)>),
+    /// [`SessionGroup::Project`]: a heading per band, each with its row count, over one list that
+    /// scrolls as a whole — never equal-height blocks.
+    Sections(Vec<(String, usize)>),
 }
 
 /// The layout [`rail_bands`] is drawn in. Reads `state.session_group`, `state.rail_collapsed_bands`
@@ -5889,6 +6001,14 @@ fn rail_layout(state: State, bands: &[RailBand], filter: SessionFilter) -> RailL
                  to see them."
             }
         });
+    }
+    if state.session_group.get() == SessionGroup::Project {
+        return RailLayout::Sections(
+            bands
+                .iter()
+                .map(|b| (b.label.clone(), b.rows.len()))
+                .collect(),
+        );
     }
     if bands.len() == 1 {
         return RailLayout::Single {
@@ -5950,7 +6070,47 @@ fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
             </div>
         }
         .into_any(),
+        // Grouped by project: the sections stack in the rail's own scroll, each as tall as its rows,
+        // with the one combined Load more under the last — a page is cut across every project at
+        // once, so no single section could say what pressing it would bring.
+        RailLayout::Sections(sections) => view! {
+            {sections
+                .into_iter()
+                .map(|(label, count)| chat_project_section(state, watch, rail, label, count))
+                .collect::<Vec<_>>()}
+            {move || chat_load_more(state)}
+        }
+        .into_any(),
     })
+    .into_any()
+}
+
+/// One project's section of a project-grouped rail: its heading and count, then its rows. Rows
+/// name their machine when several are merged — the heading here says the project, not the source.
+fn chat_project_section(
+    state: State,
+    watch: AgentsWatch,
+    rail: Memo<(Vec<RailBand>, SessionFilter)>,
+    label: String,
+    count: usize,
+) -> AnyView {
+    let rows_of = {
+        let label = label.clone();
+        move || {
+            rail.with(|(bands, _)| {
+                bands
+                    .iter()
+                    .find(|b| b.label == label)
+                    .map(|b| b.rows.clone())
+                    .unwrap_or_default()
+            })
+        }
+    };
+    view! {
+        <adi_ui::RailGroup label=label count=count>
+            {chat_session_rows(state, watch, rows_of, true)}
+        </adi_ui::RailGroup>
+    }
     .into_any()
 }
 
@@ -6675,10 +6835,11 @@ async fn settle_session_change(
             }
             let limit = Some(crate::state::source_limit_untracked(state, node.as_deref()));
             let filter = state.session_filter.get_untracked();
+            let group = state.session_group.get_untracked();
             let show_hidden = state.show_hidden.get_untracked();
             match &node {
                 None => {
-                    if let Ok(all) = fetch::all_agent_runs_visible(limit, filter).await {
+                    if let Ok(all) = fetch::all_agent_runs_visible(limit, filter, group).await {
                         state.all_chats.set(Some(all));
                     }
                     if show_hidden && let Ok(all) = fetch::hidden_runs().await {
@@ -6686,7 +6847,9 @@ async fn settle_session_change(
                     }
                 }
                 Some(node) => {
-                    if let Ok(all) = fetch::all_agent_runs_visible_on(node, limit, filter).await {
+                    if let Ok(all) =
+                        fetch::all_agent_runs_visible_on(node, limit, filter, group).await
+                    {
                         state.rail_node_chats.update(|m| {
                             m.insert(node.clone(), all);
                         });
@@ -6762,10 +6925,7 @@ fn install_session_hotkeys(state: State, watch: AgentsWatch) {
             // effect's move to make.
             return;
         }
-        let drawn = drawn_rows(
-            rail_bands(state, watch).0,
-            &state.rail_collapsed_bands.get_untracked(),
-        );
+        let drawn = drawn_rows(rail_bands(state, watch).0, &rail_folded(state, false));
         let Some(i) = drawn_row_index(&drawn, &pending.node, &pending.agent, &pending.run_id)
         else {
             return;
@@ -6952,7 +7112,7 @@ fn walk_session_rail(
     // One band (a single source, or `SessionGroup::Flat`): the same single-list layout
     // [`chat_all_sessions`] dispatches on, and so the same "which Load more" question.
     let single_list = bands.len() == 1;
-    let drawn = drawn_rows(bands, &state.rail_collapsed_bands.get());
+    let drawn = drawn_rows(bands, &rail_folded(state, true));
     if drawn.is_empty() {
         return;
     }
@@ -7086,7 +7246,7 @@ fn toggle_open_session_hidden(
         .then(|| {
             let bands = rail_bands(state, watch).0;
             let single_list = bands.len() == 1;
-            let drawn = drawn_rows(bands, &state.rail_collapsed_bands.get_untracked());
+            let drawn = drawn_rows(bands, &rail_folded(state, false));
             let i = drawn.iter().position(is_open)?;
             if let Some(row) = walk_step(&drawn, i, true) {
                 // Not the last drawn row: step down, no different from before this task.
@@ -8375,6 +8535,15 @@ mod tests {
         std::collections::BTreeSet::new()
     }
 
+    /// [`grouped_bands`] for the groupings the client draws on its own, which read no project bands.
+    fn bands_of(
+        group: SessionGroup,
+        banded: [Vec<SessionRow>; 5],
+        collapsed: &std::collections::BTreeSet<String>,
+    ) -> Vec<RailBand> {
+        grouped_bands(group, banded, collapsed, &ProjectBands::default())
+    }
+
     /// Grouping by machine is a *re-deal* of the activity bands, not a re-sort of the rows: each
     /// machine keeps the rail's own order inside it, so what is stopped on you is still the first
     /// thing under every heading. Get this wrong by grouping the sorted rows instead and each
@@ -8393,7 +8562,7 @@ mod tests {
             ],
         ];
 
-        let bands = grouped_bands(SessionGroup::Machine, banded, &nothing_collapsed());
+        let bands = bands_of(SessionGroup::Machine, banded, &nothing_collapsed());
 
         assert_eq!(
             labels(&bands),
@@ -8406,6 +8575,67 @@ mod tests {
             ["asking", "old-studio"],
             "the question comes first inside its own machine, not the newest row",
         );
+    }
+
+    /// Grouping by project deals the rows into the server's headings in the server's order, shares
+    /// one heading across machines, sends a row nobody placed to "No project", and keeps a heading
+    /// even when it is the only one — it still says which project every row is in.
+    #[test]
+    fn grouping_by_project_follows_the_servers_bands() {
+        let mut projects = ProjectBands {
+            order: vec!["Website".to_string(), NO_PROJECT.to_string()],
+            of: HashMap::new(),
+        };
+        for (node, agent, label) in [
+            (None, "web", "Website"),
+            (Some("studio"), "web", "Website"),
+            (None, "root", NO_PROJECT),
+        ] {
+            projects.of.insert(
+                (node.map(str::to_string), agent.to_string()),
+                label.to_string(),
+            );
+        }
+        let banded = [
+            vec![rail_row(None, "root")],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            vec![
+                rail_row(Some("studio"), "web"),
+                rail_row(None, "web"),
+                rail_row(None, "stray"),
+            ],
+        ];
+
+        let bands = grouped_bands(
+            SessionGroup::Project,
+            banded,
+            &nothing_collapsed(),
+            &projects,
+        );
+        assert_eq!(labels(&bands), ["Website", NO_PROJECT]);
+        assert_eq!(agents_in(&bands[0]), ["web", "web"]);
+        assert_eq!(
+            agents_in(&bands[1]),
+            ["root", "stray"],
+            "the question still leads its band; an unplaced row lands under no project",
+        );
+
+        let alone = [
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            vec![rail_row(None, "web")],
+        ];
+        let bands = grouped_bands(
+            SessionGroup::Project,
+            alone,
+            &nothing_collapsed(),
+            &projects,
+        );
+        assert_eq!(labels(&bands), ["Website"]);
     }
 
     /// Two promises the drawn rail makes whichever way it is grouped: a heading is never drawn over
@@ -8422,7 +8652,7 @@ mod tests {
             vec![rail_row(None, "old-local")],
         ];
 
-        let flat = grouped_bands(SessionGroup::Flat, banded.clone(), &nothing_collapsed());
+        let flat = bands_of(SessionGroup::Flat, banded.clone(), &nothing_collapsed());
         assert_eq!(labels(&flat), [""], "one list, and nothing to head it with");
         assert_eq!(
             agents_in(&flat[0]),
@@ -8432,7 +8662,7 @@ mod tests {
         assert_eq!(flat[0].rows[0].hotkey, Some(1));
         assert_eq!(flat[0].rows[1].hotkey, Some(2));
 
-        let by_machine = grouped_bands(SessionGroup::Machine, banded, &nothing_collapsed());
+        let by_machine = bands_of(SessionGroup::Machine, banded, &nothing_collapsed());
         assert_eq!(labels(&by_machine), ["This machine", "studio"]);
         assert_eq!(
             by_machine[0].rows[0].hotkey,
@@ -8454,7 +8684,7 @@ mod tests {
             Vec::new(),
             vec![rail_row(None, "local-a"), rail_row(None, "local-b")],
         ];
-        let bands = grouped_bands(SessionGroup::Machine, alone, &nothing_collapsed());
+        let bands = bands_of(SessionGroup::Machine, alone, &nothing_collapsed());
         assert_eq!(labels(&bands), [""]);
         assert_eq!(agents_in(&bands[0]), ["local-a", "local-b"]);
 
@@ -8466,7 +8696,7 @@ mod tests {
             vec![rail_row(None, "local-a"), rail_row(Some("studio"), "far")],
         ];
         assert_eq!(
-            labels(&grouped_bands(
+            labels(&bands_of(
                 SessionGroup::Machine,
                 joined,
                 &nothing_collapsed()
@@ -8490,7 +8720,7 @@ mod tests {
     #[test]
     fn a_band_draws_every_row_it_has_however_many_there_are() {
         let rows = rail_rows(Some("studio"), 20, "s");
-        let bands = grouped_bands(
+        let bands = bands_of(
             SessionGroup::Machine,
             [Vec::new(), Vec::new(), Vec::new(), Vec::new(), rows],
             &nothing_collapsed(),
@@ -8524,7 +8754,7 @@ mod tests {
             ],
         ];
         let folded = std::collections::BTreeSet::from(["This machine".to_string()]);
-        let bands = grouped_bands(SessionGroup::Machine, banded, &folded);
+        let bands = bands_of(SessionGroup::Machine, banded, &folded);
 
         let [local, studio] = bands.as_slice() else {
             panic!("two bands: {:?}", labels(&bands));
@@ -8558,7 +8788,7 @@ mod tests {
             ],
         ];
         let folded = std::collections::BTreeSet::from(["This machine".to_string()]);
-        let bands = grouped_bands(SessionGroup::Machine, banded, &folded);
+        let bands = bands_of(SessionGroup::Machine, banded, &folded);
 
         let drawn = drawn_rows(bands, &folded);
         assert_eq!(
