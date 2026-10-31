@@ -439,8 +439,8 @@ Relays are configured per machine, as a **list**, in `mesh.toml`:
 
 ```toml
 relays = [
-  "https://mad.mono-relay.withadi.dev",   # GCE europe-southwest1 (Madrid)
-  "https://iad.mono-relay.withadi.dev",   # GCE us-east4 (N. Virginia)
+  "https://mad.mono-relay.withadi.dev",   # AWS EC2 eu-central-1 (Frankfurt), moved 2026-10-16
+  "https://iad.mono-relay.withadi.dev",   # GCE us-east4 (N. Virginia) — down since 2026-10-16, not yet re-stood-up
 ]
 ```
 
@@ -512,6 +512,13 @@ address, reuses the `adi-relay-ingress` firewall rule, and boots a Debian 12 `e2
 verifies the three things that matter: HTTPS answers, the `101` echoes `sec-websocket-protocol:
 iroh-relay-v2`, and UDP 7842 is reachable. The label becomes the hostname's first label, so use the
 IATA code of the city the zone is in.
+
+The same shape runs on AWS: `scripts/deploy-relay-aws.sh <label> <region>` — an Elastic IP, the same
+`adi-relay-ingress` security group (tcp 22/80/443 + udp 7842), and a Debian 12 `t3.micro` under the
+`withadi` profile, from the identical `relay.toml` and unit. Its DNS step also *updates* an existing
+record, which is how `mad` was moved onto EC2 (`eu-central-1`) on 2026-10-16 — repointing one A
+record, no node reissued. The GCE `mono-504617` boxes are the old home; migrating off them is a new
+box plus that one DNS change.
 
 Two things it cannot and will not do. **The DNS A record** must exist *before* the relay first
 starts, because LetsEncrypt's http-01 challenge is answered by the relay itself on :80 — and it must

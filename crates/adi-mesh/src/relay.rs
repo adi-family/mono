@@ -73,10 +73,15 @@ pub fn relay_mode(relays: &[String]) -> Option<RelayMode> {
 /// of *ours* is the opposite case, and is what the list is for — both echo `iroh-relay-v2`, so
 /// whichever a machine picks works, and it picks the near one.
 ///
-/// - `mad` — GCE `europe-southwest1` (Madrid), live since 2026-08-05
-/// - `iad` — GCE `us-east4` (N. Virginia), live since 2026-08-27
+/// - `mad` — AWS EC2 `eu-central-1` (Frankfurt) since 2026-10-16; was GCE `europe-southwest1`
+///   (Madrid) from 2026-08-05 until that box died in the 2026-10-16 relay outage. The name is kept
+///   so the fleet re-homes by DNS alone, with no node change, and was moved with
+///   `scripts/deploy-relay-aws.sh`.
+/// - `iad` — GCE `us-east4` (N. Virginia) from 2026-08-27; down since the same 2026-10-16 outage
+///   and not yet re-stood-up, so there is currently one live relay, not two.
 ///
-/// Add a region with `scripts/deploy-relay.sh`, and only once its name resolves:
+/// Add a region with `scripts/deploy-relay.sh` (GCE) or `scripts/deploy-relay-aws.sh` (AWS EC2) —
+/// same relay, same ports (tcp 80/443 + udp 7842) — and only once its name resolves:
 /// `fra.mono-relay.withadi.dev` sat in this crate's test fixtures for weeks without ever existing.
 pub const DEFAULT_RELAYS: &[&str] = &[
     "https://mad.mono-relay.withadi.dev",
