@@ -720,6 +720,7 @@ fn await_wake(input: &Value, ctx: &Ctx<'_>) -> std::result::Result<String, Strin
         check,
         expires_in_seconds: arg_u64(input, "expires_in_seconds"),
         cwd: ctx.cwd.display().to_string(),
+        baseline_seq: None,
     };
     let registered =
         awaits::register(&ctx.awaits, ctx.agent, ctx.conv, &req).map_err(|e| e.to_string())?;

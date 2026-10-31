@@ -121,9 +121,14 @@ const DEFAULT_LIFETIME_SECS: u64 = 7 * 24 * 60 * 60;
 /// replaying the whole tail on every tick would be paying for a race that is no longer possible.
 const REPLAY_WINDOW_SECS: u64 = 60;
 
-/// How far back [`already_published`] reads the event log, in rows rather than time — cheap
+/// The most rows [`already_published`] reads past [`Await::baseline_seq`] in one look — cheap
 /// regardless of retention (the app keeps events for up to 30 days), because this is an indexed
-/// range scan bounded by row count, not a scan of however much history happens to still be on disk.
+/// range scan bounded by row count, not a scan of however much history happens to still be on
+/// disk. The baseline is already an exact floor, so this is purely a cost cap for the pathological
+/// case of thousands of events landing in the gap before registration, not a second window layered
+/// on top of it the way reading backward from the log's tip used to be before ADI-MONO-216's own
+/// regression (an await with no baseline of its own matching whatever had happened in the last
+/// [`REPLAY_LOOKBACK`] rows, however long ago).
 const REPLAY_LOOKBACK: u64 = 5_000;
 
 /// How many consecutive "not yet"s from a poll's own check are worth a warning (ADI-MONO-129).
@@ -190,6 +195,20 @@ pub struct Await {
     /// When it was registered, as Unix epoch seconds.
     #[serde(default)]
     pub created_at: u64,
+    /// The event log's position at the moment this await's wait logically began — the floor
+    /// [`already_published`] replays from, so nothing published before it can ever be read as the
+    /// first thing that happened (ADI-MONO-216's own regression: `REPLAY_WINDOW_SECS` bounded
+    /// which awaits got replayed, but the replay itself read the log's last [`REPLAY_LOOKBACK`]
+    /// rows with no floor of its own, so a pattern with no `when` woke on anything that matched
+    /// in that whole tail, however old).
+    ///
+    /// Set by [`register`] from [`Request::baseline_seq`] when the caller supplied one — an
+    /// action that already acted before asking to register (see [`follow_up`]) knows the real
+    /// moment the wait began better than "whenever this record happened to land" — or from the
+    /// log's own current tip otherwise, which is what makes a bare `Await` call wait on the
+    /// *next* match rather than replay one that happened before anyone asked.
+    #[serde(default)]
+    pub baseline_seq: u64,
     /// Consecutive times a timer candidate's [`check`](Self::check) has said "not yet". Reset by
     /// [`update`] and whenever the check passes (the await is gone by then, so nothing is left to
     /// reset). What lets [`tick`] flag a poll whose check may never agree, well before
@@ -399,6 +418,16 @@ impl Awaits {
         &self.config
     }
 
+    /// The event log's current tip, read through this store's own config — what an action that is
+    /// about to start something should capture *before* doing so, and pass as
+    /// [`Request::baseline_seq`], so the thing it starts can publish in the gap before
+    /// registration and still be caught by [`already_published`] rather than read as having
+    /// happened before the wait began (ADI-MONO-216).
+    #[must_use]
+    pub fn event_head(&self) -> u64 {
+        Events::with_config(self.config.clone()).head().unwrap_or(0)
+    }
+
     /// Every pending await, oldest first. An unreadable or unparseable record is skipped rather
     /// than failing the read: one bad file must not stop every other run from waking.
     #[must_use]
@@ -604,6 +633,14 @@ pub struct Request {
     pub expires_in_seconds: Option<u64>,
     /// Where the check runs — the registering turn's own working directory.
     pub cwd: String,
+    /// The event log position the wait actually began at, if the caller knows one —
+    /// [`Await::baseline_seq`] is set from this. An action that starts something and only then
+    /// registers a wake on its own behalf (see [`follow_up`]) should capture [`Events::head`]
+    /// *before* acting and pass it here, so an event the started thing publishes in the gap
+    /// before registration still counts as happening after the wait began, not before it
+    /// (ADI-MONO-216). Left `None` for a model's own direct `Await` call, which has no earlier
+    /// moment to point to than registration itself.
+    pub baseline_seq: Option<u64>,
 }
 
 /// Register a wake for `agent`'s conversation `conv`, returning the stored record.
@@ -663,6 +700,11 @@ pub fn register(store: &Awaits, agent: &str, conv: &str, req: &Request) -> Resul
         .every_seconds
         .or_else(|| check.as_ref().and(req.after_seconds))
         .filter(|n| *n > 0);
+    // No earlier moment to point to than right now: a model's own `Await` call has nothing it
+    // already did that the wait could be backdated to, so its baseline is this registration.
+    let baseline_seq = req
+        .baseline_seq
+        .unwrap_or_else(|| Events::with_config(store.config().clone()).head().unwrap_or(0));
 
     let record = Await {
         id: new_id(now),
@@ -684,6 +726,7 @@ pub fn register(store: &Awaits, agent: &str, conv: &str, req: &Request) -> Resul
         ),
         expiry_wakes: req.expires_in_seconds.is_some(),
         created_at: now,
+        baseline_seq,
         fails: 0,
     };
     store.save(&record)?;
@@ -1080,14 +1123,20 @@ fn consider_dead_job(agents: &Agents, store: &Awaits, a: &Await, job: &jobs::Job
     None
 }
 
-/// The oldest already-published event the event log holds that `a` wants, if `a` is young enough
-/// for that to mean anything (ADI-MONO-216) — see [`REPLAY_WINDOW_SECS`].
+/// The oldest already-published event at or after [`Await::baseline_seq`] that `a` wants, if `a`
+/// is young enough for that to mean anything (ADI-MONO-216) — see [`REPLAY_WINDOW_SECS`].
 ///
 /// [`on_event`] only ever sees an event at the moment a live dispatcher hands it one, so an event
 /// published in the gap between whatever acted (launching a run, starting a background job) and
 /// this await's own registration landing on disk is otherwise invisible to it forever: by the time
-/// `a` exists, that event has already been and gone. Reading the log's own tail is this await's one
-/// chance to notice what it would have caught had it been subscribed in time.
+/// `a` exists, that event has already been and gone. Reading the log forward from the moment the
+/// wait began is this await's one chance to notice what it would have caught had it been
+/// subscribed in time.
+///
+/// Anchored on `baseline_seq`, never on the log's own tip: a tip-relative window would read as a
+/// match anything that happened to fire in its last [`REPLAY_LOOKBACK`] rows, however long before
+/// this await ever existed — which is exactly the regression this fix is for. [`REPLAY_LOOKBACK`]
+/// still caps how far past the baseline one look reads, purely as a cost bound.
 ///
 /// Oldest match, not newest: if more than one of `a`'s patterns already fired, the run should be
 /// told about the one that actually happened first.
@@ -1096,9 +1145,7 @@ fn already_published(agents: &Agents, a: &Await) -> Option<(String, String)> {
         return None;
     }
     let log = Events::with_config(agents.config().clone());
-    let head = log.head().ok()?;
-    let from = head.saturating_sub(REPLAY_LOOKBACK);
-    log.after(from, (REPLAY_LOOKBACK + 1) as usize)
+    log.after(a.baseline_seq, (REPLAY_LOOKBACK + 1) as usize)
         .ok()?
         .into_iter()
         .find(|row| a.wants(&row.record.name, &row.record.payload))
@@ -1522,6 +1569,7 @@ mod tests {
             expires_at: None,
             expiry_wakes: false,
             created_at: 0,
+            baseline_seq: 0,
             fails: 0,
         };
         assert!(!a.wants(AgentRunFinished::NAME, "not json at all"));
@@ -2049,6 +2097,7 @@ mod tests {
             expires_at: None,
             expiry_wakes: false,
             created_at: 0,
+            baseline_seq: 0,
             fails: 0,
         };
         let outcome = run_check(&a, "sleep 30", Cause::Timer, 200);
@@ -2076,6 +2125,7 @@ mod tests {
             expires_at: None,
             expiry_wakes: false,
             created_at: 0,
+            baseline_seq: 0,
             fails: 0,
         };
         let text = wake_message(
@@ -2376,13 +2426,17 @@ mod tests {
     /// *after* the run has already been launched, so a run fast enough to finish in that gap
     /// publishes `adi.agents.run.finished` before any await exists to catch it — [`on_event`] only
     /// ever hands an event to awaits pending at the moment it arrives, so a subscriber a beat late
-    /// would otherwise never see it. `tick`'s own replay of the log's recent tail is this await's
-    /// one chance to notice what it missed.
+    /// would otherwise never see it. `tick`'s own replay from [`Await::baseline_seq`] is this
+    /// await's one chance to notice what it missed — exercised here exactly as the launcher
+    /// captures it, with the baseline read *before* the event the launch causes.
     #[test]
     fn tick_wakes_an_await_whose_event_already_fired_before_it_registered() {
         let store = scratch("event-raced-registration");
         let agents = Agents::with_config(store.config().clone());
         let events = Events::with_config(store.config().clone());
+
+        // The launcher captures its baseline before launching, the way `agents.rs` does.
+        let baseline_seq = Some(events.head().expect("head"));
 
         // The event fires first — nothing is watching for it yet.
         events
@@ -2400,6 +2454,7 @@ mod tests {
                 when: [("run_id".to_string(), "r-42".to_string())]
                     .into_iter()
                     .collect(),
+                baseline_seq,
                 ..Request::default()
             },
         )
@@ -2421,12 +2476,17 @@ mod tests {
     }
 
     /// The replay in [`already_published`] must still respect `when`: a stranger's run finishing in
-    /// the same gap is not this await's to claim, before or after it was subscribed.
+    /// the same gap — after the baseline, so still inside what the replay reads — is not this
+    /// await's to claim, before or after it was subscribed.
     #[test]
     fn tick_replay_still_scopes_a_wake_to_the_one_run_it_named() {
         let store = scratch("event-raced-scoped");
         let agents = Agents::with_config(store.config().clone());
         let events = Events::with_config(store.config().clone());
+
+        // Baseline captured before the launch, same as the real launcher — the stranger's ending
+        // below is still in the replay's own range, so only `when` is what has to exclude it.
+        let baseline_seq = Some(events.head().expect("head"));
 
         events
             .emit_event(&AgentRunFinished::new("r-43", "worker", false))
@@ -2442,6 +2502,7 @@ mod tests {
                 when: [("run_id".to_string(), "r-42".to_string())]
                     .into_iter()
                     .collect(),
+                baseline_seq,
                 ..Request::default()
             },
         )
@@ -2456,6 +2517,62 @@ mod tests {
             Some(&saved),
             "left pending for its own run"
         );
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// The regression the follow-up to ADI-MONO-216 exists for: `REPLAY_WINDOW_SECS` bounded which
+    /// awaits got replayed, but not how far back the replay itself looked, so a task created long
+    /// before a run ever asked to be told about one still read as "the next time this happens" —
+    /// not "this already happened". A fresh await registered with no baseline of its own (a
+    /// model's direct `Await` call, not an action's `follow_up`) must take the log's own current
+    /// tip as where its wait begins, so an event from before registration never counts.
+    #[test]
+    fn tick_does_not_replay_an_event_published_before_the_awaits_own_baseline() {
+        let store = scratch("replay-respects-baseline");
+        let agents = Agents::with_config(store.config().clone());
+        let events = Events::with_config(store.config().clone());
+
+        // A task created well before anyone asked to be told about one.
+        events
+            .emit("adi.tasks.created", r#"{"id":"old-task"}"#)
+            .expect("emit the old task");
+
+        // No `baseline_seq` given — exactly a model's own `Await` call, with nothing it already
+        // did to backdate the wait to. `register` must anchor it to right now, not to the log's
+        // last `REPLAY_LOOKBACK` rows.
+        let saved = register(
+            &store,
+            "watcher",
+            "conv-1",
+            &Request {
+                note: "wake me the next time a task is created".into(),
+                events: vec!["adi.tasks.created".into()],
+                ..Request::default()
+            },
+        )
+        .expect("register");
+        assert!(
+            saved.baseline_seq >= events.head().expect("head"),
+            "a bare await's baseline is the log's tip at registration, not the beginning of time"
+        );
+
+        assert!(
+            tick(&agents).is_empty(),
+            "the task created before this await existed must not read as the one it is waiting for"
+        );
+        assert_eq!(
+            store.get(&saved.id).as_ref(),
+            Some(&saved),
+            "left pending — nothing it is waiting for has happened yet"
+        );
+
+        // A task created after registration is exactly what this await is for.
+        events
+            .emit("adi.tasks.created", r#"{"id":"new-task"}"#)
+            .expect("emit a task after the await existed");
+        let woken = on_event(&agents, "adi.tasks.created", r#"{"id":"new-task"}"#);
+        assert_eq!(woken.len(), 1, "the new task is exactly what it asked for");
 
         let _ = std::fs::remove_dir_all(store.dir());
     }

@@ -617,6 +617,8 @@ pub struct Await {
     pub expiry_wakes: bool,
     #[serde(default)]
     pub created_at: u64,
+    #[serde(default)]
+    pub baseline_seq: u64,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub fails: u32,
 }
@@ -697,6 +699,7 @@ pub struct Request {
     pub check: Option<String>,
     pub expires_in_seconds: Option<u64>,
     pub cwd: String,
+    pub baseline_seq: Option<u64>,
 }
 ```
 

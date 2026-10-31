@@ -27,9 +27,14 @@ extraction script cares about.
   watch is already started — so a run or job fast enough to finish first used to leave nothing to
   wake the conversation: the event had already come and gone before anything was watching for it,
   or (for a job) garbage collection mistook the one real wake for an already-covered, redundant one
-  and retired it unseen. Both now get one real chance to notice what they missed — a short replay
-  of the event log's own recent tail, and an actual run of a job's own check before it is ever
-  written off as dead — so the wake still fires, once, with what actually happened.
+  and retired it unseen. Both now get one real chance to notice what they missed — a replay of the
+  event log from the exact moment the wait began, and an actual run of a job's own check before it
+  is ever written off as dead — so the wake still fires, once, with what actually happened. That
+  replay is anchored to an exact log position captured before the watched thing starts, not to a
+  window worked backward from whenever the await happened to land in the store — otherwise an
+  ordinary `Await` with no `when` filter could wake immediately on something that had already
+  happened minutes or hours earlier, which is a different promise than "the next time this
+  happens" and was never the intended fix.
 
 ## 1.34.0 — 2026-10-29
 

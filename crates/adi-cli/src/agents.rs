@@ -771,6 +771,10 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
             }
 
             let by = launched_by();
+            // Captured *before* the launch (ADI-MONO-216): a run fast enough to publish its own
+            // finish event before `follow_the_run` registers the wake below must still have that
+            // event count as happening after the wait began, not before it.
+            let baseline_seq = awaits::Awaits::with_config(store.config().clone()).event_head();
             let launch = store
                 .launch(
                     &name,
@@ -828,7 +832,8 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
                     println!("  command: {command}");
                     println!("  log:     {}", log.display());
                     if !no_await
-                        && let Some(note) = follow_the_run(&store, &name, &run_id, &message)
+                        && let Some(note) =
+                            follow_the_run(&store, &name, &run_id, &message, baseline_seq)
                     {
                         println!();
                         println!("{note}");
@@ -1510,13 +1515,25 @@ fn created_by_for_save() -> String {
 /// event names are published for every run on the machine, and the launcher wants exactly the one
 /// it started. `run_id` is spelled the same way across all four payloads for exactly this reason —
 /// see `AgentQuestionAsked::run_id` in `adi-agents`.
-fn follow_the_run(store: &Agents, agent: &str, run_id: &str, message: &str) -> Option<String> {
+///
+/// `baseline_seq` is the event log's position read before `store.launch` was ever called
+/// (ADI-MONO-216): a run quick enough to finish in the gap between that launch and this wake
+/// landing in the store must still have its own finish event count as happening after the wait
+/// began, not read as something that already happened before anyone asked.
+fn follow_the_run(
+    store: &Agents,
+    agent: &str,
+    run_id: &str,
+    message: &str,
+    baseline_seq: u64,
+) -> Option<String> {
     let who = awaits::caller()?;
     let pending = awaits::Awaits::with_config(store.config().clone());
     Some(awaits::follow_up(
         &pending,
         &who,
         &awaits::Request {
+            baseline_seq: Some(baseline_seq),
             note: format!(
                 "You started agent {agent} (run {run_id}) with:\n\n{message}\n\nThis wake fires on \
                  any of four things: the run finishing for real, the run sending you an interim \
@@ -1587,6 +1604,11 @@ fn run_leased(
         body["overrides"] = serde_json::to_value(overrides).map_err(|e| e.to_string())?;
     }
 
+    // Captured before the request is even sent (ADI-MONO-216), the same reasoning the local
+    // launch above uses: `adi-app` shares this store's own event log, so a run quick enough to
+    // finish before the response (let alone before `follow_the_run` below) still publishes after
+    // this point.
+    let baseline_seq = awaits::Awaits::with_config(store.config().clone()).event_head();
     let client = adi_mesh::node_api::gateway_client(crate::secrets::NODE_TIMEOUT)
         .map_err(|e| e.to_string())?;
     let response = client
@@ -1629,7 +1651,7 @@ fn run_leased(
     println!("Started agent {name} through its lease at {lease_url}.");
     println!("  run:     {run_id}");
     if !no_await
-        && let Some(note) = follow_the_run(store, name, run_id, message)
+        && let Some(note) = follow_the_run(store, name, run_id, message, baseline_seq)
     {
         println!();
         println!("{note}");
