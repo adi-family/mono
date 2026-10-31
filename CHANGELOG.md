@@ -20,6 +20,20 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.35.0 — 2026-10-31
+
+### Added
+
+- **A chain can now point at a reusable, ordered group of backends instead of listing
+  each one by name.** An LLM backend can be a *group* — an ordered list of other backends,
+  which may themselves be groups — so a failover order used by several agents lives in one
+  place and changes once instead of being copied into every chain that uses it. A chain row
+  that names a group expands to the group's own members, best-first, with that row's own
+  overrides applied to each one. Saving a group that names itself (directly or through
+  another group) or a backend that doesn't exist is refused with the full chain named;
+  deleting a backend still named by a group is refused the same way a backend an agent still
+  lists already was, and renaming one repoints every group that names it. (ADI-MONO-206)
+
 ### Fixed
 
 - **A run could be declared finished before it had even started (ADI-MONO-218).** A launch opens
@@ -47,6 +61,19 @@ extraction script cares about.
   ordinary `Await` with no `when` filter could wake immediately on something that had already
   happened minutes or hours earlier, which is a different promise than "the next time this
   happens" and was never the intended fix.
+
+### Changed
+
+- **Pairing a phone to a fleet is scan-or-paste only now.** Pairing is always
+  machine-mints / phone-spends in practice, so the segmented direction picker and the whole
+  'invite a machine' path — mint a QR on the phone, scan it on the machine, wait while it
+  connects — are gone from Fleet; a phone pairs by scanning or pasting, and the screen
+  dismisses itself the moment that succeeds.
+- **Unpairing a node from Fleet no longer needs a swipe.** A long-press on a node row offers
+  the same Unpair action — removing the node and its Keychain password — that swiping on it
+  already did. Dashboard rows also drop their explanatory subtitles ('Not shared with this
+  phone yet…', 'Not running…', 'No address…') down to just icon and name; one with no address
+  still reads as unavailable, just dimmed instead of captioned.
 
 ## 1.34.0 — 2026-10-29
 
