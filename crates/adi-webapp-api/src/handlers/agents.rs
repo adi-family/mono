@@ -1415,16 +1415,16 @@ impl RunFilter {
 }
 
 ///
-/// `group` is the rail's `?group=project`: given the project registry, the answer also carries
-/// [`AllAgentRuns::groups`] — see [`project_groups`]. `None` leaves it empty, as every other caller
-/// wants.
+/// `group` is the rail's `?group=project` ([`ProjectGrouping`]): the answer also carries
+/// [`AllAgentRuns::groups`], and with a per-project page the `limit` cut is replaced by one cut per
+/// project — see [`project_groups`]. `None` leaves it empty, as every other caller wants.
 #[must_use]
 pub fn all_agent_runs(
     store: &Agents,
     limit: Option<usize>,
     hidden: Option<bool>,
     filter: Option<RunFilter>,
-    group: Option<&adi_projects::Projects>,
+    group: Option<ProjectGrouping<'_>>,
     sender: Option<FleetSender<'_>>,
 ) -> Response {
     match store.list() {
@@ -1461,17 +1461,27 @@ pub fn all_agent_runs(
             // rail's "N older", the Hidden band's count and a narrowed view's count each describe the
             // population that was actually asked for, not the whole store.
             let total = runs.iter().map(|a| a.runs.len()).sum();
-            if let Some(limit) = limit {
-                runs = newest(runs, limit);
-            }
-            // After the cut, so a heading is never drawn for a project whose sessions all fell
-            // behind Load more.
-            let groups = group
-                .map(|projects| {
-                    let names = project_names(projects);
-                    project_groups(&agents, &runs, &names)
-                })
-                .unwrap_or_default();
+            let groups = match group {
+                Some(grouping) => {
+                    let names = project_names(grouping.projects);
+                    let (cut, groups) = project_groups(
+                        &agents,
+                        runs,
+                        &names,
+                        grouping.per_group,
+                        &grouping.more,
+                        limit,
+                    );
+                    runs = cut;
+                    groups
+                }
+                None => {
+                    if let Some(limit) = limit {
+                        runs = newest(runs, limit);
+                    }
+                    Vec::new()
+                }
+            };
             ok_json(&AllAgentRuns {
                 agents: runs,
                 total,
@@ -1480,6 +1490,49 @@ pub fn all_agent_runs(
             })
         }
         Err(e) => Response::from(&e),
+    }
+}
+
+/// The rail's `?group=project` request: the project registry the headings are named from, and —
+/// when `group_limit` is sent — a page **per project** instead of one page across the whole index,
+/// so a project with only old sessions still shows its newest few rather than none at all.
+///
+/// `more` is each project's own Load more, `group_more=<key>:<n>,…`: how many sessions past
+/// `per_group` that project has asked for. The key is the project id, or [`NO_PROJECT_KEY`] for
+/// agents in no project — ids are a single path segment of letters, digits, `.`, `-` and `_`, so
+/// neither `:` nor `,` nor `~` can occur in one.
+pub struct ProjectGrouping<'a> {
+    pub projects: &'a adi_projects::Projects,
+    pub per_group: Option<usize>,
+    pub more: BTreeMap<String, usize>,
+}
+
+/// The `group_more` key of agents filed under no project.
+pub const NO_PROJECT_KEY: &str = "~";
+
+impl<'a> ProjectGrouping<'a> {
+    /// Parse the query: `None` unless `group=project`. A malformed `group_limit` or `group_more`
+    /// entry is dropped rather than refused, the same fail-open reading [`RunFilter::from_query`]
+    /// gives a stray value.
+    #[must_use]
+    pub fn from_query(
+        projects: &'a adi_projects::Projects,
+        group: Option<&str>,
+        per_group: Option<&str>,
+        more: Option<&str>,
+    ) -> Option<Self> {
+        (group == Some("project")).then(|| Self {
+            projects,
+            per_group: per_group.and_then(|n| n.parse().ok()),
+            more: more
+                .unwrap_or_default()
+                .split(',')
+                .filter_map(|pair| {
+                    let (key, n) = pair.rsplit_once(':')?;
+                    Some((key.to_string(), n.parse().ok()?))
+                })
+                .collect(),
+        })
     }
 }
 
@@ -1495,19 +1548,27 @@ fn project_names(projects: &adi_projects::Projects) -> BTreeMap<String, String> 
         .collect()
 }
 
-/// The `?group=project` bands: each agent that still has a session in `runs` filed under its
-/// manifest's project, projects ordered by display name (case-insensitive), then agents in no
-/// project as the last band.
+/// The `?group=project` cut and bands: each agent filed under its manifest's project, projects
+/// ordered by display name (case-insensitive), then agents in no project as the last band. Answers
+/// the runs as cut, and the bands over them.
+///
+/// The cut is [`newest`] run once per project when there is a per-project page, so each
+/// keeps what the rail's own cut always keeps (running, asking, awaiting, starred) plus its newest
+/// `per_group + more`; without one it is the plain `limit` across the index. Each band's `total` is
+/// counted before either, which is what tells the client a project has more behind its Load more.
 ///
 /// "No project" goes last rather than first because it is where the root agent and every global
 /// helper live — on most machines the busiest band, and one that would otherwise push every
-/// project's heading below the fold. An interactive agent is kept even with no runs: its live
-/// terminal is a row the client draws without a run record.
+/// project's heading below the fold. An agent with nothing left after the cut draws no band, except
+/// an interactive one: its live terminal is a row the client draws without a run record.
 fn project_groups(
     agents: &[StoredAgent],
-    runs: &[AgentRuns],
+    runs: Vec<AgentRuns>,
     names: &BTreeMap<String, String>,
-) -> Vec<RunGroup> {
+    per_group: Option<usize>,
+    more: &BTreeMap<String, usize>,
+    limit: Option<usize>,
+) -> (Vec<AgentRuns>, Vec<RunGroup>) {
     let project_of: std::collections::HashMap<&str, Option<&str>> = agents
         .iter()
         .map(|a| {
@@ -1519,13 +1580,42 @@ fn project_groups(
             (a.name.as_str(), project)
         })
         .collect();
+    let project = |ar: &AgentRuns| project_of.get(ar.name.as_str()).copied().flatten();
+    let mut totals: BTreeMap<Option<&str>, usize> = BTreeMap::new();
+    for ar in &runs {
+        *totals.entry(project(ar)).or_default() += ar.runs.len();
+    }
+    let runs = match per_group {
+        Some(per_group) => {
+            let mut buckets: BTreeMap<Option<&str>, Vec<AgentRuns>> = BTreeMap::new();
+            for ar in runs {
+                buckets.entry(project(&ar)).or_default().push(ar);
+            }
+            buckets
+                .into_iter()
+                .flat_map(|(key, bucket)| {
+                    let more = more
+                        .get(key.unwrap_or(NO_PROJECT_KEY))
+                        .copied()
+                        .unwrap_or(0);
+                    newest(bucket, per_group.saturating_add(more))
+                })
+                .collect()
+        }
+        None => match limit {
+            Some(limit) => newest(runs, limit),
+            None => runs,
+        },
+    };
     let mut by_project: BTreeMap<Option<&str>, Vec<String>> = BTreeMap::new();
     for ar in runs
         .iter()
         .filter(|ar| ar.interactive || !ar.runs.is_empty())
     {
-        let project = project_of.get(ar.name.as_str()).copied().flatten();
-        by_project.entry(project).or_default().push(ar.name.clone());
+        by_project
+            .entry(project(ar))
+            .or_default()
+            .push(ar.name.clone());
     }
     let mut groups: Vec<RunGroup> = by_project
         .into_iter()
@@ -1534,12 +1624,13 @@ fn project_groups(
                 Some(id) => names.get(id).cloned().unwrap_or_else(|| id.to_string()),
                 None => "No project".to_string(),
             },
+            total: totals.get(&project).copied().unwrap_or(0),
             project: project.map(str::to_string),
             agents,
         })
         .collect();
     groups.sort_by_cached_key(|g| (g.project.is_none(), g.label.to_lowercase()));
-    groups
+    (runs, groups)
 }
 
 /// The username behind this specific request — the mesh credential's own name
@@ -4620,6 +4711,69 @@ mod tests {
         }
     }
 
+    /// `group_limit` pages each project on its own: a project whose sessions are all older than the
+    /// busy one's still shows its newest few, `total` says what each holds before the cut, and a
+    /// project's own `group_more` widens it alone.
+    #[test]
+    fn project_groups_page_each_project_on_its_own() {
+        let filed = |name: &str, project: Option<&str>| StoredAgent {
+            name: name.to_string(),
+            manifest: StoredAgentManifest {
+                project: project.map(str::to_string),
+                ..Default::default()
+            },
+        };
+        let agents = vec![filed("busy", Some("hot")), filed("old", Some("cold"))];
+        let runs = vec![
+            listing("busy", &[900, 800, 700, 600, 500]),
+            listing("old", &[50, 40, 30, 20]),
+        ];
+        let names = BTreeMap::new();
+
+        let (cut, groups) = project_groups(
+            &agents,
+            runs.clone(),
+            &names,
+            Some(3),
+            &BTreeMap::new(),
+            Some(3),
+        );
+        assert_eq!(
+            kept(&cut),
+            [
+                "old-50", "old-40", "old-30", "busy-900", "busy-800", "busy-700"
+            ],
+            "three of each, not the three newest overall",
+        );
+        let totals: Vec<(&str, usize)> =
+            groups.iter().map(|g| (g.label.as_str(), g.total)).collect();
+        assert_eq!(totals, [("cold", 4), ("hot", 5)]);
+
+        let more: BTreeMap<String, usize> = [("cold".to_string(), 10)].into_iter().collect();
+        let (cut, _) = project_groups(&agents, runs, &names, Some(3), &more, None);
+        assert_eq!(cut.iter().map(|a| a.runs.len()).collect::<Vec<_>>(), [4, 3]);
+    }
+
+    /// The query: `group=project` only, `group_more` read as `<key>:<n>` pairs, a malformed pair
+    /// dropped rather than failing the request.
+    #[test]
+    fn project_grouping_parses_its_query() {
+        let projects = adi_projects::Projects::with_config(scratch("grouping").config().clone());
+        assert!(ProjectGrouping::from_query(&projects, Some("machine"), None, None).is_none());
+        let g = ProjectGrouping::from_query(
+            &projects,
+            Some("project"),
+            Some("3"),
+            Some("adi:10,~:20,junk,x:y"),
+        )
+        .expect("grouped");
+        assert_eq!(g.per_group, Some(3));
+        assert_eq!(
+            g.more.into_iter().collect::<Vec<_>>(),
+            [("adi".to_string(), 10), ("~".to_string(), 20)]
+        );
+    }
+
     /// `?group=project`: projects by display name, a project no longer registered under its bare
     /// id, "No project" last whatever it sorts as — and an agent with nothing left on the page
     /// draws no band at all.
@@ -4657,7 +4811,7 @@ mod tests {
         .map(|(id, name)| (id.to_string(), name.to_string()))
         .collect();
 
-        let groups = project_groups(&agents, &runs, &names);
+        let (_, groups) = project_groups(&agents, runs, &names, None, &BTreeMap::new(), None);
         let seen: Vec<(&str, Vec<&str>)> = groups
             .iter()
             .map(|g| {

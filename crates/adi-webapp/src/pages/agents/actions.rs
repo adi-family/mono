@@ -23,8 +23,9 @@ use crate::fetch;
 use crate::launcher::{self, Launcher};
 use crate::routing::{Route, agent_form_path, scroll_top};
 use crate::state::{
-    AgentsWatch, ChatDrawer, Flash, ROOT_AGENT, SESSION_PAGE, SessionFilter, SessionGroup,
-    SessionMenu, State, load_last_agent, refresh_fleet_dashboards, save_last_agent, source_limit,
+    AgentsWatch, ChatDrawer, Flash, PROJECT_PAGE, PROJECT_STEP, ROOT_AGENT, SESSION_PAGE,
+    SessionFilter, SessionGroup, SessionMenu, State, load_last_agent, refresh_fleet_dashboards,
+    save_last_agent, source_limit,
 };
 use crate::ui::{
     Key, Sort, TableState, apply_mutation, display_message, field_hint, prompt, sort_rows,
@@ -5681,6 +5682,10 @@ struct RailBand {
     /// every one of these regardless, because a question left where nobody looks is a run stopped
     /// for good.
     rows: Vec<SessionRow>,
+    /// [`SessionGroup::Project`] only: the project's server key (`RunGroup::project`, or `~`) and how
+    /// many sessions it holds in all — what its own Load more widens, and what it says is left.
+    /// `None` under every other grouping, and for a heading no source has reported a total for.
+    project: Option<(String, usize)>,
 }
 
 /// The rail exactly as it is drawn: the bands in order, their rows in order, and the first nine
@@ -5751,15 +5756,64 @@ const NO_PROJECT: &str = "No project";
 struct ProjectBands {
     order: Vec<String>,
     of: HashMap<(Option<String>, String), String>,
+    /// Per heading: its server key, the sessions it holds across every source, and how many of
+    /// them to draw.
+    meta: HashMap<String, ProjectMeta>,
+}
+
+struct ProjectMeta {
+    key: String,
+    total: usize,
+    /// [`PROJECT_PAGE`] plus this project's own Load more — the same cut the server made, applied
+    /// again here because the open agent's rows come from its whole, uncut history (`watch.runs`)
+    /// and would otherwise grow its section past every other.
+    cap: usize,
+}
+
+/// The `group_more` key of agents in no project — the server's `NO_PROJECT_KEY`.
+const NO_PROJECT_KEY: &str = "~";
+
+/// A section's rows cut to `cap`, keeping what the server's cut always keeps — a run working,
+/// asking, awaiting or starred — and the first `cap` of the rest. Order is untouched, so what is
+/// stopped on you still leads.
+fn capped(rows: Vec<SessionRow>, cap: usize) -> Vec<SessionRow> {
+    let mut rest = 0;
+    rows.into_iter()
+        .filter(|row| {
+            let held = row.running
+                || row.starred
+                || row
+                    .run
+                    .as_ref()
+                    .is_some_and(|r| r.pending_question.is_some() || !r.awaits.is_empty());
+            if held {
+                return true;
+            }
+            rest += 1;
+            rest <= cap
+        })
+        .collect()
 }
 
 fn project_bands(state: State) -> ProjectBands {
     let mut bands = ProjectBands::default();
+    let more = state.rail_project_more.get();
+    let meta_for = |key: &str| ProjectMeta {
+        key: key.to_string(),
+        total: 0,
+        cap: PROJECT_PAGE + more.get(key).copied().unwrap_or(0),
+    };
     let mut add = |node: Option<&str>, all: &AllAgentRuns| {
         for g in &all.groups {
             if g.project.is_some() && !bands.order.contains(&g.label) {
                 bands.order.push(g.label.clone());
             }
+            let key = g.project.as_deref().unwrap_or(NO_PROJECT_KEY);
+            bands
+                .meta
+                .entry(g.label.clone())
+                .or_insert_with(|| meta_for(key))
+                .total += g.total;
             for agent in &g.agents {
                 bands
                     .of
@@ -5779,6 +5833,10 @@ fn project_bands(state: State) -> ProjectBands {
         }
     }
     bands.order.push(NO_PROJECT.to_string());
+    bands
+        .meta
+        .entry(NO_PROJECT.to_string())
+        .or_insert_with(|| meta_for(NO_PROJECT_KEY));
     bands
 }
 
@@ -5811,6 +5869,7 @@ fn grouped_bands(
             label: String::new(),
             node: None,
             rows: banded.into_iter().flatten().collect(),
+            project: None,
         }],
         // Dealt out of the activity bands rather than off the sorted rows, which is what keeps each
         // machine's own band in the rail's own order: what is stopped on you, then what is running,
@@ -5832,6 +5891,7 @@ fn grouped_bands(
                 label: node.clone().unwrap_or_else(|| "This machine".to_string()),
                 node,
                 rows,
+                project: None,
             })
             .collect(),
         // Dealt out of the activity bands for the same reason, into the server's headings in the
@@ -5857,10 +5917,17 @@ fn grouped_bands(
                 .iter()
                 .cloned()
                 .zip(rows_of)
-                .map(|(label, rows)| RailBand {
-                    label,
-                    node: None,
-                    rows,
+                .map(|(label, rows)| {
+                    let meta = projects.meta.get(&label);
+                    RailBand {
+                        rows: match meta {
+                            Some(meta) => capped(rows, meta.cap),
+                            None => rows,
+                        },
+                        project: meta.map(|m| (m.key.clone(), m.total)),
+                        label,
+                        node: None,
+                    }
                 })
                 .collect()
         }
@@ -5964,9 +6031,9 @@ enum RailLayout {
     Single { sourced: bool },
     /// A block per band: its label, its source, and whether it is folded shut.
     Blocks(Vec<(String, Option<String>, bool)>),
-    /// [`SessionGroup::Project`]: a heading per band, each with its row count, over one list that
-    /// scrolls as a whole — never equal-height blocks.
-    Sections(Vec<(String, usize)>),
+    /// [`SessionGroup::Project`]: a heading per band over one list that scrolls as a whole — never
+    /// equal-height blocks — with how many sessions the project holds, and its own Load more.
+    Sections(Vec<SectionHead>),
 }
 
 /// The layout [`rail_bands`] is drawn in. Reads `state.session_group`, `state.rail_collapsed_bands`
@@ -6006,7 +6073,16 @@ fn rail_layout(state: State, bands: &[RailBand], filter: SessionFilter) -> RailL
         return RailLayout::Sections(
             bands
                 .iter()
-                .map(|b| (b.label.clone(), b.rows.len()))
+                .map(|b| {
+                    let drawn = b.rows.len();
+                    let (key, total) = b.project.clone().unwrap_or_default();
+                    let total = total.max(drawn);
+                    SectionHead {
+                        label: b.label.clone(),
+                        total,
+                        more: (total > drawn).then(|| (key, total - drawn)),
+                    }
+                })
                 .collect(),
         );
     }
@@ -6070,30 +6146,38 @@ fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
             </div>
         }
         .into_any(),
-        // Grouped by project: the sections stack in the rail's own scroll, each as tall as its rows,
-        // with the one combined Load more under the last — a page is cut across every project at
-        // once, so no single section could say what pressing it would bring.
-        RailLayout::Sections(sections) => view! {
-            {sections
-                .into_iter()
-                .map(|(label, count)| chat_project_section(state, watch, rail, label, count))
-                .collect::<Vec<_>>()}
-            {move || chat_load_more(state)}
-        }
-        .into_any(),
+        // Grouped by project: the sections stack in the rail's own scroll, each as tall as its rows
+        // and each paged on its own, so there is no rail-wide Load more under the last.
+        RailLayout::Sections(sections) => sections
+            .into_iter()
+            .map(|head| chat_project_section(state, watch, rail, head))
+            .collect::<Vec<_>>()
+            .into_any(),
     })
     .into_any()
 }
 
-/// One project's section of a project-grouped rail: its heading and count, then its rows. Rows
-/// name their machine when several are merged — the heading here says the project, not the source.
+/// One heading of a project-grouped rail, as [`RailLayout::Sections`] carries it.
+#[derive(Clone, PartialEq, Eq)]
+struct SectionHead {
+    label: String,
+    /// Sessions the project holds in all, not only the ones drawn.
+    total: usize,
+    /// The project's server key and how many of its sessions are not drawn yet — `None` once they
+    /// all are, so a finished section carries no button.
+    more: Option<(String, usize)>,
+}
+
+/// One project's section of a project-grouped rail: its heading and how many sessions the project
+/// holds, its first few rows, and its own Load more. Rows name their machine when several are
+/// merged — the heading here says the project, not the source.
 fn chat_project_section(
     state: State,
     watch: AgentsWatch,
     rail: Memo<(Vec<RailBand>, SessionFilter)>,
-    label: String,
-    count: usize,
+    head: SectionHead,
 ) -> AnyView {
+    let SectionHead { label, total, more } = head;
     let rows_of = {
         let label = label.clone();
         move || {
@@ -6106,9 +6190,25 @@ fn chat_project_section(
             })
         }
     };
+    let load_more = more.map(|(key, left)| {
+        // The same wording the rail-wide Load more uses, so the two read as one control.
+        let text = if left <= PROJECT_STEP {
+            format!("Load the last {left}")
+        } else {
+            format!("Load {PROJECT_STEP} more \u{00b7} {left} older")
+        };
+        view! {
+            <button class="adi-chome__divider adi-chome__divider--toggle" type="button"
+                title="ask the backend for more of this project's sessions"
+                on:click=move |_| state.rail_project_more.update(|m| {
+                    *m.entry(key.clone()).or_default() += PROJECT_STEP;
+                })>{text}</button>
+        }
+    });
     view! {
-        <adi_ui::RailGroup label=label count=count>
+        <adi_ui::RailGroup label=label count=total>
             {chat_session_rows(state, watch, rows_of, true)}
+            {load_more}
         </adi_ui::RailGroup>
     }
     .into_any()
@@ -6835,11 +6935,11 @@ async fn settle_session_change(
             }
             let limit = Some(crate::state::source_limit_untracked(state, node.as_deref()));
             let filter = state.session_filter.get_untracked();
-            let group = state.session_group.get_untracked();
+            let group = crate::state::rail_grouping(state, false);
             let show_hidden = state.show_hidden.get_untracked();
             match &node {
                 None => {
-                    if let Ok(all) = fetch::all_agent_runs_visible(limit, filter, group).await {
+                    if let Ok(all) = fetch::all_agent_runs_visible(limit, filter, &group).await {
                         state.all_chats.set(Some(all));
                     }
                     if show_hidden && let Ok(all) = fetch::hidden_runs().await {
@@ -6848,7 +6948,7 @@ async fn settle_session_change(
                 }
                 Some(node) => {
                     if let Ok(all) =
-                        fetch::all_agent_runs_visible_on(node, limit, filter, group).await
+                        fetch::all_agent_runs_visible_on(node, limit, filter, &group).await
                     {
                         state.rail_node_chats.update(|m| {
                             m.insert(node.clone(), all);
@@ -8585,6 +8685,7 @@ mod tests {
         let mut projects = ProjectBands {
             order: vec!["Website".to_string(), NO_PROJECT.to_string()],
             of: HashMap::new(),
+            meta: HashMap::new(),
         };
         for (node, agent, label) in [
             (None, "web", "Website"),
@@ -8636,6 +8737,52 @@ mod tests {
             &projects,
         );
         assert_eq!(labels(&bands), ["Website"]);
+    }
+
+    /// Each project section draws its own page: a running row always, then the first `cap` of the
+    /// rest — and carries its key and total for its own Load more.
+    #[test]
+    fn a_project_section_is_cut_to_its_own_page() {
+        let mut projects = ProjectBands {
+            order: vec!["Website".to_string(), NO_PROJECT.to_string()],
+            of: HashMap::new(),
+            meta: HashMap::new(),
+        };
+        for agent in ["live", "a", "b", "c"] {
+            projects
+                .of
+                .insert((None, agent.to_string()), "Website".to_string());
+        }
+        projects.meta.insert(
+            "Website".to_string(),
+            ProjectMeta {
+                key: "web".to_string(),
+                total: 9,
+                cap: 2,
+            },
+        );
+        let mut live = rail_row(None, "live");
+        live.running = true;
+        let banded = [
+            Vec::new(),
+            vec![live],
+            Vec::new(),
+            Vec::new(),
+            vec![
+                rail_row(None, "a"),
+                rail_row(None, "b"),
+                rail_row(None, "c"),
+            ],
+        ];
+
+        let bands = grouped_bands(
+            SessionGroup::Project,
+            banded,
+            &nothing_collapsed(),
+            &projects,
+        );
+        assert_eq!(agents_in(&bands[0]), ["live", "a", "b"]);
+        assert_eq!(bands[0].project, Some(("web".to_string(), 9)));
     }
 
     /// Two promises the drawn rail makes whichever way it is grouped: a heading is never drawn over

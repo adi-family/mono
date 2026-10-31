@@ -46,6 +46,40 @@ pub(crate) const ROOT_AGENT: &str = "adi-agent";
 /// carries its own Load more, so there is no longer one number to split. See [`source_limit`].
 pub(crate) const SESSION_PAGE: usize = 100;
 
+/// How many sessions each project's section of a project-grouped rail opens on
+/// ([`SessionGroup::Project`]) — enough to see what a project is doing without one busy project
+/// pushing every other heading below the fold. The server cuts each project to this
+/// (`?group_limit=`), so a project whose sessions are all old still shows its newest few.
+pub(crate) const PROJECT_PAGE: usize = 3;
+
+/// How many more one project's own Load more brings.
+pub(crate) const PROJECT_STEP: usize = 10;
+
+/// Everything about the rail's grouping that goes into its request path: the grouping, and — for
+/// [`SessionGroup::Project`] — how far past [`PROJECT_PAGE`] each project has been widened, keyed
+/// as the server keys it (`RunGroup::project`, or `~` for no project).
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub(crate) struct RailGrouping {
+    pub(crate) group: SessionGroup,
+    pub(crate) more: BTreeMap<String, usize>,
+}
+
+/// The rail's current [`RailGrouping`]. `tracked` for the effect that subscribes with it, so a
+/// regrouping or a project's Load more re-subscribes; untracked for one-off fetches.
+pub(crate) fn rail_grouping(s: State, tracked: bool) -> RailGrouping {
+    if tracked {
+        RailGrouping {
+            group: s.session_group.get(),
+            more: s.rail_project_more.get(),
+        }
+    } else {
+        RailGrouping {
+            group: s.session_group.get_untracked(),
+            more: s.rail_project_more.get_untracked(),
+        }
+    }
+}
+
 /// What one source is currently asked for: this machine's own [`State::rail_limit`] for `None`, or
 /// one ticked node's own entry in [`State::rail_node_limits`] — [`SESSION_PAGE`] before that
 /// source's own Load more has ever been pressed, since a source with no entry yet has asked for
@@ -227,6 +261,10 @@ pub(crate) struct State {
     /// then hand one block's fold to whichever one landed in its slot. A label left behind by a
     /// block that no longer exists costs nothing.
     pub(crate) rail_collapsed_bands: RwSignal<BTreeSet<String>>,
+    /// How many sessions past [`PROJECT_PAGE`] each project's own Load more has asked for, keyed as
+    /// [`RailGrouping::more`] is. Page state like the folds above: a reload opens every project on
+    /// its first few again.
+    pub(crate) rail_project_more: RwSignal<BTreeMap<String, usize>>,
     /// How the chat rail is narrowed — see [`SessionFilter`]. [`SessionFilter::Mine`] by default:
     /// the rail opens on the conversations *you* started, because a working fleet starts most of
     /// its own work and the handful you had is otherwise buried under hundreds the machine (or a
@@ -525,6 +563,7 @@ impl State {
             session_menu: RwSignal::new(None),
             show_hidden: RwSignal::new(false),
             rail_collapsed_bands: RwSignal::new(BTreeSet::new()),
+            rail_project_more: RwSignal::new(BTreeMap::new()),
             session_filter: RwSignal::new(SessionFilter::default()),
             session_filter_menu: RwSignal::new(None),
             session_group: RwSignal::new(load_session_group()),
@@ -2994,7 +3033,7 @@ pub(crate) fn toggle_session_source(s: State, watch: AgentsWatch, node: Option<S
 pub(crate) fn refresh_rail_node(s: State, node: String) {
     let limit = Some(source_limit_untracked(s, Some(&node)));
     let filter = s.session_filter.get_untracked();
-    let group = s.session_group.get_untracked();
+    let group = rail_grouping(s, false);
     wasm_bindgen_futures::spawn_local(async move {
         // Still selected? A slow answer for a node ticked and un-ticked in the same second must not
         // resurrect a row for a source the rail no longer shows.
@@ -3011,7 +3050,7 @@ pub(crate) fn refresh_rail_node(s: State, node: String) {
             }
             Err(e) => s.flash.set(Some(Flash::err(format!("{node}: {e}")))),
         }
-        if let Ok(c) = fetch::all_agent_runs_visible_on(&node, limit, filter, group).await
+        if let Ok(c) = fetch::all_agent_runs_visible_on(&node, limit, filter, &group).await
             && s.session_nodes.get_untracked().contains(&node)
         {
             s.rail_node_chats.update(|m| {
