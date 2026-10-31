@@ -1,38 +1,21 @@
-import CoreImage.CIFilterBuiltins
 import SwiftUI
 import UIKit
 
-/// Pairing, from the viewer's side — in both directions.
+/// Pairing, from the viewer's side.
 ///
-/// The handshake is symmetric and which side dials is a deployment choice (`docs/fleet.md` §8), so
-/// this screen offers both:
+/// A node is enrolled one way: the machine mints a token — `adi-mono mesh invite`, or its Fleet
+/// page — and this device spends it by dialling out. The handshake is symmetric (`docs/fleet.md`
+/// §8), but the person holding a phone is never the side that should be pasting a `adi-mono mesh
+/// join` command into a terminal, so this screen offers only the spending half: scan the code the
+/// machine draws, or paste the token. (The other direction — this device minting and a machine
+/// spending it from a terminal — was dropped on purpose; a headless box is enrolled from its own
+/// terminal, not from here.)
 ///
-/// - **Invite a machine** — this device mints a token and the machine spends it by running
-///   `adi-mono mesh join`. The whole job is getting the token onto the machine, which is why Copy
-///   and Share matter more than the QR does.
-/// - **Enter an invite** — the machine minted (`adi-mono mesh invite`) and this device dials it.
-///   The direction that works when whoever holds the phone is not sitting at the machine, and the
-///   only one that works when they have no terminal at all.
-///
-/// Nothing here opens a port, in either direction.
+/// Nothing here opens a port.
 struct PairView: View {
     let model: FleetModel
     @Environment(\.dismiss) private var dismiss
 
-    /// Which way round this pairing is going.
-    ///
-    /// `spend` is first and is the default, because it is the one almost everybody uses: the
-    /// machine draws a code and the phone reads it. `mint` is the other direction — this device
-    /// makes the invite and the machine spends it from a terminal — which is the right way round
-    /// for enrolling a headless box and the wrong way round for a person holding a phone.
-    private enum Direction: String, CaseIterable {
-        case spend = "Scan a code"
-        case mint = "Invite a machine"
-    }
-
-    @State private var direction: Direction = .spend
-    @State private var token: String?
-    @State private var copied = false
     /// What has been pasted into the spend field.
     @State private var typed = ""
     /// True while the dial is in flight, so the button cannot be pressed twice.
@@ -45,59 +28,15 @@ struct PairView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                Picker("Direction", selection: $direction) {
-                    ForEach(Direction.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .padding(.horizontal, 20)
-                .padding(.bottom, 8)
-
-                switch direction {
-                case .mint:
-                    if let token {
-                        invite(token)
-                    } else if model.ready {
-                        VStack(spacing: 12) {
-                            ProgressView().controlSize(.large)
-                            Text("Minting an invite…")
-                                .font(ADI.TextStyle.small)
-                                .foregroundStyle(ADI.ink3)
-                        }
-                        .frame(maxHeight: .infinity)
-                    } else {
-                        waiting
+            spend
+                .background(ADI.bg)
+                .navigationTitle("Pair a node")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Done") { dismiss() }
                     }
-                case .spend:
-                    spend
                 }
-            }
-            .background(ADI.bg)
-            .navigationTitle("Pair a node")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
-        }
-        .task {
-            guard model.ready else { return }
-            token = await model.invite()
-        }
-        // Only the minting direction finishes without anything happening on this screen — the node
-        // dials back whenever it gets round to it. Polling is how the sheet notices; a second is
-        // well inside "it just worked". The spending direction dismisses itself, below.
-        .task {
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(1))
-                await model.collectPairings()
-                if model.justPaired != nil {
-                    await model.refresh()
-                    dismiss()
-                    return
-                }
-            }
         }
     }
 
@@ -261,107 +200,5 @@ struct PairView: View {
     /// Store reviewer met on 2026-09-02.
     private static func hasSomethingToSpend(_ text: String) -> Bool {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    /// Shown until the relay session is up. Minting before then would produce a token that only
-    /// works on the local network, which is a worse answer than waiting a moment.
-    private var waiting: some View {
-        VStack(spacing: 12) {
-            LucideIcon(icon: .radio, size: .xl)
-                .foregroundStyle(ADI.ink3)
-            Text("Connecting to the mesh")
-                .font(ADI.TextStyle.section)
-                .foregroundStyle(ADI.ink)
-            Text("An invite needs a relay session, so a node has something to dial. This usually takes a few seconds.")
-                .font(ADI.TextStyle.small)
-                .foregroundStyle(ADI.ink2)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 320)
-        }
-        .padding(32)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private func invite(_ token: String) -> some View {
-        ScrollView {
-            VStack(spacing: 24) {
-                // The code on a white plate: a QR drawn on the dark page is an inverted one that
-                // many cameras refuse, and the white is also its quiet zone.
-                if let image = qr(token) {
-                    Image(uiImage: image)
-                        .interpolation(.none)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(maxWidth: 260)
-                        .padding(12)
-                        .background(.white)
-                        .clipShape(RoundedRectangle(cornerRadius: ADI.Radius.lg))
-                }
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Run this on the node")
-                        .font(ADI.TextStyle.section)
-                        .foregroundStyle(ADI.ink)
-                    Text("adi-mono mesh join …")
-                        .font(ADI.TextStyle.mono)
-                        .foregroundStyle(ADI.code)
-                    Text("The node dials back over the mesh. It needs no open port, and it will print nothing you have to type here — this device already holds the password.")
-                        .font(ADI.TextStyle.small)
-                        .foregroundStyle(ADI.ink2)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                Text(token)
-                    .font(ADI.TextStyle.mono)
-                    .foregroundStyle(ADI.ink3)
-                    .lineLimit(4)
-                    .truncationMode(.middle)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .adiCodeBlock()
-
-                HStack(spacing: 12) {
-                    // The one orange on the minting path: getting the command onto the machine is
-                    // the whole job.
-                    Button {
-                        UIPasteboard.general.string = "adi-mono mesh join \(token)"
-                        copied = true
-                    } label: {
-                        HStack(spacing: 6) {
-                            LucideIcon(icon: copied ? .check : .copy)
-                            Text(copied ? "Copied" : "Copy command")
-                        }
-                    }
-                    .buttonStyle(.adi(.accent, wide: true))
-
-                    ShareLink(item: "adi-mono mesh join \(token)") {
-                        HStack(spacing: 6) {
-                            LucideIcon(icon: .share)
-                            Text("Share")
-                        }
-                    }
-                    .buttonStyle(.adi(wide: true))
-                }
-
-                Text("This invite can be spent once, and expires in ten minutes.")
-                    .font(ADI.TextStyle.label)
-                    .foregroundStyle(ADI.ink3)
-            }
-            .padding(20)
-        }
-    }
-
-    /// A QR of the token.
-    ///
-    /// Correction level `L`: the token carries a full endpoint address, so it is long, and the
-    /// lowest correction level is what keeps the result coarse enough to scan off a phone screen.
-    private func qr(_ token: String) -> UIImage? {
-        let filter = CIFilter.qrCodeGenerator()
-        filter.message = Data(token.utf8)
-        filter.correctionLevel = "L"
-        guard let output = filter.outputImage else { return nil }
-        let scaled = output.transformed(by: CGAffineTransform(scaleX: 8, y: 8))
-        let context = CIContext()
-        guard let cgImage = context.createCGImage(scaled, from: scaled.extent) else { return nil }
-        return UIImage(cgImage: cgImage)
     }
 }
