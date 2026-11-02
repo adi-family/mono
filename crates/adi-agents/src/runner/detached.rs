@@ -147,7 +147,10 @@ impl DetachedRunner {
                                 codex_unverifiable_reason(spec)
                             )));
                         }
-                        (Some(stored), Some(current)) if stored != current => {
+                        (Some(stored), Some(current))
+                            if stored != current
+                                && codex_auth_context_is_current_scheme(stored) =>
+                        {
                             return Err(Error::Launch(
                                 "cannot safely resume the Codex conversation: its login/session \
                                  context changed since this thread's last turn; start a new \
@@ -155,6 +158,10 @@ impl DetachedRunner {
                                     .to_string(),
                             ));
                         }
+                        // An equal context resumes; a stored context without the current scheme
+                        // tag was written by an older binary under a previous formula, so it can
+                        // never equal a current digest — migrate the thread forward (this turn
+                        // rewrites the state to the current scheme) rather than refuse it.
                         _ => {}
                     }
                 }
@@ -722,6 +729,23 @@ impl CodexIdentity {
 /// whole, which errs on the safe side and asks for a new conversation after they change.
 const CODEX_AUTH_UNVERIFIABLE: &str = "unverifiable:v1";
 
+/// Scheme tag that prefixes every auth-context digest this binary computes, so a stored context is
+/// self-identifying. A value without it was written by an older binary under a different formula
+/// (or none at all); such a thread is migrated forward on its next resume rather than refused,
+/// because its digest cannot be expected to equal a current one even for the very same login. Bump
+/// the version whenever the digest inputs change, so pre-change threads migrate instead of reading
+/// as an account switch.
+const CODEX_AUTH_SCHEME: &str = "adi.codex-auth.v2";
+
+/// Whether `stored` carries [`CODEX_AUTH_SCHEME`] — i.e. was written by this binary's current
+/// auth-context formula and may be compared digest-for-digest. Anything else is a legacy context to
+/// migrate, not to compare.
+fn codex_auth_context_is_current_scheme(stored: &str) -> bool {
+    stored
+        .strip_prefix(CODEX_AUTH_SCHEME)
+        .is_some_and(|rest| rest.starts_with(':'))
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum CodexProviderAuth {
     /// Codex's own `auth.json` or direct `CODEX_*` credential variables.
@@ -853,8 +877,10 @@ fn codex_auth_context_with_preferences(
     }
 
     let bytes = digest.finalize();
-    let mut encoded = String::with_capacity(7 + bytes.len() * 2);
-    encoded.push_str("sha256:");
+    let mut encoded =
+        String::with_capacity(CODEX_AUTH_SCHEME.len() + ":sha256:".len() + bytes.len() * 2);
+    encoded.push_str(CODEX_AUTH_SCHEME);
+    encoded.push_str(":sha256:");
     for byte in bytes {
         // Writing into a String cannot fail.
         write!(&mut encoded, "{byte:02x}").expect("write a digest");
@@ -3551,6 +3577,46 @@ mod tests {
             ),
             Err(Error::Launch(message)) if message.contains("context changed since this thread's last turn")
         ));
+    }
+
+    /// A thread whose auth context was written by an older binary carries no current scheme tag.
+    /// Its digest can never equal a current one, so rather than refuse it as an account switch —
+    /// which would orphan every in-flight conversation across a formula change — the resume is
+    /// allowed and the turn rewrites the state forward. The strict guard still applies once the
+    /// stored context is on the current scheme (see
+    /// `a_codex_thread_refuses_the_same_credential_after_auth_context_drift`).
+    #[test]
+    fn a_legacy_scheme_codex_thread_is_migrated_not_refused() {
+        let runner = DetachedRunner::new(Backend::ProcessCodex);
+        let session = FakeSession::new("codex-auth-migrate");
+        // A controlled Codex home so the current login verifies deterministically, rather than
+        // depending on the host's real ~/.codex (whose token refresh state would decide it).
+        let home = session.log.parent().expect("scratch").join("codex-home");
+        write_codex_auth(&home, "account-a", "user-a", "access-one");
+        let mut run = spec(json!({}));
+        run.env.push((
+            "CODEX_HOME".to_string(),
+            home.to_string_lossy().into_owned(),
+        ));
+        let identity = CodexIdentity::of(&run);
+        assert!(
+            identity.auth_context.is_some(),
+            "the controlled login must be verifiable for this to exercise migration",
+        );
+        let session = session.started().with_state(json!({
+            "codex_thread_id": "thread-a",
+            "codex_credential": identity.credential.clone(),
+            // A bare sha256 with no current-scheme prefix: the shape an older binary wrote.
+            "codex_auth_context":
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        }));
+        let argv = runner
+            .argv(&run, &session, "continue", "thread-a", Some(&identity))
+            .expect("a legacy-scheme thread must be migrated forward, not refused");
+        assert!(
+            argv.join(" ").contains("thread-a"),
+            "the legacy thread id is resumed rather than a fresh one opened: {argv:?}",
+        );
     }
 
     #[test]
