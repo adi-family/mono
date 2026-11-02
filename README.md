@@ -110,4 +110,7 @@ Program (https://withadi.dev/startups); the Licensor decides each request at
 its discretion. Reselling,
 distributing, or embedding it in something you sell, or running it as a
 service for other companies, also needs a separate license — and a license
-covers one company only.
+covers one company only. A commercial license holder may modify ADI for its own
+internal use on the instances its license covers, including adding features or
+removing ones it does not need; modified versions stay under the same
+restrictions.
