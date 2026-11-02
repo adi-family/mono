@@ -2104,11 +2104,16 @@ impl Agents {
         let store = self.sessions();
         // The session's own runner, not the agent's current backend's: a simulated run and a real
         // one of the same agent carry the same backend, and only the record tells them apart.
-        let Some(runner) = store.get(&agent.name, conv_id).as_ref().and_then(runner_of) else {
+        let Some(record) = store.get(&agent.name, conv_id) else {
+            return Vec::new();
+        };
+        let Some(runner) = runner_of(&record) else {
             return Vec::new();
         };
         let session = store.session(&agent.name, conv_id);
-        let running = runner.is_alive(&session);
+        // The opening question can land before the runner records its pid. Like a run listing,
+        // a transcript must keep that launch pending rather than commit an empty answer forever.
+        let running = Self::still_launching(&record) || runner.is_alive(&session);
         let live = live_content(runner.as_ref(), &session, running);
         if !running {
             settle(&store, &agent.name, conv_id, &live);
@@ -2131,11 +2136,14 @@ impl Agents {
     ) -> store::TranscriptPage {
         self.advance_queue(agent, conv_id);
         let store = self.sessions();
-        let Some(runner) = store.get(&agent.name, conv_id).as_ref().and_then(runner_of) else {
+        let Some(record) = store.get(&agent.name, conv_id) else {
+            return store::TranscriptPage::default();
+        };
+        let Some(runner) = runner_of(&record) else {
             return store::TranscriptPage::default();
         };
         let session = store.session(&agent.name, conv_id);
-        let running = runner.is_alive(&session);
+        let running = Self::still_launching(&record) || runner.is_alive(&session);
         // Only the newest page can be showing the answer being written, so only it pays for parsing
         // it — an older page is a read of settled rows and nothing else.
         if before.is_some() {
@@ -2171,12 +2179,10 @@ impl Agents {
         }
         // The pending answer, rebuilt exactly as a page rebuilds it — including the closing of calls
         // nothing is left alive to answer, so an opened run never claims to still be working.
-        let runner = store
-            .get(&agent.name, conv_id)
-            .as_ref()
-            .and_then(runner_of)?;
+        let record = store.get(&agent.name, conv_id)?;
+        let runner = runner_of(&record)?;
         let session = store.session(&agent.name, conv_id);
-        let running = runner.is_alive(&session);
+        let running = Self::still_launching(&record) || runner.is_alive(&session);
         let mut live = live_content(runner.as_ref(), &session, running);
         if !running {
             progress::close_open_calls(&mut live.steps);
@@ -9176,6 +9182,100 @@ mod tests {
             1,
             "exactly one run.finished, for the real ending"
         );
+    }
+
+    /// A transcript can be read after its question lands but before the runner records its pid.
+    /// Settling that empty read would permanently hide the real answer: live content is only
+    /// spliced behind a user turn, and a settled assistant turn is never replaced.
+    #[test]
+    fn transcript_reads_mid_launch_do_not_steal_the_codex_answer() {
+        for paged in [false, true] {
+            let store = scratch(if paged {
+                "launching-page"
+            } else {
+                "launching-transcript"
+            });
+            store.save("codex", spec("process:codex")).expect("save");
+            let agent = store.get("codex").expect("get").expect("present");
+            let sessions = store.sessions();
+            let record = sessions
+                .create("codex", Backend::ProcessCodex, "/tmp", "go")
+                .expect("create");
+            sessions.mark_launching("codex", &record.id).expect("mark");
+            sessions
+                .append_turn("codex", &record.id, user_turn("go"))
+                .expect("the question");
+            let read = || {
+                if paged {
+                    store
+                        .transcript_page(&agent, &record.id, None, 20)
+                        .turns
+                        .into_iter()
+                        .map(|(_, turn)| turn)
+                        .collect::<Vec<_>>()
+                } else {
+                    store.transcript(&agent, &record.id)
+                }
+            };
+
+            let turns = read();
+            assert_eq!(turns.len(), 2);
+            assert!(turns[1].pending, "the answer has not started yet");
+            assert_eq!(
+                sessions.turn_count("codex", &record.id),
+                1,
+                "reading before the pid lands must not persist an empty answer"
+            );
+
+            let log = sessions.log_path("codex", &record.id);
+            std::fs::write(
+                &log,
+                concat!(
+                    "{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}\n",
+                    "{\"type\":\"item.started\",\"item\":{\"id\":\"tool\",\"type\":\"command_execution\",\"command\":\"echo ready\",\"status\":\"in_progress\"}}\n",
+                ),
+            )
+            .expect("the child starts writing before its pid is recorded");
+            let steps = store.turn_steps(&agent, &record.id, 1).expect("live steps");
+            assert!(
+                matches!(steps.as_slice(), [Step::Tool {
+                    status: progress::ToolStatus::Running, ..
+                }]),
+                "launching must not close the child's live tool call: {steps:?}"
+            );
+            assert!(read()[1].pending);
+            assert_eq!(sessions.turn_count("codex", &record.id), 1);
+
+            std::fs::write(
+                &log,
+                concat!(
+                    "{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}\n",
+                    "{\"type\":\"item.completed\",\"item\":{\"id\":\"tool\",\"type\":\"command_execution\",\"command\":\"echo ready\",\"aggregated_output\":\"ready\",\"exit_code\":0,\"status\":\"completed\"}}\n",
+                    "{\"type\":\"item.completed\",\"item\":{\"id\":\"answer\",\"type\":\"agent_message\",\"text\":\"The real answer\"}}\n",
+                    "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":12,\"output_tokens\":3}}\n",
+                ),
+            )
+            .expect("the completed turn");
+            sessions
+                .set_runner_state("codex", &record.id, serde_json::json!({}))
+                .expect("the child has exited");
+            sessions.clear_launching("codex", &record.id).expect("clear");
+
+            let turns = read();
+            assert_eq!(turns.len(), 2);
+            assert_eq!(turns[1].text, "The real answer");
+            assert!(!turns[1].pending);
+            assert!(matches!(turns[1].steps.as_slice(), [Step::Tool {
+                status: progress::ToolStatus::Ok, output, ..
+            }] if output == "ready"));
+            assert_eq!(
+                turns[1].metrics.as_ref().and_then(|m| m.output_tokens),
+                Some(3)
+            );
+            assert_eq!(read(), turns, "the real answer settles exactly once");
+            assert_eq!(sessions.turn_count("codex", &record.id), 2);
+            let _ = std::fs::remove_dir_all(store.config.root());
+        }
     }
 
     /// ADI-MONO-129 (1): the launcher's blind spot `adi.agents.run.idle` exists to close. Published
