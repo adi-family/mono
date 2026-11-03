@@ -20,6 +20,21 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.35.1 — 2026-11-03
+
+### Changed
+
+- **A commercial license holder may now modify ADI for its own internal use.** The licence's
+  Grant of Rights gains a Commercial License Holders section: a business or organization
+  holding a valid commercial license may, for its own internal use on the instances that
+  license covers, modify the Licensed Work and create derivative works of it — including
+  adding functionality and disabling or removing features it does not need or must exclude
+  for security or compliance reasons. Modified versions remain subject to the same
+  Restrictions: they may not be distributed, sublicensed or sold, bundled into a product sold
+  to others, run as a service for other companies, or used to create a competing product, and
+  no copyright notice, license terms or attribution in them may be removed or altered. Read
+  [LICENSE](LICENSE) if you run adi commercially.
+
 ## 1.35.0 — 2026-10-31
 
 ### Added
