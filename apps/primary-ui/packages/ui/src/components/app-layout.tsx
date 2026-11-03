@@ -10,6 +10,12 @@ type AppLayoutProps = Omit<React.ComponentProps<"div">, "children"> & {
   children: React.ReactNode;
   /** Join the second menu and content in one bounded surface beside the primary navigation. */
   surface?: "separate" | "joined";
+  /** Opt in to remembering the resized sidebar width in local storage. */
+  sidebarWidthStorageKey?: string;
+  /** Hide the primary rail and topbar while retaining section navigation. */
+  focusMode?: boolean;
+  /** Floating controls at the workspace origin, independent of section navigation. */
+  workspaceControls?: React.ReactNode;
   surfaceProps?: Omit<React.ComponentProps<"div">, "children">;
   /** Hide the second menu without unmounting its contents. */
   hideSecondaryNavigation?: boolean;
@@ -25,6 +31,9 @@ function AppLayout({
   topbar,
   children,
   surface = "separate",
+  sidebarWidthStorageKey,
+  focusMode = false,
+  workspaceControls,
   surfaceProps,
   hideSecondaryNavigation = false,
   primaryNavigationProps,
@@ -39,39 +48,64 @@ function AppLayout({
   const showSecondaryNavigation = hasSecondaryNavigation && !hideSecondaryNavigation;
   const joined = surface === "joined";
 
-  const [sidebarWidth, setSidebarWidth] = React.useState<number>();
+  function readWidth() {
+    try {
+      const stored = sidebarWidthStorageKey ? window.localStorage.getItem(sidebarWidthStorageKey) : null;
+      const value = stored?.trim() ? Number(stored) : NaN;
+      return Number.isFinite(value) ? Math.max(160, Math.min(480, value)) : undefined;
+    } catch { return undefined; }
+  }
+  const [sidebarWidth, setSidebarWidth] = React.useState<number | undefined>(readWidth);
+  React.useEffect(() => { setSidebarWidth(readWidth()); }, [sidebarWidthStorageKey]);
   const drag = React.useRef<{ pointerId: number; x: number; width: number } | null>(null);
-  const defaultWidth = joined ? 224 : 208;
+  const defaultWidth = 200;
   const width = sidebarWidth ?? defaultWidth;
-  const resize = (value: number) => setSidebarWidth(Math.max(160, Math.min(480, value)));
+  const resize = (value?: number) => {
+    const next = value === undefined ? undefined : Math.max(160, Math.min(480, value));
+    setSidebarWidth(next);
+    try {
+      if (sidebarWidthStorageKey) {
+        if (next === undefined) window.localStorage.removeItem(sidebarWidthStorageKey);
+        else window.localStorage.setItem(sidebarWidthStorageKey, String(next));
+      }
+    } catch { /* Resizing still works when browser storage is unavailable. */ }
+  };
 
   return (
     <AppShell
       data-slot="app-layout"
       className={cn(
-        "[--app-layout-height:100svh] grid-cols-[3.5rem_minmax(0,1fr)]",
+        "relative [--app-layout-height:100svh] grid-cols-[3rem_minmax(0,1fr)]",
         joined
           ? cn(
             "h-[var(--app-layout-height)] min-h-0 grid-rows-[auto_minmax(0,1fr)]",
-            showSecondaryNavigation && "md:grid-cols-[3.5rem_var(--app-sidebar-width)_minmax(0,1fr)]",
+            showSecondaryNavigation && "md:grid-cols-[3rem_var(--app-sidebar-width)_minmax(0,1fr)]",
           )
           : cn(
             "min-h-[var(--app-layout-height)]",
             showSecondaryNavigation
-              ? "grid-rows-[auto_auto_1fr] md:grid-cols-[3.5rem_var(--app-sidebar-width)_minmax(0,1fr)] md:grid-rows-[auto_1fr]"
+              ? "grid-rows-[auto_auto_1fr] md:grid-cols-[3rem_var(--app-sidebar-width)_minmax(0,1fr)] md:grid-rows-[auto_1fr]"
               : "grid-rows-[auto_1fr]",
           ),
+        focusMode && "h-[var(--app-layout-height)] min-h-0 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)] md:grid-cols-[minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)]",
+        focusMode && !joined && showSecondaryNavigation && "grid-rows-[auto_minmax(0,1fr)] md:grid-cols-[var(--app-sidebar-width)_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)]",
         className,
       )}
       {...props}
       style={{ ...style, "--app-sidebar-width": `${width}px` } as React.CSSProperties}
     >
+      {workspaceControls && (
+        <div data-slot="app-workspace-controls" className={cn("pointer-events-none absolute top-11 left-12 z-50", focusMode && "top-0 left-0")}>
+          {workspaceControls}
+        </div>
+      )}
       <AppSidebar
         {...primaryNavigationProps}
         className={cn(
           "col-start-1 row-start-1 h-[var(--app-layout-height)]",
           joined ? "row-span-2" : showSecondaryNavigation && "row-span-3 md:row-span-2",
           primaryNavigationProps?.className,
+          focusMode && "hidden",
         )}
       >
         {primaryNavigation}
@@ -82,6 +116,7 @@ function AppLayout({
           "col-start-2 row-start-1",
           showSecondaryNavigation && "md:col-start-3",
           topbarProps?.className,
+          focusMode && "hidden",
         )}
       >
         {topbar}
@@ -99,6 +134,7 @@ function AppLayout({
             )
             : "contents",
           surfaceProps?.className,
+          focusMode && joined && "col-span-1 col-start-1 row-start-1 m-0 rounded-none md:col-span-1 md:m-0",
         )}
       >
         {hasSecondaryNavigation && (
@@ -108,11 +144,12 @@ function AppLayout({
             hidden={!showSecondaryNavigation}
             className={cn(
               joined
-                ? "col-start-1 row-start-1 z-40 min-h-0 min-w-0 self-stretch bg-background px-3 pb-3 md:z-10 md:overflow-hidden md:pt-5"
-                : "static col-start-2 row-start-2 z-40 min-w-0 self-start bg-transparent px-3 pb-3 md:sticky md:top-8 md:col-start-2 md:row-start-1 md:row-span-2 md:z-10 md:pt-5",
+                ? "col-start-1 row-start-1 z-40 min-h-0 min-w-0 self-stretch bg-background px-3 pb-3 md:z-10 md:overflow-hidden md:pt-3"
+                : "static col-start-2 row-start-2 z-40 min-w-0 self-start bg-transparent px-3 pb-3 md:sticky md:top-8 md:col-start-2 md:row-start-1 md:row-span-2 md:z-10 md:pt-3",
               joined && "relative",
               secondaryNavigationProps?.className,
               !showSecondaryNavigation && "hidden",
+              focusMode && !joined && "col-start-1 row-start-1 md:top-0 md:col-start-1 md:row-start-1 md:row-span-1",
             )}
           >
             {secondaryNavigation}
@@ -145,7 +182,7 @@ function AppLayout({
               }}
               onPointerCancel={() => { drag.current = null; }}
               onLostPointerCapture={() => { drag.current = null; }}
-              onDoubleClick={() => setSidebarWidth(undefined)}
+              onDoubleClick={() => resize()}
               onKeyDown={(event) => {
                 const next = event.key === "ArrowLeft" ? width - 16
                   : event.key === "ArrowRight" ? width + 16
@@ -171,6 +208,8 @@ function AppLayout({
                 showSecondaryNavigation ? "row-start-3 md:col-start-3 md:row-start-2" : "row-start-2",
               ),
             contentProps?.className,
+            focusMode && !joined && "col-start-1 row-start-1 m-0 min-h-0 overflow-auto rounded-none md:col-start-1 md:row-start-1 md:m-0",
+            focusMode && !joined && showSecondaryNavigation && "row-start-2 md:col-start-2 md:row-start-1",
           )}
         >
           {children}

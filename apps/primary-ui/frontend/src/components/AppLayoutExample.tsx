@@ -25,7 +25,7 @@ const layoutCode = `<AppLayout
   <main>Page content</main>
 </AppLayout>`;
 
-const iconLinkClass = "focus-visible:ring-ring flex size-10 items-center justify-center rounded-lg outline-none transition-colors hover:bg-foreground/5 focus-visible:ring-2";
+const iconLinkClass = "focus-visible:ring-ring flex size-9 items-center justify-center rounded-lg outline-none transition-colors hover:bg-foreground/5 focus-visible:ring-2";
 
 export function AppLayoutExample() {
   const [surface, setSurface] = useState<"separate" | "joined">("joined");
@@ -60,8 +60,8 @@ export function AppLayoutExample() {
             surfaceProps={surface === "joined" ? { className: "dark:bg-black" } : undefined}
             secondaryNavigationProps={surface === "joined" ? { className: "bg-muted/50 dark:bg-background" } : undefined}
             primaryNavigation={
-              <nav aria-label="Preview global navigation" className="flex w-14 flex-col items-center">
-                <div className="flex h-14 items-center justify-center">
+              <nav aria-label="Preview global navigation" className="flex w-12 flex-col items-center">
+                <div className="flex h-11 items-center justify-center">
                   <a href="/" aria-label="ADI home" title="ADI home" className={iconLinkClass}>
                     <AdiLogo />
                   </a>

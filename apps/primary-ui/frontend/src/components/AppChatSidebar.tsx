@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown, Filter, LockKeyhole, Network, Plus, Search } from "lucide-react";
+import { Check, ChevronDown, Filter, LockKeyhole, Network, Plus, Search, Star } from "lucide-react";
 
 import { Button, cn } from "@design-system/ui";
 
@@ -9,6 +9,8 @@ import { appHref } from "../lib/app-api";
 import { conversationFilters, conversationGroups, conversationSections } from "../lib/app-chat-sidebar";
 import { sameConversation } from "../lib/app-chat-sources";
 import { conversationHref } from "../lib/app-chat-transcript";
+
+import { ChatContextMenu, type ChatContextTarget } from "./ChatContextMenu";
 
 type Menu = "filters" | "sources";
 const menuItemClass = "focus:bg-accent hover:bg-accent flex min-h-8 w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs outline-none disabled:opacity-50 disabled:hover:bg-transparent";
@@ -117,6 +119,7 @@ function SidebarMenu({ menu, anchor, onClose }: { menu: Menu; anchor: RefObject<
 
 export function AppChatSidebar() {
   const { conversations, active, isLoading, indexError, sourceStates, sources, filter, group, loadMore, openConversation, newConversation, refresh } = useAppChat();
+  const [contextTarget, setContextTarget] = useState<ChatContextTarget | null>(null);
   const [query, setQuery] = useState("");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [visibleCounts, setVisibleCounts] = useState<Record<string, number>>({});
@@ -151,7 +154,7 @@ export function AppChatSidebar() {
       </button>
 
       <div id={navigationId} className={cn("mt-3 min-h-0 flex-1 flex-col md:mt-0 md:flex", expanded ? "flex" : "hidden")}>
-        <div className="mb-3 flex shrink-0 items-center gap-1 px-1">
+        <div className="mb-2 flex shrink-0 items-center gap-1 px-1">
           <h2 className="mr-auto pl-1 text-sm font-semibold">Chats</h2>
           <Button ref={sourceRef} variant="ghost" size="icon" className={cn("size-7 shrink-0", sourceCount > 1 && "w-auto min-w-7 gap-1 px-1.5", sourceCount > 1 || !sources.local ? "text-foreground" : "text-muted-foreground")} aria-label="Conversation sources" title={`Sessions from ${[...(sources.local ? ["This machine"] : []), ...sources.nodes].join(", ")}`} aria-haspopup="menu" aria-expanded={menu === "sources"} onClick={() => setMenu((current) => current === "sources" ? null : "sources")}>
             <Network aria-hidden="true" className="size-3.5" />
@@ -165,13 +168,13 @@ export function AppChatSidebar() {
           </Button>
         </div>
 
-        <div className="relative mb-3 shrink-0">
+        <div className="relative mb-2 shrink-0">
           <Search aria-hidden="true" className="text-muted-foreground pointer-events-none absolute top-2.5 left-2.5 size-3.5" />
           <input type="search" aria-label="Search conversations" placeholder="Search chats" value={query} onChange={(event) => setQuery(event.target.value)} className="border-input/60 bg-background/40 placeholder:text-muted-foreground focus-visible:ring-ring h-8 w-full rounded-md border py-1 pr-2 pl-8 text-xs outline-none focus-visible:ring-2" />
         </div>
 
         {indexError && (
-          <div className="mb-3 shrink-0 px-2 text-xs leading-relaxed">
+          <div className="mb-2 shrink-0 px-2 text-xs leading-relaxed">
             <p className="text-muted-foreground break-words" role="alert">{indexError}</p>
             <button type="button" className="focus-visible:ring-ring mt-1 rounded underline underline-offset-4 outline-none focus-visible:ring-2" onClick={refresh}>Retry</button>
           </div>
@@ -185,7 +188,7 @@ export function AppChatSidebar() {
             const hiddenCount = Math.max(0, section.conversations.length - visibleCount);
             const remaining = hiddenCount + section.pages.reduce((total, page) => total + Math.max(0, page.total - page.held), 0);
             return (
-              <section key={section.key} data-slot="app-conversation-group" className="mb-3 last:mb-0" aria-label={section.label}>
+              <section key={section.key} data-slot="app-conversation-group" className="mb-2 last:mb-0" aria-label={section.label}>
                 {section.label && (
                   <h3 className="mb-1">
                     <button type="button" data-slot="app-conversation-group-toggle" aria-expanded={!isCollapsed} className="text-foreground/80 hover:bg-foreground/5 focus-visible:ring-ring flex w-full min-w-0 items-center gap-1.5 rounded-md px-1 py-1.5 text-left text-[11px] font-semibold outline-none focus-visible:ring-2 focus-visible:ring-inset" onClick={() => setCollapsed((current) => ({ ...current, [sectionKey]: !isCollapsed }))}>
@@ -201,7 +204,16 @@ export function AppChatSidebar() {
                       const status = conversation.pendingQuestion ? "Needs your answer" : conversation.running ? "Running" : conversation.awaiting ? "Awaiting" : null;
                       return (
                         <li key={conversationHref(conversation)}>
-                          <a href={conversationHref(conversation)} data-slot="app-conversation-link" data-source={conversation.source ?? ""} data-agent={conversation.agent} data-run={conversation.runId} aria-current={isActive ? "page" : undefined} title={conversation.title} className={cn("focus-visible:ring-ring block rounded-md px-2 py-2 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset", isActive ? "bg-foreground/8 text-foreground" : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground")} onClick={(event) => {
+                          <a onContextMenu={(event) => {
+                            event.preventDefault(); setMenu(null);
+                            setContextTarget({ conversation, x: event.clientX, y: event.clientY, trigger: event.currentTarget });
+                          }} onKeyDown={(event) => {
+                            if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+                              event.preventDefault(); setMenu(null);
+                              const bounds = event.currentTarget.getBoundingClientRect();
+                              setContextTarget({ conversation, x: bounds.left, y: bounds.bottom, trigger: event.currentTarget });
+                            }
+                          }} href={conversationHref(conversation)} data-slot="app-conversation-link" data-source={conversation.source ?? ""} data-agent={conversation.agent} data-run={conversation.runId} aria-current={isActive ? "page" : undefined} title={conversation.title} className={cn("focus-visible:ring-ring block rounded-md px-2 py-1.5 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset", isActive ? "bg-foreground/8 text-foreground" : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground")} onClick={(event) => {
                             if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
                             event.preventDefault();
                             openConversation(conversation);
@@ -209,6 +221,7 @@ export function AppChatSidebar() {
                           }}>
                             <span className="flex min-w-0 items-center gap-2">
                               <span className="min-w-0 flex-1 truncate text-xs font-medium leading-5">{conversation.title}</span>
+                              {conversation.starred && <Star aria-label="Starred chat" className="size-3 shrink-0 fill-current" />}
                               {status && <span className={cn("size-1.5 shrink-0 rounded-full", conversation.pendingQuestion ? "bg-amber-600 dark:bg-amber-400" : conversation.running ? "bg-blue-600 dark:bg-blue-400" : "bg-foreground/50")} aria-hidden="true" />}
                             </span>
                             <span className="text-muted-foreground block truncate text-[11px] leading-4">{conversation.agent}{(sourceCount > 1 || !sources.local) && ` · ${conversation.source ?? "This machine"}`}</span>
@@ -234,6 +247,7 @@ export function AppChatSidebar() {
           )}
         </nav>
       </div>
+      {contextTarget && <ChatContextMenu key={conversationHref(contextTarget.conversation)} target={contextTarget} onClose={() => setContextTarget(null)} />}
       {menu && <SidebarMenu menu={menu} anchor={menu === "filters" ? filterRef : sourceRef} onClose={closeMenu} />}
     </aside>
   );

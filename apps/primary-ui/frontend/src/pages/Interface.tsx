@@ -1,14 +1,15 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { ExternalLink, LoaderCircle, RefreshCw, Square } from "lucide-react";
-import { Button, ChatComposer, ChatQueuedMessage, ChatThread, ChatWaitingStatus, Select } from "@design-system/ui";
+import { Button, ChatComposer, ChatQueuedMessage, ChatThread, ChatWaitingStatus } from "@design-system/ui";
 
 import { ChatMicrophone } from "../components/ChatMicrophone";
+import { NewChatSetup } from "../components/NewChatSetup";
 import { ChatTitle } from "../components/ChatTitle";
 
 import { AppChatAttachments, appChatTranscriptEntries } from "../components/AppChatTranscript";
 import type { AgentAsk } from "../lib/app-chat";
 import { useAppChat } from "../lib/app-chat-state";
-import { sameConversation, selectedSources, sourceName } from "../lib/app-chat-sources";
+import { sameConversation } from "../lib/app-chat-sources";
 import { appConversationHref } from "../lib/app-chat-transcript";
 
 function PendingQuestion({ ask, onAnswer }: {
@@ -99,10 +100,10 @@ function PendingQuestion({ ask, onAnswer }: {
 
 export function Interface() {
   const {
-    renameChat, appendDraft, agents, conversations, active, agent, draftKey, snapshot, draft, setDraft, images, addImages, removeImage, imageError,
+    starChat, renameChat, appendDraft, agents, conversations, active, agent, draftKey, snapshot, draft, setDraft, images, addImages, removeImage, imageError,
     isLoading, isLoadingConversation, indexError, conversationError, actionError,
-    isStopping, openConversation, newConversation, refresh, sendMessage, stopResponse,
-    submitAnswer, loadEarlier, isLoadingEarlier, sources, activeSource, setNewSource,
+    isStopping, openConversation, refresh, sendMessage, stopResponse,
+    submitAnswer, loadEarlier, isLoadingEarlier, activeSource,
   } = useAppChat();
   const [voiceBusy, setVoiceBusy] = useState(false);
   const selected = agents.find((item) => item.name === agent);
@@ -126,30 +127,11 @@ export function Interface() {
 
   return (
     <main data-slot="app-chat" aria-label="ADI chat" className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
-      <header className="flex min-w-0 shrink-0 items-center justify-between gap-3 border-b px-4 py-3 sm:px-5">
+      <header className="flex min-w-0 shrink-0 items-center justify-between gap-3 border-b px-3 py-2 sm:px-4">
         <div className="min-w-0 flex-1">
-          <ChatTitle key={draftKey} title={title} conversation={active} onRename={renameChat} />
+          <ChatTitle key={draftKey} title={title} conversation={active} onRename={renameChat} starred={conversation?.starred === true} onStar={starChat} />
           {active && <p className="text-muted-foreground mt-0.5 truncate text-xs">{active.agent}{active.source ? ` · ${active.source}` : ""}</p>}
-          {!active && <div data-slot="app-chat-agent" className="mt-2 flex max-w-md flex-wrap gap-2">
-            {selectedSources(sources).length > 1 && <Select
-              aria-label="New conversation source"
-              data-slot="app-chat-new-source"
-              size="sm"
-              value={activeSource ?? ""}
-              onValueChange={(value) => setNewSource(value || undefined)}
-              options={selectedSources(sources).map((source) => ({ value: source ?? "", label: sourceName(source) }))}
-            />}
-            <Select
-              data-app-chat-agent=""
-              aria-label="Agent"
-              size="sm"
-              value={agent}
-              onValueChange={newConversation}
-              placeholder="Choose an agent"
-              disabled={!agents.length}
-              options={agents.map((item) => ({ value: item.name, label: item.caps?.answerable === false ? `${item.name} (read only)` : item.name, disabled: item.runnable === false || item.caps?.answerable === false }))}
-            />
-          </div>}
+
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {running && <Button type="button" size="icon" variant="ghost" aria-label="Stop response" disabled={isStopping} disabledReason="The response is being stopped." onClick={() => { void stopResponse(); }}>
@@ -183,8 +165,7 @@ export function Interface() {
       </ChatThread> : <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 overflow-y-auto px-6 py-8 text-center">
         {loading ? <p role="status" className="text-muted-foreground text-sm">{active ? "Loading conversation…" : "Loading agents…"}</p>
           : active ? <p className="text-muted-foreground text-sm">This conversation could not be loaded.</p>
-            : !agents.length ? <p className="text-muted-foreground text-sm">No agents are available.</p>
-              : <><p className="text-sm font-medium">Start a conversation</p><p className="text-muted-foreground text-sm">Choose an agent and send a message.</p></>}
+            : <NewChatSetup />}
       </div>}
 
       <div className="mx-auto w-full max-w-4xl shrink-0 px-3 pb-3 pt-2 sm:px-4 sm:pb-4">

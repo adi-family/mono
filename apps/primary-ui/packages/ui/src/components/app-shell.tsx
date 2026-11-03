@@ -30,7 +30,7 @@ function AppTopbar({ className, ...props }: React.ComponentProps<"header">) {
     <header
       data-slot="app-topbar"
       className={cn(
-        "flex min-h-14 min-w-0 items-center justify-between gap-4 bg-transparent px-4",
+        "flex min-h-11 min-w-0 items-center justify-between gap-3 bg-transparent px-3",
         className,
       )}
       {...props}

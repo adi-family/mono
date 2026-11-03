@@ -215,6 +215,18 @@ try {
   await send("Page.navigate", { url: `${origin}/` });
   await ready();
 
+  await check("Home has an absolute expand control without a section sidebar", async () => {
+    const control = '[data-slot="workspace-expand"]';
+    assert.equal(await evaluate(`getComputedStyle(document.querySelector('${control}')).position`), 'absolute');
+    assert.equal(await evaluate(`document.querySelector('[data-slot="app-secondary-navigation"]').hidden`), true);
+    await click('[aria-label="Expand workspace"]');
+    assert.equal(await evaluate(`getComputedStyle(document.querySelector('[data-slot="app-sidebar"]')).display`), 'none');
+    assert.equal(await evaluate(`getComputedStyle(document.querySelector('[data-slot="app-topbar"]')).display`), 'none');
+    assert.deepEqual(await evaluate(`(() => {const r=document.querySelector('[data-slot="app-content"]').getBoundingClientRect();return [r.x,r.y,r.width,r.height]})()`), [0,0,1280,1000]);
+    await click('[aria-label="Restore navigation"]');
+    assert.equal(await evaluate(`getComputedStyle(document.querySelector('[data-slot="app-topbar"]')).display`), 'flex');
+  });
+
   await check("Home combines local and remote apps with source labels and accurate counts", async () => {
     assert.equal(await evaluate(`document.querySelectorAll('${grid} > li').length`), 7);
     assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('[data-slot="home-machine-filter"]'), el => ({machine:el.dataset.machine,label:el.textContent.trim()}))`), [

@@ -21,6 +21,7 @@ const chrome = Bun.spawn([
   "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "about:blank",
 ], { stdout: "ignore", stderr: "ignore" });
 
+const stars = new Set();
 const main = { agent: "design-assistant", runId: "design-main" };
 const other = { agent: "design-assistant", runId: "design-other" };
 const child = { agent: "layout-reviewer", runId: "review-run" };
@@ -76,6 +77,7 @@ const checks = [];
 let socket;
 let send;
 let evaluate;
+let failAfterAccept = false;
 let failNextReply = false;
 let holdNextPeek = null;
 let heldPeek = null;
@@ -148,7 +150,7 @@ function allRuns() {
     runs: [...snapshots.values()].filter((snapshot) => snapshot.name === name).map((snapshot, index) => ({
       run_id: snapshot.run_id, caps: capabilities, started_at: 5000 - index * 100,
       last_activity: 5000 - index * 100, message: titles.get(`${name}:${snapshot.run_id}`),
-      title: titles.get(`${name}:${snapshot.run_id}`), running: snapshot.running, hidden: false, starred: false, launched_by: "human",
+      title: titles.get(`${name}:${snapshot.run_id}`), running: snapshot.running, hidden: false, starred: stars.has(`${name}:${snapshot.run_id}`), launched_by: "human",
       ...(snapshot.pending_question ? { pending_question: snapshot.pending_question } : {}),
     })),
   }));
@@ -212,13 +214,18 @@ async function intercept({ requestId, request }) {
       return;
     }
     if (request.method === "GET" && path === "/api/app/agents") {
-      await fulfill(requestId, { agents: ["design-assistant", "layout-reviewer"].map((name) => ({ name, running: false, runnable: true, backend: "process:fixture", caps: capabilities })) });
+      await fulfill(requestId, { agents: ["design-assistant", "layout-reviewer"].map((name) => ({ name, starred: name === "design-assistant", running: false, runnable: true, backend: "process:fixture", caps: capabilities })) });
       return;
     }
     if (request.method === "GET" && path === "/api/app/agents/runs/all") {
       assert.equal(url.searchParams.get("hidden"), "false");
       await fulfill(requestId, allRuns());
       return;
+    }
+    if (request.method === "POST" && path === "/api/app/agents/run/star") {
+      const id = `${body.name}:${body.run_id}`;
+      if (body.starred) stars.add(id); else stars.delete(id);
+      await fulfill(requestId, { ok: true }); return;
     }
     if (request.method === "POST" && path === "/api/app/agents/run/rename") {
       if (failNextRename) { failNextRename=false; await fulfill(requestId,{ok:false,error:"Fixture rename refused"}); return; }
@@ -256,6 +263,11 @@ async function intercept({ requestId, request }) {
       snapshot.turns.push(next);
       if (!snapshot.running) snapshot.turns.push(assistant("Mock reply accepted", snapshot.turns.length));
       snapshot.total_turns = snapshot.turns.length;
+      if (failAfterAccept) {
+        failAfterAccept = false;
+        await fulfill(requestId, { ok: false, error: "Snapshot failed after accepting the message" });
+        return;
+      }
       if (holdNextReply) {
         holdNextReply = false;
         const response = copy(snapshot);
@@ -581,11 +593,27 @@ try {
     await type(composer, "");
   });
 
+  await check("an accepted message with a failed response is reconciled without duplicate sending", async () => {
+    await open(main, "Mock main answer");
+    const before = mutations("run/reply").length;
+    failAfterAccept = true;
+    await type(composer, "Accepted despite snapshot failure");
+    await key("Enter");
+    await until(() => contains("Accepted despite snapshot failure"), "accepted message is read back");
+    await until(() => evaluate(`document.querySelector('[data-slot="chat-composer"]').getAttribute('aria-busy') !== 'true'`), "reconciliation finished");
+    assert.equal(await draft(), "");
+    assert.equal(await evaluate(`!!document.querySelector('[data-slot="chat-composer"] [role="alert"]')`), false);
+    assert.equal(mutations("run/reply").length, before + 1);
+  });
+
   await check("an accepted reply clears only its own draft after navigating to another chat", async () => {
     holdNextReply = true;
     await type(composer, "Accepted after switching chats");
     await key("Enter");
     await until(() => heldReply !== null, "reply acceptance is held");
+    assert.equal(await evaluate(`document.querySelector('[data-slot="chat-composer-status"]').textContent`), "Sending message…");
+    assert.equal(await draft(), "");
+    assert.equal(await evaluate(`document.querySelector('[data-slot="chat-composer"]').getAttribute('aria-busy')`), 'true');
     await open(other, "Mock other answer");
     await type(composer, "Other chat draft stays");
     await heldReply.release();
@@ -595,6 +623,7 @@ try {
     assert.equal(await draft(), "Other chat draft stays");
     await open(main, "Mock main answer");
     assert.equal(await draft(), "", "accepted draft does not return after its composer unmounted");
+    assert.equal(await evaluate(`document.querySelector('[data-slot="chat-composer-status"]').textContent.includes('Sending message')`), false);
   });
 
   await check("folded tool calls load only when opened and retain the original step coordinates", async () => {
@@ -719,9 +748,23 @@ try {
     await until(() => contains("Mock child answer"), "child conversation transcript");
   });
 
+  await check("new chat offers starred agents without inheriting the last viewed agent", async () => {
+    await open(child, "Mock child answer");
+    await click('[data-slot="app-chat-sidebar"] [aria-label="New conversation"]');
+    await until(() => evaluate(`!!document.querySelector('[data-slot="new-chat-starred-agent"]')`), "starred agents shown");
+    assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('[data-app-chat-agent] option')).filter(o=>o.value).map(o=>o.value)`), ['design-assistant']);
+    assert.equal(await evaluate(`document.querySelector('[data-slot="new-chat-starred-agent"]').textContent.includes('design-assistant')`), true);
+    await click('[data-slot="new-chat-starred-agent"]');
+    await until(() => evaluate(`new URLSearchParams(location.search).get('agent')==='design-assistant'`), "starred selection changes destination");
+    assert.equal(await evaluate(`new URLSearchParams(location.search).has('run')`), false);
+    await open(child, "Mock child answer");
+  });
+
   await check("new chat starts the selected agent and opens the run returned by the server", async () => {
     await click('[data-slot="app-chat-sidebar"] [aria-label="New conversation"]');
-    await until(() => evaluate(`new URLSearchParams(location.search).get('agent')==='layout-reviewer' && !new URLSearchParams(location.search).has('run')`), "new chat keeps the selected agent");
+    await until(() => evaluate(`new URLSearchParams(location.search).get('agent')==='design-assistant' && !new URLSearchParams(location.search).has('run')`), "new chat starts with a browser-local default");
+    await evaluate(`history.pushState({},'', '/interface?agent=layout-reviewer'); dispatchEvent(new PopStateEvent('popstate'))`);
+    await until(() => evaluate(`document.querySelector('[data-app-chat-agent]')?.value==='layout-reviewer'`), "explicit unstarred agent selected");
     // Router history updates before React necessarily remounts the conversation-keyed composer.
     await until(() => evaluate(`${q(`${chat} [data-slot="app-chat-agent"]`)} !== null && ${q(composer)}?.disabled === false && ${q(`${chat} [data-slot="chat-thread"]`)} === null`), "new-chat form has rendered before typing");
     await type(composer, "New fixture request");
@@ -746,6 +789,8 @@ try {
     await click('button[data-slot="home-new-chat"][aria-label="New chat"]');
     await until(() => evaluate(`location.pathname==='/interface' && !new URLSearchParams(location.search).has('run') && ${q(`${chat} [data-slot="app-chat-agent"]`)} !== null && ${q(composer)}?.disabled === false && ${q(`${chat} [data-slot="chat-thread"]`)} === null`), "Home opens a new-chat form rather than the latest conversation");
     assert.equal(await draft(), "", "Home New chat starts with an empty composer");
+    assert.equal(await evaluate(`new URLSearchParams(location.search).get('agent')`), child.agent, "last locally launched agent wins over the viewed conversation");
+    assert.deepEqual(await evaluate(`JSON.parse(localStorage.getItem('adi.last-launched-agent.v1'))`), {agent: child.agent});
     assert.equal(await contains("Mock main answer"), false, "previous history is absent from the new chat");
     assert.equal(mutations("run").length, startsBefore, "opening a blank chat does not launch an agent");
     assert.equal(mutations("run/reply").length, repliesBefore, "opening a blank chat does not send a reply");
@@ -886,6 +931,69 @@ try {
     await until(() => mutations("run/answer").length === 2, "partial answer request");
     assert.deepEqual(mutations("run/answer")[1].body.replies, ["", "Compact, Keep it short", ""]);
     await until(() => evaluate(`!document.querySelector('[data-slot="app-chat-question"]')`), "partial answer settles");
+  });
+
+  await check("expand workspace keeps the inner sidebar and restores the outer navigation", async () => {
+    await open(main, "Mock main answer");
+    await type(composer, "Draft while expanded");
+    const width = await evaluate(`document.querySelector('[data-slot="app-secondary-navigation"]').getBoundingClientRect().width`);
+    await click('[aria-label="Expand workspace"]');
+    assert.equal(await evaluate(`getComputedStyle(document.querySelector('[data-slot="app-sidebar"]')).display`), 'none');
+    assert.equal(await evaluate(`getComputedStyle(document.querySelector('[data-slot="app-topbar"]')).display`), 'none');
+    assert.equal(await evaluate(`document.querySelector('[data-slot="app-secondary-navigation"]').hidden`), false);
+    assert.deepEqual(await evaluate(`(() => {const r=document.querySelector('[data-slot="app-layout-surface"]').getBoundingClientRect();return [r.x,r.y,r.width,r.height]})()`), await evaluate(`[0,0,innerWidth,innerHeight]`));
+    assert.equal(await evaluate(`document.querySelector('[data-slot="app-secondary-navigation"]').getBoundingClientRect().width`), width);
+    assert.equal(await draft(), 'Draft while expanded');
+    await send('Emulation.setDeviceMetricsOverride', {width:390,height:844,deviceScaleFactor:1,mobile:false});
+    assert.deepEqual(await evaluate(`(() => {const r=document.querySelector('[data-slot="app-layout-surface"]').getBoundingClientRect();return [r.x,r.y,r.width,r.height]})()`), [0,0,390,844]);
+    await send('Emulation.setDeviceMetricsOverride', {width:1280,height:900,deviceScaleFactor:1,mobile:false});
+    await click('[aria-label="Restore navigation"]');
+    assert.equal(await evaluate(`document.querySelector('[data-slot="app-secondary-navigation"]').getBoundingClientRect().width`), width);
+    assert.equal(await draft(), 'Draft while expanded');
+    assert.equal(await evaluate(`document.activeElement.getAttribute('data-slot')`), 'workspace-expand');
+    await type(composer, '');
+  });
+
+  await check("sidebar context menu renames and stars an inactive chat", async () => {
+    await open(main, "Mock main answer");
+    const menu = '[data-slot="chat-context-menu"]';
+    const rightClick = async () => evaluate(`${q(listLink(other))}.dispatchEvent(new MouseEvent('contextmenu', {bubbles:true,cancelable:true,clientX:220,clientY:300}))`);
+    await rightClick();
+    await until(() => evaluate(`!!document.querySelector('${menu}')`), "context menu opens");
+    await click(`${menu} button:nth-of-type(2)`);
+    await until(() => evaluate(`!document.querySelector('${menu}')`), "star saved");
+    assert.ok(stars.has(`${other.agent}:${other.runId}`));
+    assert.ok(await evaluate(`${q(listLink(main))}.getAttribute('aria-current')==='page'`));
+    await rightClick();
+    assert.equal(await evaluate(`document.querySelector('${menu} button:nth-of-type(2)').textContent`), "Unstar");
+    await click(`${menu} button:nth-of-type(2)`);
+    await until(() => evaluate(`!document.querySelector('${menu}')`), "unstar saved");
+    await rightClick();
+    await click(`${menu} button`);
+    await type('#context-chat-name', 'Context renamed');
+    failNextRename = true;
+    await key('Enter');
+    await until(() => evaluate(`document.querySelector('${menu}')?.textContent.includes('Fixture rename refused')`), "context error stays visible");
+    assert.equal(await evaluate(`document.querySelector('#context-chat-name').value`), 'Context renamed');
+    await key('Enter');
+    await until(() => evaluate(`!document.querySelector('${menu}')`), "context rename saved");
+    assert.ok(await evaluate(`${q(listLink(other))}.textContent.includes('Context renamed')`));
+    await evaluate(`${q(listLink(other))}.focus(); ${q(listLink(other))}.dispatchEvent(new KeyboardEvent('keydown',{key:'F10',shiftKey:true,bubbles:true,cancelable:true}))`);
+    await until(() => evaluate(`!!document.querySelector('${menu}')`), "keyboard context menu opens");
+    await key('Escape');
+    assert.equal(await evaluate(`document.activeElement===${q(listLink(other))}`), true);
+  });
+
+  await check("chat stars persist across navigation and can be removed", async () => {
+    await open(main, "Mock main answer");
+    await click('[aria-label="Star chat"]');
+    await until(() => evaluate(`document.querySelector('[aria-label="Unstar chat"]')?.getAttribute('aria-pressed')==='true'`), "chat starred");
+    assert.ok(await evaluate(`${q(listLink(main))}.querySelector('[aria-label="Starred chat"]') !== null`));
+    await open(other, "Mock other answer");
+    await open(main, "Mock main answer");
+    await click('[aria-label="Unstar chat"]');
+    await until(() => evaluate(`!!document.querySelector('[aria-label="Star chat"]:not(:disabled)')`), "chat unstarred");
+    assert.equal(stars.size, 0);
   });
 
   await check("chat titles rename, retain edits on error, cancel and restore the default", async () => {

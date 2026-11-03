@@ -3,7 +3,7 @@ import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
 import {
   AppChatError, answerQuestion, getAgents, getConversation, getConversationIndex, getConversations, getFleetNodes, getSteps,
-  replyToConversation, startConversation, stopConversation, uploadImage, attachmentUrl, renameConversation, getVoice, transcribeAudio,
+  replyToConversation, startConversation, stopConversation, uploadImage, attachmentUrl, renameConversation, starConversation, getVoice, transcribeAudio,
 } from "./app-chat";
 import { groupErrorCount } from "./app-chat-activity";
 
@@ -328,4 +328,14 @@ test("dictation reuses local engines and sends raw audio rather than a chat repl
   assert.equal(calls[1].init?.body, clip);
   mockResponse({ error: "Missing transcription key" }, 400);
   await assert.rejects(transcribeAudio(clip, "openai"), /Missing transcription key/);
+});
+
+test("chat stars target the owning source and send explicit desired state", async () => {
+  mockResponse({ ok: true });
+  await starConversation({ ...ref, source: "laptop-b" }, true);
+  assert.equal(calls[0].url, "/api/app/node/laptop-b/api/agents/run/star");
+  assert.deepEqual(body(), { name: ref.agent, run_id: ref.runId, starred: true });
+  await starConversation(ref, false);
+  assert.equal(calls[1].url, "/api/app/agents/run/star");
+  assert.deepEqual(body(1), { name: ref.agent, run_id: ref.runId, starred: false });
 });

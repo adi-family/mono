@@ -1,7 +1,7 @@
 /// <reference types="node" />
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { conversationKey, hasSource, normalizeSources, routeNode, sameConversation, selectedSources } from "./app-chat-sources";
+import { readLastLaunchedAgent, conversationKey, hasSource, normalizeSources, routeNode, sameConversation, selectedSources } from "./app-chat-sources";
 import { appConversationHref, conversationHref } from "./app-chat-transcript";
 
 test("source preferences restore a nonempty sorted selection and reject malformed storage", () => {
@@ -29,4 +29,24 @@ test("conversation and main app links preserve source and encode agent/run names
   assert.equal(appConversationHref({ agent: "designer", runId: "one" }), "http://app.adi/chat/designer/one");
   assert.equal(routeNode("hetzner-adi"), "hetzner-adi");
   for (const value of [null, "", "../node", "node.local", "NODE", "node/"]) assert.equal(routeNode(value), undefined);
+});
+
+test("last launched agent is browser-local, validates the owning machine and tolerates unavailable storage", () => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  try {
+    for (const [stored, expected] of [
+      ['{"agent":"designer"}', {agent:"designer"}],
+      ['{"agent":"designer","source":"laptop-b"}', {agent:"designer",source:"laptop-b"}],
+      ['{"agent":"designer","source":"../node"}', undefined],
+      ['{"agent":" "}', undefined], ['null', undefined], ['broken', undefined],
+    ] as const) {
+      Object.defineProperty(globalThis, "localStorage", {configurable:true,value:{getItem:()=>stored}});
+      assert.deepEqual(readLastLaunchedAgent(), expected);
+    }
+    Object.defineProperty(globalThis, "localStorage", {configurable:true,get:()=>{throw new Error("Blocked");}});
+    assert.equal(readLastLaunchedAgent(), undefined);
+  } finally {
+    if (descriptor) Object.defineProperty(globalThis, "localStorage", descriptor);
+    else Reflect.deleteProperty(globalThis, "localStorage");
+  }
 });

@@ -77,22 +77,34 @@ try {
     await send("Page.navigate", {url: new URL(route,url).href});
     await until(() => evaluate(`!!document.querySelector('${handle}')`), "sidebar rendered");
     await pause(300);
+    assert.equal(await evaluate(`document.querySelector('[data-slot="app-topbar"]').getBoundingClientRect().height`), 44);
+    assert.equal(await evaluate(`document.querySelector('[data-slot="app-sidebar"]').getBoundingClientRect().width`), 48);
     const initial = await width();
-    assert.equal(initial, route === "/interface" ? 224 : 208);
+    assert.equal(initial, 200);
     const rect = await evaluate(`(() => {const r=document.querySelector('${handle}').getBoundingClientRect();return {x:r.x+4,y:r.y+80}})()`);
     await send("Input.dispatchMouseEvent", {type:"mouseMoved",...rect});
     await send("Input.dispatchMouseEvent", {type:"mousePressed",...rect,button:"left",clickCount:1});
     await send("Input.dispatchMouseEvent", {type:"mouseMoved",x:rect.x+100,y:rect.y,button:"left",buttons:1});
     await send("Input.dispatchMouseEvent", {type:"mouseReleased",x:rect.x+100,y:rect.y,button:"left",clickCount:1});
     await until(async () => await width() === initial+100, "drag grows sidebar");
+    await send("Page.reload");
+    await until(() => evaluate(`!!document.querySelector('${handle}')`), "sidebar restored after reload");
+    await until(async () => await width() === initial+100, "dragged width persists after reload");
     await evaluate(`document.querySelector('${handle}').focus()`);
     for (const [key,expected] of [["ArrowLeft",initial+84],["Home",160],["End",480]]) {
       await send("Input.dispatchKeyEvent",{type:"keyDown",key});
       await send("Input.dispatchKeyEvent",{type:"keyUp",key});
       await until(async () => await width() === expected, key);
     }
+    await send("Page.reload");
+    await until(() => evaluate(`!!document.querySelector('${handle}')`), "keyboard width restored");
+    await until(async () => await width() === 480, "keyboard width persists after reload");
     await evaluate(`document.querySelector('${handle}').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))`);
     await until(async () => await width() === initial, "reset");
+    assert.equal(await evaluate(`localStorage.getItem('adi.sidebar-width.v1')`), null, "reset clears saved width");
+    await send("Page.reload");
+    await until(() => evaluate(`!!document.querySelector('${handle}')`), "reset reload");
+    await until(async () => await width() === initial, "reset persists");
     const color = await evaluate(`getComputedStyle(document.querySelector('[data-slot="app-content"]')).backgroundColor`);
     if(route === "/library") {
       assert.match(color,/oklch/);
@@ -101,7 +113,27 @@ try {
     await send("Emulation.setDeviceMetricsOverride", {width:390,height:844,deviceScaleFactor:1,mobile:false});
     assert.equal(await evaluate(`getComputedStyle(document.querySelector('${handle}')).display`),"none");
     await send("Emulation.setDeviceMetricsOverride", {width:1280,height:900,deviceScaleFactor:1,mobile:false});
-    console.log(`Passed ${route}: drag, keyboard, bounds, reset, mobile`);
+    assert.equal(await evaluate(`getComputedStyle(document.querySelector('[data-slot="app-workspace-controls"]')).position`), 'absolute');
+    assert.equal(await evaluate(`document.querySelector('[data-slot="workspace-expand"]').closest('${sidebar}')`), null);
+    await evaluate(`document.querySelector('[aria-label="Expand workspace"]').click()`);
+    await until(() => evaluate(`getComputedStyle(document.querySelector('[data-slot="app-topbar"]')).display==='none'`), "topbar hidden");
+    const contentBounds = () => evaluate(`(() => {const r=document.querySelector('[data-slot="app-content"]').getBoundingClientRect(); return [r.x,r.y,r.width,r.height]})()`);
+    assert.deepEqual(await contentBounds(), [initial,0,1280-initial,900]);
+    assert.equal(await width(), initial);
+    assert.equal(await evaluate(`document.querySelector('${sidebar}').hidden`), false);
+    assert.ok(await evaluate(`(() => {const b=document.querySelector('[data-slot="workspace-expand"]').getBoundingClientRect();const s=document.querySelector('${sidebar}').getBoundingClientRect();return b.x >= s.x && b.x < s.x+32 && b.y >= s.y && b.y < s.y+32})()`));
+    await send("Emulation.setDeviceMetricsOverride", {width:390,height:844,deviceScaleFactor:1,mobile:false});
+    const mobileBounds = await contentBounds();
+    assert.equal(mobileBounds[0], 0);
+    assert.equal(mobileBounds[2], 390);
+    assert.ok(mobileBounds[1] > 0 && mobileBounds[1] < 844);
+    assert.equal(mobileBounds[1] + mobileBounds[3], 844);
+    await send("Emulation.setDeviceMetricsOverride", {width:1280,height:900,deviceScaleFactor:1,mobile:false});
+    const expandedScreenshot = await send("Page.captureScreenshot", {format:"png"});
+    await writeFile(`/tmp/design-system-expanded-${route.slice(1)}.png`,Buffer.from(expandedScreenshot.data,"base64"));
+    await evaluate(`document.querySelector('[aria-label="Restore navigation"]').click()`);
+    await until(async () => await width() === initial, "navigation width restored");
+    console.log(`Passed ${route}: drag, keyboard, bounds, reload persistence, reset, mobile`);
   }
   const screenshot = await send("Page.captureScreenshot",{format:"png"});
   await writeFile("/tmp/design-system-sidebar.png",Buffer.from(screenshot.data,"base64"));

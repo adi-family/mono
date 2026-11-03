@@ -20,6 +20,21 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.36.1 — 2026-11-03
+
+### Changed
+
+- More compact top bar and left navigation give chats more room. Sidebar width is remembered in this browser, and a corner control hides the outer navigation while keeping the chat list visible.
+- New chat puts starred agents from selected machines within easy reach. The last agent you successfully launched, including its machine, is remembered locally in your browser instead of following someone else's recent chat.
+
+### Added
+
+- Rename and star or unstar conversations from the chat title or the sidebar's right-click menu. Changes are saved on the conversation's own machine.
+
+### Fixed
+
+- Sending immediately clears the message field and shows a visible sending status. Failed sends restore an empty draft field, and messages accepted before a response error are recognized from history without being sent twice.
+
 ## 1.36.0 — 2026-11-03
 
 ### Added

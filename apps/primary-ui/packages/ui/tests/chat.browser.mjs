@@ -552,12 +552,12 @@ try {
     assert.equal(await evaluate(`${query(sendButton)}.disabled`), true);
   });
 
-  await check("Enter trims and sends once, preserves pending draft and clears on success", async () => {
+  await check("Enter trims and sends once, clears immediately and stays clear on success", async () => {
     await type("  Hello chat  ");
     await key("Enter");
     await until(async () => (await submitted()).length === 1, "send starts");
     assert.deepEqual(await submitted(), ["Hello chat"]);
-    assert.equal(await value("#test-draft"), "  Hello chat  ");
+    assert.equal(await value("#test-draft"), "");
     await key("Enter");
     await evaluate("document.getElementById('test-composer').requestSubmit()");
     assert.equal((await submitted()).length, 1, "pending submission is single-flight");

@@ -37,3 +37,14 @@ export function selectedSources(sources: ChatSources): (string | undefined)[] {
 }
 export function hasSource(sources: ChatSources, source?: string) { return source ? sources.nodes.includes(source) : sources.local; }
 export function routeNode(value: string | null): string | undefined { return validNode(value) ? value : undefined; }
+
+export type LastLaunchedAgent = { agent: string; source?: string };
+export const lastLaunchedAgentKey = "adi.last-launched-agent.v1";
+export function readLastLaunchedAgent(): LastLaunchedAgent | undefined {
+  try {
+    const value = JSON.parse(localStorage.getItem(lastLaunchedAgentKey) ?? "null");
+    if (!value || typeof value.agent !== "string" || !value.agent.trim()) return undefined;
+    if (value.source !== undefined && !validNode(value.source)) return undefined;
+    return { agent: value.agent, ...(value.source ? { source: value.source } : {}) };
+  } catch { return undefined; }
+}

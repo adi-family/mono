@@ -20,6 +20,7 @@ type ChatComposerProps = Omit<React.ComponentProps<"form">, "onSubmit" | "onErro
     inputLabel?: string;
     placeholder?: string;
     sendLabel?: string;
+    sendingLabel?: string;
     stopLabel?: string;
     errorMessage?: string;
     sendOnEnter?: boolean;
@@ -46,6 +47,7 @@ function ChatComposer({
   inputLabel = "Message",
   placeholder = "Write a message…",
   sendLabel = "Send message",
+  sendingLabel = "Sending message…",
   stopLabel = "Stop response",
   errorMessage = "Message could not be sent. Try again.",
   sendOnEnter = true,
@@ -83,11 +85,15 @@ function ChatComposer({
     inFlight.current = true;
     setSending(true);
     setFailed(false);
+    currentValue.current = "";
+    onValueChange("");
     try {
       await onSend(message);
-      if (mounted.current && currentValue.current === draft) onValueChange("");
     } catch {
-      if (mounted.current) setFailed(true);
+      if (mounted.current) {
+        if (!currentValue.current) { currentValue.current = draft; onValueChange(draft); }
+        setFailed(true);
+      }
     } finally {
       inFlight.current = false;
       if (mounted.current) setSending(false);
@@ -190,8 +196,9 @@ function ChatComposer({
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           {onFilesSelect && <Button type="button" variant="ghost" size="icon" className="size-7 shrink-0" aria-label="Attach images" disabled={disabled || sending} disabledReason={disabled ? reason! : "Wait for this message to finish sending."} onClick={() => fileInput.current?.click()}><Paperclip aria-hidden="true" className="size-4" /></Button>}
           {children}
-          <p id={helperId} className="text-muted-foreground text-xs leading-5">
-            {sendOnEnter ? "Enter to send · Shift + Enter for a new line" : "Use the send button to send your message."}
+          <p id={helperId} role="status" aria-live="polite" aria-atomic="true" data-slot="chat-composer-status" className={cn("flex items-center gap-1.5 text-xs leading-5", sending ? "text-foreground font-medium" : "text-muted-foreground")}>
+            {sending && <LoaderCircle aria-hidden="true" className="size-3.5 shrink-0 motion-safe:animate-spin" />}
+            {sending ? sendingLabel : sendOnEnter ? "Enter to send · Shift + Enter for a new line" : "Use the send button to send your message."}
           </p>
         </div>
         {isGenerating ? (

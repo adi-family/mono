@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Check, LoaderCircle, Pencil, X } from "lucide-react";
+import { Check, LoaderCircle, Pencil, Star, X } from "lucide-react";
 import { Button } from "@design-system/ui";
 import type { ConversationRef } from "../lib/app-chat";
 
-export function ChatTitle({ title, conversation, onRename }: {
+export function ChatTitle({ title, conversation, onRename, starred, onStar }: {
   title: string; conversation: ConversationRef | null;
+  starred: boolean; onStar: (conversation: ConversationRef, starred: boolean) => Promise<void>;
   onRename: (conversation: ConversationRef, title: string) => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
@@ -36,6 +37,14 @@ export function ChatTitle({ title, conversation, onRename }: {
     {error && <p role="alert" className="text-destructive mt-1 text-xs">{error}</p>}
   </form> : <div className="flex min-w-0 items-center gap-1">
     <h1 className="truncate text-sm font-medium" title={title}>{title}</h1>
+    {conversation && <Button type="button" size="icon" variant="ghost" className="text-muted-foreground size-6 shrink-0" aria-label={starred ? "Unstar chat" : "Star chat"} aria-pressed={starred} disabled={saving} disabledReason="The chat is being updated." onClick={async () => {
+      if (inFlight.current) return;
+      inFlight.current = true; setSaving(true); setError("");
+      try { await onStar(conversation, !starred); }
+      catch (cause) { setError(cause instanceof Error ? cause.message : "Could not update this chat. Try again."); }
+      finally { inFlight.current = false; setSaving(false); }
+    }}><Star aria-hidden="true" className={starred ? "size-3 fill-current" : "size-3"} /></Button>}
+    {error && <p role="alert" className="text-destructive text-xs">{error}</p>}
     {conversation && <Button ref={trigger} type="button" size="icon" variant="ghost" className="text-muted-foreground size-6 shrink-0" aria-label="Rename chat" onClick={() => { setName(title); setEditing(true); }}><Pencil aria-hidden="true" className="size-3" /></Button>}
   </div>;
 }

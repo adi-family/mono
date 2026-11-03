@@ -504,6 +504,10 @@ export async function uploadImage(file: File, source?: string): Promise<AgentAtt
   return { id: data.id, name: file.name, media_type: file.type, size: file.size };
 }
 
+export async function starConversation(ref: ConversationRef, starred: boolean): Promise<void> {
+  await request("/agents/run/star", undefined, { ...runBody(ref), starred }, ref.source);
+}
+
 export async function renameConversation(ref: ConversationRef, title: string): Promise<void> {
   await request("/agents/run/rename", undefined, { ...runBody(ref), title: title.trim() }, ref.source);
 }

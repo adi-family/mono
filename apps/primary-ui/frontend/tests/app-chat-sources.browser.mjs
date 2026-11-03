@@ -335,6 +335,25 @@ try {
     assert.equal(await evaluate(`${q(row(remoteMain))}.getAttribute('href')`), `/interface?agent=${remoteMain.agent}&run=${remoteMain.runId}&node=${remote}`);
   });
 
+  await check("new chat includes starred agents from every selected machine", async () => {
+    async function visit(path) {
+      await send('Page.navigate', {url: `${origin}${path}`});
+      await until(() => evaluate(`!!document.querySelector('[data-slot="app-chat"]')`), 'chat route loaded');
+    }
+    await visit('/chat');
+    await until(() => evaluate(`document.querySelectorAll('[data-slot="new-chat-starred-agent"]').length===2`), "both sources have starred choices");
+    assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('[data-slot="new-chat-starred-agent"]')).map(el=>el.dataset.source).sort()`), ['', remote].sort());
+    const image = await send('Page.captureScreenshot', {format:'png'});
+    await writeFile('/tmp/design-system-new-chat.png', Buffer.from(image.data,'base64'));
+    const launches = requests.filter((request) => request.path === '/agents/run').length;
+    await click('[data-slot="new-chat-starred-agent"][data-source="' + remote + '"]');
+    await until(() => evaluate(`new URLSearchParams(location.search).get('node')===${JSON.stringify(remote)}`), "remote starred agent selected");
+    assert.equal(await evaluate(`new URLSearchParams(location.search).has('run')`), false);
+    assert.equal(requests.filter((request) => request.path === '/agents/run').length, launches);
+    await visit(`/chat/${main.agent}/${main.runId}`);
+    await until(() => contains('local fixture answer shared-run'), 'original conversation restored');
+  });
+
   await check("legacy chat bookmarks retain their machine, agent and explicit run selection", async () => {
     async function visit(path) {
       const previous = await evaluate("performance.timeOrigin");

@@ -135,18 +135,18 @@ For a single-component import, use `@design-system/ui/theme-toggle`.
 ## Application layout
 
 `AppLayout` provides slots for the icon rail, second-level navigation, topbar, and content.
-It owns their responsive placement: the primary rail is 56px wide, the secondary navigation
-is 208px wide on desktop, and the topbar is 56px high. On smaller screens, secondary
+It owns their responsive placement: the primary rail is 48px wide, the secondary navigation
+is 200px wide on desktop, and the topbar is 44px high. On smaller screens, secondary
 navigation moves below the topbar. Apply `bg-canvas` to the host's `body` for the gray canvas.
 Navigation and the topbar stay transparent; content uses `bg-background`, which is white in
 light mode and near-black in dark mode. The host supplies menus, routing, theme state, and
 any mobile menu disclosure.
 In the separate layout, the secondary navigation slot owns its desktop spacing: a 32px
-top offset and 20px inner top padding.
+top offset and 12px inner top padding.
 
 Use `surface="joined"` for one bounded workspace beside the icon rail, below the topbar.
 The secondary navigation and content share its frame and rounded outer corners. Its sidebar
-is 224px wide on desktop and uses `bg-background`, giving the dark workspace a near-black
+is 200px wide on desktop and uses `bg-background`, giving the dark workspace a near-black
 sidebar just lighter than the black content and darker than the outer canvas. The topbar
 stays outside with its original theme, aligned with the content column. The content has no
 separate border or rounding. The surface fills the remaining viewport height below the
@@ -174,7 +174,18 @@ import { AppLayout } from "@design-system/ui";
 The desktop secondary navigation can be resized from 160px to 480px by dragging its right
 edge. The topbar and content follow the same width. Double-click the edge to restore the
 layout’s default width, or focus it and use Left/Right arrows (16px steps), Home, or End.
-Mobile navigation keeps its stacked layout.
+Mobile navigation keeps its stacked layout. Pass `sidebarWidthStorageKey` to remember the
+chosen width across reloads. The live app uses `adi.sidebar-width.v1` across its pages.
+Double-clicking the resize edge also clears the saved preference. Invalid saved values
+fall back to the default; numeric values stay within the 160–480px bounds. Storage
+failures leave resizing usable.
+
+The absolute expand button at the workspace’s upper-left toggles `focusMode`, hiding
+only the outer icon rail and topbar. The section sidebar and content fill the window
+together. The same button restores the layout.
+Navigation stays mounted, retaining filters, drafts, and sidebar width. The `workspaceControls`
+slot renders outside the layout flow and remains available on pages without a sidebar,
+including Home.
 
 Omit `secondaryNavigation` for a single navigation level. Set `hideSecondaryNavigation` to
 hide a supplied secondary slot while keeping it mounted, preserving its state between pages.
@@ -600,7 +611,8 @@ Use keyed siblings when switching their DOM order so draft and send state are pr
 `ChatComposer` uses a controlled `value` and `onValueChange`. `onSend` receives trimmed text;
 resolve its optional promise when the message is accepted, or reject it to show `errorMessage`
 and retain the draft. While a send is pending, another send is blocked but typing is allowed.
-Successful sends clear the submitted draft only if it has not changed. Enter sends;
+The field clears as sending starts. A rejected send restores the submitted draft when
+the field is still empty, preserving any new text typed during sending. Enter sends;
 Shift+Enter inserts a newline. IME composition and modified shortcuts do not submit.
 Set `sendOnEnter={false}` for button-only submission. `textareaProps` forwards input attributes
 such as `id`, `name`, `maxLength`, and `onKeyDown`; calling `preventDefault()` in that handler
@@ -699,6 +711,13 @@ Dictation appends editable text to the draft and never sends it. The engine foll
 in the composer. Recording stops and tracks are released on chat navigation. Microphone access
 requires HTTPS; the HTTP showcase shows only the disabled microphone and its existing help control.
 
+Right-click a sidebar chat (or press Shift+F10 while focused) to rename or star/unstar
+it without opening it. Rename supports Enter to save, Escape to cancel, and inline errors.
+
+Use the star beside an open chat’s title to keep or unstar that conversation. Starred chats
+show a filled star in the sidebar and retain their existing priority in the list. Changes are
+saved on the owning machine through the existing run star endpoint.
+
 Use the pencil beside an open chat’s title to rename it. Enter saves, Escape cancels, and
 an empty name restores the generated title. Changes use the existing run rename endpoint on
 the conversation’s owning machine and update both the header and sidebar.
@@ -766,3 +785,20 @@ differs from the dashboard defaults. The temporary browser profile is removed af
 1. `src/components/<name>.tsx`
 2. re-export it from `src/components.ts`
 3. (optional) add it as its own entry in `vite.config.ts` to get a separate `dist/<name>.js`
+
+`ChatComposer` immediately replaces its keyboard hint with a spinner and “Sending message…”
+while `onSend` is pending. The live status is announced to assistive technology; `sendingLabel`
+customizes it. The field clears immediately; a failed send restores the draft when the field is still empty.
+The live chat checks the transcript after a reply error to recognize messages already accepted
+by the server, without automatically repeating the send.
+
+The new-chat page puts agent selection in the center, with quick choices for starred agents
+from every selected source. Its machine-specific picker includes starred agents plus the
+current agent, preserving unstarred deep links. New default selections prefer starred,
+chat-capable agents; read-only and unavailable agents remain disabled.
+
+Successful new-chat launches save the chosen agent and owning machine in browser-local
+`adi.last-launched-agent.v1`. New chat restores that choice when available in selected
+sources. Viewing history, selecting an agent without launching, failed launches, and other
+people’s sessions never update it. An unavailable saved agent falls back to an eligible
+starred/default agent on a selected source.
