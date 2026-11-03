@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "strict": true,
+    // Explicit, rather than relying on every `@types/*` package under node_modules being
+    // auto-included: confirmed needed on `typescript` 7.0.2, same as the backend's tsconfig.
+    "types": ["node"]
+  },
+  "include": ["vite.config.ts"]
+}

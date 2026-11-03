@@ -1,0 +1,215 @@
+@import "tailwindcss";
+
+/* Generate the utility classes used by @design-system/ui's source (imported directly in dev). */
+@source "../../packages/ui/src";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  color-scheme: light;
+  --radius: 0.625rem;
+  --background: oklch(1 0 0);
+  --canvas: oklch(0.97 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+}
+
+.dark {
+  color-scheme: dark;
+  --background: oklch(0.145 0 0);
+  --canvas: oklch(0.205 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-canvas: var(--canvas);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+@layer base {
+  html {
+    scrollbar-gutter: stable;
+  }
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-canvas text-foreground;
+  }
+}
+
+/* Chat prose uses semantic Markdown elements; preformatted tool output is outside this scope. */
+.chat-markdown {
+  text-align: start;
+}
+
+.chat-markdown :where(p, ul, ol, blockquote, pre, hr, [data-slot="chat-markdown-table"]) {
+  margin-block: 0.75rem;
+}
+
+.chat-markdown :where(h1, h2, h3, h4, h5, h6) {
+  margin-block: 1.25rem 0.5rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.chat-markdown h1 { font-size: 1.25rem; }
+.chat-markdown h2 { font-size: 1.125rem; }
+.chat-markdown h3 { font-size: 1rem; }
+.chat-markdown :where(h4, h5, h6) { font-size: 0.875rem; }
+.chat-markdown > :first-child { margin-top: 0; }
+.chat-markdown > :last-child { margin-bottom: 0; }
+.chat-markdown strong { font-weight: 600; }
+.chat-markdown em { font-style: italic; }
+.chat-markdown del { text-decoration: line-through; }
+.chat-markdown ul { padding-inline-start: 1.4rem; list-style: disc; }
+.chat-markdown ol { padding-inline-start: 1.4rem; list-style: decimal; }
+.chat-markdown li { padding-inline-start: 0.15rem; margin-block: 0.25rem; }
+.chat-markdown li :where(p, ul, ol) { margin-block: 0.35rem; }
+.chat-markdown ul ul { list-style-type: circle; }
+.chat-markdown .contains-task-list { padding-inline-start: 0; list-style: none; }
+.chat-markdown .task-list-item { padding-inline-start: 0; }
+.chat-markdown input[type="checkbox"] { margin-inline-end: 0.4rem; vertical-align: middle; }
+
+.chat-markdown a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  @apply rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50;
+}
+
+.chat-markdown blockquote {
+  padding-inline-start: 0.9rem;
+  border-inline-start: 3px solid color-mix(in oklab, currentColor 25%, transparent);
+}
+
+.chat-markdown blockquote > :first-child { margin-top: 0; }
+.chat-markdown blockquote > :last-child { margin-bottom: 0; }
+.chat-markdown :not(pre) > code {
+  padding: 0.12rem 0.3rem;
+  border-radius: 0.25rem;
+  background: color-mix(in oklab, currentColor 8%, transparent);
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+  white-space: break-spaces;
+}
+
+.chat-markdown pre {
+  @apply bg-background/70 text-foreground max-h-96 max-w-full overflow-auto overscroll-contain rounded-md border p-3 font-mono text-xs leading-5 whitespace-pre outline-none focus-visible:ring-2 focus-visible:ring-ring/50;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.chat-markdown pre code { font: inherit; white-space: inherit; }
+.chat-markdown table { width: 100%; border-collapse: collapse; font-size: 0.875em; }
+.chat-markdown :where(th, td) {
+  border: 1px solid color-mix(in oklab, currentColor 20%, transparent);
+  padding: 0.45rem 0.65rem;
+  white-space: nowrap;
+}
+.chat-markdown th { font-weight: 600; background: color-mix(in oklab, currentColor 5%, transparent); }
+.chat-markdown hr { border-top: 1px solid color-mix(in oklab, currentColor 20%, transparent); }
+.chat-markdown img { display: block; max-width: 100%; height: auto; border-radius: 0.375rem; }
+.chat-markdown .footnotes { margin-top: 1rem; font-size: 0.85em; }
+
+/* Usage snippets inherit the page theme; all lines stay visible and wrap on small screens. */
+.code-example .token.tag,
+.code-example .token.class-name {
+  @apply text-sky-700 dark:text-sky-300;
+}
+
+.code-example .token.attr-name {
+  @apply text-amber-800 dark:text-amber-300;
+}
+
+.code-example .token.string,
+.code-example .token.attr-value {
+  @apply text-emerald-700 dark:text-emerald-300;
+}
+
+.code-example .token.keyword {
+  @apply text-violet-700 dark:text-violet-300;
+}
+
+.code-example .token.function {
+  @apply text-blue-700 dark:text-blue-300;
+}
+
+.code-example .token.boolean,
+.code-example .token.number {
+  @apply text-orange-700 dark:text-orange-300;
+}
+
+.code-example .token.punctuation {
+  @apply text-muted-foreground;
+}
+
+.code-example .token.comment {
+  @apply text-muted-foreground italic;
+}
+
+/* Explicit gallery opt-in only. The distributed Button keeps its motion-safe behavior. */
+@media (prefers-reduced-motion: reduce) and (hover: hover) {
+  #disabled-buttons[data-preview-animations="true"] [data-slot="button-disabled"]:hover [data-slot="help-tooltip-wave"] {
+    @apply animate-ping;
+    animation-duration: 1.6s;
+    opacity: 0.4;
+  }
+
+  #disabled-buttons[data-preview-animations="true"] [data-slot="button-disabled"]:hover [data-slot="help-tooltip-wave"] + [data-slot="help-tooltip-wave"] {
+    animation-delay: 800ms;
+    opacity: 0.25;
+  }
+}

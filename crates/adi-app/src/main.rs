@@ -175,6 +175,8 @@ where
 }
 
 /// Embedded Trunk output; [`serve_asset`] uses a placeholder if `index.html` is absent.
+static PRIMARY_UI: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../apps/primary-ui/frontend/dist-primary");
+
 static WEBAPP: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../adi-webapp/dist");
 
 const SERVICE: &str = "adi-app";
@@ -446,6 +448,11 @@ async fn handle(mut stream: TcpStream, app: &Arc<App>) -> anyhow::Result<()> {
             if let Some(asset) = tokio::task::spawn_blocking(move || primary.read(&path)).await? {
                 return write_build_file(&mut stream, &asset.relative, None, &asset.bytes).await;
             }
+        }
+        if let Some(relative) = primary_ui::relative_path(req.route_path())
+            && let Some(file) = PRIMARY_UI.get_file(relative)
+        {
+            return write_build_file(&mut stream, relative, None, file.contents()).await;
         }
         return serve_asset(
             &mut stream,
@@ -1548,7 +1555,7 @@ fn primary_ui_override() -> Option<primary_ui::PrimaryUi> {
             Some(primary)
         }
         Err(error) => {
-            warn!(dist = %dir.display(), %error, "ADI_PRIMARY_UI_DIST is not a readable UI build; keeping the original UI");
+            warn!(dist = %dir.display(), %error, "ADI_PRIMARY_UI_DIST is not a readable UI build; using the bundled UI");
             None
         }
     }
@@ -1593,6 +1600,40 @@ fn content_type(path: &str) -> &'static str {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn primary_ui_is_embedded_with_its_referenced_assets() {
+        // The release preparation script builds this before native checks. A debug-only
+        // checkout may have no primary UI; release compilation rejects that in build.rs.
+        let Some(index) = PRIMARY_UI.get_file("index.html") else {
+            assert!(cfg!(debug_assertions));
+            return;
+        };
+        let html = index.contents_utf8().expect("primary HTML");
+        assert!(html.contains("<title>ADI</title>"));
+        for part in html.split("/assets/").skip(1) {
+            let name = part.split('"').next().unwrap();
+            // The favicon deliberately uses the legacy panel's shared /assets/mark.svg.
+            if name == "mark.svg" {
+                continue;
+            }
+            assert!(
+                PRIMARY_UI.get_file(format!("assets/{name}")).is_some(),
+                "missing {name}"
+            );
+        }
+        for path in ["/", "/interface/", "/library/", "/chat/old-bookmark"] {
+            assert_eq!(primary_ui::relative_path(path), Some("index.html"));
+        }
+        for path in [
+            "/extended/settings",
+            "/marketplace/apps",
+            "/embed/chat",
+            "/api/health",
+        ] {
+            assert!(primary_ui::relative_path(path).is_none());
+        }
+    }
 
     fn request(method: &str, path: &str, body: &str) -> http::Request {
         http::Request {

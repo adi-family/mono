@@ -1,0 +1,45 @@
+{
+  "name": "dashboard-frontend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "build:primary": "tsc -b && VITE_APP_API_BASE=/api vite build --outDir dist-primary",
+    "typecheck": "tsc -b --noEmit",
+    "test:home": "bun test src/lib/home-apps.test.ts",
+    "test:home:browser": "bun tests/home-apps.browser.mjs",
+    "test:primary": "bun test src/lib/primary-routes.test.ts src/lib/app-api.test.ts && VITE_APP_API_BASE=/api bun test src/lib/app-api.test.ts",
+    "test:primary:browser": "bun tests/primary-app.browser.mjs",
+    "test:chat": "bun test src/lib/app-chat.test.ts src/lib/app-chat-sources.test.ts src/lib/app-chat-sidebar.test.ts tests/app-chat-transcript.test.ts",
+    "test:chat:browser": "bun tests/app-chat.browser.mjs",
+    "preview": "vite preview",
+    "test:chat:sources": "bun tests/app-chat-sources.browser.mjs"
+  },
+  "dependencies": {
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "react-router-dom": "7.18.5",
+    "@tanstack/react-query": "5.105.0",
+    "hono": "4.13.14",
+    "class-variance-authority": "0.7.1",
+    "clsx": "2.1.1",
+    "tailwind-merge": "3.7.0",
+    "lucide-react": "1.63.0",
+    "@radix-ui/react-slot": "1.5.0",
+    "prism-react-renderer": "2.4.1",
+    "react-markdown": "10.1.0",
+    "remark-breaks": "4.0.0",
+    "remark-gfm": "4.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "typescript": "7.0.2",
+    "vite": "8.3.5",
+    "tailwindcss": "4.3.3",
+    "@tailwindcss/vite": "4.3.3"
+  }
+}

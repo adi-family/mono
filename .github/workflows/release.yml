@@ -126,6 +126,20 @@ jobs:
       - name: Type-check the custom elements
         run: scripts/elements.sh check
 
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.5'
+
+      - name: Build and check the primary React interface
+        run: scripts/primary-ui.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: primary-ui-dist
+          path: apps/primary-ui/frontend/dist-primary
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Build the webapp
         run: cd crates/adi-webapp && trunk build --release
 
@@ -241,6 +255,12 @@ jobs:
           name: webapp-dist
           path: crates/adi-webapp/dist
 
+      - name: Take the primary React interface
+        uses: actions/download-artifact@v4
+        with:
+          name: primary-ui-dist
+          path: apps/primary-ui/frontend/dist-primary
+
       - name: Import the Developer ID certificate
         env:
           CERT: ${{ secrets.MACOS_CERT_P12 }}
@@ -328,6 +348,12 @@ jobs:
           name: webapp-dist
           path: crates/adi-webapp/dist
 
+      - name: Take the primary React interface
+        uses: actions/download-artifact@v4
+        with:
+          name: primary-ui-dist
+          path: apps/primary-ui/frontend/dist-primary
+
       # The musl half is built inside Alpine, whose *own* libc is musl — so this is a native
       # compile, not a cross one, and the toolchain question disappears instead of being worked
       # around. `musl-tools`, which this used to install, is a C compiler only; usearch (reached
@@ -406,6 +432,12 @@ jobs:
         with:
           name: webapp-dist
           path: crates/adi-webapp/dist
+
+      - name: Take the primary React interface
+        uses: actions/download-artifact@v4
+        with:
+          name: primary-ui-dist
+          path: apps/primary-ui/frontend/dist-primary
 
       - name: Build the Windows package
         run: apps/windows/build.sh

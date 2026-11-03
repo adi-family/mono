@@ -23,6 +23,15 @@ fn main() {
     let dist = Path::new(&manifest).join("../adi-webapp/dist");
     let _ = std::fs::create_dir_all(&dist);
     emit_rerun(&dist);
+    let primary = Path::new(&manifest).join("../../apps/primary-ui/frontend/dist-primary");
+    std::fs::create_dir_all(&primary).expect("create primary UI build directory");
+    emit_rerun(&primary);
+    if std::env::var("PROFILE").as_deref() == Ok("release") {
+        assert!(
+            primary.join("index.html").is_file(),
+            "build the primary UI before a release: scripts/primary-ui.sh"
+        );
+    }
 
     // Only for the release profile: this is a multi-second pass over a ~15 MB wasm file at
     // brotli's top quality, and nobody wants to pay that on every debug-build iteration of a
@@ -123,7 +132,9 @@ fn brotli_compress(data: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     {
         let mut writer = brotli::CompressorWriter::with_params(&mut out, 4096, &params);
-        writer.write_all(data).expect("compressing into a Vec cannot fail");
+        writer
+            .write_all(data)
+            .expect("compressing into a Vec cannot fail");
     }
     out
 }
@@ -133,5 +144,7 @@ fn gzip_compress(data: &[u8]) -> Vec<u8> {
     encoder
         .write_all(data)
         .expect("compressing into a Vec cannot fail");
-    encoder.finish().expect("compressing into a Vec cannot fail")
+    encoder
+        .finish()
+        .expect("compressing into a Vec cannot fail")
 }

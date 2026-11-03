@@ -55,7 +55,7 @@ impl PrimaryUi {
     }
 }
 
-fn relative_path(path: &str) -> Option<&str> {
+pub(crate) fn relative_path(path: &str) -> Option<&str> {
     // React Router accepts a trailing slash on document routes. Strip only one so repeated
     // trailing separators cannot turn an otherwise invalid path into a fixed document match.
     let document = path.strip_suffix('/').unwrap_or(path);

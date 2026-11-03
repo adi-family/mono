@@ -111,3 +111,8 @@ own connection and there's no keep-alive framing to track. `src/main.rs` routes 
 to `adi_webapp_api::handlers` and serves everything else out of the webapp — the embedded
 `include_dir!` copy by default, or a disk `dist/` when `ADI_WEBAPP_DIST` is set — falling
 back to the app shell for unknown paths so the client-side router can resolve them.
+
+Release builds also embed the primary React interface from `apps/primary-ui/frontend/dist-primary`.
+Build it with `scripts/primary-ui.sh` before packaging. CI builds it once and downloads the
+same artifact on all platforms; release compilation refuses a missing primary shell.
+`ADI_PRIMARY_UI_DIST` is optional and overrides that embedded interface for development.

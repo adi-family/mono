@@ -20,6 +20,14 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.36.0 — 2026-11-03
+
+### Added
+
+- A new Home screen brings apps from this machine and paired machines into one searchable grid, with machine unlock and lock controls.
+- Chats now use the new shared interface, with conversation search, machine and project filters, Markdown replies, attachments, and compact expandable tool activity.
+- Home and Chats ship inside the application on every platform. Existing chat bookmarks continue to work, and Settings, Marketplace, and embedded chats remain available.
+
 ## 1.35.1 — 2026-11-03
 
 ### Changed

@@ -31,3 +31,9 @@ ls "$DIST"/*.wasm >/dev/null 2>&1 || {
     echo "       rebuild it:  (cd $ROOT/crates/adi-webapp && trunk build --release)" >&2
     exit 1
 }
+
+PRIMARY="$ROOT/apps/primary-ui/frontend/dist-primary"
+[ -f "$PRIMARY/index.html" ] && [ -d "$PRIMARY/assets" ] || {
+    echo "error: primary UI missing; run scripts/primary-ui.sh before packaging" >&2
+    exit 1
+}

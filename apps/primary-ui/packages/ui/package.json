@@ -1,0 +1,60 @@
+{
+  "name": "@design-system/ui",
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Design System — shared React component library. In the design-system dashboard it is imported directly from src/ (TypeScript, hot-reload) for fast development; for other apps it is built to dist JS and bundled in.",
+  "files": ["dist"],
+  "sideEffects": ["**/*.css", "**/styles.css", "**/standalone.*"],
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./button": { "types": "./dist/components/button.d.ts", "import": "./dist/button.js" },
+    "./card": { "types": "./dist/components/card.d.ts", "import": "./dist/card.js" },
+    "./app-layout": { "types": "./dist/components/app-layout.d.ts", "import": "./dist/app-layout.js" },
+    "./scroll-sidebar": { "types": "./dist/components/scroll-sidebar.d.ts", "import": "./dist/scroll-sidebar.js" },
+    "./theme-toggle": { "types": "./dist/components/theme-toggle.d.ts", "import": "./dist/theme-toggle.js" },
+    "./question-mark": { "types": "./dist/components/question-mark.d.ts", "import": "./dist/question-mark.js" },
+    "./help-tooltip": { "types": "./dist/components/help-tooltip.d.ts", "import": "./dist/help-tooltip.js" },
+    "./select": { "types": "./dist/components/select.d.ts", "import": "./dist/select.js" },
+    "./autocomplete": { "types": "./dist/components/autocomplete.d.ts", "import": "./dist/autocomplete.js" },
+    "./multi-select": { "types": "./dist/components/multi-select.d.ts", "import": "./dist/multi-select.js" },
+    "./chat": { "types": "./dist/components/chat.d.ts", "import": "./dist/chat.js" },
+    "./chat-composer": { "types": "./dist/components/chat-composer.d.ts", "import": "./dist/chat-composer.js" },
+    "./chat-tool-call": { "types": "./dist/components/chat-tool-call.d.ts", "import": "./dist/chat-tool-call.js" },
+    "./style.css": "./dist/style.css",
+    "./standalone": { "types": "./dist/index.d.ts", "import": "./dist/standalone/design-system-ui.js" }
+  },
+  "scripts": {
+    "dev": "vite build --watch",
+    "build": "bun run build:lib && bun run build:standalone && bun run build:types",
+    "build:lib": "vite build",
+    "build:standalone": "vite build --config vite.standalone.config.ts",
+    "build:types": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.tests.json",
+    "test": "bun test tests",
+    "test:browser": "bun tests/choices.browser.mjs && bun tests/chat.browser.mjs"
+  },
+  "peerDependencies": {
+    "react": ">=19",
+    "react-dom": ">=19"
+  },
+  "dependencies": {
+    "@radix-ui/react-popover": "1.3.1",
+    "@radix-ui/react-slot": "1.5.0",
+    "@radix-ui/react-tooltip": "1.4.1",
+    "class-variance-authority": "0.7.1",
+    "clsx": "2.1.1",
+    "lucide-react": "1.63.0",
+    "tailwind-merge": "3.7.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.3",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "tailwindcss": "4.3.3",
+    "typescript": "7.0.2",
+    "vite": "8.3.5"
+  }
+}

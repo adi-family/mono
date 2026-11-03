@@ -85,6 +85,8 @@ echo "==> trunk build ${trunk_flags[*]}  (crates/adi-webapp -> target/webapp-dis
 rm -rf "$private_dist"
 ( cd crates/adi-webapp && trunk build "${trunk_flags[@]}" --dist "$private_dist" )
 
+"$repo_root/scripts/primary-ui.sh"
+
 echo "==> staging it as crates/adi-webapp/dist/"
 rm -rf "$repo_root/crates/adi-webapp/dist"
 cp -R "$private_dist" "$repo_root/crates/adi-webapp/dist"

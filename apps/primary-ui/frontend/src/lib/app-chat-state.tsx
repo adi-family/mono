@@ -1,0 +1,244 @@
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
+
+import {
+  answerQuestion, getAgents, getConversation, getConversationIndex, getFleetNodes, replyToConversation,
+  startConversation, stopConversation, renameConversation, uploadImage, attachmentUrl,
+  type Agent, type Conversation, type ConversationRef,
+} from "./app-chat";
+import { conversationHref } from "./app-chat-transcript";
+import { matchesConversationFilter } from "./app-chat-sidebar";
+import {
+  conversationKey, hasSource, normalizeSources, readGroup, readSources, routeNode,
+  savePreference, selectedSources, sourceName, type ChatFilter, type ChatGroup,
+} from "./app-chat-sources";
+
+type DraftImage = { id: string; name: string; url?: string; attachmentId?: string; error?: string };
+const emptyAgents: Agent[] = [];
+const identity = (ref: ConversationRef | null, agent: string, source?: string) => conversationKey(ref ?? { agent, source, runId: "new" });
+const errorText = (error: unknown) => error instanceof Error ? error.message : "The app could not complete this request.";
+
+function useAppChatState() {
+  const { pathname } = useLocation();
+  const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const client = useQueryClient();
+  const enabled = pathname === "/interface";
+  const routeSource = routeNode(params.get("node"));
+  const invalidSource = params.has("node") && !routeSource;
+  const [sources, setSources] = useState(() => {
+    const saved = readSources();
+    return routeSource ? normalizeSources({ ...saved, nodes: [...saved.nodes, routeSource] }) : saved;
+  });
+  const activeSource = params.has("node") ? params.get("node") || undefined : params.has("agent") || params.has("run") ? undefined : selectedSources(sources)[0];
+  const [filter, setFilter] = useState<ChatFilter>("me");
+  const [group, updateGroup] = useState<ChatGroup>(readGroup);
+  const sourceList = useMemo(() => selectedSources(sources), [sources]);
+  const [indexLimits, setIndexLimits] = useState<Record<string, number>>({});
+  const [projectMore, setProjectMore] = useState<Record<string, Record<string, number>>>({});
+  const fleetQuery = useQuery({ queryKey: ["app-chat", "fleet"], queryFn: ({ signal }) => getFleetNodes(signal), enabled, retry: false, refetchInterval: 15000 });
+  const agentQueries = useQueries({ queries: sourceList.map((source) => ({
+    queryKey: ["app-chat", "agents", source ?? ""], queryFn: ({ signal }: { signal: AbortSignal }) => getAgents(signal, source),
+    enabled, refetchInterval: 5000, retry: false,
+  })) });
+  const indexQueries = useQueries({ queries: sourceList.map((source) => ({
+    queryKey: ["app-chat", "conversations", source ?? "", filter, group, indexLimits[source ?? ""] ?? 100, projectMore[source ?? ""] ?? {}],
+    queryFn: ({ signal }: { signal: AbortSignal }) => getConversationIndex(signal, source, {
+      filter, limit: indexLimits[source ?? ""] ?? 100,
+      ...(group === "project" ? { group: "project" as const, groupLimit: 3, groupMore: projectMore[source ?? ""] } : {}),
+    }),
+    enabled, refetchInterval: 5000, retry: false,
+  })) });
+  const currentSourceIndex = sourceList.indexOf(activeSource);
+  const agents = agentQueries[currentSourceIndex]?.data ?? emptyAgents;
+  const defaultAgent = agents.find((item) => item.name === "adi-agent")?.name ?? agents.find((item) => item.runnable !== false)?.name ?? "";
+  const agent = params.get("agent") || defaultAgent;
+  const runId = params.get("run") ?? "";
+  const active = useMemo(() => agent && runId ? { agent, runId, ...(activeSource ? { source: activeSource } : {}) } : null, [agent, runId, activeSource]);
+  const draftKey = identity(active, agent, activeSource);
+  const selection = useRef({ key: draftKey, pathname });
+  selection.current = { key: draftKey, pathname };
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [imageDrafts, setImageDrafts] = useState<Record<string, DraftImage[]>>({});
+  const imageDraftsRef = useRef(imageDrafts);
+  const nextImageId = useRef(0);
+  function updateImages(key: string, update: (images: DraftImage[]) => DraftImage[]) {
+    const next = { ...imageDraftsRef.current, [key]: update(imageDraftsRef.current[key] ?? []) };
+    imageDraftsRef.current = next;
+    setImageDrafts(next);
+  }
+  const [imageErrors, setImageErrors] = useState<Record<string, string>>({});
+  function addImages(files: File[]) {
+    const key = draftKey;
+    const source = activeSource;
+    const room = Math.max(0, 6 - (imageDraftsRef.current[key]?.length ?? 0));
+    setImageErrors((current) => ({ ...current, [key]: files.length > room ? "Attach up to six images per message." : "" }));
+    for (const file of files.slice(0, room)) {
+      const id = `draft-image-${++nextImageId.current}`;
+      updateImages(key, (images) => [...images, { id, name: file.name }]);
+      void uploadImage(file, source).then((image) => {
+        updateImages(key, (images) => images.map((item) => item.id === id ? { ...item, attachmentId: image.id, url: attachmentUrl(image.id, source) } : item));
+      }).catch((error) => {
+        updateImages(key, (images) => images.map((item) => item.id === id ? { ...item, error: errorText(error) } : item));
+      });
+    }
+  }
+  const [limits, setLimits] = useState<Record<string, number>>({});
+  const limit = limits[draftKey] ?? 20;
+  const snapshotKey = ["app-chat", "conversation", activeSource ?? "", agent, runId, limit] as const;
+  const snapshotQuery = useQuery({
+    queryKey: snapshotKey,
+    queryFn: ({ signal }) => getConversation({ agent, runId, source: activeSource }, signal, { limit }),
+    enabled: enabled && !invalidSource && active !== null && hasSource(sources, activeSource), retry: false,
+    placeholderData: (previous, previousQuery) => previousQuery?.queryKey[2] === (activeSource ?? "") && previousQuery.queryKey[3] === agent && previousQuery.queryKey[4] === runId ? previous : undefined,
+    refetchInterval: (query) => query.state.data?.running || query.state.data?.turns.some((turn) => turn.pending || turn.queued) ? 1000 : 5000,
+  });
+  const snapshot = active && !invalidSource ? snapshotQuery.data : undefined;
+  const known = useRef(new Map<string, Conversation>());
+  const sourceStates = sourceList.map((source, index) => {
+    const query = indexQueries[index];
+    const data = query.data;
+    const enrich = (conversation: Conversation) => {
+      const owner = agentQueries[index]?.data?.find((item) => item.name === conversation.agent);
+      const result = { ...conversation, ...(owner ? { agentStarred: owner.starred, project: conversation.project ?? owner.project } : {}) };
+      known.current.set(conversationKey(result), result);
+      return result;
+    };
+    const conversations = (data?.conversations ?? []).map(enrich).filter((item) => matchesConversationFilter(item, filter, active));
+    // A narrowing never makes the conversation being read disappear from its own rail.
+    if (active && active.source === source && !conversations.some((item) => conversationKey(item) === conversationKey(active))) {
+      const prior = known.current.get(conversationKey(active));
+      if (prior || snapshot) conversations.push({
+        ...prior,
+        ...active, title: prior?.title ?? snapshot?.turns.find((turn) => turn.role === "user")?.text.trim().replace(/\s+/g, " ").slice(0, 120) ?? "Conversation",
+        message: prior?.message ?? "", lastActivity: prior?.lastActivity ?? 0,
+        running: snapshot?.running ?? prior?.running ?? false,
+        answerable: snapshot?.answerable ?? prior?.answerable ?? false,
+        interactive: snapshot?.interactive ?? prior?.interactive ?? false,
+        pendingQuestion: snapshot ? Boolean(snapshot.pending_question) : prior?.pendingQuestion,
+        awaiting: snapshot ? snapshot.awaits.length > 0 : prior?.awaiting,
+      });
+    }
+    const groups = data?.groups?.map((item) => ({ ...item, held: item.conversations.length, conversations: item.conversations.map(enrich).filter((row) => matchesConversationFilter(row, filter, active)) })) ?? [];
+    const exempt = active && conversations.find((item) => conversationKey(item) === conversationKey(active));
+    if (group === "project" && exempt && !groups.some((item) => item.conversations.some((row) => conversationKey(row) === conversationKey(exempt)))) {
+      const section = groups.find((item) => item.project === exempt.project);
+      if (section) section.conversations.push(exempt);
+      else groups.push({ project: exempt.project, label: exempt.projectName || "No project", conversations: [exempt], total: 0, held: 0 });
+    }
+    const error = query.error ?? agentQueries[index]?.error;
+    return { source, conversations, groups, total: data?.total ?? 0, held: data?.conversations.length ?? 0, isLoading: query.isPending, isFetching: query.isFetching, error: error ? errorText(error) : null };
+  });
+  const conversations = sourceStates.flatMap((item) => item.conversations).sort((a, b) => b.lastActivity - a.lastActivity);
+  const sending = useRef(new Set<string>());
+  const [stopping, setStopping] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<{ key: string; message: string } | null>(null);
+
+  useEffect(() => { savePreference("adi-session-sources", sources); }, [sources]);
+  // Deep links and browser history select their owning machine as well as the conversation.
+  useEffect(() => {
+    if (enabled && !invalidSource) setSources((current) => hasSource(current, activeSource) ? current : normalizeSources(activeSource ? { ...current, nodes: [...current.nodes, activeSource] } : { ...current, local: true }));
+  }, [enabled, activeSource, invalidSource]);
+
+  function openConversation(ref: ConversationRef) { navigate(conversationHref(ref)); }
+  function newConversation(name = agent, ...sourceArgument: [source?: string]) {
+    const source = sourceArgument.length ? sourceArgument[0] : activeSource;
+    const available = agentQueries[sourceList.indexOf(source)]?.data ?? [];
+    const chosen = available.find((item) => item.name === name && item.runnable !== false)?.name ?? available.find((item) => item.name === "adi-agent")?.name ?? available.find((item) => item.runnable !== false)?.name ?? "";
+    // An empty explicit agent keeps this a new chat while the destination's agents load.
+    navigate(`/interface?${new URLSearchParams({ agent: chosen, ...(source ? { node: source } : {}) })}`);
+  }
+  function toggleSource(source?: string) {
+    const next = normalizeSources(source ? { ...sources, nodes: sources.nodes.includes(source) ? sources.nodes.filter((node) => node !== source) : [...sources.nodes, source] } : { ...sources, local: !sources.local });
+    setSources(next);
+    if (!hasSource(next, activeSource)) newConversation(undefined, selectedSources(next)[0]);
+  }
+  function setGroup(value: ChatGroup) { updateGroup(value); savePreference("adi-session-group", value); }
+  function loadMore(source?: string, project?: string) {
+    if (project !== undefined) setProjectMore((current) => ({ ...current, [source ?? ""]: { ...current[source ?? ""], [project]: (current[source ?? ""]?.[project] ?? 0) + 3 } }));
+    else setIndexLimits((current) => ({ ...current, [source ?? ""]: (current[source ?? ""] ?? 100) + 100 }));
+  }
+
+  useEffect(() => {
+    if (enabled && !params.has("agent") && !params.has("run") && conversations.length && !drafts[draftKey] && !imageDrafts[draftKey]?.length && !sending.current.has(draftKey)) {
+      const recent = conversations.find((item) => item.source === activeSource);
+      if (recent) navigate(conversationHref(recent), { replace: true });
+    }
+  }, [enabled, params, conversations, navigate, drafts, imageDrafts, draftKey, activeSource]);
+
+  async function refresh() {
+    setActionError(null);
+    await Promise.all([client.invalidateQueries({ queryKey: ["app-chat", "voice"] }), client.invalidateQueries({ queryKey: ["app-chat", "agents"] }), client.invalidateQueries({ queryKey: ["app-chat", "conversations"] }), client.invalidateQueries({ queryKey: ["app-chat", "conversation"] }), client.invalidateQueries({ queryKey: ["app-chat", "fleet"] })]);
+  }
+  async function sendMessage(message: string) {
+    if (invalidSource) throw new Error("This chat source is invalid. Choose a source from the sidebar.");
+    if (!agent) throw new Error("Choose an agent before sending a message.");
+    if (sending.current.has(draftKey)) throw new Error("A message is already being sent to this conversation.");
+    const images = imageDraftsRef.current[draftKey] ?? [];
+    if (images.some((image) => !image.attachmentId)) throw new Error("Wait for images to upload, or remove failed attachments.");
+    if (!message.trim() && !images.length) throw new Error("Write a message or attach an image.");
+    const attachments = images.map((image) => image.attachmentId!);
+    const target = active;
+    const submittedDraft = drafts[draftKey] ?? "";
+    const key = draftKey;
+    sending.current.add(key);
+    try {
+      if (target) {
+        const result = await replyToConversation(target, message, undefined, attachments);
+        if (limit <= 20) client.setQueryData(snapshotKey, result);
+        setDrafts((current) => current[key] === submittedDraft ? { ...current, [key]: "" } : current);
+      } else {
+        const created = await startConversation(agent, message, undefined, activeSource, attachments);
+        const createdKey = identity(created, created.agent, created.source);
+        setDrafts((current) => ({ ...current, [key]: "", [createdKey]: current[key] === submittedDraft ? "" : current[key] ?? "" }));
+        if (selection.current.key === key && selection.current.pathname === "/interface") openConversation(created);
+      }
+      updateImages(key, (current) => current.filter((image) => !images.some((submitted) => submitted.id === image.id)));
+      void refresh();
+    } finally { sending.current.delete(key); }
+  }
+  async function stopResponse() {
+    if (!active || stopping === draftKey) return;
+    const key = draftKey;
+    setStopping(key); setActionError(null);
+    try { await stopConversation(active); await refresh(); }
+    catch (error) { setActionError({ key, message: errorText(error) }); }
+    finally { setStopping((current) => current === key ? null : current); }
+  }
+  async function submitAnswer(ask: string, replies: string[]) {
+    if (!active) throw new Error("Open a conversation first.");
+    const result = await answerQuestion(active, ask, replies);
+    if (limit <= 20) client.setQueryData(snapshotKey, result);
+    void refresh();
+  }
+  return {
+    agents, conversations, sourceStates, sources, activeSource, filter, setFilter, group, setGroup, toggleSource, loadMore,
+    fleetNodes: fleetQuery.data ?? [], fleetLoading: fleetQuery.isPending, fleetError: fleetQuery.error ? errorText(fleetQuery.error) : null,
+    setNewSource: (source?: string) => newConversation(undefined, source),
+    active, agent, draftKey, snapshot, draft: drafts[draftKey] ?? "",
+    images: imageDrafts[draftKey] ?? [], imageError: imageErrors[draftKey] || null, addImages,
+    removeImage: (id: string) => updateImages(draftKey, (images) => images.filter((image) => image.id !== id)),
+    setDraft: (value: string) => setDrafts((current) => ({ ...current, [draftKey]: value })),
+    isLoading: agentQueries[currentSourceIndex]?.isPending === true || indexQueries.some((query) => query.isPending),
+    isLoadingConversation: active !== null && !invalidSource && snapshotQuery.isPending,
+    indexError: sourceStates.filter((item) => item.error).map((item) => `${sourceName(item.source)}: ${item.error}`).join(" ") || null,
+    conversationError: invalidSource ? "This chat source is invalid. Choose a source from the sidebar." : active && snapshotQuery.error ? errorText(snapshotQuery.error) : null,
+    actionError: actionError?.key === draftKey ? actionError.message : null, isStopping: stopping === draftKey,
+    renameChat: async (ref: ConversationRef, title: string) => { await renameConversation(ref, title); await refresh(); },
+    appendDraft: (text: string) => setDrafts((current) => ({ ...current, [draftKey]: [current[draftKey]?.trimEnd(), text.trim()].filter(Boolean).join(" ") })),
+    openConversation, newConversation, refresh, sendMessage, stopResponse, submitAnswer,
+    loadEarlier: () => setLimits((current) => ({ ...current, [draftKey]: limit + 20 })),
+    isLoadingEarlier: snapshotQuery.isFetching && snapshotQuery.isPlaceholderData,
+  };
+}
+const AppChatContext = createContext<ReturnType<typeof useAppChatState> | null>(null);
+export function AppChatProvider({ children }: { children: ReactNode }) {
+  const state = useAppChatState();
+  return <AppChatContext.Provider value={state}>{children}</AppChatContext.Provider>;
+}
+export function useAppChat() {
+  const value = useContext(AppChatContext);
+  if (!value) throw new Error("The app chat must be inside AppChatProvider.");
+  return value;
+}
