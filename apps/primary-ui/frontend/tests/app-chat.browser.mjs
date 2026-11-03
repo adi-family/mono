@@ -580,7 +580,7 @@ try {
     await until(async () => mutations("run/reply").length === before + 1 && await draft() === "", "accepted reply clears its draft");
     assert.equal(mutations("run/reply").at(-1).body.run_id, main.runId);
     assert.equal(mutations("run/reply").at(-1).body.message, "Accepted fixture reply");
-    assert.equal(await contains("Accepted fixture reply"), true);
+    await until(() => contains("Accepted fixture reply"), "accepted reply appears in the transcript");
     failNextReply = true;
     before = mutations("run/reply").length;
     await type(composer, "Refused fixture reply");

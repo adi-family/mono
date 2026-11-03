@@ -343,8 +343,7 @@ try {
     await visit('/chat');
     await until(() => evaluate(`document.querySelectorAll('[data-slot="new-chat-starred-agent"]').length===2`), "both sources have starred choices");
     assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('[data-slot="new-chat-starred-agent"]')).map(el=>el.dataset.source).sort()`), ['', remote].sort());
-    const image = await send('Page.captureScreenshot', {format:'png'});
-    await writeFile('/tmp/design-system-new-chat.png', Buffer.from(image.data,'base64'));
+    await screenshot('new-chat-starred');
     const launches = requests.filter((request) => request.path === '/agents/run').length;
     await click('[data-slot="new-chat-starred-agent"][data-source="' + remote + '"]');
     await until(() => evaluate(`new URLSearchParams(location.search).get('node')===${JSON.stringify(remote)}`), "remote starred agent selected");
