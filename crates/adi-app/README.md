@@ -66,6 +66,32 @@ To turn the real **app.adi** into a live-updating target, set `ADI_WEBAPP_DIST` 
 front-door's `app` runner (a one-time change + restart); after that, `trunk build` alone
 refreshes the UI — no re-embed, no binary swap.
 
+## Primary interface
+
+Set `ADI_PRIMARY_UI_DIST` to a built React interface to make it the main app while retaining
+the original control panel. This is separate from `ADI_WEBAPP_DIST`, which continues to
+override only the original Leptos build.
+
+Build the native API variant, which writes `dist-primary` and sends requests directly to
+`/api` on the panel's own origin:
+
+```sh
+cd /path/to/design-system/frontend
+bun run build:primary
+ADI_PRIMARY_UI_DIST="$PWD/dist-primary" adi-app
+```
+
+The primary build serves `/`, `/index.html`, `/interface`, `/library`,
+`/library/agents/layout-reviewer`, and `/chat` or `/chat/*` compatibility bookmarks. Its
+existing asset files are served from the same origin. `/extended/*` (including Settings),
+`/marketplace/*`, `/embed/*`, and other routes or assets continue to use the original panel.
+The native API remains at `/api/*`.
+
+The directory must contain a readable `index.html`. An invalid setting logs a warning and
+leaves the original UI working. Missing primary files also fall back to the original panel;
+asset paths and symlinks cannot escape the configured distribution directory. Build first,
+then set the variable on the existing managed `adi-app` service and restart only that service.
+
 ## Run
 
 ```sh

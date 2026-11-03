@@ -4,7 +4,7 @@
 
 > The adi app: a Rust HTTP backend serving a control-panel SPA at / and a JSON API at /api, fronted by adi-hive at app.adi.
 
-25 structs · 1 enum · 2 type aliases across 9 files.
+27 structs · 1 enum · 2 type aliases across 10 files.
 
 ## Index
 
@@ -13,6 +13,7 @@
 - [`src/live.rs`](#srclivers) — `Watch`, `Topic`, `Inner`, `Hub`
 - [`src/main.rs`](#srcmainrs) — `App`, `MeshCtl`, `Reads`, `EmbeddedHit`
 - [`src/node.rs`](#srcnoders) — `CallError`, `Payload`
+- [`src/primary_ui.rs`](#srcprimary_uirs) — `PrimaryUi`, `Asset`
 - [`src/scan.rs`](#srcscanrs) — `Proc`, `ProcessTable`
 - [`src/shared_assets.rs`](#srcshared_assetsrs) — `SharedAssets`
 - [`src/viewer.rs`](#srcviewerrs) — `Credential`, `Credentials`, `HeldCredentials`
@@ -218,6 +219,7 @@ struct App {
     workflows: adi_workflows::Engine,
     mesh: MeshCtl,
     dist: Option<PathBuf>,
+    primary_ui: Option<primary_ui::PrimaryUi>,
     start: Instant,
     reads: Reads,
     live: live::Hub,
@@ -278,6 +280,29 @@ struct Payload<'a> {
     bytes: Vec<u8>,
     content_type: &'a str,
     filename: Option<&'a str>,
+}
+```
+
+---
+
+## `src/primary_ui.rs`
+
+### struct `PrimaryUi`
+
+```rust
+#[derive(Clone, Debug)]
+pub(crate) struct PrimaryUi {
+    root: PathBuf,
+}
+```
+
+### struct `Asset`
+
+```rust
+#[derive(Debug)]
+pub(crate) struct Asset {
+    pub(crate) relative: String,
+    pub(crate) bytes: Vec<u8>,
 }
 ```
 

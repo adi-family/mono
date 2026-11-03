@@ -10,6 +10,7 @@ mod lease_worker;
 mod leases;
 mod live;
 mod node;
+mod primary_ui;
 mod prober;
 mod projects;
 mod scan;
@@ -68,6 +69,8 @@ struct App {
     mesh: MeshCtl,
     /// Overrides the embedded webapp when [`DIST_ENV`] is set.
     dist: Option<PathBuf>,
+    /// Optional primary React interface; the legacy panel remains available alongside it.
+    primary_ui: Option<primary_ui::PrimaryUi>,
     start: Instant,
     reads: Reads,
     live: live::Hub,
@@ -302,6 +305,7 @@ async fn main() -> anyhow::Result<()> {
     if let Some(dir) = dist.as_ref() {
         info!(dist = %dir.display(), "serving webapp from disk (dev mode)");
     }
+    let primary_ui = primary_ui_override();
     info!(%local, registry = %ports.config().registry_path.display(), "adi-app listening");
 
     let app = Arc::new(App {
@@ -321,6 +325,7 @@ async fn main() -> anyhow::Result<()> {
         workflows,
         mesh: MeshCtl::default(),
         dist,
+        primary_ui,
         start: Instant::now(),
         reads: Reads::default(),
         live: live::Hub::default(),
@@ -433,6 +438,15 @@ async fn handle(mut stream: TcpStream, app: &Arc<App>) -> anyhow::Result<()> {
 
     // Unknown API paths must return a 404, not the SPA shell.
     if req.method == "GET" && !req.route_path().starts_with("/api") {
+        if let Some(primary) = app.primary_ui.as_ref() {
+            let primary = primary.clone();
+            let path = req.route_path().to_string();
+            // Resolve symlinks and read files off the async worker. A missing primary file
+            // falls through to the original panel, including if a deployment disappears.
+            if let Some(asset) = tokio::task::spawn_blocking(move || primary.read(&path)).await? {
+                return write_build_file(&mut stream, &asset.relative, None, &asset.bytes).await;
+            }
+        }
         return serve_asset(
             &mut stream,
             req.route_path(),
@@ -1523,6 +1537,20 @@ fn webapp_dist_override() -> Option<PathBuf> {
     } else {
         warn!(dist = %dir.display(), "{DIST_ENV} is set but not a directory; ignoring");
         None
+    }
+}
+
+fn primary_ui_override() -> Option<primary_ui::PrimaryUi> {
+    let dir = PathBuf::from(std::env::var_os(primary_ui::DIST_ENV)?);
+    match primary_ui::PrimaryUi::open(&dir) {
+        Ok(primary) => {
+            info!(dist = %dir.display(), "serving primary UI from disk; legacy panel routes remain available");
+            Some(primary)
+        }
+        Err(error) => {
+            warn!(dist = %dir.display(), %error, "ADI_PRIMARY_UI_DIST is not a readable UI build; keeping the original UI");
+            None
+        }
     }
 }
 
