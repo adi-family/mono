@@ -300,9 +300,9 @@ test("image uploads use raw bytes, preserve machine routing and send only attach
   assert.deepEqual((body(2) as { attachments: string[] }).attachments, ["image-one"]);
 });
 
-test("unsupported and oversized image uploads fail before sending; upload errors remain readable", async () => {
+test("oversized uploads fail before sending; upload errors remain readable", async () => {
   mockResponse({ error: "Upload refused" }, 413);
-  await assert.rejects(uploadImage(new File(["<svg/>"], "x.svg", { type: "image/svg+xml" })), /PNG/);
+  await assert.rejects(uploadImage(new File([new Uint8Array(25 * 1024 * 1024 + 1)], "x.pdf", { type: "application/pdf" })), /25 MB/);
   await assert.rejects(uploadImage(new File([new Uint8Array(5 * 1024 * 1024 + 1)], "x.png", { type: "image/png" })), /5 MB/);
   assert.equal(calls.length, 0);
   await assert.rejects(uploadImage(new File(["x"], "x.png", { type: "image/png" })), /Upload refused/);
@@ -338,4 +338,17 @@ test("chat stars target the owning source and send explicit desired state", asyn
   await starConversation(ref, false);
   assert.equal(calls[1].url, "/api/app/agents/run/star");
   assert.deepEqual(body(1), { name: ref.agent, run_id: ref.runId, starred: false });
+});
+
+ test("PDF and untyped file uploads preserve bytes and media types", async () => {
+  for (const type of ["application/pdf", ""]) {
+    mockResponse({ id: "document-one" });
+    const file = new File(["%PDF-1.7"], "report.pdf", { type });
+    const uploaded = await uploadImage(file, "laptop-b");
+    const call = calls.at(-1)!;
+    assert.equal(call.url, "/api/app/node/laptop-b/api/agents/attachment");
+    assert.equal(call.init?.body, file);
+    assert.equal(new Headers(call.init?.headers).get("Content-Type"), type || "application/octet-stream");
+    assert.equal(uploaded.media_type, type || "application/octet-stream");
+  }
 });

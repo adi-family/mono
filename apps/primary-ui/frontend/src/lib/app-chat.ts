@@ -493,15 +493,17 @@ export function attachmentUrl(id: string, source?: string): string {
 }
 
 export async function uploadImage(file: File, source?: string): Promise<AgentAttachment> {
-  if (!["image/png", "image/jpeg", "image/webp", "image/gif"].includes(file.type)) throw new Error("Choose a PNG, JPEG, WebP, or GIF image.");
-  if (file.size > 5 * 1024 * 1024) throw new Error("Images must be 5 MB or smaller.");
+  const mediaType = file.type || "application/octet-stream";
+  const isImage = ["image/png", "image/jpeg", "image/webp", "image/gif"].includes(mediaType);
+  const limit = isImage ? 5 : 25;
+  if (file.size > limit * 1024 * 1024) throw new Error(`${isImage ? "Images" : "Files"} must be ${limit} MB or smaller.`);
   const response = await fetch(`${appApiBase(source)}/agents/attachment`, {
-    method: "POST", headers: { "Content-Type": file.type, "X-Adi-Filename": file.name.replace(/[^\x20-\x7e]/g, "_") }, body: file,
+    method: "POST", headers: { "Content-Type": mediaType, "X-Adi-Filename": file.name.replace(/[^\x20-\x7e]/g, "_") }, body: file,
   });
   const data = await response.json();
-  if (!response.ok || data.ok === false) throw new Error(data.error || "Image could not be uploaded. Try again.");
-  if (typeof data.id !== "string" || !data.id) throw new Error("The app returned an invalid image reference.");
-  return { id: data.id, name: file.name, media_type: file.type, size: file.size };
+  if (!response.ok || data.ok === false) throw new Error(data.error || "File could not be uploaded. Try again.");
+  if (typeof data.id !== "string" || !data.id) throw new Error("The app returned an invalid attachment reference.");
+  return { id: data.id, name: file.name, media_type: mediaType, size: file.size };
 }
 
 export async function starConversation(ref: ConversationRef, starred: boolean): Promise<void> {

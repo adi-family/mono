@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ArrowUp, LoaderCircle, Paperclip, Square, X } from "lucide-react";
+import { ArrowUp, FileText, LoaderCircle, Paperclip, Square, X } from "lucide-react";
 
 import { cn } from "../lib/cn";
 import { Button, type ButtonDisabledProps } from "./button";
@@ -7,7 +7,7 @@ import { Button, type ButtonDisabledProps } from "./button";
 type ChatComposerProps = Omit<React.ComponentProps<"form">, "onSubmit" | "onError" | "children"> &
   ButtonDisabledProps & {
     /** Controlled attachments; the host uploads files and supplies their preview URLs. */
-    attachments?: readonly { id: string; name: string; url?: string; error?: string }[];
+    attachments?: readonly { id: string; name: string; mediaType?: string; url?: string; error?: string }[];
     onFilesSelect?: (files: File[]) => void;
     onAttachmentRemove?: (id: string) => void;
     attachmentsBusy?: boolean;
@@ -112,7 +112,7 @@ function ChatComposer({
   const cannotSend = disabled || sending || attachmentsBusy || attachments.some((image) => image.error) || (!value.trim() && !attachments.length);
   const sendDisabledReason = disabled
     ? reason!
-    : attachmentsBusy ? "Wait for images to finish uploading."
+    : attachmentsBusy ? "Wait for files to finish uploading."
     : attachments.some((image) => image.error) ? "Remove failed attachments before sending."
     : sending
       ? "Wait for this message to finish sending."
@@ -128,7 +128,7 @@ function ChatComposer({
       onPaste={(event) => {
         props.onPaste?.(event);
         if (event.defaultPrevented || disabled || sending || !onFilesSelect) return;
-        const files = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/"));
+        const files = Array.from(event.clipboardData.files);
         if (files.length) { event.preventDefault(); onFilesSelect(files); }
       }}
       onDragOver={(event) => {
@@ -144,16 +144,16 @@ function ChatComposer({
         }
       }}
     >
-      {attachments.length > 0 && <ul aria-label="Image attachments" className="flex max-h-40 flex-wrap gap-2 overflow-y-auto">
+      {attachments.length > 0 && <ul aria-label="Attachments" className="flex max-h-40 flex-wrap gap-2 overflow-y-auto">
         {attachments.map((image) => <li key={image.id} className="relative w-24 rounded-md border p-1.5">
-          {image.url ? <a href={image.url} target="_blank" rel="noreferrer"><img src={image.url} alt={image.name} className="h-16 w-full rounded object-cover" /></a>
-            : <div className="text-muted-foreground flex h-16 items-center justify-center text-xs">{image.error ? "Upload failed" : <LoaderCircle aria-label="Uploading image" className="size-4 motion-safe:animate-spin" />}</div>}
+          {image.url ? <a href={image.url} target="_blank" rel="noreferrer">{!image.mediaType || ["image/png", "image/jpeg", "image/webp", "image/gif"].includes(image.mediaType) ? <img src={image.url} alt={image.name} className="h-16 w-full rounded object-cover" /> : <span className="text-muted-foreground flex h-16 items-center justify-center"><FileText aria-label="Attached file" className="size-6" /></span>}</a>
+            : <div className="text-muted-foreground flex h-16 items-center justify-center text-xs">{image.error ? "Upload failed" : <LoaderCircle aria-label="Uploading file" className="size-4 motion-safe:animate-spin" />}</div>}
           <p className="text-muted-foreground mt-1 truncate text-[10px]" title={image.name}>{image.name}</p>
           {image.error && <p role="alert" className="text-destructive text-[10px]">{image.error}</p>}
           {onAttachmentRemove && <button type="button" aria-label={`Remove ${image.name}`} disabled={sending} className="bg-background focus-visible:ring-ring absolute top-0 right-0 rounded-full border p-0.5 outline-none focus-visible:ring-2" onClick={() => onAttachmentRemove(image.id)}><X aria-hidden="true" className="size-3" /></button>}
         </li>)}
       </ul>}
-      {onFilesSelect && <input ref={fileInput} type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif" aria-label="Choose images" className="hidden" disabled={disabled || sending} onChange={(event) => {
+      {onFilesSelect && <input ref={fileInput} type="file" multiple aria-label="Choose files" className="hidden" disabled={disabled || sending} onChange={(event) => {
         const files = Array.from(event.target.files ?? []);
         event.target.value = "";
         if (files.length) onFilesSelect(files);
@@ -194,7 +194,7 @@ function ChatComposer({
       />
       <div className="flex min-w-0 items-end justify-between gap-3">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          {onFilesSelect && <Button type="button" variant="ghost" size="icon" className="size-7 shrink-0" aria-label="Attach images" disabled={disabled || sending} disabledReason={disabled ? reason! : "Wait for this message to finish sending."} onClick={() => fileInput.current?.click()}><Paperclip aria-hidden="true" className="size-4" /></Button>}
+          {onFilesSelect && <Button type="button" variant="ghost" size="icon" className="size-7 shrink-0" aria-label="Attach files" disabled={disabled || sending} disabledReason={disabled ? reason! : "Wait for this message to finish sending."} onClick={() => fileInput.current?.click()}><Paperclip aria-hidden="true" className="size-4" /></Button>}
           {children}
           <p id={helperId} role="status" aria-live="polite" aria-atomic="true" data-slot="chat-composer-status" className={cn("flex items-center gap-1.5 text-xs leading-5", sending ? "text-foreground font-medium" : "text-muted-foreground")}>
             {sending && <LoaderCircle aria-hidden="true" className="size-3.5 shrink-0 motion-safe:animate-spin" />}

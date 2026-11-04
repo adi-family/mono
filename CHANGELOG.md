@@ -20,6 +20,12 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.36.2 — 2026-11-04
+
+### Fixed
+
+- Restore PDF and other file attachments in the new chat interface. Choose, paste, or drag files up to 25 MB each, with document previews and links; PNG, JPEG, WebP, and GIF images retain their 5 MB limit.
+
 ## 1.36.1 — 2026-11-03
 
 ### Changed

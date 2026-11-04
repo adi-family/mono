@@ -14,7 +14,7 @@ import {
   readLastLaunchedAgent, lastLaunchedAgentKey, savePreference, selectedSources, sourceName, type ChatFilter, type ChatGroup,
 } from "./app-chat-sources";
 
-type DraftImage = { id: string; name: string; url?: string; attachmentId?: string; error?: string };
+type DraftImage = { id: string; name: string; mediaType?: string; url?: string; attachmentId?: string; error?: string };
 const emptyAgents: Agent[] = [];
 const identity = (ref: ConversationRef | null, agent: string, source?: string) => conversationKey(ref ?? { agent, source, runId: "new" });
 const errorText = (error: unknown) => error instanceof Error ? error.message : "The app could not complete this request.";
@@ -75,12 +75,12 @@ function useAppChatState() {
     const key = draftKey;
     const source = activeSource;
     const room = Math.max(0, 6 - (imageDraftsRef.current[key]?.length ?? 0));
-    setImageErrors((current) => ({ ...current, [key]: files.length > room ? "Attach up to six images per message." : "" }));
+    setImageErrors((current) => ({ ...current, [key]: files.length > room ? "Attach up to six files per message." : "" }));
     for (const file of files.slice(0, room)) {
       const id = `draft-image-${++nextImageId.current}`;
       updateImages(key, (images) => [...images, { id, name: file.name }]);
       void uploadImage(file, source).then((image) => {
-        updateImages(key, (images) => images.map((item) => item.id === id ? { ...item, attachmentId: image.id, url: attachmentUrl(image.id, source) } : item));
+        updateImages(key, (images) => images.map((item) => item.id === id ? { ...item, attachmentId: image.id, mediaType: image.media_type, url: attachmentUrl(image.id, source) } : item));
       }).catch((error) => {
         updateImages(key, (images) => images.map((item) => item.id === id ? { ...item, error: errorText(error) } : item));
       });
@@ -180,8 +180,8 @@ function useAppChatState() {
     if (!agent) throw new Error("Choose an agent before sending a message.");
     if (sending.current.has(draftKey)) throw new Error("A message is already being sent to this conversation.");
     const images = imageDraftsRef.current[draftKey] ?? [];
-    if (images.some((image) => !image.attachmentId)) throw new Error("Wait for images to upload, or remove failed attachments.");
-    if (!message.trim() && !images.length) throw new Error("Write a message or attach an image.");
+    if (images.some((image) => !image.attachmentId)) throw new Error("Wait for files to upload, or remove failed attachments.");
+    if (!message.trim() && !images.length) throw new Error("Write a message or attach a file.");
     const attachments = images.map((image) => image.attachmentId!);
     const target = active;
     const submittedDraft = drafts[draftKey] ?? "";

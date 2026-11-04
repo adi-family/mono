@@ -165,7 +165,7 @@ async function intercept({ requestId, request }) {
     if (!url.pathname.startsWith("/api/app/")) throw new Error(`Unexpected direct API request: ${request.method} ${url.pathname}`);
     if (source !== undefined && source !== remote) throw new Error(`Unexpected fixture source: ${source}`);
     if (request.method === "POST" && path === "/agents/attachment") {
-      const image = { id: `${localName(source)}-image-${++imageSequence}`, name: "shot.png", media_type: "image/png", size: 68 };
+      const image = { id: `${localName(source)}-image-${++imageSequence}`, name: "shot.png", media_type: request.headers["Content-Type"] || request.headers["content-type"] || "image/png", size: 68 };
       uploadedImages.set(image.id, { ...image, source });
       return await fulfill(requestId, image);
     }
@@ -415,6 +415,27 @@ try {
     assert.equal(await evaluate(`document.querySelectorAll('[data-slot="app-conversation-group"][aria-label="This machine"] [data-slot="app-conversation-link"]').length`), 5, "other machine keeps its own page size");
   });
 
+  await check("PDF picker, paste and drop upload as file links and send attachment IDs", async () => {
+    await open(main);
+    for (const method of ["picker", "paste", "drop"]) {
+      await evaluate(`(() => {
+        const dt = new DataTransfer(); dt.items.add(new File(['%PDF-1.7'], '${method}.pdf', {type:'application/pdf'}));
+        const form = document.querySelector('[data-slot="chat-composer"]');
+        const input = form.querySelector('input[type=file]');
+        if (input.accept) throw new Error('File picker still restricts types');
+        if ('${method}' === 'picker') {input.files=dt.files;input.dispatchEvent(new Event('change',{bubbles:true}));}
+        else if ('${method}' === 'paste') form.dispatchEvent(new ClipboardEvent('paste',{clipboardData:dt,bubbles:true,cancelable:true}));
+        else form.dispatchEvent(new DragEvent('drop',{dataTransfer:dt,bubbles:true,cancelable:true}));
+      })()`);
+      await until(() => evaluate(`document.querySelectorAll('[aria-label="Attachments"] [aria-label="Attached file"]').length === ${["picker", "paste", "drop"].indexOf(method) + 1}`), 'PDF preview');
+    }
+    assert.equal(await evaluate(`document.querySelector('[data-slot="chat-composer"] img') === null`), true);
+    await click('[aria-label="Send message"]');
+    await until(() => evaluate(`!document.querySelector('[data-slot="chat-composer"] [aria-label="Attachments"]')`), 'PDF draft sent');
+    const sent = requests.filter(r => r.path === '/agents/run/reply' && r.source === undefined).at(-1);
+    assert.equal(sent.body.attachments.length, 3);
+  });
+
   await check("image picker, paste and drop retain drafts per machine and retry failed sends", async () => {
     async function attach(method, name) {
       await evaluate(`(() => {
@@ -431,7 +452,7 @@ try {
     await open(main);
     await attach("picker", "local-shot.png");
     await open(remoteMain);
-    assert.equal(await evaluate(`!!document.querySelector('[aria-label="Image attachments"]')`), false);
+    assert.equal(await evaluate(`!!document.querySelector('[data-slot="chat-composer"] [aria-label="Attachments"]')`), false);
     await attach("paste", "remote-paste.png");
     await attach("drop", "remote-drop.png");
     await click('[aria-label="Remove remote-drop.png"]');
@@ -442,9 +463,9 @@ try {
     failImageReply = true;
     await click('[data-slot="chat-composer"] [aria-label="Send message"]');
     await until(() => evaluate(`document.querySelector('[data-slot="chat-composer"]').textContent.includes("Message could not be sent")`), "failed image send reported");
-    assert.ok(await evaluate(`!!document.querySelector('[aria-label="Image attachments"] img')`), "failed send retains image");
+    assert.ok(await evaluate(`!!document.querySelector('[aria-label="Attachments"] img')`), "failed send retains image");
     await click('[data-slot="chat-composer"] [aria-label="Send message"]');
-    await until(() => evaluate(`!document.querySelector('[aria-label="Image attachments"]')`), "accepted image clears draft");
+    await until(() => evaluate(`!document.querySelector('[data-slot="chat-composer"] [aria-label="Attachments"]')`), "accepted image clears draft");
     assert.ok(await evaluate(`!!document.querySelector('[aria-label="Attachments"] img')?.naturalWidth`), "sent image renders in transcript");
     const sent=requests.filter(r=>r.path==='/agents/run/reply'&&r.source===remote).at(-1);
     assert.equal(sent.body.message, "");

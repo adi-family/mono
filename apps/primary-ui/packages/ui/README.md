@@ -700,7 +700,7 @@ check commands out of the status. It stays visible even when the agent is not ru
 (default: “Queued”), and optional attachment children. The live Interface keeps these rows
 above its composer until the server marks their turns as sent, then shows the ordinary messages.
 
-The live Interface uploads PNG, JPEG, WebP, and GIF images (up to 5 MB each, six per message)
+The live Interface uploads files including PDFs (up to 25 MB each) and PNG, JPEG, WebP, and GIF images (up to 5 MB each), with six attachments per message
 to the conversation’s own machine. Image drafts survive switching conversations and failed
 sends. The same-origin relay forwards only the existing attachment upload and read endpoints.
 
