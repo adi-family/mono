@@ -146,17 +146,27 @@ fn is_codex_event(kind: &str) -> bool {
         || kind == "error"
 }
 
-/// Codex's own narration, dropped from a log we are reduced to quoting verbatim.
+/// Codex's own narration, and ADI's own per-turn log scaffolding, dropped from a log we are reduced
+/// to quoting verbatim.
 ///
 /// `exec` announces that it is reading the prompt from a pipe every single time, on stderr, and the
-/// runner merges stderr into the log. It is harmless while there is a stream to read the answer
-/// from; when there is not — a Codex that refused to start, say — it is half of what the chat would
-/// otherwise show, above the one line that actually says why.
+/// runner merges stderr into the log. ADI itself wraps every turn in a `=== turn started ===` /
+/// `=== turn ended ===` separator ([`spawn_child`](super::detached)); those are the only lines in a
+/// freshly opened log until the engine emits its first event, so without dropping them a turn still
+/// starting up shows ADI's scaffolding in the chat as the agent's answer, and a turn that dies
+/// before saying anything keeps it for ever. All of it is harmless while there is a stream to read
+/// the answer from; when there is not, it is noise above — or instead of — the one line that says
+/// why.
 fn without_chrome(text: &str) -> String {
     const NARRATION: [&str; 1] = ["Reading additional input from stdin..."];
     let kept: Vec<&str> = text
         .lines()
-        .filter(|line| !NARRATION.contains(&line.trim()))
+        .filter(|line| {
+            let line = line.trim();
+            !NARRATION.contains(&line)
+                && !line.starts_with("=== turn started:")
+                && !line.starts_with("=== turn ended:")
+        })
         .collect();
     kept.join("\n").trim().to_string()
 }
@@ -629,6 +639,25 @@ mod tests {
             content.text,
             "Not inside a trusted directory and --skip-git-repo-check was not specified."
         );
+    }
+
+    /// ADI wraps every turn's log in its own `=== turn started/ended ===` separators
+    /// ([`spawn_child`](super::detached)). They are the only lines in a freshly opened log until the
+    /// engine's first event, and must never reach the chat as the answer: a turn still starting up
+    /// would otherwise show ADI's scaffolding, and one that died before emitting an event would keep
+    /// it for ever.
+    #[test]
+    fn the_fallback_drops_adis_own_turn_separators() {
+        // A turn still starting up: ADI's header is written, the engine has said nothing yet.
+        let starting = "=== turn started: unix 1793636622 ===\n";
+        assert_eq!(parse(starting.as_bytes()).text, "");
+        // One that died before emitting an event keeps the reason, never the scaffolding.
+        let failed = concat!(
+            "=== turn started: unix 1 ===\n",
+            "codex: command not found\n",
+            "=== turn ended: unix 2 (exit status: 127) ===\n",
+        );
+        assert_eq!(parse(failed.as_bytes()).text, "codex: command not found");
     }
 
     /// JSON on stderr from something else in the process tree is not a thread event, and must not

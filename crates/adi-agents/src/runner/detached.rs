@@ -87,8 +87,8 @@ impl DetachedRunner {
     ///
     /// The continuation is derived here and nowhere else. `harness:claude-sdk` establishes its
     /// engine session on the first turn (`--session-id`) and resumes it afterwards (`--resume`).
-    /// `process:codex` opens with `codex exec`, whose `thread.started` event supplies the id used by
-    /// later `codex exec resume` turns. No caller ever passes a "fresh or resume" flag.
+    /// `process:codex` opens with app-server `thread/start`; its thread id is used by
+    /// later app-server `thread/resume` turns. No caller ever passes a "fresh or resume" flag.
     ///
     /// `process:claude` has no such pair: it remains a one-shot `--print` run. The adi loop
     /// continues by replaying the transcript, addressed by agent + conversation id alone.
@@ -735,7 +735,7 @@ const CODEX_AUTH_UNVERIFIABLE: &str = "unverifiable:v1";
 /// because its digest cannot be expected to equal a current one even for the very same login. Bump
 /// the version whenever the digest inputs change, so pre-change threads migrate instead of reading
 /// as an account switch.
-const CODEX_AUTH_SCHEME: &str = "adi.codex-auth.v2";
+const CODEX_AUTH_SCHEME: &str = "adi.codex-auth.v4";
 
 /// Whether `stored` carries [`CODEX_AUTH_SCHEME`] — i.e. was written by this binary's current
 /// auth-context formula and may be compared digest-for-digest. Anything else is a legacy context to
@@ -1028,7 +1028,19 @@ impl CodexConfigSnapshot {
                 layer.path.to_string_lossy().as_bytes(),
             );
             match &layer.bytes {
-                Some(bytes) => hash_part(digest, "config_bytes", bytes),
+                Some(bytes) => {
+                    // Execution policy is not login identity. Changing approvals or sandbox
+                    // must not strand a conversation after its operator updates permissions.
+                    if let Some(mut value) = layer.value.clone() {
+                        if let Some(table) = value.as_table_mut() {
+                            table.remove("approval_policy");
+                            table.remove("sandbox_mode");
+                        }
+                        hash_part(digest, "config_bytes", value.to_string().as_bytes());
+                    } else {
+                        hash_part(digest, "config_bytes", bytes);
+                    }
+                }
                 None => hash_part(digest, "config_bytes", b"<missing>"),
             }
         }
@@ -2424,11 +2436,8 @@ mod tests {
             })),
             "and now a test",
         );
-        let resume = again
-            .iter()
-            .position(|arg| arg == "resume")
-            .expect("a later turn resumes");
-        assert_eq!(again.get(resume + 2).map(String::as_str), Some("sid-1"));
+        let options: Value = serde_json::from_str(&again[4]).unwrap();
+        assert_eq!(options["thread"]["threadId"], "sid-1");
         assert_eq!(again.last().map(String::as_str), Some("and now a test"));
         assert!(
             again.iter().all(|arg| !arg.contains("Work carefully.")),
@@ -2959,6 +2968,23 @@ mod tests {
             config_toml_base64: encode(config),
             requirements_toml_base64: encode(requirements),
         }
+    }
+
+    #[test]
+    fn codex_permission_changes_preserve_login_identity() {
+        let session = FakeSession::new("codex-permission-context");
+        let home = session.log.parent().expect("scratch").join("codex-home");
+        std::fs::create_dir_all(&home).unwrap();
+        let mut run = spec(json!({}));
+        run.env.push(("CODEX_HOME".into(), home.to_string_lossy().into_owned()));
+        run.env.push(("CODEX_API_KEY".into(), "test-key".into()));
+        let path = home.join("config.toml");
+        std::fs::write(&path, "approval_policy = 'on-request'\nsandbox_mode = 'read-only'\n").unwrap();
+        let before = codex_auth_context(&run).expect("API key context");
+        std::fs::write(&path, "approval_policy = 'never'\nsandbox_mode = 'danger-full-access'\n").unwrap();
+        assert_eq!(codex_auth_context(&run).as_deref(), Some(before.as_str()));
+        run.env.push(("CODEX_API_KEY".into(), "different-key".into()));
+        assert_ne!(codex_auth_context(&run).as_deref(), Some(before.as_str()));
     }
 
     #[test]

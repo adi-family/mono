@@ -1183,17 +1183,26 @@ impl Agents {
     }
 
     /// Whether `record` is marked [`launching`](store::SessionRecord::launching) and is still
-    /// within [`LAUNCHING_GRACE_MS`] of having been created — the window
+    /// within [`LAUNCHING_GRACE_MS`] of its newest turn — the window
     /// [`mark_launching`](SessionStore::mark_launching) opens and
     /// [`clear_launching`](SessionStore::clear_launching) closes, during which a listing must read
     /// a session as running whatever its runner says, because nothing has been spawned for the
     /// runner to have an opinion about yet (ADI-MONO-218).
     ///
+    /// Measured from [`last_activity`](store::SessionRecord::last_activity) — the moment of the turn
+    /// just recorded — rather than the session's creation, so it covers the start of *every* turn
+    /// and not only the first. A reply records its question and then spends real time resolving the
+    /// engine (a Codex login digest can shell out to `codex --version`) before any child exists to
+    /// be found alive; keyed to creation, that window read as idle on an existing conversation, and
+    /// a poll landing in it let the lazy clock settle the *previous* turn's answer onto the new
+    /// question. The opening launch is unchanged: a freshly created session's newest turn is its
+    /// opening one, recorded the instant it began.
+    ///
     /// Past the grace this reads `false` even for a still-`launching` record: that is exactly the
     /// case [`note_finished`](Self::note_finished) treats as lost rather than running, and nothing
     /// else should disagree with it about which is which.
     fn still_launching(record: &SessionRecord) -> bool {
-        record.launching && now_ms().saturating_sub(record.started_at) < LAUNCHING_GRACE_MS
+        record.launching && now_ms().saturating_sub(record.last_activity) < LAUNCHING_GRACE_MS
     }
 
     /// What is running right now, totalled and divided between projects — one walk of the session
@@ -1500,6 +1509,11 @@ impl Agents {
                 .and_then(|name| self.credential_qualifier(name, lease.as_ref(), &agent.manifest.secrets));
             llm::chain::qualify_credential(&row.credential, qualifier.as_deref())
         });
+        if let Some(row) = chain.as_ref().and_then(llm::PinnedChain::current)
+            && matches!(row.runtime, Backend::ProcessCodex | Backend::PtyCodex)
+        {
+            backends::codex_home::prepare(&self.config, &row.backend, &mut spec.env)?;
+        }
         // The unlock check, same as `runner.check` below: fail before anything is written down
         // (`docs/byo-credentials.md` §10, ADI-MONO-181 P2.7). `missing = "wait"` is different —
         // the body's own answer is to create the session and queue the opening message rather
@@ -2445,6 +2459,11 @@ impl Agents {
             });
             llm::chain::qualify_credential(&row.credential, qualifier.as_deref())
         });
+        if let Some(row) = record.chain.as_ref().and_then(llm::PinnedChain::current)
+            && matches!(row.runtime, Backend::ProcessCodex | Backend::PtyCodex)
+        {
+            backends::codex_home::prepare(&self.config, &row.backend, &mut spec.env)?;
+        }
         pin_tool_help(store, &agent.name, &record.id, &mut spec);
         pin_owner_instructions(store, &agent.name, &record.id, &mut spec);
         name_conversation(&mut spec, &record.id);
@@ -2452,6 +2471,13 @@ impl Agents {
         // Checked before the question is written down, so a spec this engine cannot run leaves no
         // dangling unanswered turn in the transcript.
         runner.check(&spec)?;
+        // Mark this turn launching before its question is recorded, exactly as `launch_run` does for
+        // a fresh launch — so the window from here until `send_or_note_failure` clears it reads as
+        // running. Without it the gap between recording the question and the child being found alive
+        // reads as idle, and a once-a-second poll landing in it lets the lazy clock `settle` the
+        // previous turn's answer onto this one (ADI-MONO-218, now covering replies too). After
+        // `runner.check`, so an unrunnable spec still leaves nothing dangling.
+        store.mark_launching(&agent.name, &record.id)?;
         let mut turn = store::user_turn_with(&message.text, message.images.clone());
         turn.markers.clone_from(&message.markers);
         store.append_turn(&agent.name, &record.id, turn)?;
@@ -2498,9 +2524,10 @@ impl Agents {
     ) -> Result<()> {
         let session = store.session(agent, run_id);
         let result = runner.send(spec, &session, message);
-        // The attempt is over, whichever way it came out — clear the mark `launch_run` left
-        // before the caller even learns the result (ADI-MONO-218). A reply's `run_id` was never
-        // marked in the first place, so this is a no-op for every call that is not a fresh launch.
+        // The attempt is over, whichever way it came out — clear the mark its launch left before
+        // the caller even learns the result (ADI-MONO-218). Both launch paths set it: a fresh
+        // launch in `launch_run`, and every later turn in `start_turn`, so this closes the window
+        // for an ordinary reply as much as for the opening message.
         let _ = store.clear_launching(agent, run_id);
         let error = match result {
             Ok(()) => return Ok(()),
@@ -6163,6 +6190,38 @@ mod tests {
     }
 
     // -- waiting on unlock, and refusing (ADI-MONO-181 P2.7/P2.8) ---------------------------
+
+    /// The `settle` race behind "a reply counts as the previous message": `still_launching` now
+    /// keys its grace off the newest turn, so a reply on a conversation opened long ago is covered
+    /// for the window between recording its question and its child coming up — where keyed to the
+    /// session's creation it would have read as idle and let the lazy clock commit the old answer.
+    #[test]
+    fn still_launching_is_measured_from_the_newest_turn_not_the_conversation_start() {
+        let now = now_ms();
+        // A reply mid-start on an old conversation: created long ago, its newest turn just recorded.
+        let replying = SessionRecord {
+            launching: true,
+            started_at: now - LAUNCHING_GRACE_MS * 10,
+            last_activity: now,
+            ..SessionRecord::default()
+        };
+        assert!(
+            Agents::still_launching(&replying),
+            "an old conversation starting a turn now is launching, not idle"
+        );
+        // The flag is still required — a settled conversation whose last turn is recent is not it.
+        let settled = SessionRecord {
+            launching: false,
+            ..replying.clone()
+        };
+        assert!(!Agents::still_launching(&settled));
+        // And the grace still closes: a turn that never got a pid inside it reads as lost later.
+        let expired = SessionRecord {
+            last_activity: now - LAUNCHING_GRACE_MS - 1,
+            ..replying.clone()
+        };
+        assert!(!Agents::still_launching(&expired));
+    }
 
     /// A lease'd session with a queued message, `missing = "wait"`, and no live value: the message
     /// stays in the queue — `advance_queue` never reaches its own `dequeue` — and

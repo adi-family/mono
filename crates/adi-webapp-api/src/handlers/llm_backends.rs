@@ -273,6 +273,7 @@ pub fn release_llm_hold(store: &Agents, body: &[u8]) -> Response {
 #[must_use]
 pub fn test_llm_backend(store: &Agents, body: &[u8], user: Option<&str>) -> Response {
     let req = require!(body, TestLlmBackend);
+    let backend_id = (!req.id.trim().is_empty()).then(|| req.id.trim().to_string());
     let manifest = if let Some(draft) = req.draft {
         manifest_from(draft)
     } else {
@@ -286,10 +287,11 @@ pub fn test_llm_backend(store: &Agents, body: &[u8], user: Option<&str>) -> Resp
     let asker = user
         .zip(store.lease_values())
         .map(|(user, live)| adi_agents::llm::Asker { user, live });
-    ok_json(&test_result_dto(&adi_agents::llm::test_manifest(
+    ok_json(&test_result_dto(&adi_agents::llm::test_manifest_named(
         store.config(),
         &manifest,
         asker,
+        backend_id.as_deref(),
     )))
 }
 
