@@ -131,7 +131,7 @@ pub fn test_backend(config: &Config, id: &str, asker: Option<Asker<'_>>) -> Resu
     let backend = LlmBackends::with_config(config.clone())
         .get(id)?
         .ok_or_else(|| Error::NotFound(id.to_string()))?;
-    Ok(test_manifest(config, &backend.manifest, asker))
+    Ok(test_manifest_named(config, &backend.manifest, asker, Some(id)))
 }
 
 /// Test a backend that may not be saved at all — a draft an operator is still typing into the panel.
@@ -147,6 +147,10 @@ pub fn test_manifest(
     manifest: &LlmBackendManifest,
     asker: Option<Asker<'_>>,
 ) -> TestResult {
+    test_manifest_named(config, manifest, asker, None)
+}
+
+pub fn test_manifest_named(config: &Config, manifest: &LlmBackendManifest, asker: Option<Asker<'_>>, backend_id: Option<&str>) -> TestResult {
     // A group has no runtime of its own to ask anything through — it is a list of other backends,
     // each testable on its own. Said plainly here rather than left to the generic "no runtime set"
     // a group's always-empty `runtime` field would otherwise fall through to, which would read as
@@ -163,7 +167,7 @@ pub fn test_manifest(
     let (prompt, model) = test_prompt(manifest);
 
     let start = Instant::now();
-    let outcome = ask(config, manifest, model, prompt, asker);
+    let outcome = ask(config, manifest, model, prompt, asker, backend_id);
     let elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
 
     let (verdict, credential) = match outcome {
@@ -220,6 +224,7 @@ fn ask(
     model: &str,
     prompt: &str,
     asker: Option<Asker<'_>>,
+    backend_id: Option<&str>,
 ) -> std::result::Result<String, (String, String)> {
     match &manifest.runtime {
         Backend::HarnessAdi => {
@@ -258,6 +263,10 @@ fn ask(
             };
             let argv = codex_argv(model, prompt);
             let mut env: Vec<(String, String)> = credential.env.into_iter().collect();
+            let id = backend_id.unwrap_or("__draft_codex");
+            if let Err(error) = crate::backends::codex_home::prepare(config, id, &mut env) {
+                return Err((credential.description, error.to_string()));
+            }
             crate::backends::quiet_codex_env(&mut env);
             let outcome = run_with_env(&argv, &env).and_then(|output| read_codex(&output));
             match outcome {
@@ -436,23 +445,17 @@ fn expand_settings(value: &str) -> String {
 /// stop to ask permission, and `--json` because [`crate::backends::codex_stream`] is the only reader
 /// that can tell a real failure from Codex's own startup narration.
 fn codex_argv(model: &str, prompt: &str) -> Vec<String> {
-    let mut argv = vec!["codex".to_string()];
-    if !model.trim().is_empty() {
-        argv.extend(["--model".to_string(), model.to_string()]);
-    }
-    argv.extend([
-        "--ask-for-approval".to_string(),
-        "never".to_string(),
-        "exec".to_string(),
-        "--color".to_string(),
-        "never".to_string(),
-        "--sandbox".to_string(),
-        "read-only".to_string(),
-        "--skip-git-repo-check".to_string(),
-        "--json".to_string(),
-        run_prompt(prompt),
-    ]);
-    argv
+    crate::backends::process::codex::argv(
+        &crate::arguments::ProcessCodexArguments {
+            model: (!model.trim().is_empty()).then(|| model.to_string()),
+            sandbox: Some(crate::arguments::CodexSandbox::ReadOnly),
+            approval: Some(crate::arguments::CodexApproval::Never),
+            ..Default::default()
+        },
+        prompt,
+        None,
+        &crate::backends::process::codex::Continuation::First,
+    )
 }
 
 /// Read a `codex exec --json` run's combined output the same way a real run's log would be, so a
@@ -687,44 +690,13 @@ mod tests {
     /// The codex argv a test sends: read-only, unattended, and `--json` so the answer can be told
     /// from the CLI's own narration.
     #[test]
-    fn codex_argv_is_read_only_and_unattended() {
-        assert_eq!(
-            codex_argv("gpt-5-codex", "ok"),
-            [
-                "codex",
-                "--model",
-                "gpt-5-codex",
-                "--ask-for-approval",
-                "never",
-                "exec",
-                "--color",
-                "never",
-                "--sandbox",
-                "read-only",
-                "--skip-git-repo-check",
-                "--json",
-                "ok",
-            ]
-        );
-    }
-
-    /// Codex accepts approval policy on the root command, not on its `exec` subcommand. Keep this
-    /// contract independent of a locally installed CLI or an authenticated provider.
-    #[test]
-    fn codex_test_approval_policy_precedes_the_exec_subcommand() {
-        for model in ["", "gpt-5-codex"] {
-            let argv = codex_argv(model, "ok");
-            let exec = argv.iter().position(|arg| arg == "exec").expect("exec");
-            let approval = argv
-                .iter()
-                .position(|arg| arg == "--ask-for-approval")
-                .expect("approval policy");
-            assert_eq!(argv[approval + 1], "never");
-            assert!(
-                approval + 1 < exec,
-                "--ask-for-approval belongs before exec: {argv:?}",
-            );
-        }
+    fn codex_probe_uses_read_only_app_server() {
+        let argv = codex_argv("gpt-5-codex", "ok");
+        let options: serde_json::Value = serde_json::from_str(&argv[4]).unwrap();
+        assert_eq!(options["command"][1], "app-server");
+        assert_eq!(options["thread"]["sandbox"], "read-only");
+        assert_eq!(options["thread"]["approvalPolicy"], "never");
+        assert_eq!(argv.last().unwrap(), "ok");
     }
 
     /// A settings file is the whole credential — nothing to look up, so a scratch store with no
@@ -822,7 +794,10 @@ mod tests {
         let credential = resolve_credential(
             &config,
             &m,
-            Some(Asker { user: "u-aaa", live: &live }),
+            Some(Asker {
+                user: "u-aaa",
+                live: &live,
+            }),
         )
         .expect("the asker's value answers");
         assert_eq!(credential.description, "u-aaa's value for MY_KEY");
@@ -856,7 +831,10 @@ mod tests {
         let credential = resolve_credential(
             &config,
             &m,
-            Some(Asker { user: "u-aaa", live: &live }),
+            Some(Asker {
+                user: "u-aaa",
+                live: &live,
+            }),
         )
         .expect("the server's own secret still answers");
         assert_eq!(credential.description, "api_key_env MY_KEY");
@@ -883,7 +861,10 @@ mod tests {
         let credential = resolve_credential(
             &config,
             &m,
-            Some(Asker { user: "u-aaa", live: &live }),
+            Some(Asker {
+                user: "u-aaa",
+                live: &live,
+            }),
         )
         .expect("the server's own secret still answers");
         assert_eq!(credential.description, "api_key_env MY_KEY");

@@ -1,7 +1,6 @@
-//! `process:codex` command construction (`codex exec`, then `codex exec resume`).
+//! Bounded Codex app-server stdio client, embedded in the binary.
 
-use crate::arguments::{CodexApproval, CodexSandbox, ProcessCodexArguments};
-use crate::backends::push_option;
+use crate::arguments::ProcessCodexArguments;
 
 /// Whether this turn opens a Codex thread or continues one the first turn established.
 ///
@@ -13,7 +12,7 @@ pub(crate) enum Continuation<'a> {
 }
 
 /// `workspace` is the run's resolved directory (`crate::workspace::resolve`, by way of
-/// [`RunSpec::cwd`](crate::runner::RunSpec)), passed as `--cd` because it scopes Codex's sandbox,
+/// [`RunSpec::cwd`](crate::runner::RunSpec)), passed as RPC `cwd` because it scopes Codex's sandbox,
 /// not just where the process starts. The manifest's own `working_dir` already fed into that
 /// resolution, so it is not read again here.
 pub(crate) fn argv(
@@ -22,57 +21,58 @@ pub(crate) fn argv(
     workspace: Option<&str>,
     cont: &Continuation<'_>,
 ) -> Vec<String> {
-    let mut argv = vec!["codex".to_string()];
-    push_option(&mut argv, "--model", config.model.as_deref());
-    push_option(
-        &mut argv,
-        "--sandbox",
-        config.sandbox.map(CodexSandbox::as_str),
-    );
-    push_option(
-        &mut argv,
-        "--ask-for-approval",
-        config.approval.map(CodexApproval::as_str),
-    );
-    push_option(&mut argv, "--cd", workspace);
-    push_option(&mut argv, "--add-dir", config.add_dir.as_deref());
-    if config.web_search {
-        argv.push("--search".into());
-    }
+    let mut command = vec![
+        "codex".to_string(),
+        "app-server".into(),
+        "--listen".into(),
+        "stdio://".into(),
+    ];
     if let Some(effort) = config.reasoning_effort {
-        argv.extend([
-            "--config".into(),
+        command.extend([
+            "-c".into(),
             format!("model_reasoning_effort={}", effort.as_str()),
         ]);
     }
-
-    argv.push("exec".into());
-    argv.extend(["--color".into(), "never".into()]);
-    if matches!(cont, Continuation::Resume { .. }) {
-        argv.push("resume".into());
+    if config.web_search {
+        command.extend(["-c".into(), "web_search=\"live\"".into()]);
     }
-    if config.skip_git_repo_check {
-        argv.push("--skip-git-repo-check".into());
+    if let Some(dir) = &config.add_dir {
+        command.extend([
+            "-c".into(),
+            format!(
+                "sandbox_workspace_write.writable_roots=[{}]",
+                serde_json::to_string(dir).unwrap()
+            ),
+        ]);
     }
-    // Always, because this is the format ADI reads — `crate::backends::codex_stream` is the only
-    // thing that ever looks at the log, and it understands nothing else. Without it Codex writes a
-    // banner, a replay of the whole prompt it was handed and a token trailer to stderr, all of
-    // which shares the run's log file with the answer and used to be shown as the answer.
-    argv.push("--json".into());
-    match cont {
-        Continuation::First => {
-            // Messages are untrusted positional values. Without the separator, a prompt such as
-            // `--help` is parsed as another Codex CLI flag instead of being sent to the model.
-            argv.push("--".into());
-            argv.push(cli_prompt(run_prompt(config, message)));
-        }
+    let mut thread = serde_json::json!({});
+    if let Some(model) = &config.model {
+        thread["model"] = model.clone().into();
+    }
+    if let Some(cwd) = workspace {
+        thread["cwd"] = cwd.into();
+    }
+    if let Some(sandbox) = config.sandbox {
+        thread["sandbox"] = sandbox.as_str().into();
+    }
+    if let Some(approval) = config.approval {
+        thread["approvalPolicy"] = approval.as_str().into();
+    }
+    let message = match cont {
+        Continuation::First => run_prompt(config, message),
         Continuation::Resume { thread_id } => {
-            argv.push((*thread_id).to_string());
-            argv.push("--".into());
-            argv.push(cli_prompt(run_message(message)));
+            thread["threadId"] = (*thread_id).into();
+            run_message(message)
         }
-    }
-    argv
+    };
+    vec![
+        "python3".into(),
+        "-u".into(),
+        "-c".into(),
+        include_str!("codex_app_server.py").into(),
+        serde_json::json!({"command": command, "thread": thread}).to_string(),
+        message,
+    ]
 }
 
 fn run_prompt(config: &ProcessCodexArguments, message: &str) -> String {
@@ -94,131 +94,36 @@ fn run_message(message: &str) -> String {
         message.into()
     }
 }
-
-/// Keep a literal `-` a prompt rather than Codex's positional sentinel for “read stdin”.
-///
-/// The separator above protects leading dashes from option parsing, but `codex exec` deliberately
-/// interprets the exact positional value `-` after parsing. A trailing newline makes it an ordinary
-/// prompt while preserving what the model reads.
-fn cli_prompt(prompt: String) -> String {
-    if prompt == "-" { "-\n".into() } else { prompt }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::AgentManifest;
-    use crate::arguments::CodexReasoningEffort;
 
     #[test]
-    fn argv_puts_global_options_before_exec_and_never_opens_a_tui() {
-        let manifest = AgentManifest {
-            backend: Some("process:codex".into()),
-            arguments: ProcessCodexArguments {
-                model: Some("gpt-5-codex".into()),
-                system_prompt: Some("Work carefully.".into()),
-                sandbox: Some(CodexSandbox::WorkspaceWrite),
-                approval: Some(CodexApproval::Never),
-                reasoning_effort: Some(CodexReasoningEffort::High),
-                skip_git_repo_check: true,
-                ..ProcessCodexArguments::default()
-            },
-            ..AgentManifest::default()
-        };
-        assert_eq!(
-            argv(
-                &manifest.arguments,
-                "fix the tests",
-                Some("/targets/acme"),
-                &Continuation::First,
-            ),
-            [
-                "codex",
-                "--model",
-                "gpt-5-codex",
-                "--sandbox",
-                "workspace-write",
-                "--ask-for-approval",
-                "never",
-                "--cd",
-                "/targets/acme",
-                "--config",
-                "model_reasoning_effort=high",
-                "exec",
-                "--color",
-                "never",
-                "--skip-git-repo-check",
-                "--json",
-                "--",
-                "Work carefully.\n\nfix the tests",
-            ]
-        );
-    }
-
-    /// Not a knob. `--json` is the only shape `codex_stream` can read, and an `exec` without it
-    /// writes its chrome — banner, prompt replay, token trailer — into the same log as the answer.
-    #[test]
-    fn argv_always_asks_for_the_event_stream() {
-        let argv = argv(
-            &ProcessCodexArguments::default(),
-            "go",
-            None,
-            &Continuation::First,
-        );
-        assert!(argv.contains(&"--json".to_string()), "{argv:?}");
-    }
-
-    #[test]
-    fn a_reply_resumes_the_thread_without_repeating_the_opening_prompt() {
+    fn rpc_parameters_preserve_options_and_literal_prompts() {
         let config = ProcessCodexArguments {
-            system_prompt: Some("Work carefully.".into()),
-            skip_git_repo_check: true,
-            ..ProcessCodexArguments::default()
+            model: Some("example".into()),
+            sandbox: Some(crate::arguments::CodexSandbox::WorkspaceWrite),
+            approval: Some(crate::arguments::CodexApproval::Never),
+            add_dir: Some("/tmp/a space".into()),
+            web_search: true,
+            ..Default::default()
         };
-        assert_eq!(
-            argv(
-                &config,
-                "and now write a test",
-                Some("/targets/acme"),
-                &Continuation::Resume {
-                    thread_id: "thread-1",
-                },
-            ),
-            [
-                "codex",
-                "--cd",
-                "/targets/acme",
-                "exec",
-                "--color",
-                "never",
-                "resume",
-                "--skip-git-repo-check",
-                "--json",
-                "thread-1",
-                "--",
-                "and now write a test",
-            ]
-        );
-    }
-
-    #[test]
-    fn prompt_like_a_flag_is_always_a_positional_message() {
-        let first = argv(
-            &ProcessCodexArguments::default(),
-            "--help",
-            None,
-            &Continuation::First,
-        );
-        assert_eq!(&first[first.len() - 2..], ["--", "--help"]);
-
-        let resumed = argv(
-            &ProcessCodexArguments::default(),
+        let args = argv(&config, "--help", Some("/workspace"), &Continuation::First);
+        let opts: serde_json::Value = serde_json::from_str(&args[4]).unwrap();
+        assert_eq!(opts["thread"]["cwd"], "/workspace");
+        assert_eq!(opts["thread"]["model"], "example");
+        assert_eq!(opts["thread"]["sandbox"], "workspace-write");
+        assert_eq!(opts["thread"]["approvalPolicy"], "never");
+        assert!(opts["thread"].get("threadId").is_none());
+        assert_eq!(args.last().unwrap(), "--help");
+        let args = argv(
+            &config,
             "-",
             None,
-            &Continuation::Resume {
-                thread_id: "thread-1",
-            },
+            &Continuation::Resume { thread_id: "saved" },
         );
-        assert_eq!(&resumed[resumed.len() - 3..], ["thread-1", "--", "-\n"]);
+        let opts: serde_json::Value = serde_json::from_str(&args[4]).unwrap();
+        assert_eq!(opts["thread"]["threadId"], "saved");
+        assert_eq!(args.last().unwrap(), "-");
     }
 }

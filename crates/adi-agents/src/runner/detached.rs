@@ -87,8 +87,8 @@ impl DetachedRunner {
     ///
     /// The continuation is derived here and nowhere else. `harness:claude-sdk` establishes its
     /// engine session on the first turn (`--session-id`) and resumes it afterwards (`--resume`).
-    /// `process:codex` opens with `codex exec`, whose `thread.started` event supplies the id used by
-    /// later `codex exec resume` turns. No caller ever passes a "fresh or resume" flag.
+    /// `process:codex` opens with app-server `thread/start`; its thread id is used by
+    /// later app-server `thread/resume` turns. No caller ever passes a "fresh or resume" flag.
     ///
     /// `process:claude` has no such pair: it remains a one-shot `--print` run. The adi loop
     /// continues by replaying the transcript, addressed by agent + conversation id alone.
@@ -147,7 +147,10 @@ impl DetachedRunner {
                                 codex_unverifiable_reason(spec)
                             )));
                         }
-                        (Some(stored), Some(current)) if stored != current => {
+                        (Some(stored), Some(current))
+                            if stored != current
+                                && codex_auth_context_is_current_scheme(stored) =>
+                        {
                             return Err(Error::Launch(
                                 "cannot safely resume the Codex conversation: its login/session \
                                  context changed since this thread's last turn; start a new \
@@ -155,6 +158,10 @@ impl DetachedRunner {
                                     .to_string(),
                             ));
                         }
+                        // An equal context resumes; a stored context without the current scheme
+                        // tag was written by an older binary under a previous formula, so it can
+                        // never equal a current digest — migrate the thread forward (this turn
+                        // rewrites the state to the current scheme) rather than refuse it.
                         _ => {}
                     }
                 }
@@ -722,6 +729,23 @@ impl CodexIdentity {
 /// whole, which errs on the safe side and asks for a new conversation after they change.
 const CODEX_AUTH_UNVERIFIABLE: &str = "unverifiable:v1";
 
+/// Scheme tag that prefixes every auth-context digest this binary computes, so a stored context is
+/// self-identifying. A value without it was written by an older binary under a different formula
+/// (or none at all); such a thread is migrated forward on its next resume rather than refused,
+/// because its digest cannot be expected to equal a current one even for the very same login. Bump
+/// the version whenever the digest inputs change, so pre-change threads migrate instead of reading
+/// as an account switch.
+const CODEX_AUTH_SCHEME: &str = "adi.codex-auth.v4";
+
+/// Whether `stored` carries [`CODEX_AUTH_SCHEME`] — i.e. was written by this binary's current
+/// auth-context formula and may be compared digest-for-digest. Anything else is a legacy context to
+/// migrate, not to compare.
+fn codex_auth_context_is_current_scheme(stored: &str) -> bool {
+    stored
+        .strip_prefix(CODEX_AUTH_SCHEME)
+        .is_some_and(|rest| rest.starts_with(':'))
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum CodexProviderAuth {
     /// Codex's own `auth.json` or direct `CODEX_*` credential variables.
@@ -815,9 +839,11 @@ fn codex_auth_context_with_preferences(
     );
     let codex_version = hash_codex_executable(&mut digest, spec)?;
     // Provider auth/routing can name arbitrary variables (`env_key`, AWS credentials, local OSS
-    // endpoints, future built-ins). Hash the exact environment the child receives instead of
-    // maintaining another incomplete list. Only the digest is persisted.
-    hash_child_environment(&mut digest, spec);
+    // endpoints, future built-ins), so the per-run overlay is hashed wholesale with no allowlist.
+    // The app server's inherited ambient environment and `PATH` are deliberately left out: they
+    // are identity-irrelevant here and drift when the server restarts, which used to read as a
+    // login/session change and refuse an otherwise-valid resume. Only the digest is persisted.
+    hash_identity_environment(&mut digest, spec);
     config.hash_into(&mut digest);
     if provider_auth == CodexProviderAuth::OpenAi {
         // A keyring/auto/ephemeral login has no stable public account identifier ADI can read.
@@ -851,8 +877,10 @@ fn codex_auth_context_with_preferences(
     }
 
     let bytes = digest.finalize();
-    let mut encoded = String::with_capacity(7 + bytes.len() * 2);
-    encoded.push_str("sha256:");
+    let mut encoded =
+        String::with_capacity(CODEX_AUTH_SCHEME.len() + ":sha256:".len() + bytes.len() * 2);
+    encoded.push_str(CODEX_AUTH_SCHEME);
+    encoded.push_str(":sha256:");
     for byte in bytes {
         // Writing into a String cannot fail.
         write!(&mut encoded, "{byte:02x}").expect("write a digest");
@@ -1000,7 +1028,19 @@ impl CodexConfigSnapshot {
                 layer.path.to_string_lossy().as_bytes(),
             );
             match &layer.bytes {
-                Some(bytes) => hash_part(digest, "config_bytes", bytes),
+                Some(bytes) => {
+                    // Execution policy is not login identity. Changing approvals or sandbox
+                    // must not strand a conversation after its operator updates permissions.
+                    if let Some(mut value) = layer.value.clone() {
+                        if let Some(table) = value.as_table_mut() {
+                            table.remove("approval_policy");
+                            table.remove("sandbox_mode");
+                        }
+                        hash_part(digest, "config_bytes", value.to_string().as_bytes());
+                    } else {
+                        hash_part(digest, "config_bytes", bytes);
+                    }
+                }
                 None => hash_part(digest, "config_bytes", b"<missing>"),
             }
         }
@@ -1473,24 +1513,22 @@ fn path_bytes(path: &Path) -> Vec<u8> {
     }
 }
 
-/// Hashed from exactly the same base [`spawn_child`](detached::spawn_child) builds its `Command`
-/// from — [`detached::scrub_ambient`] with `spec.inherited_strip`, never raw `std::env::vars_os`
-/// — so this fingerprint can never disagree with what the child the next line actually spawns
-/// receives. [`Agents::inherited_strip`](crate::Agents::inherited_strip) is re-derived every turn
-/// from the calling process's own `$ADI_AGENT`, same as the rest of `spec`, so it is as stable
-/// across a session's turns as everything else this digest already covers (ADI-MONO-175).
-fn hash_child_environment(digest: &mut Sha256, spec: &RunSpec) {
-    let mut env: BTreeMap<String, String> =
-        detached::scrub_ambient(std::env::vars(), &spec.inherited_strip)
-            .into_iter()
-            .map(|(key, value)| (normalized_env_key(&key), value))
-            .collect();
+/// Hash only the explicit per-run environment overlay the agent definition contributes — the place
+/// ADI injects an agent's provider credentials and secrets — applying [`quiet_codex_env`] exactly
+/// as [`spawn_child`](detached::spawn_child) does, so a credential switch is still caught with no
+/// hard-coded allowlist. The app server's inherited ambient environment and `PATH` are left out on
+/// purpose (ADI-MONO-175 used to fold the whole child environment in): the overlay is re-derived
+/// deterministically from the agent definition every turn, independent of which server process
+/// computes it, whereas the ambient environment drifts across a server restart; `PATH` is
+/// redundant because the resolved Codex executable is already fingerprinted by
+/// [`hash_codex_executable`].
+fn hash_identity_environment(digest: &mut Sha256, spec: &RunSpec) {
     let mut overlay = spec.env.clone();
     quiet_codex_env(&mut overlay);
+    let mut env: BTreeMap<String, String> = BTreeMap::new();
     for (key, value) in overlay {
         env.insert(normalized_env_key(&key), value);
     }
-    env.insert(normalized_env_key("PATH"), spec.path.clone());
     for (key, value) in env {
         hash_part(digest, "env_key", key.as_bytes());
         hash_part(digest, "env_value", value.as_bytes());
@@ -1742,15 +1780,14 @@ fn hash_auth_file(
                     cloud_config_eligible: true,
                 };
             }
-            // Codex can proactively refresh OAuth before it decides whether this account receives
-            // a remote cloud-policy bundle. A locally personal plan is therefore not enough when
-            // the access token is at its refresh boundary: the replacement can describe a newly
-            // managed workspace and alter provider/routing policy before `exec resume` starts.
-            //
-            // Bind the complete auth state as well as the stable identity. This deliberately makes
-            // any token rewrite start a new ADI conversation, closing the gap between this check
-            // and the child loading the same file.
-            hash_part(digest, "auth_file_bytes", &bytes);
+            // Bind only the stable identity — account, user, and plan — not the credential bytes.
+            // A token refresh rewrites the access/refresh tokens and `last_refresh` but leaves the
+            // identity untouched, so a routine refresh no longer starts a new ADI conversation and
+            // a resume survives it, while an account or user switch still changes the digest. The
+            // one case a refresh could matter — the access token sitting at its refresh boundary,
+            // where the replacement might carry a newly managed workspace policy — is handled by
+            // `cloud_config_eligible` below, which refuses to compute a resumable context at all
+            // when a proactive refresh is due.
             let proactive_refresh_due = chatgpt_proactive_refresh_due(&auth, tokens);
             let account = tokens
                 .get("account_id")
@@ -1764,6 +1801,9 @@ fn hash_auth_file(
             if let (Some(account), Some(claims)) = (account, claims.as_ref()) {
                 hash_part(digest, "auth_account", account.as_bytes());
                 hash_part(digest, "auth_user", claims.user.as_bytes());
+                if let Some(plan) = claims.plan.as_deref() {
+                    hash_part(digest, "auth_plan", plan.as_bytes());
+                }
             } else {
                 // Workspace/account ids are shared by multiple users. Without both halves of the
                 // stable identity, bind the exact file rather than risk a cross-user/workspace resume.
@@ -2396,11 +2436,8 @@ mod tests {
             })),
             "and now a test",
         );
-        let resume = again
-            .iter()
-            .position(|arg| arg == "resume")
-            .expect("a later turn resumes");
-        assert_eq!(again.get(resume + 2).map(String::as_str), Some("sid-1"));
+        let options: Value = serde_json::from_str(&again[4]).unwrap();
+        assert_eq!(options["thread"]["threadId"], "sid-1");
         assert_eq!(again.last().map(String::as_str), Some("and now a test"));
         assert!(
             again.iter().all(|arg| !arg.contains("Work carefully.")),
@@ -2448,11 +2485,11 @@ mod tests {
         .expect("write auth");
     }
 
-    /// OAuth refreshes rewrite the credential state that Codex can consume before loading cloud
-    /// policy. Even for the same account that rewrite must change the conversation binding; an
-    /// account switch must continue to do so as well.
+    /// The fingerprint binds only the stable identity, so a token refresh for the same account
+    /// must NOT change the conversation binding — a resume has to survive a routine refresh. A
+    /// different user in the same workspace, or a different account, still must change it.
     #[test]
-    fn codex_auth_context_tracks_oauth_token_rewrites_and_account_switches() {
+    fn codex_auth_context_binds_stable_identity_across_token_rewrites() {
         let session = FakeSession::new("codex-auth-context");
         let home = session.log.parent().expect("scratch").join("codex-home");
         let mut run = spec(json!({}));
@@ -2467,11 +2504,12 @@ mod tests {
 
         write_codex_auth(&home, "account-a", "user-a", "access-one");
         let first = codex_auth_context(&run).expect("file login is verifiable");
+
         write_codex_auth(&home, "account-a", "user-a", "access-two");
-        assert_ne!(
+        assert_eq!(
             codex_auth_context(&run).as_deref(),
             Some(first.as_str()),
-            "a token rewrite cannot inherit the pre-refresh cloud-policy decision",
+            "a token refresh for the same account must keep the conversation resumable",
         );
 
         write_codex_auth(&home, "account-a", "user-b", "access-three");
@@ -2480,6 +2518,14 @@ mod tests {
             Some(first.as_str()),
             "another user in the same workspace may not inherit the first user's thread",
         );
+
+        write_codex_auth(&home, "account-b", "user-a", "access-four");
+        assert_ne!(
+            codex_auth_context(&run).as_deref(),
+            Some(first.as_str()),
+            "a different account must change the binding",
+        );
+
         assert!(!first.contains("unrelated-inherited-key"));
         assert!(!first.contains("account-a"));
         assert!(!first.contains("access-one"));
@@ -2922,6 +2968,23 @@ mod tests {
             config_toml_base64: encode(config),
             requirements_toml_base64: encode(requirements),
         }
+    }
+
+    #[test]
+    fn codex_permission_changes_preserve_login_identity() {
+        let session = FakeSession::new("codex-permission-context");
+        let home = session.log.parent().expect("scratch").join("codex-home");
+        std::fs::create_dir_all(&home).unwrap();
+        let mut run = spec(json!({}));
+        run.env.push(("CODEX_HOME".into(), home.to_string_lossy().into_owned()));
+        run.env.push(("CODEX_API_KEY".into(), "test-key".into()));
+        let path = home.join("config.toml");
+        std::fs::write(&path, "approval_policy = 'on-request'\nsandbox_mode = 'read-only'\n").unwrap();
+        let before = codex_auth_context(&run).expect("API key context");
+        std::fs::write(&path, "approval_policy = 'never'\nsandbox_mode = 'danger-full-access'\n").unwrap();
+        assert_eq!(codex_auth_context(&run).as_deref(), Some(before.as_str()));
+        run.env.push(("CODEX_API_KEY".into(), "different-key".into()));
+        assert_ne!(codex_auth_context(&run).as_deref(), Some(before.as_str()));
     }
 
     #[test]
@@ -3540,6 +3603,46 @@ mod tests {
             ),
             Err(Error::Launch(message)) if message.contains("context changed since this thread's last turn")
         ));
+    }
+
+    /// A thread whose auth context was written by an older binary carries no current scheme tag.
+    /// Its digest can never equal a current one, so rather than refuse it as an account switch —
+    /// which would orphan every in-flight conversation across a formula change — the resume is
+    /// allowed and the turn rewrites the state forward. The strict guard still applies once the
+    /// stored context is on the current scheme (see
+    /// `a_codex_thread_refuses_the_same_credential_after_auth_context_drift`).
+    #[test]
+    fn a_legacy_scheme_codex_thread_is_migrated_not_refused() {
+        let runner = DetachedRunner::new(Backend::ProcessCodex);
+        let session = FakeSession::new("codex-auth-migrate");
+        // A controlled Codex home so the current login verifies deterministically, rather than
+        // depending on the host's real ~/.codex (whose token refresh state would decide it).
+        let home = session.log.parent().expect("scratch").join("codex-home");
+        write_codex_auth(&home, "account-a", "user-a", "access-one");
+        let mut run = spec(json!({}));
+        run.env.push((
+            "CODEX_HOME".to_string(),
+            home.to_string_lossy().into_owned(),
+        ));
+        let identity = CodexIdentity::of(&run);
+        assert!(
+            identity.auth_context.is_some(),
+            "the controlled login must be verifiable for this to exercise migration",
+        );
+        let session = session.started().with_state(json!({
+            "codex_thread_id": "thread-a",
+            "codex_credential": identity.credential.clone(),
+            // A bare sha256 with no current-scheme prefix: the shape an older binary wrote.
+            "codex_auth_context":
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        }));
+        let argv = runner
+            .argv(&run, &session, "continue", "thread-a", Some(&identity))
+            .expect("a legacy-scheme thread must be migrated forward, not refused");
+        assert!(
+            argv.join(" ").contains("thread-a"),
+            "the legacy thread id is resumed rather than a fresh one opened: {argv:?}",
+        );
     }
 
     #[test]

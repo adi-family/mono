@@ -324,9 +324,32 @@ test(manifest):
   the same plain `claude --print --tools "" --output-format text` ask: no built-in tools (so a
   two-token prompt cannot turn into the model reaching for the filesystem), plain text so the
   answer needs no stream parser, and the backend's settings file when it names one.
-- `pty:codex` / `process:codex` both run `codex exec --sandbox read-only --ask-for-approval never
-  --json`, read the same way a real run's log is (`crate::backends::codex_stream`), so a startup
-  failure that never reached the model still reads as an error rather than a silent success.
+- Codex probes use `codex app-server --listen stdio://` with a read-only sandbox and
+  `approvalPolicy: never`. The process runner uses the same embedded Python 3 stdio client:
+  initialize, start/resume the saved thread, start a turn, stream events, and exit on completion.
+  Both `python3` and `codex` must be available on the run PATH. Each app-server is a bounded
+  child in the run's process group, not a separately supervised service. Existing logs remain
+  readable; new RPC events are translated to the historical ADI event format. Interactive
+  server requests fail explicitly because the detached runner has no approval/input UI.
+  A named Codex backend lazily creates `<ADI root>/codex-homes/<sha256(backend id)>` on
+  its first run or saved-backend test. Creation is serialized and published atomically. The
+  initial file login is copied once from the prior `CODEX_HOME` (or `~/.codex`); later token
+  refreshes and login changes stay in this home. Keyring-only logins require signing in to
+  the backend home explicitly. Only explicit `approval_policy` and `sandbox_mode` defaults are copied from the source
+  config at initialization. Global desktop config, sessions, SQLite files and writer locks
+  are never shared; explicit backend model/sandbox/approval arguments still take precedence.
+  Later changes to these two execution-policy settings do not invalidate login identity. `CODEX_SQLITE_HOME` is pinned
+  to the private home too. On the first continuation of an old ADI conversation, only that
+  thread's rollout is snapshotted into the backend home. The desktop retains its old snapshot,
+  but subsequent messages are private to ADI. Unsaved tests use a separate draft home.
+  If `thread/resume` returns the specific active-writer conflict, ADI forks the persisted
+  history and sends the message once to that branch. The new thread ID becomes the conversation's
+  continuation ID; the other application's original thread stays untouched. The timeline records
+  the branch. Other resume errors are surfaced without branching. Future messages in the two
+  applications are independent, not synchronized.
+  `skip_git_repo_check` remains accepted for old manifests but is unnecessary for app-server.
+  The interactive `pty:codex` runtime continues to use the Codex TUI.
+
 
 Each vendor-CLI ask is bounded by a short timeout (45s) — generous enough for a cold process start
 and a real round trip, far short of a full turn's ten-minute budget, because a human watching a

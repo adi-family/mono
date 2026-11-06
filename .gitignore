@@ -46,3 +46,6 @@ apps/ios/shots/*/store/_plate/
 
 # Compiled primary interface (release artifact, never source).
 /apps/primary-ui/frontend/dist-primary/
+# Local scratch: PDFs, codex deploy/restore working dirs, DS_Store
+output/
+tmp/
