@@ -20,6 +20,20 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.36.3 — 2026-11-06
+
+### Added
+
+- Hide a chat from the sidebar's right-click menu; hiding only affects the owning machine and keeps the transcript and running session intact.
+- Copy a chat's ID from a new button beside the chat title, with a confirming checkmark and a clipboard fallback on plain HTTP.
+- Chats in the sidebar show a relative "last activity" time, such as "5m ago", next to the agent name.
+- A new lightning "Send ASAP" button delivers a message at the next available point, including between tool rounds, instead of waiting for the current response to finish.
+- Right-click a starred agent in New chat to unstar it just for yourself; an "Unstarred for me" list lets you restore the star or start a chat with it anyway, and this preference stays in your browser only.
+
+### Changed
+
+- New chat's agent picker now lists every agent for the selected machine, with starred ones first, instead of only starred agents plus the current one.
+
 ## 1.36.2 — 2026-11-04
 
 ### Fixed
