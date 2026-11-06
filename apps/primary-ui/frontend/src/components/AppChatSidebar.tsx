@@ -6,7 +6,7 @@ import { Button, cn } from "@design-system/ui";
 
 import { useAppChat } from "../lib/app-chat-state";
 import { appHref } from "../lib/app-api";
-import { conversationFilters, conversationGroups, conversationSections } from "../lib/app-chat-sidebar";
+import { conversationAge, conversationFilters, conversationGroups, conversationSections } from "../lib/app-chat-sidebar";
 import { sameConversation } from "../lib/app-chat-sources";
 import { conversationHref } from "../lib/app-chat-transcript";
 
@@ -125,6 +125,11 @@ export function AppChatSidebar() {
   const [visibleCounts, setVisibleCounts] = useState<Record<string, number>>({});
   const [expanded, setExpanded] = useState(false);
   const [menu, setMenu] = useState<Menu | null>(null);
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
   const toggleRef = useRef<HTMLButtonElement>(null);
   const filterRef = useRef<HTMLButtonElement>(null);
   const sourceRef = useRef<HTMLButtonElement>(null);
@@ -201,6 +206,7 @@ export function AppChatSidebar() {
                   <ul className="space-y-0.5">
                     {section.conversations.slice(0, visibleCount).map((conversation) => {
                       const isActive = sameConversation(conversation, active);
+                      const age = conversationAge(conversation.lastActivity, now);
                       const status = conversation.pendingQuestion ? "Needs your answer" : conversation.running ? "Running" : conversation.awaiting ? "Awaiting" : null;
                       return (
                         <li key={conversationHref(conversation)}>
@@ -224,7 +230,10 @@ export function AppChatSidebar() {
                               {conversation.starred && <Star aria-label="Starred chat" className="size-3 shrink-0 fill-current" />}
                               {status && <span className={cn("size-1.5 shrink-0 rounded-full", conversation.pendingQuestion ? "bg-amber-600 dark:bg-amber-400" : conversation.running ? "bg-blue-600 dark:bg-blue-400" : "bg-foreground/50")} aria-hidden="true" />}
                             </span>
-                            <span className="text-muted-foreground block truncate text-[11px] leading-4">{conversation.agent}{(sourceCount > 1 || !sources.local) && ` · ${conversation.source ?? "This machine"}`}</span>
+                            <span className="text-muted-foreground flex min-w-0 items-center gap-2 text-[11px] leading-4">
+                              <span className="min-w-0 flex-1 truncate">{conversation.agent}{sourceCount > 1 && group !== "machine" && <span data-slot="app-conversation-machine"> · {conversation.source ?? "This machine"}</span>}</span>
+                              {age && <time data-slot="app-conversation-time" className="shrink-0" dateTime={new Date(conversation.lastActivity).toISOString()} title={`Last activity: ${new Date(conversation.lastActivity).toLocaleString()}`} aria-label={`Last activity: ${age}`}>{age}</time>}
+                            </span>
                             {status && <span className="sr-only">{status}</span>}
                           </a>
                         </li>

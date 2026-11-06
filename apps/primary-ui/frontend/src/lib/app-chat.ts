@@ -470,9 +470,9 @@ export async function startConversation(agent: string, message: string, signal?:
   return { agent, runId: text(data.run_id), ...(source === undefined ? {} : { source }) };
 }
 
-export async function replyToConversation(ref: ConversationRef, message: string, signal?: AbortSignal, attachments: string[] = []): Promise<AgentPeek> {
+export async function replyToConversation(ref: ConversationRef, message: string, signal?: AbortSignal, attachments: string[] = [], mode: "regular" | "asap" = "regular"): Promise<AgentPeek> {
   return peekOf(await request("/agents/run/reply", signal, {
-    ...runBody(ref), message, attachments, mode: "regular", limit: 20, fold: true,
+    ...runBody(ref), message, attachments, mode, limit: 20, fold: true,
   }, ref.source));
 }
 
@@ -504,6 +504,10 @@ export async function uploadImage(file: File, source?: string): Promise<AgentAtt
   if (!response.ok || data.ok === false) throw new Error(data.error || "File could not be uploaded. Try again.");
   if (typeof data.id !== "string" || !data.id) throw new Error("The app returned an invalid attachment reference.");
   return { id: data.id, name: file.name, media_type: mediaType, size: file.size };
+}
+
+export async function hideConversation(ref: ConversationRef): Promise<void> {
+  await request("/agents/run/hide", undefined, { ...runBody(ref), hidden: true }, ref.source);
 }
 
 export async function starConversation(ref: ConversationRef, starred: boolean): Promise<void> {

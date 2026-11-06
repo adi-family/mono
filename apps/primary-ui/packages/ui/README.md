@@ -711,12 +711,15 @@ Dictation appends editable text to the draft and never sends it. The engine foll
 in the composer. Recording stops and tracks are released on chat navigation. Microphone access
 requires HTTPS; the HTTP showcase shows only the disabled microphone and its existing help control.
 
-Right-click a sidebar chat (or press Shift+F10 while focused) to rename or star/unstar
-it without opening it. Rename supports Enter to save, Escape to cancel, and inline errors.
+Right-click a sidebar chat (or press Shift+F10 while focused) to rename, star/unstar, or hide
+it without opening it. Hide persists on the owning machine and keeps the transcript and running session intact. Rename supports Enter to save, Escape to cancel, and inline errors.
 
 Use the star beside an open chat’s title to keep or unstar that conversation. Starred chats
 show a filled star in the sidebar and retain their existing priority in the list. Changes are
 saved on the owning machine through the existing run star endpoint.
+
+Use the copy icon beside an open chat’s title to copy its thread/run ID. The tooltip shows
+the full ID, and a checkmark confirms copying. HTTP hosts use a clipboard fallback.
 
 Use the pencil beside an open chat’s title to rename it. Enter saves, Escape cancels, and
 an empty name restores the generated title. Changes use the existing run rename endpoint on
@@ -793,8 +796,8 @@ The live chat checks the transcript after a reply error to recognize messages al
 by the server, without automatically repeating the send.
 
 The new-chat page puts agent selection in the center, with quick choices for starred agents
-from every selected source. Its machine-specific picker includes starred agents plus the
-current agent, preserving unstarred deep links. New default selections prefer starred,
+from every selected source. Its machine-specific picker includes all agents, with starred agents first,
+preserving access to personally unstarred agents and unstarred deep links. New default selections prefer starred,
 chat-capable agents; read-only and unavailable agents remain disabled.
 
 Successful new-chat launches save the chosen agent and owning machine in browser-local
@@ -802,3 +805,18 @@ Successful new-chat launches save the chosen agent and owning machine in browser
 sources. Viewing history, selecting an agent without launching, failed launches, and other
 people’s sessions never update it. An unavailable saved agent falls back to an eligible
 starred/default agent on a selected source.
+
+`ChatComposer.onSendAsap` adds a lightning action using the same draft, attachment, pending,
+and failure handling as normal send. The live chat exposes it while running and sends
+`mode: "asap"` for delivery at the next runtime injection point, including between tool rounds.
+Regular send continues to queue until the current response finishes. Existing queued messages
+cannot be promoted with the current runtime API.
+
+Right-click a starred agent in New chat (or press Shift+F10) for **Unstar for me**.
+Personal overrides persist in browser-local `adi.personal-overrides.v1`, keyed by owning
+machine, entity kind, and name. The client shallowly overlays fields onto shared metadata
+without modifying API data or sending mutations. Other browsers and users keep the shared
+values. “Unstarred for me” offers **Restore star for me**, which removes the override and
+resumes inheritance. The agent picker still includes unstarred agents. Effective agent
+stars also control the client’s Only starred session filter. Additional personal fields
+can use the same override store; nested metadata is replaced as a whole field.

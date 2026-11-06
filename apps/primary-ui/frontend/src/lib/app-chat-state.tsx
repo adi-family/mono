@@ -4,7 +4,7 @@ import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import {
   answerQuestion, getAgents, getConversation, getConversationIndex, getFleetNodes, replyToConversation,
-  startConversation, stopConversation, renameConversation, starConversation, uploadImage, attachmentUrl,
+  startConversation, stopConversation, hideConversation, renameConversation, starConversation, uploadImage, attachmentUrl,
   type Agent, type Conversation, type ConversationRef,
 } from "./app-chat";
 import { conversationHref } from "./app-chat-transcript";
@@ -13,6 +13,8 @@ import {
   conversationKey, hasSource, normalizeSources, readGroup, readSources, routeNode,
   readLastLaunchedAgent, lastLaunchedAgentKey, savePreference, selectedSources, sourceName, type ChatFilter, type ChatGroup,
 } from "./app-chat-sources";
+
+import { applyOverrides, entityOverrideKey, usePersonalOverrides } from "./personal-overrides";
 
 type DraftImage = { id: string; name: string; mediaType?: string; url?: string; attachmentId?: string; error?: string };
 const emptyAgents: Agent[] = [];
@@ -51,8 +53,10 @@ function useAppChatState() {
     }),
     enabled, refetchInterval: 5000, retry: false,
   })) });
+  const { overrides, setOverride } = usePersonalOverrides();
+  const effectiveAgents = agentQueries.map((query) => (query.data ?? emptyAgents).map((item) => applyOverrides(item, overrides, entityOverrideKey("agent", item.name, item.source))));
   const currentSourceIndex = sourceList.indexOf(activeSource);
-  const agents = agentQueries[currentSourceIndex]?.data ?? emptyAgents;
+  const agents = effectiveAgents[currentSourceIndex] ?? emptyAgents;
   const preferred = (items: Agent[]) => [...items].filter((item) => item.runnable !== false && item.caps?.answerable !== false).sort((a, b) => Number(Boolean(b.starred)) - Number(Boolean(a.starred)) || Number(b.name === "adi-agent") - Number(a.name === "adi-agent") || a.name.localeCompare(b.name))[0]?.name;
   const defaultAgent = agents.find((item) => lastLaunchedAgent?.source === activeSource && item.name === lastLaunchedAgent?.agent && item.runnable !== false && item.caps?.answerable !== false)?.name ?? preferred(agents) ?? "";
   const agent = params.get("agent") || defaultAgent;
@@ -102,7 +106,7 @@ function useAppChatState() {
     const query = indexQueries[index];
     const data = query.data;
     const enrich = (conversation: Conversation) => {
-      const owner = agentQueries[index]?.data?.find((item) => item.name === conversation.agent);
+      const owner = effectiveAgents[index]?.find((item) => item.name === conversation.agent);
       const result = { ...conversation, ...(owner ? { agentStarred: owner.starred, project: conversation.project ?? owner.project } : {}) };
       known.current.set(conversationKey(result), result);
       return result;
@@ -175,7 +179,7 @@ function useAppChatState() {
     setActionError(null);
     await Promise.all([client.invalidateQueries({ queryKey: ["app-chat", "voice"] }), client.invalidateQueries({ queryKey: ["app-chat", "agents"] }), client.invalidateQueries({ queryKey: ["app-chat", "conversations"] }), client.invalidateQueries({ queryKey: ["app-chat", "conversation"] }), client.invalidateQueries({ queryKey: ["app-chat", "fleet"] })]);
   }
-  async function sendMessage(message: string) {
+  async function sendMessage(message: string, mode: "regular" | "asap" = "regular") {
     if (invalidSource) throw new Error("This chat source is invalid. Choose a source from the sidebar.");
     if (!agent) throw new Error("Choose an agent before sending a message.");
     if (sending.current.has(draftKey)) throw new Error("A message is already being sent to this conversation.");
@@ -191,7 +195,7 @@ function useAppChatState() {
     try {
       if (target) {
         let result;
-        try { result = await replyToConversation(target, message, undefined, attachments); }
+        try { result = await replyToConversation(target, message, undefined, attachments, mode); }
         catch (sendError) {
           // The write can succeed before snapshot generation or delivery fails.
           // Reconcile with a read; never repeat the mutation automatically.
@@ -234,7 +238,9 @@ function useAppChatState() {
     void refresh();
   }
   return {
-    newChatAgents: agentQueries.flatMap((query) => query.data ?? []),
+    newChatAgents: effectiveAgents.flat(),
+    personalAgentOverrides: overrides,
+    setAgentOverride: <K extends keyof Agent>(item: Agent, field: K, value: Agent[K] | undefined) => setOverride(entityOverrideKey("agent", item.name, item.source), field, value),
     agentsLoading: agentQueries.some((query) => query.isPending),
     agents, conversations, sourceStates, sources, activeSource, filter, setFilter, group, setGroup, toggleSource, loadMore,
     fleetNodes: fleetQuery.data ?? [], fleetLoading: fleetQuery.isPending, fleetError: fleetQuery.error ? errorText(fleetQuery.error) : null,
@@ -248,8 +254,14 @@ function useAppChatState() {
     indexError: sourceStates.filter((item) => item.error).map((item) => `${sourceName(item.source)}: ${item.error}`).join(" ") || null,
     conversationError: invalidSource ? "This chat source is invalid. Choose a source from the sidebar." : active && snapshotQuery.error ? errorText(snapshotQuery.error) : null,
     actionError: actionError?.key === draftKey ? actionError.message : null, isStopping: stopping === draftKey,
-    starChat: async (ref: ConversationRef, starred: boolean) => { await starConversation(ref, starred); await refresh(); },
-    renameChat: async (ref: ConversationRef, title: string) => { await renameConversation(ref, title); await refresh(); },
+    // Background reads must not hold menus open after a successful mutation.
+    hideChat: async (ref: ConversationRef) => {
+      await hideConversation(ref);
+      if (active && conversationKey(active) === conversationKey(ref)) newConversation(ref.agent, ref.source);
+      void refresh();
+    },
+    starChat: async (ref: ConversationRef, starred: boolean) => { await starConversation(ref, starred); void refresh(); },
+    renameChat: async (ref: ConversationRef, title: string) => { await renameConversation(ref, title); void refresh(); },
     appendDraft: (text: string) => setDrafts((current) => ({ ...current, [draftKey]: [current[draftKey]?.trimEnd(), text.trim()].filter(Boolean).join(" ") })),
     openConversation, newConversation, refresh, sendMessage, stopResponse, submitAnswer,
     loadEarlier: () => setLimits((current) => ({ ...current, [draftKey]: limit + 20 })),

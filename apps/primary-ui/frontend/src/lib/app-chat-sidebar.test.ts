@@ -3,7 +3,17 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import type { Conversation } from "./app-chat";
-import { conversationSections, matchesConversationFilter, type SidebarSourceState } from "./app-chat-sidebar";
+import { conversationAge, conversationSections, matchesConversationFilter, type SidebarSourceState } from "./app-chat-sidebar";
+
+test("conversation age uses milliseconds and handles missing, future, and older activity", () => {
+  const now = Date.UTC(2026, 10, 5);
+  for (const value of [0, -1, NaN, Infinity]) assert.equal(conversationAge(value, now), null);
+  for (const [elapsed, expected] of [
+    [-60, "Just now"], [0, "Just now"], [59, "Just now"], [60, "1m ago"],
+    [3599, "59m ago"], [3600, "1h ago"], [86400, "1d ago"],
+    [604800, "1w ago"], [2592000, "1mo ago"], [31536000, "1y ago"],
+  ] as const) assert.equal(conversationAge(now - elapsed * 1000, now), expected);
+});
 
 function conversation(runId: string, values: Partial<Conversation> = {}): Conversation {
   return { agent: "designer", runId, title: runId, message: "", lastActivity: 0, running: false, answerable: true, interactive: false, ...values };

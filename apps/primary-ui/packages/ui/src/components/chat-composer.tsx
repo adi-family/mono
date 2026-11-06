@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ArrowUp, FileText, LoaderCircle, Paperclip, Square, X } from "lucide-react";
+import { ArrowUp, FileText, LoaderCircle, Paperclip, Square, X, Zap } from "lucide-react";
 
 import { cn } from "../lib/cn";
 import { Button, type ButtonDisabledProps } from "./button";
@@ -15,6 +15,8 @@ type ChatComposerProps = Omit<React.ComponentProps<"form">, "onSubmit" | "onErro
     onValueChange: (value: string) => void;
     /** Resolving accepts the message; rejecting keeps the draft and displays errorMessage. */
     onSend: (message: string) => void | Promise<void>;
+    /** Deliver at the next runtime injection point while a response is running. */
+    onSendAsap?: (message: string) => void | Promise<void>;
     isGenerating?: boolean;
     onStop?: () => void;
     inputLabel?: string;
@@ -40,6 +42,7 @@ function ChatComposer({
   attachmentsBusy = false,
   onValueChange,
   onSend,
+  onSendAsap,
   isGenerating = false,
   onStop,
   disabled = false,
@@ -88,7 +91,8 @@ function ChatComposer({
     currentValue.current = "";
     onValueChange("");
     try {
-      await onSend(message);
+      const asap = (event.nativeEvent as SubmitEvent).submitter?.getAttribute("data-send-mode") === "asap";
+      await (asap && onSendAsap ? onSendAsap : onSend)(message);
     } catch {
       if (mounted.current) {
         if (!currentValue.current) { currentValue.current = draft; onValueChange(draft); }
@@ -201,6 +205,11 @@ function ChatComposer({
             {sending ? sendingLabel : sendOnEnter ? "Enter to send · Shift + Enter for a new line" : "Use the send button to send your message."}
           </p>
         </div>
+        {onSendAsap && !isGenerating && <Button
+          type="submit" size="icon" variant="outline" data-send-mode="asap"
+          aria-label="Send ASAP" title="Send at the next available injection point"
+          disabled={cannotSend} disabledReason={sendDisabledReason}
+        ><Zap className="size-4" aria-hidden="true" /></Button>}
         {isGenerating ? (
           <Button
             type="button"

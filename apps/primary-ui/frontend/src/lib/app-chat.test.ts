@@ -3,7 +3,7 @@ import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
 import {
   AppChatError, answerQuestion, getAgents, getConversation, getConversationIndex, getConversations, getFleetNodes, getSteps,
-  replyToConversation, startConversation, stopConversation, uploadImage, attachmentUrl, renameConversation, starConversation, getVoice, transcribeAudio,
+  replyToConversation, startConversation, stopConversation, uploadImage, attachmentUrl, renameConversation, starConversation, hideConversation, getVoice, transcribeAudio,
 } from "./app-chat";
 import { groupErrorCount } from "./app-chat-activity";
 
@@ -351,4 +351,25 @@ test("chat stars target the owning source and send explicit desired state", asyn
     assert.equal(new Headers(call.init?.headers).get("Content-Type"), type || "application/octet-stream");
     assert.equal(uploaded.media_type, type || "application/octet-stream");
   }
+});
+
+
+test("Hide persists on the owning machine and reports failed saves", async () => {
+  mockResponse({ ok: true });
+  await hideConversation({ ...ref, source: "laptop-b" });
+  assert.equal(calls[0].url, "/api/app/node/laptop-b/api/agents/run/hide");
+  assert.deepEqual(body(0), { name: ref.agent, run_id: ref.runId, hidden: true });
+  await hideConversation(ref);
+  assert.equal(calls[1].url, "/api/app/agents/run/hide");
+  mockResponse({ ok: false, error: "Hide refused" });
+  await assert.rejects(hideConversation(ref), /Hide refused/);
+  assert.equal(calls.length, 3);
+});
+
+test("ASAP replies retain attachments and target the owning machine", async () => {
+  mockResponse({ running: true, turns: [{ role: "user", text: "Update", queued: true, mode: "asap" }] });
+  const peek = await replyToConversation({ ...ref, source: "remote" }, "Update", undefined, ["file-id"], "asap");
+  assert.equal(calls[0].url, "/api/app/node/remote/api/agents/run/reply");
+  assert.deepEqual(body(), { name: ref.agent, run_id: ref.runId, message: "Update", attachments: ["file-id"], mode: "asap", limit: 20, fold: true });
+  assert.equal(peek.turns[0].mode, "asap");
 });

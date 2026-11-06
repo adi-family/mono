@@ -325,6 +325,26 @@ try {
   await send("Page.navigate", { url: conversationUrl(main) });
   await until(() => contains("local fixture answer shared-run"), "source fixtures render", 15000);
 
+  await check("sidebar activity time and machine metadata follow source selection and grouping", async () => {
+    await until(() => evaluate(`!!${q(row(main))}&&!!${q(row(remoteMain))}`), "both source rows");
+    assert.equal(await evaluate(`${q(row(main))}.querySelector('time').dateTime`), new Date(5000).toISOString());
+    assert.match(await evaluate(`${q(row(main))}.querySelector('time').textContent`), /ago$/);
+    assert.equal(await evaluate(`document.querySelectorAll('[data-slot="app-conversation-machine"]').length`), 0, "machine headings replace row labels");
+    await filter("Disabled");
+    assert.equal(await evaluate(`${q(row(main))}.querySelector('[data-slot="app-conversation-machine"]').textContent.trim()`), "· This machine");
+    assert.equal(await evaluate(`${q(row(remoteMain))}.querySelector('[data-slot="app-conversation-machine"]').textContent.trim()`), `· ${remote}`);
+    await click('[aria-label="Conversation sources"]');
+    await option("menuitemcheckbox", "This machine");
+    await key("Escape");
+    await until(() => evaluate(`!${q(row(main))}`), "remote source only");
+    assert.equal(await evaluate(`document.querySelectorAll('[data-slot="app-conversation-machine"]').length`), 0, "one remote machine needs no row label");
+    await click('[aria-label="Conversation sources"]');
+    await option("menuitemcheckbox", "This machine");
+    await key("Escape");
+    await filter("Machine");
+    await until(() => evaluate(`!!${q(row(main))}`), "local source restored");
+  });
+
   await check("default me filter requests both sources and preserves pending questions", async () => {
     await until(() => evaluate(`!!${q(row(remoteMain))}&&!!${q(row(question))}`), "remote index and pending question render");
     for (const source of [undefined, remote]) {
@@ -344,6 +364,23 @@ try {
     await until(() => evaluate(`document.querySelectorAll('[data-slot="new-chat-starred-agent"]').length===2`), "both sources have starred choices");
     assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('[data-slot="new-chat-starred-agent"]')).map(el=>el.dataset.source).sort()`), ['', remote].sort());
     await screenshot('new-chat-starred');
+    const localCard = '[data-slot="new-chat-starred-agent"][data-source=""]';
+    const remoteCard = '[data-slot="new-chat-starred-agent"][data-source="' + remote + '"]';
+    const mutations = requests.filter((request) => request.method === "POST").length;
+    await evaluate(`${q(localCard)}.dispatchEvent(new MouseEvent('contextmenu', {bubbles:true, cancelable:true, clientX:200, clientY:200}))`);
+    await until(() => evaluate(`!!document.querySelector('[data-slot="agent-context-menu"]')`), 'agent context menu');
+    await click('[data-slot="agent-context-menu"] button');
+    await until(() => evaluate(`!${q(localCard)} && !!${q(remoteCard)}`), 'personal unstar isolates the machine');
+    const beforeReload = await evaluate('performance.timeOrigin');
+    await send('Page.reload');
+    await until(() => evaluate(`performance.timeOrigin!==${beforeReload} && !${q(localCard)} && !!${q(remoteCard)} && !!document.querySelector('details summary')`), 'personal unstar persists after reload', 30000);
+    await click('details summary');
+    await click('details button');
+    await until(() => evaluate(`!!document.querySelector('[data-slot="agent-context-menu"]')`), 'restore action available');
+    await click('[data-slot="agent-context-menu"] button');
+    await until(() => evaluate(`!!${q(localCard)}`), 'restore inherits shared star');
+    assert.equal(requests.filter((request) => request.method === "POST").length, mutations);
+
     const launches = requests.filter((request) => request.path === '/agents/run').length;
     await click('[data-slot="new-chat-starred-agent"][data-source="' + remote + '"]');
     await until(() => evaluate(`new URLSearchParams(location.search).get('node')===${JSON.stringify(remote)}`), "remote starred agent selected");

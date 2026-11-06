@@ -87,6 +87,14 @@ let holdNextStart = false;
 let heldStart = null;
 let created = 0;
 let failNextRename = false;
+const hiddenRuns = new Set();
+let failNextHide = false;
+let holdIndexRefresh = false;
+const heldIndexes = [];
+async function releaseIndexRefresh() {
+  holdIndexRefresh = false;
+  await Promise.all(heldIndexes.splice(0).map((release) => release()));
+}
 let failTranscription = false;
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const idOf = (ref) => `${ref.agent}:${ref.runId}`;
@@ -147,7 +155,7 @@ put(compact, "Compact messages and tool errors", [
 function allRuns() {
   const agents = ["design-assistant", "layout-reviewer"].map((name) => ({
     name, answerable: true, interactive: false, caps: capabilities,
-    runs: [...snapshots.values()].filter((snapshot) => snapshot.name === name).map((snapshot, index) => ({
+    runs: [...snapshots.values()].filter((snapshot) => snapshot.name === name && !hiddenRuns.has(`${name}:${snapshot.run_id}`)).map((snapshot, index) => ({
       run_id: snapshot.run_id, caps: capabilities, started_at: 5000 - index * 100,
       last_activity: 5000 - index * 100, message: titles.get(`${name}:${snapshot.run_id}`),
       title: titles.get(`${name}:${snapshot.run_id}`), running: snapshot.running, hidden: false, starred: stars.has(`${name}:${snapshot.run_id}`), launched_by: "human",
@@ -219,8 +227,15 @@ async function intercept({ requestId, request }) {
     }
     if (request.method === "GET" && path === "/api/app/agents/runs/all") {
       assert.equal(url.searchParams.get("hidden"), "false");
+      if (holdIndexRefresh) { heldIndexes.push(() => fulfill(requestId, allRuns())); return; }
       await fulfill(requestId, allRuns());
       return;
+    }
+    if (request.method === "POST" && path === "/api/app/agents/run/hide") {
+      if (failNextHide) { failNextHide = false; await fulfill(requestId, {ok:false,error:"Fixture hide refused"}); return; }
+      assert.equal(body.hidden, true);
+      hiddenRuns.add(`${body.name}:${body.run_id}`);
+      await fulfill(requestId, {ok:true}); return;
     }
     if (request.method === "POST" && path === "/api/app/agents/run/star") {
       const id = `${body.name}:${body.run_id}`;
@@ -260,6 +275,7 @@ async function intercept({ requestId, request }) {
       }
       const next = user(body.message, snapshot.turns.length);
       next.queued = snapshot.running;
+      next.mode = body.mode;
       snapshot.turns.push(next);
       if (!snapshot.running) snapshot.turns.push(assistant("Mock reply accepted", snapshot.turns.length));
       snapshot.total_turns = snapshot.turns.length;
@@ -437,6 +453,25 @@ try {
     await type('[aria-label="Search conversations"]', "");
     await open(other, "Mock other answer");
     assert.equal(await contains("Mock main answer"), false);
+    await open(main, "Mock main answer");
+  });
+
+  await check("chat header copies the current thread ID over HTTP", async () => {
+    await open(main, "Mock main answer");
+    await evaluate(`window.__copiedChatIds = []; window.__originalCopyCommand = document.execCommand; document.execCommand = (command) => { if (command === 'copy') { window.__copiedChatIds.push(document.activeElement.value); return true; } return false; }`);
+    try {
+      await click('[aria-label="Copy chat ID"]');
+      await until(() => evaluate(`document.querySelector('[role="status"]')?.textContent === 'Chat ID copied'`), "copy confirmation");
+      assert.equal(await evaluate(`window.__copiedChatIds.at(-1)`), main.runId);
+      await open(other, "Mock other answer");
+      await click('[aria-label="Copy chat ID"]');
+      await until(() => evaluate(`window.__copiedChatIds.at(-1) === ${JSON.stringify(other.runId)}`), "current chat ID copied");
+      await evaluate(`document.execCommand = () => false`);
+      await click('[aria-label="Copy chat ID"]');
+      await until(() => evaluate(`document.querySelector('[role="alert"]')?.textContent.includes('Could not copy the chat ID')`), "copy failure is visible");
+    } finally {
+      await evaluate(`document.execCommand = window.__originalCopyCommand`);
+    }
     await open(main, "Mock main answer");
   });
 
@@ -843,6 +878,11 @@ try {
     assert.equal(await evaluate(`${q('[data-slot="chat-thread"]')}?.querySelector('[data-queued="true"]') ?? null`), null, "queued message is outside the transcript");
     await click('[data-slot="chat-queued-message"] summary');
     assert.equal(await evaluate(`${q('[data-slot="chat-queued-message"]')}.open`), true);
+    await type(composer, "ASAP fixture follow-up");
+    await click(`${chat} [aria-label="Send ASAP"]`);
+    await until(async () => mutations("run/reply").length === before + 2 && await draft() === "", "ASAP reply accepted");
+    assert.equal(mutations("run/reply").at(-1).body.mode, "asap");
+    await until(() => evaluate(`${q(chat)}.querySelector('[aria-label="Queued messages"]')?.textContent.includes("Queued · ASAP") === true`), "ASAP queue label");
     await click(`${chat} [aria-label="Stop response"]`);
     await until(() => mutations("run/stop").length === 1, "Stop request");
     assert.deepEqual(mutations("run/stop")[0].body, { name: main.agent, run_id: main.runId });
@@ -941,11 +981,11 @@ try {
     assert.equal(await evaluate(`getComputedStyle(document.querySelector('[data-slot="app-sidebar"]')).display`), 'none');
     assert.equal(await evaluate(`getComputedStyle(document.querySelector('[data-slot="app-topbar"]')).display`), 'none');
     assert.equal(await evaluate(`document.querySelector('[data-slot="app-secondary-navigation"]').hidden`), false);
-    assert.deepEqual(await evaluate(`(() => {const r=document.querySelector('[data-slot="app-layout-surface"]').getBoundingClientRect();return [r.x,r.y,r.width,r.height]})()`), await evaluate(`[0,0,innerWidth,innerHeight]`));
+    assert.deepEqual(await evaluate(`(() => {const r=document.querySelector('[data-slot="app-layout-surface"]').getBoundingClientRect();return [r.x,r.y,r.width,r.height]})()`), await evaluate(`[0,0,document.body.clientWidth,innerHeight]`));
     assert.equal(await evaluate(`document.querySelector('[data-slot="app-secondary-navigation"]').getBoundingClientRect().width`), width);
     assert.equal(await draft(), 'Draft while expanded');
     await send('Emulation.setDeviceMetricsOverride', {width:390,height:844,deviceScaleFactor:1,mobile:false});
-    assert.deepEqual(await evaluate(`(() => {const r=document.querySelector('[data-slot="app-layout-surface"]').getBoundingClientRect();return [r.x,r.y,r.width,r.height]})()`), [0,0,390,844]);
+    assert.deepEqual(await evaluate(`(() => {const r=document.querySelector('[data-slot="app-layout-surface"]').getBoundingClientRect();return [r.x,r.y,r.width,r.height]})()`), await evaluate(`[0,0,document.body.clientWidth,innerHeight]`));
     await send('Emulation.setDeviceMetricsOverride', {width:1280,height:900,deviceScaleFactor:1,mobile:false});
     await click('[aria-label="Restore navigation"]');
     assert.equal(await evaluate(`document.querySelector('[data-slot="app-secondary-navigation"]').getBoundingClientRect().width`), width);
@@ -975,13 +1015,42 @@ try {
     await key('Enter');
     await until(() => evaluate(`document.querySelector('${menu}')?.textContent.includes('Fixture rename refused')`), "context error stays visible");
     assert.equal(await evaluate(`document.querySelector('#context-chat-name').value`), 'Context renamed');
+    holdIndexRefresh = true;
     await key('Enter');
-    await until(() => evaluate(`!document.querySelector('${menu}')`), "context rename saved");
+    await until(() => heldIndexes.length > 0, "rename refresh held");
+    await until(() => evaluate(`!document.querySelector('${menu}')`), "context rename closes before refresh");
+    await releaseIndexRefresh();
+    await until(() => evaluate(`${q(listLink(other))}?.textContent.includes('Context renamed')`), "renamed sidebar refreshed");
     assert.ok(await evaluate(`${q(listLink(other))}.textContent.includes('Context renamed')`));
     await evaluate(`${q(listLink(other))}.focus(); ${q(listLink(other))}.dispatchEvent(new KeyboardEvent('keydown',{key:'F10',shiftKey:true,bubbles:true,cancelable:true}))`);
     await until(() => evaluate(`!!document.querySelector('${menu}')`), "keyboard context menu opens");
     await key('Escape');
     assert.equal(await evaluate(`document.activeElement===${q(listLink(other))}`), true);
+  });
+
+  await check("Hide persists, removes an inactive chat and preserves the current chat", async () => {
+    const menu = '[data-slot="chat-context-menu"]';
+    await evaluate(`${q(listLink(other))}.dispatchEvent(new MouseEvent('contextmenu', {bubbles:true,cancelable:true,clientX:220,clientY:300}))`);
+    assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('${menu} [role="menuitem"]'), item => item.textContent)`), ['Rename', 'Star', 'Hide']);
+    failNextHide = true;
+    await click(`${menu} button:nth-of-type(3)`);
+    await until(() => evaluate(`document.querySelector('${menu}')?.textContent.includes('Fixture hide refused')`), "hide error is visible");
+    assert.ok(await evaluate(`!!${q(listLink(other))}`));
+    holdIndexRefresh = true;
+    await click(`${menu} button:nth-of-type(3)`);
+    await until(() => heldIndexes.length > 0, "hide refresh held");
+    await until(() => evaluate(`!document.querySelector('${menu}')`), "hide closes before refresh");
+    await releaseIndexRefresh();
+    await until(() => evaluate(`!${q(listLink(other))}`), "hidden chat removed");
+    assert.ok(hiddenRuns.has(`${other.agent}:${other.runId}`));
+    assert.ok(await evaluate(`${q(listLink(main))}.getAttribute('aria-current')==='page'`));
+    await evaluate(`${q(listLink(main))}.dispatchEvent(new MouseEvent('contextmenu', {bubbles:true,cancelable:true,clientX:220,clientY:300}))`);
+    await click(`${menu} button:nth-of-type(3)`);
+    await until(() => evaluate(`!document.querySelector('${menu}') && !${q(listLink(main))} && !new URL(location.href).searchParams.has('run')`), "hiding the active chat opens a blank chat");
+    hiddenRuns.clear();
+    await until(() => evaluate(`!!${q(listLink(other))} && !!${q(listLink(main))}`), "fixture chats restored", 12000);
+    await open(other, "Mock other answer");
+    await open(main, "Mock main answer");
   });
 
   await check("chat stars persist across navigation and can be removed", async () => {
@@ -1004,7 +1073,11 @@ try {
     await key("Enter");
     await until(() => evaluate(`document.querySelector('[data-slot="chat-rename"]')?.textContent.includes('Fixture rename refused')`), "rename error retains editor");
     assert.equal(await evaluate(`document.querySelector('[aria-label="Chat name"]').value`), "My design review");
+    holdIndexRefresh = true;
     await click('[aria-label="Save chat name"]');
+    await until(() => heldIndexes.length > 0, "header rename refresh held");
+    await until(() => evaluate(`!document.querySelector('[data-slot="chat-rename"]')`), "header rename closes before refresh");
+    await releaseIndexRefresh();
     await until(() => evaluate(`${q(chat)}.querySelector('h1')?.textContent==='My design review'`), "header renamed");
     assert.ok(await evaluate(`${q(listLink(main))}.textContent.includes('My design review')`));
     await click('[aria-label="Rename chat"]');

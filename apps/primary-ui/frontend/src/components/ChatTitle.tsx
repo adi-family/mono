@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Check, LoaderCircle, Pencil, Star, X } from "lucide-react";
+import { Check, Copy, LoaderCircle, Pencil, Star, X } from "lucide-react";
 import { Button } from "@design-system/ui";
 import type { ConversationRef } from "../lib/app-chat";
 
@@ -12,6 +12,40 @@ export function ChatTitle({ title, conversation, onRename, starred, onStar }: {
   const [name, setName] = useState(title);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [copiedId, setCopiedId] = useState("");
+  useEffect(() => { setCopiedId(""); }, [conversation?.agent, conversation?.runId, conversation?.source]);
+  useEffect(() => {
+    if (!copiedId) return;
+    const timer = window.setTimeout(() => setCopiedId(""), 2000);
+    return () => window.clearTimeout(timer);
+  }, [copiedId]);
+  async function copyId() {
+    if (!conversation) return;
+    const id = conversation.runId;
+    const fallback = () => {
+      const previousFocus = document.activeElement;
+      const input = document.createElement("textarea");
+      input.value = id;
+      input.style.position = "fixed";
+      input.style.opacity = "0";
+      input.setAttribute("aria-label", "Chat ID to copy");
+      document.body.append(input);
+      input.select();
+      try {
+        if (!document.execCommand("copy")) throw new Error("Copy failed");
+      } finally {
+        input.remove();
+        if (previousFocus instanceof HTMLElement) previousFocus.focus({ preventScroll: true });
+      }
+    };
+    setError("");
+    try {
+      if (navigator.clipboard) {
+        try { await navigator.clipboard.writeText(id); } catch { fallback(); }
+      } else { fallback(); }
+      setCopiedId(id);
+    } catch { setCopiedId(""); setError("Could not copy the chat ID. Try again."); }
+  }
   const inFlight = useRef(false);
   const input = useRef<HTMLInputElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -44,6 +78,10 @@ export function ChatTitle({ title, conversation, onRename, starred, onStar }: {
       catch (cause) { setError(cause instanceof Error ? cause.message : "Could not update this chat. Try again."); }
       finally { inFlight.current = false; setSaving(false); }
     }}><Star aria-hidden="true" className={starred ? "size-3 fill-current" : "size-3"} /></Button>}
+    {conversation && <Button type="button" size="icon" variant="ghost" className="text-muted-foreground size-6 shrink-0" aria-label="Copy chat ID" title={`Copy chat ID: ${conversation.runId}`} onClick={copyId}>
+      {copiedId === conversation.runId ? <Check aria-hidden="true" className="size-3" /> : <Copy aria-hidden="true" className="size-3" />}
+    </Button>}
+    <span role="status" className="sr-only">{copiedId && copiedId === conversation?.runId ? "Chat ID copied" : ""}</span>
     {error && <p role="alert" className="text-destructive text-xs">{error}</p>}
     {conversation && <Button ref={trigger} type="button" size="icon" variant="ghost" className="text-muted-foreground size-6 shrink-0" aria-label="Rename chat" onClick={() => { setName(title); setEditing(true); }}><Pencil aria-hidden="true" className="size-3" /></Button>}
   </div>;

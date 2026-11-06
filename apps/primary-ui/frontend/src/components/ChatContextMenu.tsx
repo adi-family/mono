@@ -1,13 +1,13 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Pencil, Star } from "lucide-react";
+import { EyeOff, Pencil, Star } from "lucide-react";
 import { Button } from "@design-system/ui";
 import type { Conversation } from "../lib/app-chat";
 import { useAppChat } from "../lib/app-chat-state";
 
 export type ChatContextTarget = { conversation: Conversation; x: number; y: number; trigger: HTMLElement };
 export function ChatContextMenu({ target, onClose }: { target: ChatContextTarget; onClose: () => void }) {
-  const { renameChat, starChat } = useAppChat();
+  const { renameChat, starChat, hideChat } = useAppChat();
   const element = useRef<HTMLDivElement>(null);
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(target.conversation.title);
@@ -66,6 +66,7 @@ export function ChatContextMenu({ target, onClose }: { target: ChatContextTarget
     </form> : <>
       <button role="menuitem" type="button" disabled={saving} className={itemClass} onClick={() => setEditing(true)}><Pencil aria-hidden="true" className="size-3.5" />Rename</button>
       <button role="menuitem" type="button" disabled={saving} className={itemClass} onClick={() => void save(() => starChat(target.conversation, !target.conversation.starred))}><Star aria-hidden="true" className={target.conversation.starred ? "size-3.5 fill-current" : "size-3.5"} />{target.conversation.starred ? "Unstar" : "Star"}</button>
+      <button role="menuitem" type="button" disabled={saving} className={itemClass} onClick={() => void save(() => hideChat(target.conversation))}><EyeOff aria-hidden="true" className="size-3.5" />Hide</button>
     </>}
     {error && <p role="alert" className="text-destructive px-2 py-1 text-xs">{error}</p>}
   </div>, document.body);

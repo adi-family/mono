@@ -174,7 +174,7 @@ export function Interface() {
           label: item.note.trim() || item.summary.trim() || "Waiting for a background task to finish.",
         }))} />
         {snapshot?.turns.some((turn) => turn.queued) && <div aria-label="Queued messages" className="mb-2 max-h-52 space-y-1 overflow-y-auto">
-          {snapshot.turns.filter((turn) => turn.queued).map((turn) => <ChatQueuedMessage key={`${draftKey}:${turn.seq}`} data-queued="true" text={turn.text} label={turn.mode === "asap" ? "Queued · Next" : "Queued"}>
+          {snapshot.turns.filter((turn) => turn.queued).map((turn) => <ChatQueuedMessage key={`${draftKey}:${turn.seq}`} data-queued="true" text={turn.text} label={turn.mode === "asap" ? "Queued · ASAP" : "Queued"}>
             <AppChatAttachments turn={turn} source={activeSource} />
           </ChatQueuedMessage>)}
         </div>}
@@ -184,6 +184,7 @@ export function Interface() {
           value={draft}
           onValueChange={setDraft}
           onSend={sendMessage}
+          onSendAsap={running ? (message) => sendMessage(message, "asap") : undefined}
           attachments={images}
           attachmentsBusy={images.some((image) => !image.attachmentId && !image.error)}
           onFilesSelect={addImages}

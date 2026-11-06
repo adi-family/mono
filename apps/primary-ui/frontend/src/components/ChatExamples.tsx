@@ -443,6 +443,12 @@ export function ChatExamples() {
           <ChatComposer
             value={testDraft}
             onValueChange={setTestDraft}
+            onSendAsap={async (message) => {
+              setLastSent("");
+              await new Promise((resolve) => setTimeout(resolve, 600));
+              if (simulateFailure) throw new Error("Preview send failure");
+              setLastSent(`ASAP · ${message}`);
+            }}
             inputLabel="Try the chat composer"
             disabled={locked}
             disabledReason="This conversation is read-only. Turn off the preview option to send a message."
