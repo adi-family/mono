@@ -76,7 +76,7 @@ function PackagePage({ app }: { app: MarketplaceApp }) {
     <header className="flex flex-wrap items-start gap-5">
       <div className="bg-muted flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-xl">{icon ? <CatalogImage src={icon} alt="" slot="marketplace-package-icon" className="size-16 object-contain" fallback={<Package className="size-7" />} /> : <Package className="size-7" />}</div>
       <div className="min-w-0 flex-1"><p className="text-muted-foreground mb-2 text-xs">From {app.marketplace}</p><h2 className="text-3xl font-semibold tracking-tight">{app.name} {app.version && <span className="text-muted-foreground text-sm font-normal">v{app.version}</span>}</h2><p className="text-muted-foreground mt-3 text-sm leading-relaxed">{app.description}</p><div className="mt-3 flex flex-wrap gap-2">{app.keywords?.map((word) => <span key={word} className="bg-muted text-muted-foreground rounded-md px-2 py-1 text-xs">{word}</span>)}</div></div>
-      <Button {...disabled} data-slot="marketplace-install" onClick={() => openInstall()}>{installed ? "Install another copy" : elements.length > 1 ? "Install everything" : "Install"}</Button>
+      <Button {...disabled} className="w-full sm:w-auto" data-slot="marketplace-install" onClick={() => openInstall()}>{installed ? "Install another copy" : elements.length > 1 ? "Install everything" : "Install"}</Button>
     </header>
     {message && <p role="status" className="bg-muted rounded-lg border p-4 text-sm whitespace-pre-wrap">{message}</p>}
     {error && !install && !confirmation && <p role="alert" className="text-destructive rounded-lg border p-4 text-sm">{error}</p>}
