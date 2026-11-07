@@ -14,7 +14,7 @@ export function ShowcaseLayout() {
   const { pathname, hash, key } = useLocation();
   const { theme, setTheme } = useTheme();
   const isHome = pathname === "/";
-  const isMarketplace = pathname === "/marketplace";
+  const isMarketplace = (pathname === "/marketplace" || pathname.startsWith("/marketplace/"));
   const isInterface = pathname === "/interface";
   const title = isHome
     ? "Home"

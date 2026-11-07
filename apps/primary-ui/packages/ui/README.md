@@ -27,19 +27,17 @@ Stopped apps keep their wake links. Catalog reads do not start any apps.
 The Design System tile opens the component gallery at `/library`. Global navigation contains
 Home (the ADI logo), Chats (`/interface`), Marketplace (`/marketplace`), and Settings
 (the existing main ADI settings page, pinned to the bottom).
-Marketplace is a new React catalog page with search, category filters, package details,
-repository links, and copyable terminal install commands. It reads the official ADI public
-manifest directly from GitHub, with loading, retry, and empty states. Installation runs on
-the machine where the user executes the command. Catalog icons and gallery previews render
-on cards; package details include captioned screenshots and videos with poster images.
-Missing icons use category symbols, and failed images show a fallback.
-Card titles, previews, and View package links open the existing native package page at
-`/marketplace/adi/<slug>` for installation and management of installed copies. These are
-document links (not React Router links); the dashboard uses `app.adi`, while primary
-panels retain their own origin. Quick preview keeps inline details available in the catalog.
-The existing native marketplace remains
-separate; activating this React route on the primary app requires its native route mapping
-to serve the React page instead of the legacy marketplace.
+Marketplace is a React catalog and package detail page at `/marketplace/<source>/<slug>`.
+Both read this machine's existing `/api/marketplace` catalog, including configured sources
+and installed copies. The dashboard relays a fixed allowlist under `/api/app`; primary
+panels call their own native API. Navigation stays in React, including direct reloads.
+Cards show catalog icons and previews; details show captioned images, videos, Markdown,
+package contents and repository pins. Missing images have fallbacks.
+The install dialog supports a new project, an existing project, or global scope; legacy
+apps also expose copy name and start choice. Bundles can install one element or everything.
+Installed copies expose Start/Open, safe update, confirmed force update and scoped element
+uninstall through existing Marketplace APIs. Failed actions retain the form and show the API
+error. Quick preview keeps inline details available in the catalog.
 New chat opens the chat form without resuming history or sending a message.
 Keep the gallery away from `/components`: that path collides with the frontend's
 `components.json` file in the Vite dev server.
@@ -47,7 +45,7 @@ Keep the gallery away from `/components`: that path collides with the frontend's
 ### Primary ADI interface
 
 The same React app can run as the primary interface on `app.adi`, alongside the original
-settings, marketplace, and embedded-chat pages. Build it with the native API prefix:
+settings and embedded-chat pages. Build it with the native API prefix:
 
 ```sh
 cd frontend && bun run build:primary
@@ -59,7 +57,7 @@ at the dashboard backend: its relay forwards back to `app.adi`.
 
 The native `adi-app` server supports `ADI_PRIMARY_UI_DIST=/path/to/dist-primary`. It serves
 the React Home, Chats, gallery, and old `/chat/...` bookmarks from that build, while keeping
-the original `/extended/*`, `/marketplace/*`, and `/embed/*` pages and their assets. Settings
+the original `/extended/*` and `/embed/*` pages and their assets. Settings
 and Fleet links stay on the primary panel's own origin. `ADI_WEBAPP_DIST` remains a separate
 override for the original interface; setting it to the React build would replace Settings too.
 

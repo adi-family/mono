@@ -148,12 +148,12 @@ try {
     assert.equal(await evaluate("document.title"), "Marketplace — ADI");
     assert.equal(await evaluate(`${q('a[aria-label="Marketplace"]')}.getAttribute('aria-current')`), "page");
     await until(() => evaluate(`document.querySelectorAll('main[aria-label="Marketplace"] [data-slot="card"]').length > 0`), "marketplace packages load");
-    const media = await evaluate(`fetch('https://raw.githubusercontent.com/adi-family/marketplace/main/apps/marketplace.json').then(response=>response.json()).then(data=>({icons:data.apps.filter(item=>item.icon).length,previews:data.apps.filter(item=>item.gallery?.length).length,videos:data.apps.reduce((count,item)=>count+(item.gallery?.filter(image=>image.kind==="video").length??0),0),captions:data.apps.reduce((count,item)=>count+(item.gallery?.filter(image=>image.caption).length??0),0),gallery:data.apps.reduce((count,item)=>count+(item.gallery?.filter(image=>image.kind!=="video").length??0),0)}))`);
+    const media = await evaluate(`fetch('${process.env.MARKETPLACE_ONLY === "1" ? "/api/app" : "/api"}/marketplace').then(response=>response.json()).then(data=>({icons:data.apps.filter(item=>item.icon).length,previews:data.apps.filter(item=>item.gallery?.length).length,videos:data.apps.reduce((count,item)=>count+(item.gallery?.filter(image=>image.kind==="video").length??0),0),captions:data.apps.reduce((count,item)=>count+(item.gallery?.filter(image=>image.caption).length??0),0),gallery:data.apps.reduce((count,item)=>count+(item.gallery?.filter(image=>image.kind!=="video").length??0),0)}))`);
     assert(media.icons > 0 && media.previews > 0, "live catalog publishes images");
     assert.equal(await evaluate(`document.querySelectorAll('[data-slot="marketplace-icon"]').length`), media.icons, "catalog icons render");
     assert.equal(await evaluate(`document.querySelectorAll('[data-slot="marketplace-preview"]').length`), media.previews, "catalog previews render");
     const packageLinks = await evaluate(`Array.from(document.querySelectorAll('[data-slot="marketplace-package-link"]'),link=>({href:link.href,tag:link.tagName}))`);
-    assert(packageLinks.length > 0 && packageLinks.every(link=>link.tag === "A" && link.href.startsWith(`${process.env.MARKETPLACE_ONLY === "1" ? "http://app.adi" : origin}/marketplace/adi/`)), "package actions navigate to native detail pages");
+    assert(packageLinks.length > 0 && packageLinks.every(link=>link.tag === "A" && link.href.startsWith(`${origin}/marketplace/`)), "package actions navigate to React detail pages");
     async function imagesLoaded() {
       return evaluate(`Promise.all(Array.from(document.querySelectorAll('main[aria-label="Marketplace"] img'), async image => {await image.decode();return image.naturalWidth>0;})).then(results=>results.length>0&&results.every(Boolean))`);
     }
@@ -172,26 +172,29 @@ try {
   });
 
   if (process.env.MARKETPLACE_ONLY !== "1") {
-    await check("Package page opens the native installation dialog", async () => {
+    await check("Package page opens the React installation dialog", async () => {
       await navigate("/marketplace", '[data-slot="marketplace-package-link"]');
       await click('[data-slot="marketplace-package-link"][href="/marketplace/adi/reviewer"]');
-      await until(() => evaluate(`location.pathname === '/marketplace/adi/reviewer' && ${q('.adi-market__apptitle')}?.textContent.includes('Code reviewer')`), "native reviewer detail page loads");
-      await click('.adi-market__heroact button');
-      await until(() => evaluate(`!!${q('.adi-market__dialog #market-new-project')}`), "existing installation destination form opens");
-      assert.equal(await evaluate(`${q('#market-new-project')}.value`), "Code reviewer");
+      await until(() => evaluate(`location.pathname === '/marketplace/adi/reviewer' && ${q('[data-slot="marketplace-package"]')}?.textContent.includes('Code reviewer')`), "React reviewer detail page loads");
+      assert(await evaluate(`!!${q('[data-slot="global-navigation"]')}`), 'package keeps the React application shell');
+      await send('Page.reload');
+      await until(() => evaluate(`!!${q('[data-slot="marketplace-install"]')}`), 'direct reload keeps the React package page');
+      await click('[data-slot="marketplace-install"]');
+      await until(() => evaluate(`!!${q('[data-slot="marketplace-install-form"] input[aria-label="Project name"]')}`), "existing installation destination form opens");
+      assert.equal(await evaluate(`${q('input[aria-label="Project name"]')}.value`), "Code reviewer");
       await screenshot("package-install");
-      await click('.adi-market__dialog button[type="button"]');
-      await until(() => evaluate(`!${q('.adi-market__dialog')}`), "installation dialog closes without installing");
+      await click('[data-slot="marketplace-install-form"] button[type="button"]');
+      await until(() => evaluate(`!${q('[data-slot="marketplace-install-form"]')}`), "installation dialog closes without installing");
     });
 
-    await check("Installed package opens native copy management", async () => {
+    await check("Installed package opens React copy management", async () => {
       const installed = await evaluate(`fetch('/api/marketplace').then(response=>response.json()).then(data=>data.apps.find(app=>app.marketplace==='adi'&&app.installs?.length))`);
       if (!installed) return;
       await navigate("/marketplace", '[data-slot="marketplace-package-link"]');
       await click(`[data-slot="marketplace-package-link"][href="/marketplace/adi/${installed.slug}"]`);
-      await until(() => evaluate(`!!${q('.adi-market__copy')}`), "installed copy controls render");
-      assert((await evaluate(`${q('.adi-market__copy')}.textContent`)).includes(installed.installs[0].id), "installed copy identity is visible");
-      assert(await evaluate(`!!${q('.adi-market__copy a')} || !!${q('.adi-market__copy button')}`), "existing Open or Start actions are available");
+      await until(() => evaluate(`!!${q('[data-slot="marketplace-installed"]')}`), "installed copy controls render");
+      assert((await evaluate(`${q('[data-slot="marketplace-installed"]')}.textContent`)).includes(installed.installs[0].id), "installed copy identity is visible");
+      assert(await evaluate(`!!${q('[data-slot="marketplace-installed"] a')} || !!${q('[data-slot="marketplace-installed"] button')}`), "existing Open or Start actions are available");
       await screenshot("package-installed");
     });
 

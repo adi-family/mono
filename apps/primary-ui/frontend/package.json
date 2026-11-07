@@ -14,7 +14,8 @@
     "test:chat": "bun test src/lib/personal-overrides.test.ts src/lib/app-chat.test.ts src/lib/app-chat-sources.test.ts src/lib/app-chat-sidebar.test.ts tests/app-chat-transcript.test.ts",
     "test:chat:browser": "bun tests/app-chat.browser.mjs",
     "preview": "vite preview",
-    "test:chat:sources": "bun tests/app-chat-sources.browser.mjs"
+    "test:chat:sources": "bun tests/app-chat-sources.browser.mjs",
+    "test:marketplace:browser": "bun tests/marketplace.browser.mjs"
   },
   "dependencies": {
     "react": "19.3.1",

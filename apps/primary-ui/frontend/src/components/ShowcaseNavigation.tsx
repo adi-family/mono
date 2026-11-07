@@ -34,7 +34,7 @@ export function ShowcaseNavigation() {
           <NavLink
             key={to}
             to={to}
-            end
+            end={to !== "/marketplace"}
             aria-label={label}
             title={label}
             className={({ isActive }) => cn(

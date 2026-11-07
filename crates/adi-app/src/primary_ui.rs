@@ -59,6 +59,17 @@ pub(crate) fn relative_path(path: &str) -> Option<&str> {
     // React Router accepts a trailing slash on document routes. Strip only one so repeated
     // trailing separators cannot turn an otherwise invalid path into a fixed document match.
     let document = path.strip_suffix('/').unwrap_or(path);
+    let marketplace_package = document.strip_prefix("/marketplace/").is_some_and(|rest| {
+        let parts: Vec<_> = rest.split('/').collect();
+        parts.len() == 2
+            && parts.iter().all(|part| {
+                !part.is_empty()
+                    && !part.starts_with('.')
+                    && part.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_')
+                    })
+            })
+    });
     if path == "/"
         || matches!(
             document,
@@ -69,6 +80,7 @@ pub(crate) fn relative_path(path: &str) -> Option<&str> {
                 | "/library/agents/layout-reviewer"
                 | "/chat"
         )
+        || marketplace_package
         || path.starts_with("/chat/")
     {
         return Some("index.html");
@@ -146,6 +158,8 @@ mod tests {
             "/interface/",
             "/marketplace",
             "/marketplace/",
+            "/marketplace/adi/reviewer",
+            "/marketplace/vendor/app/",
             "/library",
             "/library/",
             "/library/agents/layout-reviewer",
@@ -189,7 +203,6 @@ mod tests {
         for path in [
             "extended/settings",
             "extended/agents",
-            "marketplace/vendor/app",
             "embed/dashboard-agent",
             "api/health",
         ] {
@@ -200,7 +213,8 @@ mod tests {
             "/extended",
             "/extended/settings",
             "/extended/agents",
-            "/marketplace/vendor/app",
+            "/marketplace/vendor/app/extra",
+            "/marketplace/../app",
             "/embed/dashboard-agent",
             "/api/health",
         ] {
