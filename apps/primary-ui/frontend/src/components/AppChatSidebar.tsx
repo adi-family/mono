@@ -123,20 +123,17 @@ export function AppChatSidebar() {
   const [query, setQuery] = useState("");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [visibleCounts, setVisibleCounts] = useState<Record<string, number>>({});
-  const [expanded, setExpanded] = useState(false);
   const [menu, setMenu] = useState<Menu | null>(null);
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 30_000);
     return () => window.clearInterval(timer);
   }, []);
-  const toggleRef = useRef<HTMLButtonElement>(null);
   const filterRef = useRef<HTMLButtonElement>(null);
   const sourceRef = useRef<HTMLButtonElement>(null);
   const navigationId = useId();
   const sections = conversationSections(conversations, sourceStates, group, query);
   const count = sections.reduce((total, section) => total + section.conversations.length, 0);
-  const selectedTitle = conversations.find((conversation) => sameConversation(conversation, active))?.title;
   const sourceCount = Number(sources.local) + sources.nodes.length;
   const currentFilter = conversationFilters.find((option) => option.value === filter)?.label;
   const closeMenu = (restoreFocus = true) => {
@@ -145,21 +142,9 @@ export function AppChatSidebar() {
   };
 
   return (
-    <aside data-slot="app-chat-sidebar" className="flex min-h-0 min-w-0 flex-col md:h-full" onKeyDown={(event) => {
-      if (event.key === "Escape" && expanded) {
-        event.preventDefault();
-        setExpanded(false);
-        toggleRef.current?.focus();
-      }
-    }}>
-      <button ref={toggleRef} type="button" aria-expanded={expanded} aria-controls={navigationId} className="focus-visible:ring-ring flex w-full items-center gap-3 rounded-md px-1 py-1 text-left text-sm outline-none focus-visible:ring-2 md:hidden" onClick={() => setExpanded((value) => !value)}>
-        <span className="font-medium">Conversations</span>
-        <span className="text-muted-foreground min-w-0 flex-1 truncate text-xs">{selectedTitle ?? "New chat"}</span>
-        <ChevronDown aria-hidden="true" className={cn("size-4 shrink-0", expanded && "rotate-180")} />
-      </button>
-
-      <div id={navigationId} className={cn("mt-3 min-h-0 flex-1 flex-col md:mt-0 md:flex", expanded ? "flex" : "hidden")}>
-        <div className="mb-2 flex shrink-0 items-center gap-1 px-1">
+    <aside data-slot="app-chat-sidebar" className="flex h-full min-h-0 min-w-0 flex-col">
+      <div id={navigationId} className="flex min-h-0 flex-1 flex-col">
+        <div className="mb-2 flex shrink-0 items-center gap-1 px-1 pt-3 md:pt-0">
           <h2 className="mr-auto pl-1 text-sm font-semibold">Chats</h2>
           <Button ref={sourceRef} variant="ghost" size="icon" className={cn("size-7 shrink-0", sourceCount > 1 && "w-auto min-w-7 gap-1 px-1.5", sourceCount > 1 || !sources.local ? "text-foreground" : "text-muted-foreground")} aria-label="Conversation sources" title={`Sessions from ${[...(sources.local ? ["This machine"] : []), ...sources.nodes].join(", ")}`} aria-haspopup="menu" aria-expanded={menu === "sources"} onClick={() => setMenu((current) => current === "sources" ? null : "sources")}>
             <Network aria-hidden="true" className="size-3.5" />
@@ -168,7 +153,7 @@ export function AppChatSidebar() {
           <Button ref={filterRef} variant="ghost" size="icon" className={cn("size-7 shrink-0", filter === "all" ? "text-muted-foreground" : "text-foreground bg-foreground/8")} aria-label="Filter conversations" title={currentFilter} aria-haspopup="menu" aria-expanded={menu === "filters"} onClick={() => setMenu((current) => current === "filters" ? null : "filters")}>
             <Filter aria-hidden="true" className="size-3.5" />
           </Button>
-          <Button variant="ghost" size="icon" className="text-muted-foreground size-7 shrink-0 hover:text-foreground" aria-label="New conversation" title="New conversation" onClick={() => { newConversation(); setExpanded(false); }}>
+          <Button variant="ghost" size="icon" className="text-muted-foreground size-7 shrink-0 hover:text-foreground" aria-label="New conversation" title="New conversation" onClick={() => newConversation()}>
             <Plus aria-hidden="true" className="size-4" />
           </Button>
         </div>
@@ -185,7 +170,7 @@ export function AppChatSidebar() {
           </div>
         )}
 
-        <nav aria-label="Conversations" aria-busy={isLoading} className="min-h-0 max-h-[55svh] flex-1 overflow-y-auto overscroll-contain md:max-h-none">
+        <nav aria-label="Conversations" aria-busy={isLoading} className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
           {sections.map((section) => {
             const sectionKey = `${group}:${filter}:${section.key}`;
             const isCollapsed = !query.trim() && !!collapsed[sectionKey];
@@ -223,7 +208,6 @@ export function AppChatSidebar() {
                             if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
                             event.preventDefault();
                             openConversation(conversation);
-                            setExpanded(false);
                           }}>
                             <span className="flex min-w-0 items-center gap-2">
                               <span className="min-w-0 flex-1 truncate text-xs font-medium leading-5">{conversation.title}</span>

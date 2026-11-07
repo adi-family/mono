@@ -17,6 +17,15 @@ const Marketplace = lazy(() => import("./pages/Marketplace").then((module) => ({
 
 const MarketplacePackage = lazy(() => import("./pages/MarketplacePackage").then((module) => ({ default: module.MarketplacePackage })));
 
+function HomeEntry() {
+  const { key } = useLocation();
+  // A fresh mobile visit starts with the inbox; Home remains reachable from the tabs.
+  if (key === "default" && window.matchMedia("(max-width: 767px)").matches) {
+    return <Navigate to="/interface" replace />;
+  }
+  return <Home />;
+}
+
 function LegacyChatRedirect() {
   const { pathname } = useLocation();
   return <Navigate to={legacyChatDestination(pathname) ?? "/"} replace />;
@@ -35,7 +44,7 @@ export default function App() {
           <Route path="/index.html" element={<Navigate to="/" replace />} />
           <Route path="/chat/*" element={<LegacyChatRedirect />} />
           <Route element={<ShowcaseLayout />}>
-            <Route path="/" element={<Home />} />
+            <Route path="/" element={<HomeEntry />} />
             <Route path="/marketplace" element={<Marketplace />} />
             <Route path="/marketplace/:marketplace/:slug" element={<MarketplacePackage />} />
             <Route path="/library" element={<Components />} />

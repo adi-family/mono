@@ -1,4 +1,4 @@
-import { useLayoutEffect, useState } from "react";
+import { Suspense, useLayoutEffect, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { Outlet, useLocation } from "react-router-dom";
 
@@ -11,11 +11,12 @@ import { AppChatSidebar } from "./AppChatSidebar";
 
 export function ShowcaseLayout() {
   const [focusMode, setFocusMode] = useState(false);
-  const { pathname, hash, key } = useLocation();
+  const { pathname, search, hash, key } = useLocation();
   const { theme, setTheme } = useTheme();
   const isHome = pathname === "/";
   const isMarketplace = (pathname === "/marketplace" || pathname.startsWith("/marketplace/"));
   const isInterface = pathname === "/interface";
+  const chatDetail = isInterface && (new URLSearchParams(search).has("agent") || new URLSearchParams(search).has("run"));
   const title = isHome
     ? "Home"
     : isMarketplace
@@ -28,10 +29,11 @@ export function ShowcaseLayout() {
 
   useLayoutEffect(() => {
     if (!hash) window.scrollTo(0, 0);
-  }, [pathname, hash, key]);
+  }, [pathname, search, hash, key]);
 
   return (
     <AppLayout
+      data-mobile-screen={isInterface ? chatDetail ? "conversation" : "chats" : "page"}
       focusMode={focusMode}
       sidebarWidthStorageKey="adi.sidebar-width.v1"
       lang="en"
@@ -74,7 +76,10 @@ export function ShowcaseLayout() {
       )}
       contentProps={{ id: "page-content", tabIndex: -1, className: isInterface ? "flex min-h-0 flex-col overflow-hidden p-0 sm:p-0" : isHome ? "flex" : undefined }}
     >
-      <Outlet context={{ theme, setTheme }} />
+      {/* A page chunk that is still loading leaves the navigation and header in place. */}
+      <Suspense fallback={<p role="status" className="text-muted-foreground p-5 text-sm">Loading…</p>}>
+        <Outlet context={{ theme, setTheme }} />
+      </Suspense>
     </AppLayout>
   );
 }

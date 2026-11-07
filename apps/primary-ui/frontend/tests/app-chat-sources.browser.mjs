@@ -674,11 +674,16 @@ try {
     for (const mode of ["light", "dark", "mobile"]) {
       const mobile = mode === "mobile";
       const dark = mode === "dark";
-      await send("Emulation.setDeviceMetricsOverride", { width: mobile ? 390 : 1280, height: 900, deviceScaleFactor: 1, mobile });
+      // The theme toggle lives in the desktop topbar; phone chat screens use their own headers.
+      await send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
       const toggle = '[data-slot="theme-toggle"]';
       if (await evaluate(`${q(toggle)}.getAttribute('aria-checked')`) !== String(dark)) await click(toggle);
       await until(() => evaluate(`document.documentElement.classList.contains('dark')===${dark}`), "global menu theme applies");
-      if (mobile) await click('[data-slot="app-chat-sidebar"] button[aria-controls]');
+      if (mobile) {
+        await send("Emulation.setDeviceMetricsOverride", { width: 390, height: 900, deviceScaleFactor: 1, mobile });
+        await click('[aria-label="Back to chats"]');
+        await until(() => evaluate(`!!document.querySelector('[data-mobile-screen="chats"] [data-slot="app-chat-sidebar"]')`), "mobile inbox shows the conversation list");
+      }
       for (const label of ["Conversation sources", "Filter conversations"]) {
         await click(`[aria-label="${label}"]`);
         const menu = await evaluate(`(() => {
@@ -706,6 +711,7 @@ try {
       }
       assert.equal(await evaluate("document.documentElement.scrollWidth<=innerWidth"), true, `${mode} menus do not widen the page`);
     }
+    await send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
   });
 
   await check("invalid source deep links cannot fall back to reading or replying to a local chat", async () => {

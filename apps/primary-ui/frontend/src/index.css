@@ -213,3 +213,97 @@
     opacity: 0.25;
   }
 }
+
+/* Mobile app navigation: one screen at a time, with a persistent bottom tab bar. */
+@media (max-width: 767px) {
+  [data-slot="app-layout"][data-mobile-screen] {
+    --mobile-tabs-height: calc(3.5rem + env(safe-area-inset-bottom, 0px));
+    --app-layout-height: 100dvh;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    min-height: 100dvh;
+    padding-bottom: var(--mobile-tabs-height);
+  }
+
+  [data-mobile-screen] > [data-slot="app-sidebar"] {
+    position: fixed;
+    inset: auto 0 0;
+    z-index: 50;
+    display: block;
+    height: var(--mobile-tabs-height);
+    border-top: 1px solid color-mix(in oklab, var(--border) 60%, transparent);
+    background: color-mix(in oklab, var(--background) 88%, transparent);
+    -webkit-backdrop-filter: blur(20px) saturate(1.4);
+    backdrop-filter: blur(20px) saturate(1.4);
+  }
+
+  [data-mobile-screen] > [data-slot="app-topbar"] {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  [data-mobile-screen] > [data-slot="app-workspace-controls"] {
+    display: none;
+  }
+
+  [data-mobile-screen] > [data-slot="app-layout-surface"] > [data-slot="app-content"] {
+    grid-column: 1;
+    grid-row: 2;
+    margin: 0;
+    border-radius: 0;
+  }
+
+  [data-mobile-screen="page"] > [data-slot="app-layout-surface"] > [data-slot="app-secondary-navigation"]:not([hidden]) {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  [data-mobile-screen="page"] > [data-slot="app-layout-surface"] > [data-slot="app-secondary-navigation"]:not([hidden]) ~ [data-slot="app-content"] {
+    grid-row: 3;
+  }
+
+  /* The inbox and an open conversation are each one full-height screen with their own header. */
+  [data-slot="app-layout"][data-mobile-screen="chats"],
+  [data-slot="app-layout"][data-mobile-screen="conversation"] {
+    height: 100dvh;
+    overflow: hidden;
+    grid-template-rows: minmax(0, 1fr);
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+
+  [data-mobile-screen="chats"] > [data-slot="app-layout-surface"],
+  [data-mobile-screen="conversation"] > [data-slot="app-layout-surface"] {
+    grid-column: 1;
+    grid-row: 1;
+    grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+    margin: 0;
+    border-radius: 0;
+  }
+
+  [data-mobile-screen="chats"] > [data-slot="app-layout-surface"] > [data-slot="app-secondary-navigation"] {
+    grid-column: 1;
+    grid-row: 1;
+    height: 100%;
+    overflow: hidden;
+  }
+
+  [data-mobile-screen="chats"] > [data-slot="app-topbar"],
+  [data-mobile-screen="chats"] > [data-slot="app-layout-surface"] > [data-slot="app-content"],
+  [data-mobile-screen="conversation"] > [data-slot="app-topbar"],
+  [data-mobile-screen="conversation"] > [data-slot="app-layout-surface"] > [data-slot="app-secondary-navigation"],
+  [data-mobile-screen="conversation"] > [data-slot="app-sidebar"] {
+    display: none;
+  }
+
+  [data-slot="app-layout"][data-mobile-screen="conversation"] {
+    padding-bottom: 0;
+  }
+
+  [data-mobile-screen="conversation"] > [data-slot="app-layout-surface"] > [data-slot="app-content"] {
+    grid-row: 1;
+  }
+
+  [data-mobile-screen="conversation"] [data-slot="chat-composer"] {
+    margin-bottom: env(safe-area-inset-bottom, 0px);
+  }
+}

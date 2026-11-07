@@ -9,6 +9,14 @@ alias (`@design-system/ui` → `packages/ui/src/components.ts`). No build step s
 here and the dashboard hot-reloads. This is the live playground — see `frontend/src/pages/`.
 
 The showcase home page is `/`, with a searchable app grid and a **New chat** action.
+On screens below 768px, a fresh visit to `/` opens the compact chat inbox at `/interface`.
+A bottom tab bar provides Home (apps), Chats, Marketplace, and Settings. Home remains
+reachable from its tab. The inbox uses its own header (sources, filter, new chat) in place
+of the outer topbar. Opening a conversation or New chat shows a full-screen chat with
+Back to chats; the tab bar and outer header are hidden there, as is the Open in ADI link.
+Explicit chat links survive reloads. The inbox never auto-resumes a conversation on mobile, and keeps search, filters,
+source selection, and its scroll position mounted while a chat is open. Desktop keeps its
+existing rail and automatic conversation selection.
 Its live catalog (`frontend/src/lib/home-apps.ts`) combines this machine's dashboards with
 apps on paired machines, refreshing every 30 seconds through the existing app relay's
 fixed `GET /dashboards` and `GET /fleet/dashboards` endpoints. Each compact tile names its
@@ -37,7 +45,8 @@ The install dialog supports a new project, an existing project, or global scope;
 apps also expose copy name and start choice. Bundles can install one element or everything.
 Installed copies expose Start/Open, safe update, confirmed force update and scoped element
 uninstall through existing Marketplace APIs. Failed actions retain the form and show the API
-error. Quick preview keeps inline details available in the catalog.
+error. Catalog cards are summaries (icon, preview image, description, View package); the
+gallery, elements and install details live on the package page only.
 New chat opens the chat form without resuming history or sending a message.
 Keep the gallery away from `/components`: that path collides with the frontend's
 `components.json` file in the Vite dev server.

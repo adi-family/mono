@@ -148,7 +148,7 @@ try {
     assert.equal(await evaluate("document.title"), "Marketplace — ADI");
     assert.equal(await evaluate(`${q('a[aria-label="Marketplace"]')}.getAttribute('aria-current')`), "page");
     await until(() => evaluate(`document.querySelectorAll('main[aria-label="Marketplace"] [data-slot="card"]').length > 0`), "marketplace packages load");
-    const media = await evaluate(`fetch('${process.env.MARKETPLACE_ONLY === "1" ? "/api/app" : "/api"}/marketplace').then(response=>response.json()).then(data=>({icons:data.apps.filter(item=>item.icon).length,previews:data.apps.filter(item=>item.gallery?.length).length,videos:data.apps.reduce((count,item)=>count+(item.gallery?.filter(image=>image.kind==="video").length??0),0),captions:data.apps.reduce((count,item)=>count+(item.gallery?.filter(image=>image.caption).length??0),0),gallery:data.apps.reduce((count,item)=>count+(item.gallery?.filter(image=>image.kind!=="video").length??0),0)}))`);
+    const media = await evaluate(`fetch('${process.env.MARKETPLACE_ONLY === "1" ? "/api/app" : "/api"}/marketplace').then(response=>response.json()).then(data=>({icons:data.apps.filter(item=>item.icon).length,previews:data.apps.filter(item=>item.gallery?.length).length}))`);
     assert(media.icons > 0 && media.previews > 0, "live catalog publishes images");
     assert.equal(await evaluate(`document.querySelectorAll('[data-slot="marketplace-icon"]').length`), media.icons, "catalog icons render");
     assert.equal(await evaluate(`document.querySelectorAll('[data-slot="marketplace-preview"]').length`), media.previews, "catalog previews render");
@@ -158,14 +158,8 @@ try {
       return evaluate(`Promise.all(Array.from(document.querySelectorAll('main[aria-label="Marketplace"] img'), async image => {await image.decode();return image.naturalWidth>0;})).then(results=>results.length>0&&results.every(Boolean))`);
     }
     await until(imagesLoaded, "marketplace icons and previews decode");
-    await evaluate(`document.querySelectorAll('main[aria-label="Marketplace"] button[aria-expanded="false"]').forEach(button=>button.click())`);
-    await until(() => evaluate(`document.querySelectorAll('[data-slot="marketplace-gallery"] img').length === ${media.gallery}`), "all package gallery images render");
-    await until(imagesLoaded, "expanded gallery images decode");
-    assert.equal(await evaluate(`document.querySelectorAll('[data-slot="marketplace-gallery"] img').length`), media.gallery, "gallery screenshots render");
-    assert.equal(await evaluate(`document.querySelectorAll('[data-slot="marketplace-gallery"] video[poster][controls]').length`), media.videos, "videos retain posters and playback controls");
-    assert.equal(await evaluate(`document.querySelectorAll('[data-slot="marketplace-gallery"] figcaption').length`), media.captions, "gallery captions render");
-    await screenshot("marketplace-expanded");
-    await evaluate(`document.querySelectorAll('main[aria-label="Marketplace"] button[aria-expanded="true"]').forEach(button=>button.click())`);
+    // Cards are summaries only: no inline preview toggle, galleries live on the package page.
+    assert.equal(await evaluate(`document.querySelectorAll('main[aria-label="Marketplace"] [data-slot="card"] button[aria-expanded]').length`), 0, "cards have no quick preview toggle");
     await tokenColor('main[aria-label="Marketplace"] [data-slot="card"]');
     if (process.env.MARKETPLACE_ONLY !== "1") await settingsLink();
     await screenshot("marketplace");

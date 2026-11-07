@@ -3,7 +3,7 @@
  * Every /api/app/* request is fulfilled locally; this script never forwards a chat mutation.
  * Run: bun frontend/tests/app-chat.browser.mjs
  * Optional: SHOWCASE_URL=http://design-system.adi CHROME_BIN=/path/to/chrome
- * Optional: BROWSER_SCREENSHOTS_DIR=/tmp/chat-screenshots
+ * Optional: BROWSER_SCREENSHOTS_DIR=/tmp/chat-screenshots, MOBILE_ONLY=1
  */
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -212,6 +212,10 @@ async function intercept({ requestId, request }) {
     if (request.method === "GET" && path === "/api/app/voice") {
       await fulfill(requestId, { engines: [{id:"browser", label:"Browser", ready:true, in_browser:true, detail:"Browser recognition"}, {id:"openai",label:"OpenAI",ready:true,in_browser:false,detail:"Fixture"}], default_engine:"browser" }); return;
     }
+    if (request.method === "GET" && path === "/api/app/marketplace") {
+      await fulfill(requestId, {sources: [], apps: []});
+      return;
+    }
     if (request.method === "GET" && path === "/api/app/dashboards") {
       await fulfill(requestId, { dashboards: [{ id: "design-system", name: "Design System", description: "Shared components", host: "design-system.adi", frontend_running: true, backend_running: true, icon: "blocks", archived_at: null }] });
       return;
@@ -394,11 +398,16 @@ try {
   const activeIs = (ref) => evaluate(`(() => { const p=new URLSearchParams(location.search); return p.get('agent')===${JSON.stringify(ref.agent)} && p.get('run')===${JSON.stringify(ref.runId)}; })()`);
   const mutations = (suffix) => requests.filter((request) => request.method === "POST" && request.path === `/api/app/agents/${suffix}`);
   async function open(ref, text) {
+    if (await evaluate(`innerWidth < 768 && !!document.querySelector('[data-mobile-screen="conversation"]')`)) {
+      await click('[aria-label="Back to chats"]');
+      await until(() => evaluate(`!!document.querySelector('[data-mobile-screen="chats"]')`), "mobile inbox");
+    }
     await click(listLink(ref));
     await until(() => activeIs(ref), "selected conversation route");
     if (text) await until(() => contains(text), "selected conversation transcript");
   }
   async function check(name, fn) {
+    if (process.env.MOBILE_ONLY && !name.startsWith("mobile ")) return;
     await fn();
     checks.push(name);
     console.log(`PASS ${name}`);
@@ -1185,16 +1194,22 @@ try {
       await setTheme(mode === "dark");
       await send("Emulation.setDeviceMetricsOverride", { width: mobile ? 390 : 1280, height: 900, deviceScaleFactor: 1, mobile });
       if (mobile) {
-        const toggle = '[data-slot="app-chat-sidebar"] button[aria-controls]';
-        assert.equal(await evaluate(`${q(toggle)}.getAttribute('aria-expanded')`), "false");
-        await click(toggle);
-        assert.equal(await evaluate(`${q(toggle)}.getAttribute('aria-expanded')`), "true");
+        assert.equal(await evaluate(`getComputedStyle(${q('[data-slot="app-sidebar"]')}).display`), "none");
+        const bounds = await evaluate(`(() => {const r=${q(chat)}.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}})()`);
+        assert.deepEqual(bounds, {x:0,y:0,width:390,height:900});
+        await click('[aria-label="Back to chats"]');
+        await until(() => evaluate(`location.search === "" && !!document.querySelector('[data-mobile-screen="chats"]')`), "back opens inbox");
+        assert.equal(await evaluate(`getComputedStyle(${q('[data-slot="app-content"]')}).display`), "none");
+        assert.equal(await evaluate(`getComputedStyle(${q('[data-slot="app-topbar"]')}).display`), "none", "inbox uses its own header instead of the outer topbar");
+        assert.equal(await evaluate(`${q('[data-slot="app-chat-sidebar"]')}.getBoundingClientRect().top < 20`), true);
+        assert.equal(await evaluate(`${q('[data-slot="app-chat-sidebar"] nav')}.getBoundingClientRect().height > 400`), true);
+        const tabs = await evaluate(`Array.from(document.querySelectorAll('[data-slot="global-navigation"] a')).map(a => {const r=a.getBoundingClientRect();return {width:r.width,bottom:r.bottom};})`);
+        assert.equal(tabs.length, 4);
+        assert.ok(tabs.every(tab => tab.width >= 80 && Math.abs(tab.bottom - 900) < 1), JSON.stringify(tabs));
+        await click('[aria-label="Filter conversations"]');
         await key("Escape");
-        assert.equal(await evaluate(`${q(toggle)}.getAttribute('aria-expanded')`), "false");
-        assert.equal(await evaluate(`document.activeElement===${q(toggle)}`), true);
-        await click(toggle);
+        assert.equal(await evaluate(`document.querySelector('[data-slot="app-chat-menu"]') === null`), true);
         await open(other, "Mock other answer");
-        assert.equal(await evaluate(`${q(toggle)}.getAttribute('aria-expanded')`), "false");
       }
       await until(() => evaluate(`/^oklch\\(/.test(getComputedStyle(${q(`${chat} [data-slot="chat-composer"]`)}).backgroundColor)`), "chat theme tokens apply");
       const colors = await evaluate(`(() => {
@@ -1245,6 +1260,35 @@ try {
         await writeFile(resolve(process.env.BROWSER_SCREENSHOTS_DIR, `design-system-app-chat-${mode}.png`), Buffer.from(screenshot.data, "base64"));
       }
     }
+  });
+
+  await check("mobile starts in the inbox and keeps apps, marketplace and new chat reachable", async () => {
+    await send("Emulation.setDeviceMetricsOverride", {width:390,height:844,deviceScaleFactor:1,mobile:true});
+    await send("Page.navigate", {url: origin + "/"});
+    await until(() => evaluate(`location.pathname === '/interface' && location.search === '' && !!document.querySelector('[data-mobile-screen="chats"]')`), "fresh mobile visit opens inbox");
+    await until(() => evaluate(`${q(listLink(main))} !== null`), "inbox loads conversations");
+    await click('[aria-label="ADI home"]');
+    await until(() => evaluate(`location.pathname === '/' && !!document.querySelector('main[aria-label="Home"]')`), "Home tab opens apps");
+    await click('[data-slot="global-navigation"] a[href="/marketplace"]');
+    await until(() => evaluate(`location.pathname === '/marketplace' && !!document.querySelector('main[aria-label="Marketplace"]')`), "Marketplace tab opens");
+    await click('[data-slot="global-navigation"] a[href="/interface"]');
+    await until(() => evaluate(`location.pathname === '/interface' && location.search === '' && !!document.querySelector('[data-mobile-screen="chats"] [data-slot="app-chat-sidebar"]')`), "Chats tab opens inbox");
+    assert.equal(await evaluate(`document.querySelector('main[aria-label="Marketplace"]') === null`), true, "the previous page is gone once the tab route changes");
+    assert.ok(await evaluate(`${q('[data-slot="global-navigation"] a[aria-label="Settings"]')}.href.includes('/extended/settings')`));
+    if (process.env.BROWSER_SCREENSHOTS_DIR) {
+      await mkdir(process.env.BROWSER_SCREENSHOTS_DIR, {recursive:true});
+      const shot = await send("Page.captureScreenshot", {format:"png",captureBeyondViewport:false});
+      await writeFile(resolve(process.env.BROWSER_SCREENSHOTS_DIR,"mobile-inbox.png"),Buffer.from(shot.data,"base64"));
+    }
+    await click('[aria-label="New conversation"]');
+    await until(() => evaluate(`new URLSearchParams(location.search).has('agent') && !!document.querySelector('[data-mobile-screen="conversation"]')`), "new conversation opens full screen");
+    await click('[aria-label="Back to chats"]');
+    await until(() => evaluate(`location.search === ''`), "new conversation returns to inbox");
+    await open(main, "Mock main answer");
+    await evaluate("window.__beforeMobileReload = true");
+    await send("Page.reload");
+    await until(async () => await evaluate("!window.__beforeMobileReload") && await contains("Mock main answer"), "mobile conversation deep link survives reload");
+    assert.equal(await evaluate(`!!document.querySelector('[data-mobile-screen="conversation"]')`), true);
   });
 
   assert.deepEqual(mockErrors, [], "all API requests stayed within the intercepted fixture contract");

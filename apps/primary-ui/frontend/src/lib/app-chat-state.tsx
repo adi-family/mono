@@ -174,7 +174,7 @@ function useAppChatState() {
   }
 
   useEffect(() => {
-    if (enabled && !params.has("agent") && !params.has("run") && conversations.length && !drafts[draftKey] && !imageDrafts[draftKey]?.length && !sending.current.has(draftKey)) {
+    if (!window.matchMedia("(max-width: 767px)").matches && enabled && !params.has("agent") && !params.has("run") && conversations.length && !drafts[draftKey] && !imageDrafts[draftKey]?.length && !sending.current.has(draftKey)) {
       const recent = conversations.find((item) => item.source === activeSource);
       if (recent) navigate(conversationHref(recent), { replace: true });
     }

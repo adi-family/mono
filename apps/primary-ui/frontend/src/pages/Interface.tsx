@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
-import { ExternalLink, LoaderCircle, RefreshCw, Square } from "lucide-react";
+import { ArrowLeft, ExternalLink, LoaderCircle, RefreshCw, Square } from "lucide-react";
+import { Link } from "react-router-dom";
 import { Button, ChatComposer, ChatQueuedMessage, ChatThread, ChatWaitingStatus } from "@design-system/ui";
 
 import { ChatMicrophone } from "../components/ChatMicrophone";
@@ -128,6 +129,9 @@ export function Interface() {
   return (
     <main data-slot="app-chat" aria-label="ADI chat" className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
       <header className="flex min-w-0 shrink-0 items-center justify-between gap-3 border-b px-3 py-2 sm:px-4">
+        <Button asChild variant="ghost" size="icon" className="shrink-0 md:hidden">
+          <Link to="/interface" aria-label="Back to chats"><ArrowLeft aria-hidden="true" className="size-5" /></Link>
+        </Button>
         <div className="min-w-0 flex-1">
           <ChatTitle key={draftKey} title={title} conversation={active} onRename={renameChat} starred={conversation?.starred === true} onStar={starChat} />
           {active && <p className="text-muted-foreground mt-0.5 truncate text-xs">{active.agent}{active.source ? ` · ${active.source}` : ""}</p>}
@@ -140,7 +144,7 @@ export function Interface() {
           <Button type="button" size="icon" variant="ghost" aria-label="Refresh chat" disabled={isLoading} disabledReason="The chat is loading." onClick={retry}>
             <RefreshCw className={`size-3.5${isLoading ? " motion-safe:animate-spin" : ""}`} aria-hidden="true" />
           </Button>
-          {active && <Button asChild size="icon" variant="ghost">
+          {active && <Button asChild size="icon" variant="ghost" className="hidden md:inline-flex">
             <a href={appConversationHref(active)} target="_blank" rel="noreferrer" aria-label="Open in ADI">
               <ExternalLink className="size-3.5" aria-hidden="true" />
             </a>

@@ -198,7 +198,10 @@ function ChatComposer({
           {children}
           <p id={helperId} role="status" aria-live="polite" aria-atomic="true" data-slot="chat-composer-status" className={cn("flex items-center gap-1.5 text-xs leading-5", sending ? "text-foreground font-medium" : "text-muted-foreground")}>
             {sending && <LoaderCircle aria-hidden="true" className="size-3.5 shrink-0 motion-safe:animate-spin" />}
-            {sending ? sendingLabel : sendOnEnter ? "Enter to send · Shift + Enter for a new line" : "Use the send button to send your message."}
+            {sending ? sendingLabel : sendOnEnter
+              // Phones have no Shift + Enter; the keyboard hint only helps on wider screens.
+              ? <span className="hidden sm:inline">Enter to send · Shift + Enter for a new line</span>
+              : "Use the send button to send your message."}
           </p>
         </div>
         {isGenerating ? (
