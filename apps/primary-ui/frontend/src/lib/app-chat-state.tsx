@@ -5,7 +5,7 @@ import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import {
   answerQuestion, getAgents, getConversation, getConversationIndex, getFleetNodes, replyToConversation,
   startConversation, stopConversation, hideConversation, renameConversation, starConversation, uploadImage, attachmentUrl,
-  type Agent, type Conversation, type ConversationRef,
+  type Agent, type Conversation, type ConversationIndex, type ConversationRef,
 } from "./app-chat";
 import { conversationHref } from "./app-chat-transcript";
 import { matchesConversationFilter } from "./app-chat-sidebar";
@@ -101,19 +101,23 @@ function useAppChatState() {
     refetchInterval: (query) => query.state.data?.running || query.state.data?.turns.some((turn) => turn.pending || turn.queued) ? 1000 : 5000,
   });
   const snapshot = active && !invalidSource ? snapshotQuery.data : undefined;
+  type ChatPatch = { hidden?: boolean; title?: string; starred?: boolean };
+  const [chatPatches, setChatPatches] = useState<Record<string, ChatPatch>>({});
+  const pendingEdits = useRef(new Set<string>());
+  const [mutationError, setMutationError] = useState<string | null>(null);
   const known = useRef(new Map<string, Conversation>());
   const sourceStates = sourceList.map((source, index) => {
     const query = indexQueries[index];
     const data = query.data;
     const enrich = (conversation: Conversation) => {
       const owner = effectiveAgents[index]?.find((item) => item.name === conversation.agent);
-      const result = { ...conversation, ...(owner ? { agentStarred: owner.starred, project: conversation.project ?? owner.project } : {}) };
-      known.current.set(conversationKey(result), result);
+      const result = { ...conversation, ...chatPatches[conversationKey(conversation)], ...(owner ? { agentStarred: owner.starred, agentDisplayName: owner.displayName, project: conversation.project ?? owner.project } : {}) };
+      known.current.set(conversationKey(result), conversation);
       return result;
     };
-    const conversations = (data?.conversations ?? []).map(enrich).filter((item) => matchesConversationFilter(item, filter, active));
+    const conversations = (data?.conversations ?? []).map(enrich).filter((item) => !chatPatches[conversationKey(item)]?.hidden && matchesConversationFilter(item, filter, active));
     // A narrowing never makes the conversation being read disappear from its own rail.
-    if (active && active.source === source && !conversations.some((item) => conversationKey(item) === conversationKey(active))) {
+    if (active && !chatPatches[conversationKey(active)]?.hidden && active.source === source && !conversations.some((item) => conversationKey(item) === conversationKey(active))) {
       const prior = known.current.get(conversationKey(active));
       if (prior || snapshot) conversations.push({
         ...prior,
@@ -124,9 +128,10 @@ function useAppChatState() {
         interactive: snapshot?.interactive ?? prior?.interactive ?? false,
         pendingQuestion: snapshot ? Boolean(snapshot.pending_question) : prior?.pendingQuestion,
         awaiting: snapshot ? snapshot.awaits.length > 0 : prior?.awaiting,
+        ...chatPatches[conversationKey(active)],
       });
     }
-    const groups = data?.groups?.map((item) => ({ ...item, held: item.conversations.length, conversations: item.conversations.map(enrich).filter((row) => matchesConversationFilter(row, filter, active)) })) ?? [];
+    const groups = data?.groups?.map((item) => ({ ...item, held: item.conversations.length, conversations: item.conversations.map(enrich).filter((row) => !chatPatches[conversationKey(row)]?.hidden && matchesConversationFilter(row, filter, active)) })) ?? [];
     const exempt = active && conversations.find((item) => conversationKey(item) === conversationKey(active));
     if (group === "project" && exempt && !groups.some((item) => item.conversations.some((row) => conversationKey(row) === conversationKey(exempt)))) {
       const section = groups.find((item) => item.project === exempt.project);
@@ -237,6 +242,40 @@ function useAppChatState() {
     if (limit <= 20) client.setQueryData(snapshotKey, result);
     void refresh();
   }
+  // Keep each field overlaid through the write and subsequent reads. Polling cannot
+  // flash stale values, and rolling back one field preserves other pending edits.
+  async function editChat(ref: ConversationRef, patch: ChatPatch, write: () => Promise<void>, failure: string) {
+    const key = conversationKey(ref);
+    const field = Object.keys(patch)[0] as keyof ChatPatch;
+    const editKey = `${key}:${field}`;
+    if (pendingEdits.current.has(editKey)) return;
+    pendingEdits.current.add(editKey);
+    setMutationError(null);
+    setChatPatches((current) => ({ ...current, [key]: { ...current[key], ...patch } }));
+    try {
+      await write();
+      if (patch.hidden && selection.current.key === key && selection.current.pathname === "/interface") newConversation(ref.agent, ref.source);
+      // Update inactive filter/group caches too. A failed follow-up read must not
+      // roll back a write the server has already accepted.
+      client.setQueriesData<ConversationIndex>({ queryKey: ["app-chat", "conversations"] }, (data) => {
+        if (!data) return data;
+        const update = (rows: Conversation[]) => rows.flatMap((row) => conversationKey(row) !== key ? [row] : patch.hidden ? [] : [{ ...row, ...patch }]);
+        return { ...data, conversations: update(data.conversations), groups: data.groups?.map((section) => ({ ...section, conversations: update(section.conversations) })) };
+      });
+      await client.invalidateQueries({ queryKey: ["app-chat", "conversations"] });
+    } catch (error) {
+      setMutationError(`${failure} ${errorText(error)}`);
+    } finally {
+      setChatPatches((current) => {
+        const remaining = { ...current[key] };
+        delete remaining[field];
+        const next = { ...current, [key]: remaining };
+        if (!Object.keys(remaining).length) delete next[key];
+        return next;
+      });
+      pendingEdits.current.delete(editKey);
+    }
+  }
   return {
     newChatAgents: effectiveAgents.flat(),
     personalAgentOverrides: overrides,
@@ -254,14 +293,14 @@ function useAppChatState() {
     indexError: sourceStates.filter((item) => item.error).map((item) => `${sourceName(item.source)}: ${item.error}`).join(" ") || null,
     conversationError: invalidSource ? "This chat source is invalid. Choose a source from the sidebar." : active && snapshotQuery.error ? errorText(snapshotQuery.error) : null,
     actionError: actionError?.key === draftKey ? actionError.message : null, isStopping: stopping === draftKey,
-    // Background reads must not hold menus open after a successful mutation.
-    hideChat: async (ref: ConversationRef) => {
-      await hideConversation(ref);
-      if (active && conversationKey(active) === conversationKey(ref)) newConversation(ref.agent, ref.source);
-      void refresh();
+    mutationError, dismissMutationError: () => setMutationError(null),
+    hideChat: (ref: ConversationRef) => editChat(ref, { hidden: true }, () => hideConversation(ref), "Could not hide this chat."),
+    starChat: (ref: ConversationRef, starred: boolean) => editChat(ref, { starred }, () => starConversation(ref, starred), "Could not update the chat star."),
+    renameChat: (ref: ConversationRef, title: string) => {
+      const prior = known.current.get(conversationKey(ref));
+      const defaultTitle = prior?.message.trim().replace(/\s+/g, " ").slice(0, 120) || "Untitled chat";
+      return editChat(ref, { title: title.trim() || defaultTitle }, () => renameConversation(ref, title), "Could not rename this chat.");
     },
-    starChat: async (ref: ConversationRef, starred: boolean) => { await starConversation(ref, starred); void refresh(); },
-    renameChat: async (ref: ConversationRef, title: string) => { await renameConversation(ref, title); void refresh(); },
     appendDraft: (text: string) => setDrafts((current) => ({ ...current, [draftKey]: [current[draftKey]?.trimEnd(), text.trim()].filter(Boolean).join(" ") })),
     openConversation, newConversation, refresh, sendMessage, stopResponse, submitAnswer,
     loadEarlier: () => setLimits((current) => ({ ...current, [draftKey]: limit + 20 })),
@@ -271,7 +310,9 @@ function useAppChatState() {
 const AppChatContext = createContext<ReturnType<typeof useAppChatState> | null>(null);
 export function AppChatProvider({ children }: { children: ReactNode }) {
   const state = useAppChatState();
-  return <AppChatContext.Provider value={state}>{children}</AppChatContext.Provider>;
+  return <AppChatContext.Provider value={state}>{children}{state.mutationError && <div role="alert" data-slot="chat-mutation-error" className="bg-popover text-popover-foreground border-border fixed right-4 bottom-4 z-50 flex max-w-sm items-start gap-3 rounded-md border p-3 text-sm shadow-md">
+    <p>{state.mutationError}</p><button type="button" aria-label="Dismiss chat error" className="shrink-0 underline" onClick={state.dismissMutationError}>Dismiss</button>
+  </div>}</AppChatContext.Provider>;
 }
 export function useAppChat() {
   const value = useContext(AppChatContext);

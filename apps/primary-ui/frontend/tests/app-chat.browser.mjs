@@ -86,7 +86,10 @@ let heldReply = null;
 let holdNextStart = false;
 let heldStart = null;
 let created = 0;
+let failNextStar = false;
 let failNextRename = false;
+let holdNextEdit = false;
+let heldEdit = null;
 const hiddenRuns = new Set();
 let failNextHide = false;
 let holdIndexRefresh = false;
@@ -231,6 +234,11 @@ async function intercept({ requestId, request }) {
       await fulfill(requestId, allRuns());
       return;
     }
+    if (request.method === "POST" && /\/agents\/run\/(hide|star|rename)$/.test(path) && holdNextEdit) {
+      holdNextEdit = false;
+      await new Promise((resolve) => { heldEdit = resolve; });
+      heldEdit = null;
+    }
     if (request.method === "POST" && path === "/api/app/agents/run/hide") {
       if (failNextHide) { failNextHide = false; await fulfill(requestId, {ok:false,error:"Fixture hide refused"}); return; }
       assert.equal(body.hidden, true);
@@ -238,6 +246,7 @@ async function intercept({ requestId, request }) {
       await fulfill(requestId, {ok:true}); return;
     }
     if (request.method === "POST" && path === "/api/app/agents/run/star") {
+      if (failNextStar) { failNextStar = false; await fulfill(requestId, {ok:false,error:"Fixture star refused"}); return; }
       const id = `${body.name}:${body.run_id}`;
       if (body.starred) stars.add(id); else stars.delete(id);
       await fulfill(requestId, { ok: true }); return;
@@ -787,7 +796,7 @@ try {
     await open(child, "Mock child answer");
     await click('[data-slot="app-chat-sidebar"] [aria-label="New conversation"]');
     await until(() => evaluate(`!!document.querySelector('[data-slot="new-chat-starred-agent"]')`), "starred agents shown");
-    assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('[data-app-chat-agent] option')).filter(o=>o.value).map(o=>o.value)`), ['design-assistant']);
+    assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('[data-app-chat-agent] option')).filter(o=>o.value).map(o=>o.value)`), ['design-assistant', 'layout-reviewer']);
     assert.equal(await evaluate(`document.querySelector('[data-slot="new-chat-starred-agent"]').textContent.includes('design-assistant')`), true);
     await click('[data-slot="new-chat-starred-agent"]');
     await until(() => evaluate(`new URLSearchParams(location.search).get('agent')==='design-assistant'`), "starred selection changes destination");
@@ -878,11 +887,8 @@ try {
     assert.equal(await evaluate(`${q('[data-slot="chat-thread"]')}?.querySelector('[data-queued="true"]') ?? null`), null, "queued message is outside the transcript");
     await click('[data-slot="chat-queued-message"] summary');
     assert.equal(await evaluate(`${q('[data-slot="chat-queued-message"]')}.open`), true);
-    await type(composer, "ASAP fixture follow-up");
-    await click(`${chat} [aria-label="Send ASAP"]`);
-    await until(async () => mutations("run/reply").length === before + 2 && await draft() === "", "ASAP reply accepted");
-    assert.equal(mutations("run/reply").at(-1).body.mode, "asap");
-    await until(() => evaluate(`${q(chat)}.querySelector('[aria-label="Queued messages"]')?.textContent.includes("Queued · ASAP") === true`), "ASAP queue label");
+    assert.equal(await evaluate(`!!${q(chat)}.querySelector('[aria-label="Send ASAP"]')`), false, "composer only offers regular queue submission");
+    assert.equal(mutations("run/reply").length, before + 1);
     await click(`${chat} [aria-label="Stop response"]`);
     await until(() => mutations("run/stop").length === 1, "Stop request");
     assert.deepEqual(mutations("run/stop")[0].body, { name: main.agent, run_id: main.runId });
@@ -1000,7 +1006,11 @@ try {
     const rightClick = async () => evaluate(`${q(listLink(other))}.dispatchEvent(new MouseEvent('contextmenu', {bubbles:true,cancelable:true,clientX:220,clientY:300}))`);
     await rightClick();
     await until(() => evaluate(`!!document.querySelector('${menu}')`), "context menu opens");
+    holdNextEdit = true;
     await click(`${menu} button:nth-of-type(2)`);
+    await until(() => heldEdit !== null, "star request held");
+    await until(() => evaluate(`${q(listLink(other))}?.querySelector('[aria-label="Starred chat"]') !== null`), "star updates before response");
+    heldEdit();
     await until(() => evaluate(`!document.querySelector('${menu}')`), "star saved");
     assert.ok(stars.has(`${other.agent}:${other.runId}`));
     assert.ok(await evaluate(`${q(listLink(main))}.getAttribute('aria-current')==='page'`));
@@ -1013,8 +1023,11 @@ try {
     await type('#context-chat-name', 'Context renamed');
     failNextRename = true;
     await key('Enter');
-    await until(() => evaluate(`document.querySelector('${menu}')?.textContent.includes('Fixture rename refused')`), "context error stays visible");
-    assert.equal(await evaluate(`document.querySelector('#context-chat-name').value`), 'Context renamed');
+    await until(() => evaluate(`document.querySelector('[data-slot="chat-mutation-error"]')?.textContent.includes('Fixture rename refused')`), "context rename failure notification");
+    assert.equal(await evaluate(`!!document.querySelector('${menu}')`), false);
+    await rightClick();
+    await click(`${menu} button`);
+    await type('#context-chat-name', 'Context renamed');
     holdIndexRefresh = true;
     await key('Enter');
     await until(() => heldIndexes.length > 0, "rename refresh held");
@@ -1033,10 +1046,15 @@ try {
     await evaluate(`${q(listLink(other))}.dispatchEvent(new MouseEvent('contextmenu', {bubbles:true,cancelable:true,clientX:220,clientY:300}))`);
     assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('${menu} [role="menuitem"]'), item => item.textContent)`), ['Rename', 'Star', 'Hide']);
     failNextHide = true;
+    holdNextEdit = true;
     await click(`${menu} button:nth-of-type(3)`);
-    await until(() => evaluate(`document.querySelector('${menu}')?.textContent.includes('Fixture hide refused')`), "hide error is visible");
+    await until(() => heldEdit !== null, "hide request held");
+    await until(() => evaluate(`!${q(listLink(other))}`), "row removed before response");
+    heldEdit();
+    await until(() => evaluate(`document.querySelector('[data-slot="chat-mutation-error"]')?.textContent.includes('Fixture hide refused')`), "hide error is visible");
     assert.ok(await evaluate(`!!${q(listLink(other))}`));
     holdIndexRefresh = true;
+    await evaluate(`${q(listLink(other))}.dispatchEvent(new MouseEvent('contextmenu', {bubbles:true,cancelable:true,clientX:220,clientY:300}))`);
     await click(`${menu} button:nth-of-type(3)`);
     await until(() => heldIndexes.length > 0, "hide refresh held");
     await until(() => evaluate(`!document.querySelector('${menu}')`), "hide closes before refresh");
@@ -1053,6 +1071,20 @@ try {
     await open(main, "Mock main answer");
   });
 
+  await check("failed stars roll back and report the error outside the menu", async () => {
+    await open(main, "Mock main answer");
+    failNextStar = true;
+    holdNextEdit = true;
+    await click('[aria-label="Star chat"]');
+    await until(() => heldEdit !== null, "failed star request held");
+    await until(() => evaluate(`!!document.querySelector('[aria-label="Unstar chat"]')`), "optimistic header star");
+    heldEdit();
+    await until(() => evaluate(`document.querySelector('[data-slot="chat-mutation-error"]')?.textContent.includes('Fixture star refused')`), "star failure notification");
+    await until(() => evaluate(`!!document.querySelector('[aria-label="Star chat"]') && !${q(listLink(main))}?.querySelector('[aria-label="Starred chat"]')`), "failed star rolled back");
+    await click('[aria-label="Dismiss chat error"]');
+    assert.equal(await evaluate(`!!document.querySelector('[data-slot="chat-mutation-error"]')`), false);
+  });
+
   await check("chat stars persist across navigation and can be removed", async () => {
     await open(main, "Mock main answer");
     await click('[aria-label="Star chat"]');
@@ -1065,16 +1097,22 @@ try {
     assert.equal(stars.size, 0);
   });
 
-  await check("chat titles rename, retain edits on error, cancel and restore the default", async () => {
+  await check("chat titles rename optimistically, report failures, cancel and restore the default", async () => {
     await open(main, "Mock main answer");
     await click('[aria-label="Rename chat"]');
     await type('[aria-label="Chat name"]', "My design review");
     failNextRename = true;
     await key("Enter");
-    await until(() => evaluate(`document.querySelector('[data-slot="chat-rename"]')?.textContent.includes('Fixture rename refused')`), "rename error retains editor");
-    assert.equal(await evaluate(`document.querySelector('[aria-label="Chat name"]').value`), "My design review");
+    await until(() => evaluate(`document.querySelector('[data-slot="chat-mutation-error"]')?.textContent.includes('Fixture rename refused')`), "header rename failure notification");
+    assert.equal(await evaluate(`!!document.querySelector('[data-slot="chat-rename"]')`), false);
+    await click('[aria-label="Rename chat"]');
+    await type('[aria-label="Chat name"]', "My design review");
     holdIndexRefresh = true;
+    holdNextEdit = true;
     await click('[aria-label="Save chat name"]');
+    await until(() => heldEdit !== null, "rename request held");
+    await until(() => evaluate(`${q(chat)}.querySelector('h1')?.textContent==='My design review' && ${q(listLink(main))}?.textContent.includes('My design review')`), "rename updates before response");
+    heldEdit();
     await until(() => heldIndexes.length > 0, "header rename refresh held");
     await until(() => evaluate(`!document.querySelector('[data-slot="chat-rename"]')`), "header rename closes before refresh");
     await releaseIndexRefresh();

@@ -381,6 +381,19 @@ try {
     await until(() => evaluate(`!!${q(localCard)}`), 'restore inherits shared star');
     assert.equal(requests.filter((request) => request.method === "POST").length, mutations);
 
+    async function renamePersonal(value) {
+      await evaluate(`${q(localCard)}.dispatchEvent(new MouseEvent('contextmenu', {bubbles:true, cancelable:true, clientX:200, clientY:200}))`);
+      await click('[data-slot="agent-context-menu"] button:nth-child(2)');
+      await evaluate(`(() => { const input = document.querySelector('input[aria-label="Name for me"]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(value)}); input.dispatchEvent(new Event('input', {bubbles:true})); })()`);
+      await click('[data-slot="agent-context-menu"] button[type="submit"]');
+    }
+    await renamePersonal('My personal helper');
+    await until(() => evaluate(`${q(localCard)}.textContent.includes('My personal helper') && !${q(remoteCard)}.textContent.includes('My personal helper')`), 'personal name isolates machine');
+    await reloadWhen(`${q(localCard)}?.textContent.includes('My personal helper')`, 'personal name survives reload');
+    await renamePersonal('');
+    await until(() => evaluate(`!${q(localCard)}.textContent.includes('My personal helper')`), 'empty name restores shared name');
+    assert.equal(requests.filter((request) => request.method === "POST").length, mutations);
+
     const launches = requests.filter((request) => request.path === '/agents/run').length;
     await click('[data-slot="new-chat-starred-agent"][data-source="' + remote + '"]');
     await until(() => evaluate(`new URLSearchParams(location.search).get('node')===${JSON.stringify(remote)}`), "remote starred agent selected");

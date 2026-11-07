@@ -62,7 +62,12 @@ pub(crate) fn relative_path(path: &str) -> Option<&str> {
     if path == "/"
         || matches!(
             document,
-            "/index.html" | "/interface" | "/library" | "/library/agents/layout-reviewer" | "/chat"
+            "/index.html"
+                | "/interface"
+                | "/marketplace"
+                | "/library"
+                | "/library/agents/layout-reviewer"
+                | "/chat"
         )
         || path.starts_with("/chat/")
     {
@@ -139,6 +144,8 @@ mod tests {
             "/index.html/",
             "/interface",
             "/interface/",
+            "/marketplace",
+            "/marketplace/",
             "/library",
             "/library/",
             "/library/agents/layout-reviewer",
@@ -193,7 +200,6 @@ mod tests {
             "/extended",
             "/extended/settings",
             "/extended/agents",
-            "/marketplace",
             "/marketplace/vendor/app",
             "/embed/dashboard-agent",
             "/api/health",

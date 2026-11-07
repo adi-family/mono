@@ -231,7 +231,7 @@ export function AppChatSidebar() {
                               {status && <span className={cn("size-1.5 shrink-0 rounded-full", conversation.pendingQuestion ? "bg-amber-600 dark:bg-amber-400" : conversation.running ? "bg-blue-600 dark:bg-blue-400" : "bg-foreground/50")} aria-hidden="true" />}
                             </span>
                             <span className="text-muted-foreground flex min-w-0 items-center gap-2 text-[11px] leading-4">
-                              <span className="min-w-0 flex-1 truncate">{conversation.agent}{sourceCount > 1 && group !== "machine" && <span data-slot="app-conversation-machine"> · {conversation.source ?? "This machine"}</span>}</span>
+                              <span className="min-w-0 flex-1 truncate">{conversation.agentDisplayName ?? conversation.agent}{sourceCount > 1 && group !== "machine" && <span data-slot="app-conversation-machine"> · {conversation.source ?? "This machine"}</span>}</span>
                               {age && <time data-slot="app-conversation-time" className="shrink-0" dateTime={new Date(conversation.lastActivity).toISOString()} title={`Last activity: ${new Date(conversation.lastActivity).toLocaleString()}`} aria-label={`Last activity: ${age}`}>{age}</time>}
                             </span>
                             {status && <span className="sr-only">{status}</span>}

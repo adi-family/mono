@@ -13,6 +13,8 @@ const Components = lazy(() => import("./pages/Components").then((module) => ({ d
 const Interface = lazy(() => import("./pages/Interface").then((module) => ({ default: module.Interface })));
 const AgentChat = lazy(() => import("./pages/AgentChat").then((module) => ({ default: module.AgentChat })));
 
+const Marketplace = lazy(() => import("./pages/Marketplace").then((module) => ({ default: module.Marketplace })));
+
 function LegacyChatRedirect() {
   const { pathname } = useLocation();
   return <Navigate to={legacyChatDestination(pathname) ?? "/"} replace />;
@@ -32,6 +34,7 @@ export default function App() {
           <Route path="/chat/*" element={<LegacyChatRedirect />} />
           <Route element={<ShowcaseLayout />}>
             <Route path="/" element={<Home />} />
+            <Route path="/marketplace" element={<Marketplace />} />
             <Route path="/library" element={<Components />} />
             <Route path="/library/agents/layout-reviewer" element={<AgentChat />} />
             <Route path="/interface" element={<Interface />} />

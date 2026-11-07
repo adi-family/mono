@@ -55,7 +55,7 @@ export function ChatTitle({ title, conversation, onRename, starred, onStar }: {
     event.preventDefault();
     if (!conversation || inFlight.current) return;
     inFlight.current = true; setSaving(true); setError("");
-    try { await onRename(conversation, name); close(); }
+    try { const result = onRename(conversation, name); close(); await result; }
     catch (cause) { setError(cause instanceof Error ? cause.message : "Could not rename this chat. Try again."); }
     finally { inFlight.current = false; setSaving(false); }
   }

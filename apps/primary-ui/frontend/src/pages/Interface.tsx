@@ -184,7 +184,6 @@ export function Interface() {
           value={draft}
           onValueChange={setDraft}
           onSend={sendMessage}
-          onSendAsap={running ? (message) => sendMessage(message, "asap") : undefined}
           attachments={images}
           attachmentsBusy={images.some((image) => !image.attachmentId && !image.error)}
           onFilesSelect={addImages}

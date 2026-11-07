@@ -21,6 +21,7 @@ export interface AgentCapabilities {
 
 export interface Agent {
   name: string;
+  displayName?: string;
   source?: string;
   starred?: boolean;
   project?: string;
@@ -45,6 +46,7 @@ export interface Conversation extends ConversationRef {
   hidden?: boolean;
   starred?: boolean;
   agentStarred?: boolean;
+  agentDisplayName?: string;
   askingUser?: string | null;
   project?: string;
   projectName?: string;

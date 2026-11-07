@@ -1,4 +1,4 @@
-import { MessageSquare, Settings } from "lucide-react";
+import { MessageSquare, Settings, Store } from "lucide-react";
 import { NavLink } from "react-router-dom";
 
 import { cn } from "@design-system/ui";
@@ -8,6 +8,7 @@ import { appHref } from "../lib/app-api";
 
 const pages = [
   { to: "/interface", label: "Chats", icon: MessageSquare },
+  { to: "/marketplace", label: "Marketplace", icon: Store },
 ];
 
 export function ShowcaseNavigation() {

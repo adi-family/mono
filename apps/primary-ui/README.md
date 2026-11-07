@@ -7,5 +7,5 @@ frontend/src/lib/api.ts excluded (unused dashboard-only backend client).
 Run `scripts/primary-ui.sh` from the repository root with Bun 1.3.5. The release workflow
 builds this source once and transfers dist-primary to every platform before Rust compilation.
 adi-app embeds the build, so installations need no dashboard checkout or environment override.
-Legacy Settings, Marketplace and embed routes keep using the native Leptos bundle.
+Legacy Settings, Marketplace detail and embed routes keep using the native Leptos bundle.
 ADI_PRIMARY_UI_DIST remains an optional disk override for local development.

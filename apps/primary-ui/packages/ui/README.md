@@ -25,7 +25,14 @@ Unreachable machines retain their control-panel links; apps needing service perm
 their machine's panel rather than silently requesting a grant. Unlock does not change grants.
 Stopped apps keep their wake links. Catalog reads do not start any apps.
 The Design System tile opens the component gallery at `/library`. Global navigation contains
-Home (the ADI logo), Chats (`/interface`), and Settings (the existing main ADI settings page).
+Home (the ADI logo), Chats (`/interface`), Marketplace (`/marketplace`), and Settings
+(the existing main ADI settings page, pinned to the bottom).
+Marketplace is a new React catalog page with search, category filters, package details,
+repository links, and copyable terminal install commands. It reads the official ADI public
+manifest directly from GitHub, with loading, retry, and empty states. Installation runs on
+the machine where the user executes the command. The existing native marketplace remains
+separate; activating this React route on the primary app requires its native route mapping
+to serve the React page instead of the legacy marketplace.
 New chat opens the chat form without resuming history or sending a message.
 Keep the gallery away from `/components`: that path collides with the frontend's
 `components.json` file in the Vite dev server.
@@ -712,7 +719,7 @@ in the composer. Recording stops and tracks are released on chat navigation. Mic
 requires HTTPS; the HTTP showcase shows only the disabled microphone and its existing help control.
 
 Right-click a sidebar chat (or press Shift+F10 while focused) to rename, star/unstar, or hide
-it without opening it. Hide persists on the owning machine and keeps the transcript and running session intact. Rename supports Enter to save, Escape to cancel, and inline errors.
+it without opening it. Hide persists on the owning machine and keeps the transcript and running session intact. Rename supports Enter to save and Escape to cancel. Hide, star/unstar, and rename update the sidebar and header immediately and close their menus/editors before saving finishes. Pending changes remain visible through background polling; a failed save rolls back the affected field and shows a dismissible error notification.
 
 Use the star beside an open chat’s title to keep or unstar that conversation. Starred chats
 show a filled star in the sidebar and retain their existing priority in the list. Changes are
@@ -806,11 +813,9 @@ sources. Viewing history, selecting an agent without launching, failed launches,
 people’s sessions never update it. An unavailable saved agent falls back to an eligible
 starred/default agent on a selected source.
 
-`ChatComposer.onSendAsap` adds a lightning action using the same draft, attachment, pending,
-and failure handling as normal send. The live chat exposes it while running and sends
-`mode: "asap"` for delivery at the next runtime injection point, including between tool rounds.
-Regular send continues to queue until the current response finishes. Existing queued messages
-cannot be promoted with the current runtime API.
+The composer has one send action. While a response is running, it queues the message
+until the current response finishes. Promoting an already queued message to immediate
+delivery requires a runtime queue-mutation API, which is not currently available.
 
 Right-click a starred agent in New chat (or press Shift+F10) for **Unstar for me**.
 Personal overrides persist in browser-local `adi.personal-overrides.v1`, keyed by owning
@@ -820,3 +825,7 @@ values. “Unstarred for me” offers **Restore star for me**, which removes the
 resumes inheritance. The agent picker still includes unstarred agents. Effective agent
 stars also control the client’s Only starred session filter. Additional personal fields
 can use the same override store; nested metadata is replaced as a whole field.
+
+Agent preferences also offer **Rename for me**. Personal display names appear in agent cards,
+the picker, and chat sidebar, while requests and links keep the original agent identity.
+An empty name restores the shared name. Names use the same browser-local, machine-scoped override store.

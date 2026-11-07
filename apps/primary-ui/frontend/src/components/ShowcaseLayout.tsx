@@ -14,9 +14,12 @@ export function ShowcaseLayout() {
   const { pathname, hash, key } = useLocation();
   const { theme, setTheme } = useTheme();
   const isHome = pathname === "/";
+  const isMarketplace = pathname === "/marketplace";
   const isInterface = pathname === "/interface";
   const title = isHome
     ? "Home"
+    : isMarketplace
+      ? "Marketplace"
     : pathname === "/library/agents/layout-reviewer"
       ? "Layout reviewer"
       : pathname === "/library"
@@ -58,11 +61,11 @@ export function ShowcaseLayout() {
       )}
       secondaryNavigation={isInterface ? <AppChatSidebar /> : <ComponentSidebar />}
       secondaryNavigationProps={isInterface ? { className: "bg-muted/50 dark:bg-background" } : undefined}
-      hideSecondaryNavigation={isHome}
+      hideSecondaryNavigation={isHome || isMarketplace}
       topbar={(
         <>
           <div className="flex min-w-0 items-center gap-2">
-            <span className="text-muted-foreground hidden text-sm sm:inline">{isHome || isInterface ? "ADI" : "Design System"}</span>
+            <span className="text-muted-foreground hidden text-sm sm:inline">{isHome || isInterface || isMarketplace ? "ADI" : "Design System"}</span>
             <ChevronRight aria-hidden="true" className="text-muted-foreground hidden size-3.5 sm:block" />
             <h1 className="truncate text-sm font-medium">{title}</h1>
           </div>
