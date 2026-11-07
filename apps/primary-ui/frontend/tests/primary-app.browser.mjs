@@ -152,6 +152,8 @@ try {
     assert(media.icons > 0 && media.previews > 0, "live catalog publishes images");
     assert.equal(await evaluate(`document.querySelectorAll('[data-slot="marketplace-icon"]').length`), media.icons, "catalog icons render");
     assert.equal(await evaluate(`document.querySelectorAll('[data-slot="marketplace-preview"]').length`), media.previews, "catalog previews render");
+    const packageLinks = await evaluate(`Array.from(document.querySelectorAll('[data-slot="marketplace-package-link"]'),link=>({href:link.href,tag:link.tagName}))`);
+    assert(packageLinks.length > 0 && packageLinks.every(link=>link.tag === "A" && link.href.startsWith(`${process.env.MARKETPLACE_ONLY === "1" ? "http://app.adi" : origin}/marketplace/adi/`)), "package actions navigate to native detail pages");
     async function imagesLoaded() {
       return evaluate(`Promise.all(Array.from(document.querySelectorAll('main[aria-label="Marketplace"] img'), async image => {await image.decode();return image.naturalWidth>0;})).then(results=>results.length>0&&results.every(Boolean))`);
     }
@@ -170,6 +172,29 @@ try {
   });
 
   if (process.env.MARKETPLACE_ONLY !== "1") {
+    await check("Package page opens the native installation dialog", async () => {
+      await navigate("/marketplace", '[data-slot="marketplace-package-link"]');
+      await click('[data-slot="marketplace-package-link"][href="/marketplace/adi/reviewer"]');
+      await until(() => evaluate(`location.pathname === '/marketplace/adi/reviewer' && ${q('.adi-market__apptitle')}?.textContent.includes('Code reviewer')`), "native reviewer detail page loads");
+      await click('.adi-market__heroact button');
+      await until(() => evaluate(`!!${q('.adi-market__dialog #market-new-project')}`), "existing installation destination form opens");
+      assert.equal(await evaluate(`${q('#market-new-project')}.value`), "Code reviewer");
+      await screenshot("package-install");
+      await click('.adi-market__dialog button[type="button"]');
+      await until(() => evaluate(`!${q('.adi-market__dialog')}`), "installation dialog closes without installing");
+    });
+
+    await check("Installed package opens native copy management", async () => {
+      const installed = await evaluate(`fetch('/api/marketplace').then(response=>response.json()).then(data=>data.apps.find(app=>app.marketplace==='adi'&&app.installs?.length))`);
+      if (!installed) return;
+      await navigate("/marketplace", '[data-slot="marketplace-package-link"]');
+      await click(`[data-slot="marketplace-package-link"][href="/marketplace/adi/${installed.slug}"]`);
+      await until(() => evaluate(`!!${q('.adi-market__copy')}`), "installed copy controls render");
+      assert((await evaluate(`${q('.adi-market__copy')}.textContent`)).includes(installed.installs[0].id), "installed copy identity is visible");
+      assert(await evaluate(`!!${q('.adi-market__copy a')} || !!${q('.adi-market__copy button')}`), "existing Open or Start actions are available");
+      await screenshot("package-installed");
+    });
+
     await check("Home renders the live application grid and styled New chat", async () => {
       await navigate("/", grid);
       await until(() => evaluate(`${q(grid)}?.getAttribute('aria-busy')==='false'`), "live Home catalog settles");

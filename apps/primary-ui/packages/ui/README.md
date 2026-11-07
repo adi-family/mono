@@ -33,6 +33,10 @@ manifest directly from GitHub, with loading, retry, and empty states. Installati
 the machine where the user executes the command. Catalog icons and gallery previews render
 on cards; package details include captioned screenshots and videos with poster images.
 Missing icons use category symbols, and failed images show a fallback.
+Card titles, previews, and View package links open the existing native package page at
+`/marketplace/adi/<slug>` for installation and management of installed copies. These are
+document links (not React Router links); the dashboard uses `app.adi`, while primary
+panels retain their own origin. Quick preview keeps inline details available in the catalog.
 The existing native marketplace remains
 separate; activating this React route on the primary app requires its native route mapping
 to serve the React page instead of the legacy marketplace.

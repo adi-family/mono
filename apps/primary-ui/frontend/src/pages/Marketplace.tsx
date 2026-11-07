@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowUpRight, Bot, Check, Copy, LayoutGrid, LoaderCircle, Package, Search, Wrench, X } from "lucide-react";
 import { Button, Card, cn } from "@design-system/ui";
+import { appHref } from "../lib/app-api";
 
 const catalogUrl = "https://raw.githubusercontent.com/adi-family/marketplace/main/apps/marketplace.json";
 const categories = ["All", "Agents", "Tools", "Dashboards", "Services"] as const;
@@ -33,6 +34,8 @@ function ListingCard({ item }: { item: Listing }) {
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
   const command = `adi-mono marketplace install adi/${item.slug}`;
+  // A document navigation opens the native package page and its existing install controls.
+  const href = appHref(`/marketplace/adi/${encodeURIComponent(item.slug)}`);
   const Icon = item.elements?.some((element) => element.kind === "agent") ? Bot : item.elements?.some((element) => element.kind === "tool") ? Wrench : LayoutGrid;
   const icon = imageUrl(item.icon);
   const gallery = Array.isArray(item.gallery) ? item.gallery.flatMap((image) => {
@@ -44,16 +47,17 @@ function ListingCard({ item }: { item: Listing }) {
   const fallbackIcon = <Icon className="size-5" aria-hidden="true" />;
   useEffect(() => { if (copied) { const timer = setTimeout(() => setCopied(false), 2000); return () => clearTimeout(timer); } }, [copied]);
   return <Card className="flex flex-col gap-0 overflow-hidden p-0 shadow-none">
-    {preview && <CatalogImage key={preview} src={preview} alt={gallery[0].caption ?? `${item.name} preview`} slot="marketplace-preview" className="bg-muted aspect-video w-full border-b object-contain" />}
+    {preview && <a href={href} aria-label={`Open ${item.name}`} className="focus-visible:ring-ring block focus-visible:ring-2 focus-visible:ring-inset"><CatalogImage key={preview} src={preview} alt={gallery[0].caption ?? `${item.name} preview`} slot="marketplace-preview" className="bg-muted aspect-video w-full border-b object-contain" /></a>}
     <div className="flex flex-1 flex-col p-5">
       <div className="mb-5 flex items-center justify-between gap-3">
         <span className="bg-muted text-foreground flex size-11 items-center justify-center overflow-hidden rounded-xl">{icon ? <CatalogImage key={icon} src={icon} alt="" slot="marketplace-icon" className="size-11 object-contain" fallback={fallbackIcon} /> : fallbackIcon}</span>
         <span className="text-muted-foreground text-xs">v{item.version}</span>
       </div>
-      <h3 className="font-semibold tracking-tight">{item.name}</h3>
+      <h3 className="font-semibold tracking-tight"><a href={href} className="focus-visible:ring-ring rounded-sm hover:underline focus-visible:ring-2">{item.name}</a></h3>
       <p className="text-muted-foreground mt-2 flex-1 text-sm leading-relaxed">{item.description}</p>
       <div className="mt-5 flex flex-wrap gap-1.5">{[...new Set(item.elements?.map((element) => element.kind) ?? ["app"])].map((kind) => <span key={kind} className="bg-muted text-muted-foreground rounded-md px-2 py-1 text-xs capitalize">{kind}</span>)}</div>
-      <Button variant="outline" className="mt-5 w-full" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>{expanded ? "Hide details" : "View package"}</Button>
+      <Button asChild variant="outline" className="mt-5 w-full" data-slot="marketplace-package-link"><a href={href}>View package <ArrowUpRight className="size-3.5" aria-hidden="true" /></a></Button>
+      <Button variant="ghost" size="sm" className="mt-2 w-full" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>{expanded ? "Hide preview" : "Quick preview"}</Button>
     </div>
     {expanded && <div className="bg-muted/30 border-t p-5 text-sm">
       {gallery.length > 0 && <div data-slot="marketplace-gallery" className="mb-5 space-y-4">{gallery.map((image, index) => <figure key={`${image.url}-${index}`}>
