@@ -20,6 +20,8 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.37.0 — 2026-11-07
+
 ### Added
 
 - On a phone, the application opens the compact chat list first, with a bottom bar for Home, Chats, Marketplace, and Settings. A conversation opens full screen with a Back control that returns to the list.
