@@ -142,6 +142,16 @@ try {
   await send("Fetch.enable", { patterns: [{ urlPattern: "*/api/*", requestStage: "Request" }] });
   await send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 1000, deviceScaleFactor: 1, mobile: false });
 
+  await check("Marketplace opens the new catalog from global navigation", async () => {
+    await navigate("/marketplace", 'main[aria-label="Marketplace"]');
+    assert.equal(await evaluate("document.title"), "Marketplace — ADI");
+    assert.equal(await evaluate(`${q('a[aria-label="Marketplace"]')}.getAttribute('aria-current')`), "page");
+    await until(() => evaluate(`document.querySelectorAll('main[aria-label="Marketplace"] [data-slot="card"]').length > 0`), "marketplace packages load");
+    await tokenColor('main[aria-label="Marketplace"] [data-slot="card"]');
+    await settingsLink();
+    await screenshot("marketplace");
+  });
+
   await check("Home renders the live application grid and styled New chat", async () => {
     await navigate("/", grid);
     await until(() => evaluate(`${q(grid)}?.getAttribute('aria-busy')==='false'`), "live Home catalog settles");
