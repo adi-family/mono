@@ -1,7 +1,8 @@
 /**
  * Read-only smoke against the activated primary ADI app using an isolated Chrome profile.
  * Run: bun frontend/tests/primary-app.browser.mjs
- * Optional: SHOWCASE_URL (default http://app.adi), CHROME_BIN, BROWSER_SCREENSHOTS_DIR.
+ * Optional: SHOWCASE_URL (default http://app.adi), CHROME_BIN, BROWSER_SCREENSHOTS_DIR,
+ * MARKETPLACE_ONLY=1 to check just the catalog (also works against the dashboard).
  * API GETs and the two existing read-only transcript POSTs reach the real backend;
  * every other API write is blocked before it leaves Chrome and fails this check.
  */
@@ -147,63 +148,81 @@ try {
     assert.equal(await evaluate("document.title"), "Marketplace — ADI");
     assert.equal(await evaluate(`${q('a[aria-label="Marketplace"]')}.getAttribute('aria-current')`), "page");
     await until(() => evaluate(`document.querySelectorAll('main[aria-label="Marketplace"] [data-slot="card"]').length > 0`), "marketplace packages load");
+    const media = await evaluate(`fetch('https://raw.githubusercontent.com/adi-family/marketplace/main/apps/marketplace.json').then(response=>response.json()).then(data=>({icons:data.apps.filter(item=>item.icon).length,previews:data.apps.filter(item=>item.gallery?.length).length,videos:data.apps.reduce((count,item)=>count+(item.gallery?.filter(image=>image.kind==="video").length??0),0),captions:data.apps.reduce((count,item)=>count+(item.gallery?.filter(image=>image.caption).length??0),0),gallery:data.apps.reduce((count,item)=>count+(item.gallery?.filter(image=>image.kind!=="video").length??0),0)}))`);
+    assert(media.icons > 0 && media.previews > 0, "live catalog publishes images");
+    assert.equal(await evaluate(`document.querySelectorAll('[data-slot="marketplace-icon"]').length`), media.icons, "catalog icons render");
+    assert.equal(await evaluate(`document.querySelectorAll('[data-slot="marketplace-preview"]').length`), media.previews, "catalog previews render");
+    async function imagesLoaded() {
+      return evaluate(`Promise.all(Array.from(document.querySelectorAll('main[aria-label="Marketplace"] img'), async image => {await image.decode();return image.naturalWidth>0;})).then(results=>results.length>0&&results.every(Boolean))`);
+    }
+    await until(imagesLoaded, "marketplace icons and previews decode");
+    await evaluate(`document.querySelectorAll('main[aria-label="Marketplace"] button[aria-expanded="false"]').forEach(button=>button.click())`);
+    await until(() => evaluate(`document.querySelectorAll('[data-slot="marketplace-gallery"] img').length === ${media.gallery}`), "all package gallery images render");
+    await until(imagesLoaded, "expanded gallery images decode");
+    assert.equal(await evaluate(`document.querySelectorAll('[data-slot="marketplace-gallery"] img').length`), media.gallery, "gallery screenshots render");
+    assert.equal(await evaluate(`document.querySelectorAll('[data-slot="marketplace-gallery"] video[poster][controls]').length`), media.videos, "videos retain posters and playback controls");
+    assert.equal(await evaluate(`document.querySelectorAll('[data-slot="marketplace-gallery"] figcaption').length`), media.captions, "gallery captions render");
+    await screenshot("marketplace-expanded");
+    await evaluate(`document.querySelectorAll('main[aria-label="Marketplace"] button[aria-expanded="true"]').forEach(button=>button.click())`);
     await tokenColor('main[aria-label="Marketplace"] [data-slot="card"]');
-    await settingsLink();
+    if (process.env.MARKETPLACE_ONLY !== "1") await settingsLink();
     await screenshot("marketplace");
   });
 
-  await check("Home renders the live application grid and styled New chat", async () => {
-    await navigate("/", grid);
-    await until(() => evaluate(`${q(grid)}?.getAttribute('aria-busy')==='false'`), "live Home catalog settles");
-    assert.equal(await evaluate("document.title"), "Home — ADI");
-    assert.equal(await evaluate(`getComputedStyle(${q(grid)}).display`), "grid");
-    assert.equal(await evaluate(`${q('[data-slot="home-new-chat"]')}?.textContent.trim()`), "New chat");
-    await tokenColor('[data-slot="home-new-chat"]');
-    await settingsLink();
-    const health = await evaluate(`fetch('/api/health').then(async response=>({status:response.status,data:await response.json()}))`);
-    assert.equal(health.status, 200);
-    assert.equal(health.data.ok, true);
-    assert.equal(health.data.service, "adi-app");
-    assert(requests.some((request) => request.stage === stage && request.path === "/api/dashboards"), "Home reads the native catalog directly");
-    assert(requests.some((request) => request.stage === stage && request.path === "/api/fleet/dashboards"), "Home reads the native fleet catalog directly");
-    assert.equal(await evaluate(`document.querySelectorAll('main[aria-label="Home"] [role="alert"]').length`), 0, "live catalog has no request errors");
-    await screenshot("home");
-  });
+  if (process.env.MARKETPLACE_ONLY !== "1") {
+    await check("Home renders the live application grid and styled New chat", async () => {
+      await navigate("/", grid);
+      await until(() => evaluate(`${q(grid)}?.getAttribute('aria-busy')==='false'`), "live Home catalog settles");
+      assert.equal(await evaluate("document.title"), "Home — ADI");
+      assert.equal(await evaluate(`getComputedStyle(${q(grid)}).display`), "grid");
+      assert.equal(await evaluate(`${q('[data-slot="home-new-chat"]')}?.textContent.trim()`), "New chat");
+      await tokenColor('[data-slot="home-new-chat"]');
+      await settingsLink();
+      const health = await evaluate(`fetch('/api/health').then(async response=>({status:response.status,data:await response.json()}))`);
+      assert.equal(health.status, 200);
+      assert.equal(health.data.ok, true);
+      assert.equal(health.data.service, "adi-app");
+      assert(requests.some((request) => request.stage === stage && request.path === "/api/dashboards"), "Home reads the native catalog directly");
+      assert(requests.some((request) => request.stage === stage && request.path === "/api/fleet/dashboards"), "Home reads the native fleet catalog directly");
+      assert.equal(await evaluate(`document.querySelectorAll('main[aria-label="Home"] [role="alert"]').length`), 0, "live catalog has no request errors");
+      await screenshot("home");
+    });
 
-  await check("trailing-slash library reload renders card and button theme tokens", async () => {
-    await navigate("/library/", '#gallery #button-example [data-slot="button"]');
-    await until(() => evaluate("location.pathname==='/library'"), "library URL is canonical");
-    assert.equal(await evaluate(`${q('#card-example')}?.dataset.slot`), "card");
-    await tokenColor('#button-example [data-slot="button"]');
-    await tokenColor('#card-example');
-    await screenshot("library");
-  });
+    await check("trailing-slash library reload renders card and button theme tokens", async () => {
+      await navigate("/library/", '#gallery #button-example [data-slot="button"]');
+      await until(() => evaluate("location.pathname==='/library'"), "library URL is canonical");
+      assert.equal(await evaluate(`${q('#card-example')}?.dataset.slot`), "card");
+      await tokenColor('#button-example [data-slot="button"]');
+      await tokenColor('#card-example');
+      await screenshot("library");
+    });
 
-  await check("trailing-slash chat reload renders composer and same-origin native links", async () => {
-    // Explicit empty agent keeps this a new draft instead of opening a real transcript.
-    await navigate("/interface/?agent=", '[data-slot="app-chat"] [data-slot="chat-composer-input"]');
-    await until(() => evaluate(`location.pathname==='/interface' && !!${q('[data-slot="app-chat-sidebar"]')}`), "chat URL is canonical and its sidebar is mounted");
-    assert.equal(await evaluate(`${q('[data-slot="chat-composer-input"]')}.value`), "");
-    await settingsLink();
-    await click('button[aria-label="Conversation sources"]');
-    const fleet = '[data-slot="app-chat-menu"] a[role="menuitem"]';
-    await until(() => evaluate(`!!${q(fleet)}`), "Fleet link is exposed in the sources menu");
-    assert.equal(await evaluate(`${q(fleet)}.href`), `${origin}/extended/settings/fleet`);
-    assert.match(await evaluate(`${q(fleet)}.textContent`), /Fleet/);
-    await send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
-    await send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
-    await screenshot("new-chat");
-  });
+    await check("trailing-slash chat reload renders composer and same-origin native links", async () => {
+      // Explicit empty agent keeps this a new draft instead of opening a real transcript.
+      await navigate("/interface/?agent=", '[data-slot="app-chat"] [data-slot="chat-composer-input"]');
+      await until(() => evaluate(`location.pathname==='/interface' && !!${q('[data-slot="app-chat-sidebar"]')}`), "chat URL is canonical and its sidebar is mounted");
+      assert.equal(await evaluate(`${q('[data-slot="chat-composer-input"]')}.value`), "");
+      await settingsLink();
+      await click('button[aria-label="Conversation sources"]');
+      const fleet = '[data-slot="app-chat-menu"] a[role="menuitem"]';
+      await until(() => evaluate(`!!${q(fleet)}`), "Fleet link is exposed in the sources menu");
+      assert.equal(await evaluate(`${q(fleet)}.href`), `${origin}/extended/settings/fleet`);
+      assert.match(await evaluate(`${q(fleet)}.textContent`), /Fleet/);
+      await send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+      await send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+      await screenshot("new-chat");
+    });
 
-  await check("native Settings still loads the original control panel", async () => {
-    await navigate("/extended/settings", '.adi-workbench .adi-main h1.adi-bar__title');
-    assert.equal(await evaluate(`${q('.adi-workbench .adi-main h1.adi-bar__title')}.textContent.trim()`), "Settings");
-    assert.equal(await evaluate(`Array.from(document.querySelectorAll('.adi-workbench button.adi-linkrow .adi-linkrow__title'), el=>el.textContent.trim()).includes('Fleet')`), true);
-    assert.equal(await evaluate(`!!${q('[data-slot="global-navigation"]')}`), false, "native Settings uses its original shell");
-    await screenshot("native-settings");
-  });
+    await check("native Settings still loads the original control panel", async () => {
+      await navigate("/extended/settings", '.adi-workbench .adi-main h1.adi-bar__title');
+      assert.equal(await evaluate(`${q('.adi-workbench .adi-main h1.adi-bar__title')}.textContent.trim()`), "Settings");
+      assert.equal(await evaluate(`Array.from(document.querySelectorAll('.adi-workbench button.adi-linkrow .adi-linkrow__title'), el=>el.textContent.trim()).includes('Fleet')`), true);
+      assert.equal(await evaluate(`!!${q('[data-slot="global-navigation"]')}`), false, "native Settings uses its original shell");
+      await screenshot("native-settings");
+    });
 
-  console.log(`\n${checks.length} primary app smoke checks passed; native APIs preserved; zero writes, exceptions or console errors.`);
+  }
+  console.log(`\n${checks.length} primary app smoke checks passed; zero writes, exceptions or console errors.`);
 } catch (error) {
   console.error(`Primary app smoke failed during ${stage}; ${checks.length} checks completed.`);
   if (errors.length) console.error(`Browser errors: ${JSON.stringify(errors)}`);

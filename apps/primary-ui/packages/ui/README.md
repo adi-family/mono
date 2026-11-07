@@ -30,7 +30,10 @@ Home (the ADI logo), Chats (`/interface`), Marketplace (`/marketplace`), and Set
 Marketplace is a new React catalog page with search, category filters, package details,
 repository links, and copyable terminal install commands. It reads the official ADI public
 manifest directly from GitHub, with loading, retry, and empty states. Installation runs on
-the machine where the user executes the command. The existing native marketplace remains
+the machine where the user executes the command. Catalog icons and gallery previews render
+on cards; package details include captioned screenshots and videos with poster images.
+Missing icons use category symbols, and failed images show a fallback.
+The existing native marketplace remains
 separate; activating this React route on the primary app requires its native route mapping
 to serve the React page instead of the legacy marketplace.
 New chat opens the chat form without resuming history or sending a message.
