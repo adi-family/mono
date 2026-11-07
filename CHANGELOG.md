@@ -20,6 +20,18 @@ extraction script cares about.
 
 ## Unreleased
 
+### Added
+
+- On a phone, the application opens the compact chat list first, with a bottom bar for Home, Chats, Marketplace, and Settings. A conversation opens full screen with a Back control that returns to the list.
+- Marketplace lives in the new interface: browse and search the catalog by category, refresh it from its configured sources, and open a package page to install it into a new, existing, or global project, start or update installed copies, and remove single elements. Catalog cards show package icons and preview images.
+- Chats in the sidebar can be grouped by project. Each project shows its newest three conversations with its own Load more, and the former "One list" grouping is now called "Disabled".
+- Codex agents run through the Codex app server with an isolated Codex home owned by the backend, so agent runs never share sessions or writer locks with the desktop app.
+
+### Fixed
+
+- Resuming a Codex conversation no longer fails after a routine token refresh or a server restart. Only a genuine account or credential switch starts a new thread, and conversations started by an earlier version resume as before.
+- A new chat keeps its transcript in a pending state while the agent launches instead of appearing empty.
+
 ## 1.36.3 — 2026-11-06
 
 ### Added
