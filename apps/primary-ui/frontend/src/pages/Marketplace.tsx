@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUpRight, Bot, LayoutGrid, LoaderCircle, Package, Search, Wrench, X } from "lucide-react";
+import { Bot, LayoutGrid, LoaderCircle, Package, Search, Wrench, X } from "lucide-react";
 import { Button, Card, cn } from "@design-system/ui";
 import { Link } from "react-router-dom";
 import { loadMarketplace, marketplaceKey, marketplacePath, marketplaceRequest, type MarketplaceApp, type MarketplaceState } from "../lib/marketplace";
@@ -26,26 +26,19 @@ function ListingCard({ item }: { item: Listing }) {
   const href = marketplacePath(item);
   const Icon = item.elements?.some((element) => element.kind === "agent") ? Bot : item.elements?.some((element) => element.kind === "tool") ? Wrench : LayoutGrid;
   const icon = imageUrl(item.icon);
-  const gallery = Array.isArray(item.gallery) ? item.gallery.flatMap((image) => {
-    const video = image?.kind === "video";
-    const url = video ? (typeof image.url === "string" && /^(https:\/\/|data:video\/)/i.test(image.url.trim()) ? image.url.trim() : undefined) : imageUrl(image?.url);
-    return url ? [{ url, video, poster: imageUrl(image.poster), caption: typeof image.caption === "string" ? image.caption : undefined }] : [];
-  }) : [];
-  const preview = gallery[0]?.video ? gallery[0].poster : gallery[0]?.url;
   const fallbackIcon = <Icon className="size-5" aria-hidden="true" />;
-  // The card is a summary; gallery, elements and install details live on the package page.
-  return <Card className="flex flex-col gap-0 overflow-hidden p-0 shadow-none">
-    {preview && <Link to={href} aria-label={`Open ${item.name}`} className="focus-visible:ring-ring block focus-visible:ring-2 focus-visible:ring-inset"><CatalogImage key={preview} src={preview} alt={gallery[0].caption ?? `${item.name} preview`} slot="marketplace-preview" className="bg-muted aspect-video w-full border-b object-contain" /></Link>}
-    <div className="flex flex-1 flex-col p-5">
-      <div className="mb-5 flex items-center justify-between gap-3">
-        <span className="bg-muted text-foreground flex size-11 items-center justify-center overflow-hidden rounded-xl">{icon ? <CatalogImage key={icon} src={icon} alt="" slot="marketplace-icon" className="size-11 object-contain" fallback={fallbackIcon} /> : fallbackIcon}</span>
-        <span className="text-muted-foreground text-xs">{item.version ? `v${item.version}` : item.marketplace}</span>
+  // One line beside the icon: the publisher's summary when there is one, else the description clipped.
+  const line = item.summary?.trim() || item.description?.trim() || "";
+  // The card is a summary and the whole of it is the way in; gallery, tags, elements and install
+  // details live on the package page.
+  return <Card className="hover:border-foreground/20 flex flex-col gap-0 overflow-hidden p-0 shadow-none transition-colors">
+    <Link to={href} data-slot="marketplace-package-link" className="focus-visible:ring-ring flex flex-1 items-center gap-3 rounded-[inherit] p-5 focus-visible:ring-2 focus-visible:ring-inset focus-visible:outline-none">
+      <span className="bg-muted text-foreground flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-xl">{icon ? <CatalogImage key={icon} src={icon} alt="" slot="marketplace-icon" className="size-11 object-contain" fallback={fallbackIcon} /> : fallbackIcon}</span>
+      <div className="min-w-0 flex-1">
+        <h3 className="font-semibold tracking-tight">{item.name}</h3>
+        {line && <p data-slot="marketplace-summary" title={item.description?.trim() || line} className="text-muted-foreground mt-1 truncate text-sm leading-relaxed">{line}</p>}
       </div>
-      <h3 className="font-semibold tracking-tight"><Link to={href} className="focus-visible:ring-ring rounded-sm hover:underline focus-visible:ring-2">{item.name}</Link></h3>
-      <p className="text-muted-foreground mt-2 flex-1 text-sm leading-relaxed">{item.description}</p>
-      <div className="mt-5 flex flex-wrap gap-1.5">{[...new Set(item.elements?.map((element) => element.kind) ?? ["app"])].map((kind) => <span key={kind} className="bg-muted text-muted-foreground rounded-md px-2 py-1 text-xs capitalize">{kind}</span>)}</div>
-      <Button asChild variant="outline" className="mt-5 w-full" data-slot="marketplace-package-link"><Link to={href}>View package <ArrowUpRight className="size-3.5" aria-hidden="true" /></Link></Button>
-    </div>
+    </Link>
   </Card>;
 }
 

@@ -100,6 +100,8 @@ pub struct CachedApp {
     pub name: String,
     /// The entry's one-liner.
     pub description: Option<String>,
+    /// The shorter line the listing card shows in its place, when the entry publishes one.
+    pub summary: Option<String>,
     /// The entry's mark: an `https://` URL or a `data:image/…` URI, drawn beside it.
     pub icon: Option<String>,
     /// What the entry says it is about — trimmed and deduped, in the order it published them.
@@ -265,6 +267,7 @@ pub fn cached_apps(config: &Config) -> Vec<CachedApp> {
             // icon, and the keywords a listing shows are the trimmed, deduped ones.
             let (icon, keywords) = (entry.icon().map(str::to_string), entry.keywords());
             let readme = entry.readme().map(str::to_string);
+            let summary = entry.summary().map(str::to_string);
             let gallery: Vec<AppMedia> = entry
                 .gallery()
                 .into_iter()
@@ -280,6 +283,7 @@ pub fn cached_apps(config: &Config) -> Vec<CachedApp> {
                 slug: entry.slug,
                 name: entry.name,
                 description: entry.description,
+                summary,
                 icon,
                 keywords,
                 readme,

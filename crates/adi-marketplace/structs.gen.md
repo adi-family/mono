@@ -473,6 +473,7 @@ pub struct CachedApp {
     pub slug: String,
     pub name: String,
     pub description: Option<String>,
+    pub summary: Option<String>,
     pub icon: Option<String>,
     pub keywords: Vec<String>,
     pub readme: Option<String>,
@@ -654,6 +655,8 @@ pub struct BundleEntry {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

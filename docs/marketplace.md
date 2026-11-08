@@ -26,6 +26,7 @@ The decision and its reasoning: `business/decisions/2026-08-31-marketplaces-are-
       "slug": "crm",
       "name": "CRM",
       "description": "Who has gone quiet, and what was last said to them.",
+      "summary": "Who has gone quiet.",
       "icon": "https://raw.githubusercontent.com/adi-family/crm/main/icon.png",
       "keywords": ["sales", "contacts", "follow-up"],
       "readme": "## What it is\n\nA list of the people you have gone quiet on…",
@@ -48,6 +49,7 @@ The decision and its reasoning: `business/decisions/2026-08-31-marketplaces-are-
 | `apps[].slug` | yes | the **published** identity — the second half of `<marketplace>/<slug>`, and how an install is addressed. One safe path segment (`[A-Za-z0-9._-]`, no `/`). It is *not* the directory the app lands as. |
 | `apps[].name` | yes | the human name, offered as the default when somebody names their copy. |
 | `apps[].description` | no | one line on what it is for. |
+| `apps[].summary` | no | the short form of the description, for the one place with room for a single line: the card on the listing page. Absent is ordinary — the card shows the description clipped to one line instead. The app's own page always shows the description in full. |
 | `apps[].icon` | no | the app's mark, drawn beside the entry. An `https://` URL, or a `data:image/…` URI to carry the image in the manifest itself. `http://`, a bare path and anything else are refused (see below). Display only. |
 | `apps[].keywords` | no | what the app is about, in the publisher's own words — a word or two each, drawn as tags. Free text: there is no taxonomy here to petition. The store trims them, drops blanks and drops a term repeated in another casing, keeping the order they were published in. |
 | `apps[].readme` | no | the long form, in **Markdown** — what the app does, what it needs, what it does not do. Shown on the app's own page (`/marketplace/<marketplace>/<slug>`). Carried in the manifest, not fetched from the repository, for the reason the icon may be a `data:` URI. Rendered through Leptos views rather than `innerHTML`, so markup in it cannot become markup on the page. |

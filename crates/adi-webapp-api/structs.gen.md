@@ -4265,6 +4265,8 @@ pub struct MarketplaceApp {
     #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
+    pub summary: Option<String>,
+    #[serde(default)]
     pub icon: Option<String>,
     #[serde(default)]
     pub keywords: Vec<String>,

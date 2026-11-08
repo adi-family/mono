@@ -4697,6 +4697,10 @@ pub struct MarketplaceApp {
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,
+    /// The one-line form of the description the listing card shows in its place, when the
+    /// publisher wrote one. Absent is ordinary: the card shows the description clipped to a line.
+    #[serde(default)]
+    pub summary: Option<String>,
     /// The entry's mark, as its publisher hosts it: an `https://` URL, or a `data:image/…` URI
     /// carried in the manifest itself. Display only — nothing is decided by it, and an entry
     /// without one is ordinary.

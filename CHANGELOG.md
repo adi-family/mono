@@ -20,6 +20,14 @@ extraction script cares about.
 
 ## Unreleased
 
+### Added
+
+- A marketplace entry can publish a `summary`: a one-line form of its description that the catalog card shows in its place.
+
+### Changed
+
+- Marketplace catalog cards are a single row: the package icon, its name, and one line of summary, and the whole card opens the package page. The preview image, tags, version, and View package button have left the card; the package page still shows the gallery, keywords, version, and full description.
+
 ## 1.37.0 — 2026-11-07
 
 ### Added

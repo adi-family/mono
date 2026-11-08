@@ -72,6 +72,7 @@ pub fn state(market: &Marketplace) -> MarketplaceState {
                     slug: a.slug,
                     name: a.name,
                     description: a.description,
+                    summary: a.summary,
                     icon: a.icon,
                     keywords: a.keywords,
                     readme: a.readme,
