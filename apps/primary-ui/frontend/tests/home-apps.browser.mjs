@@ -99,6 +99,9 @@ async function intercept({ requestId, request }) {
     await fulfill(requestId, failLocal ? { error: "Fixture local listing failure" } : local);
   } else if (request.method === "GET" && fixturePath(url.pathname) === "/api/app/fleet/dashboards") {
     await fulfill(requestId, failFleet ? { error: "Fixture fleet listing failure" } : fleet);
+  } else if (request.method === "GET" && fixturePath(url.pathname) === "/api/app/fleet/nodes") {
+    // The topbar machine selector lists the paired fleet on every page, Home included.
+    await fulfill(requestId, { nodes: fleet.nodes.map(({ node, locked }) => ({ node, locked })) });
   } else if (request.method === "POST" && fixturePath(url.pathname) === "/api/app/fleet/dashboards/unlock") {
     const body = JSON.parse(request.postData ?? "{}");
     unlockBodies.push(body);

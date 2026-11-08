@@ -15,6 +15,7 @@
     "test:chat:browser": "bun tests/app-chat.browser.mjs",
     "preview": "vite preview",
     "test:chat:sources": "bun tests/app-chat-sources.browser.mjs",
+    "test:marketplace": "bun test src/lib/marketplace.test.ts",
     "test:marketplace:browser": "bun tests/marketplace.browser.mjs"
   },
   "dependencies": {

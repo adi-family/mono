@@ -40,7 +40,9 @@ function useAppChatState() {
   const sourceList = useMemo(() => selectedSources(sources), [sources]);
   const [indexLimits, setIndexLimits] = useState<Record<string, number>>({});
   const [projectMore, setProjectMore] = useState<Record<string, Record<string, number>>>({});
-  const fleetQuery = useQuery({ queryKey: ["app-chat", "fleet"], queryFn: ({ signal }) => getFleetNodes(signal), enabled, retry: false, refetchInterval: 15000 });
+  // The machine selector sits in every page's topbar, so the fleet is read everywhere; the
+  // session reads below stay confined to the chat page.
+  const fleetQuery = useQuery({ queryKey: ["app-chat", "fleet"], queryFn: ({ signal }) => getFleetNodes(signal), retry: false, refetchInterval: 15000 });
   const agentQueries = useQueries({ queries: sourceList.map((source) => ({
     queryKey: ["app-chat", "agents", source ?? ""], queryFn: ({ signal }: { signal: AbortSignal }) => getAgents(signal, source),
     enabled, refetchInterval: 5000, retry: false,

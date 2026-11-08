@@ -21,8 +21,15 @@ const chrome = Bun.spawn([
 ], { stdout: "ignore", stderr: "ignore" });
 
 const readPosts = new Set(["/api/agents/run/peek", "/api/agents/run/steps"]);
+// The native Settings page refreshes the updater's record with `POST /api/update/check` whenever
+// that record has gone stale (about half a day). That request leaves the machine and rewrites
+// ~/.adi/mono/update/state.json, which a read-only smoke must not do — and which could flip the
+// panel into an auto-update mid-check — so it is answered with the current `GET /api/update`
+// record instead of being blocked. Listed in the summary so a run shows it happened.
+const stubbedPosts = new Set(["/api/update/check"]);
 const errors = [];
 const blocked = [];
+const stubbed = [];
 const interceptionErrors = [];
 const requests = [];
 const checks = [];
@@ -53,6 +60,14 @@ async function intercept({ requestId, request }) {
   if (url.origin === origin && (request.method === "GET" || request.method === "HEAD"
     || (request.method === "POST" && readPosts.has(nativePath)))) {
     await send("Fetch.continueRequest", { requestId });
+  } else if (url.origin === origin && request.method === "POST" && stubbedPosts.has(nativePath)) {
+    stubbed.push(label);
+    const record = await fetch(`${url.origin}${path.replace(/\/check$/, "")}`);
+    await send("Fetch.fulfillRequest", {
+      requestId, responseCode: record.status,
+      responseHeaders: [{ name: "Content-Type", value: record.headers.get("content-type") ?? "application/json" }],
+      body: Buffer.from(await record.arrayBuffer()).toString("base64"),
+    });
   } else {
     blocked.push(label);
     await send("Fetch.fulfillRequest", {
@@ -149,7 +164,8 @@ try {
     assert.equal(await evaluate(`${q('a[aria-label="Marketplace"]')}.getAttribute('aria-current')`), "page");
     await until(() => evaluate(`document.querySelectorAll('main[aria-label="Marketplace"] [data-slot="card"]').length > 0`), "marketplace packages load");
     const media = await evaluate(`fetch('${process.env.MARKETPLACE_ONLY === "1" ? "/api/app" : "/api"}/marketplace').then(response=>response.json()).then(data=>({icons:data.apps.filter(item=>item.icon).length,previews:data.apps.filter(item=>item.gallery?.length).length}))`);
-    assert(media.icons > 0 && media.previews > 0, "live catalog publishes images");
+    // The catalog is operator data: icons are expected of every entry, a gallery is the publisher's choice.
+    assert(media.icons > 0, "live catalog publishes icons");
     assert.equal(await evaluate(`document.querySelectorAll('[data-slot="marketplace-icon"]').length`), media.icons, "catalog icons render");
     // Cards carry no banner: the gallery is the package page's business.
     assert.equal(await evaluate(`document.querySelectorAll('[data-slot="marketplace-preview"]').length`), 0, "catalog cards show no gallery banner");
@@ -162,21 +178,29 @@ try {
     // Cards are summaries only: no inline preview toggle, galleries live on the package page.
     assert.equal(await evaluate(`document.querySelectorAll('main[aria-label="Marketplace"] [data-slot="card"] button[aria-expanded]').length`), 0, "cards have no quick preview toggle");
     await tokenColor('main[aria-label="Marketplace"] [data-slot="card"]');
+    // The topbar says whose marketplace this is, and the catalog line repeats it.
+    assert.match(await evaluate(`${q('button[aria-label="Marketplace machine"]')}?.textContent ?? ''`), /This machine/, "the topbar names the machine being browsed");
+    assert.match(await evaluate(`${q('[data-slot="marketplace-machine"]')}?.textContent ?? ''`), /This machine/, "the catalog names its machine");
     if (process.env.MARKETPLACE_ONLY !== "1") await settingsLink();
     await screenshot("marketplace");
   });
 
   if (process.env.MARKETPLACE_ONLY !== "1") {
     await check("Package page opens the React installation dialog", async () => {
+      // The live catalog is operator data, so the package is picked from it rather than named here — a
+      // published entry can be withdrawn. The project-name prefill follows the page's own rule: the
+      // scaffold element's published name, else the package name.
+      const sample = await evaluate(`fetch('/api/marketplace').then(response=>response.json()).then(data=>{const apps=data.apps.filter(app=>app.marketplace==='adi');const app=apps.find(app=>!(app.elements??[]).some(el=>el.kind==='project'))??apps[0];return app?{slug:app.slug,name:app.name,project:(app.elements??[]).find(el=>el.kind==='project')?.name??app.name}:null;})`);
+      assert(sample, "the live catalog lists at least one package");
       await navigate("/marketplace", '[data-slot="marketplace-package-link"]');
-      await click('[data-slot="marketplace-package-link"][href="/marketplace/adi/reviewer"]');
-      await until(() => evaluate(`location.pathname === '/marketplace/adi/reviewer' && ${q('[data-slot="marketplace-package"]')}?.textContent.includes('Code reviewer')`), "React reviewer detail page loads");
+      await click(`[data-slot="marketplace-package-link"][href="/marketplace/adi/${sample.slug}"]`);
+      await until(() => evaluate(`location.pathname === '/marketplace/adi/${sample.slug}' && ${q('[data-slot="marketplace-package"]')}?.textContent.includes(${JSON.stringify(sample.name)})`), `React ${sample.slug} detail page loads`);
       assert(await evaluate(`!!${q('[data-slot="global-navigation"]')}`), 'package keeps the React application shell');
       await send('Page.reload');
       await until(() => evaluate(`!!${q('[data-slot="marketplace-install"]')}`), 'direct reload keeps the React package page');
       await click('[data-slot="marketplace-install"]');
       await until(() => evaluate(`!!${q('[data-slot="marketplace-install-form"] input[aria-label="Project name"]')}`), "existing installation destination form opens");
-      assert.equal(await evaluate(`${q('input[aria-label="Project name"]')}.value`), "Code reviewer");
+      assert.equal(await evaluate(`${q('input[aria-label="Project name"]')}.value`), sample.project);
       await screenshot("package-install");
       await click('[data-slot="marketplace-install-form"] button[type="button"]');
       await until(() => evaluate(`!${q('[data-slot="marketplace-install-form"]')}`), "installation dialog closes without installing");
@@ -208,6 +232,7 @@ try {
       assert(requests.some((request) => request.stage === stage && request.path === "/api/dashboards"), "Home reads the native catalog directly");
       assert(requests.some((request) => request.stage === stage && request.path === "/api/fleet/dashboards"), "Home reads the native fleet catalog directly");
       assert.equal(await evaluate(`document.querySelectorAll('main[aria-label="Home"] [role="alert"]').length`), 0, "live catalog has no request errors");
+      assert(await evaluate(`!!${q('[data-slot="app-topbar"] button[aria-label="Conversation sources"]')}`), "the machine selector is in the Home topbar");
       await screenshot("home");
     });
 
@@ -227,7 +252,7 @@ try {
       assert.equal(await evaluate(`${q('[data-slot="chat-composer-input"]')}.value`), "");
       await settingsLink();
       await click('button[aria-label="Conversation sources"]');
-      const fleet = '[data-slot="app-chat-menu"] a[role="menuitem"]';
+      const fleet = '[data-slot="node-selector-menu"] a[role="menuitem"]';
       await until(() => evaluate(`!!${q(fleet)}`), "Fleet link is exposed in the sources menu");
       assert.equal(await evaluate(`${q(fleet)}.href`), `${origin}/extended/settings/fleet`);
       assert.match(await evaluate(`${q(fleet)}.textContent`), /Fleet/);
@@ -245,11 +270,12 @@ try {
     });
 
   }
-  console.log(`\n${checks.length} primary app smoke checks passed; zero writes, exceptions or console errors.`);
+  console.log(`\n${checks.length} primary app smoke checks passed; zero writes, exceptions or console errors.${stubbed.length ? ` Answered locally instead of forwarding: ${JSON.stringify(stubbed)}` : ""}`);
 } catch (error) {
   console.error(`Primary app smoke failed during ${stage}; ${checks.length} checks completed.`);
   if (errors.length) console.error(`Browser errors: ${JSON.stringify(errors)}`);
   if (blocked.length) console.error(`Blocked API requests: ${JSON.stringify(blocked)}`);
+  if (stubbed.length) console.error(`Stubbed API requests: ${JSON.stringify(stubbed)}`);
   if (interceptionErrors.length) console.error(`Interception errors: ${JSON.stringify(interceptionErrors)}`);
   console.error(`API request paths: ${JSON.stringify(requests)}`);
   if (evaluate && socket?.readyState === WebSocket.OPEN) {
