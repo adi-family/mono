@@ -39,7 +39,7 @@ async function until(fn, description, timeout = 20000) {
 
 const pixel = "data:image/svg+xml;base64," + Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="60"><rect width="100" height="60" fill="red"/></svg>').toString("base64");
 const fixture = { sources: [{name:"custom",url:"https://example.test/manifest.json"}], apps: [
-  {marketplace:"custom",slug:"legacy",name:"Legacy App",description:"Dashboard package",version:"1.0",repo:"https://github.com/example/legacy.git",commit:"a".repeat(40),keywords:[],gallery:[{url:pixel,kind:"image",caption:"Preview"},{url:pixel,kind:"image",caption:"Second preview"}],elements:[],installs:[{id:"legacy-copy",name:"My copy",started:false,outdated:true,commit:"b".repeat(40)}],bundle:null},
+  {marketplace:"custom",slug:"legacy",name:"Legacy App",description:"Dashboard package with a description that runs past one line.",summary:"One line for the card",version:"1.0",repo:"https://github.com/example/legacy.git",commit:"a".repeat(40),keywords:[],gallery:[{url:pixel,kind:"image",caption:"Preview"},{url:pixel,kind:"image",caption:"Second preview"}],elements:[],installs:[{id:"legacy-copy",name:"My copy",started:false,outdated:true,commit:"b".repeat(40)}],bundle:null},
   {marketplace:"custom",slug:"bundle",name:"Worker Bundle",description:"A scoped bundle",version:"1.0",repo:"https://github.com/example/bundle.git",commit:"a".repeat(40),keywords:[],gallery:[],elements:[{kind:"service",name:"worker"}],installs:[],bundle:{declared:1,elements:[{kind:"services",name:"worker",description:"Background service"}],installs:[{project:"project-one",project_name:"One",commit:"b".repeat(40),outdated:true,missing_secrets:["API_TOKEN"],elements:[{kind:"services",name:"worker",id:"worker",started:false}]},{project:"project-two",project_name:"Two",commit:"b".repeat(40),outdated:true,missing_secrets:[],elements:[{kind:"services",name:"worker",id:"worker",started:false}]}]}}
 ]};
 const mutations=[];
@@ -157,6 +157,11 @@ try {
   await check("React catalog navigates to package and direct reload retains the shell", async()=>{
     await navigate('/marketplace','[data-slot="marketplace-package-link"]');
     assert.equal(await evaluate(`${q('[data-slot="marketplace-package-link"]')}.getAttribute('href')`),'/marketplace/custom/legacy');
+    // A card shows the published summary, else the description; the version is a package-page fact.
+    assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('[data-slot="marketplace-summary"]'),line=>line.textContent)`),['One line for the card','A scoped bundle'],'cards prefer the summary');
+    assert.equal(await evaluate(`Array.from(document.querySelectorAll('main[aria-label="Marketplace"] [data-slot="card"] *')).some(el=>/^v1\\.0$/.test(el.textContent.trim()))`),false,'cards show no version');
+    // The whole card is one link to the package page: no tags, no button, no nested anchors.
+    assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('main[aria-label="Marketplace"] [data-slot="card"]'),card=>({anchors:card.querySelectorAll('a').length,buttons:card.querySelectorAll('button').length,wraps:card.firstElementChild===card.querySelector('[data-slot="marketplace-package-link"]')}))`),[{anchors:1,buttons:0,wraps:true},{anchors:1,buttons:0,wraps:true}],'each card is a single link');
     await evaluate('window.packageNavigationMarker=42');
     await click('[data-slot="marketplace-package-link"]');
     await until(()=>evaluate(`!!${q('[data-slot="marketplace-package"]')}`),'React detail renders');

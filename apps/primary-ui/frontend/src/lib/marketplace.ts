@@ -4,7 +4,7 @@ export type MarketplaceMedia = { url: string; kind?: string; caption?: string | 
 export type MarketplaceElement = { kind: string; name: string; description?: string | null; id?: string | null; started?: boolean | null };
 export type BundleInstall = { project?: string | null; project_name?: string | null; commit: string; outdated: boolean; missing_secrets: string[]; elements: MarketplaceElement[] };
 export type MarketplaceApp = {
-  marketplace: string; slug: string; name: string; description?: string | null; version?: string | null;
+  marketplace: string; slug: string; name: string; description?: string | null; summary?: string | null; version?: string | null;
   repo: string; commit: string; branch?: string | null; icon?: string | null; readme?: string | null;
   keywords: string[]; gallery: MarketplaceMedia[]; elements: MarketplaceElement[];
   installs: { id: string; name: string; host?: string | null; started: boolean; outdated: boolean; commit: string }[];

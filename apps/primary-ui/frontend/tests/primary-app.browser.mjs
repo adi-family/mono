@@ -151,7 +151,8 @@ try {
     const media = await evaluate(`fetch('${process.env.MARKETPLACE_ONLY === "1" ? "/api/app" : "/api"}/marketplace').then(response=>response.json()).then(data=>({icons:data.apps.filter(item=>item.icon).length,previews:data.apps.filter(item=>item.gallery?.length).length}))`);
     assert(media.icons > 0 && media.previews > 0, "live catalog publishes images");
     assert.equal(await evaluate(`document.querySelectorAll('[data-slot="marketplace-icon"]').length`), media.icons, "catalog icons render");
-    assert.equal(await evaluate(`document.querySelectorAll('[data-slot="marketplace-preview"]').length`), media.previews, "catalog previews render");
+    // Cards carry no banner: the gallery is the package page's business.
+    assert.equal(await evaluate(`document.querySelectorAll('[data-slot="marketplace-preview"]').length`), 0, "catalog cards show no gallery banner");
     const packageLinks = await evaluate(`Array.from(document.querySelectorAll('[data-slot="marketplace-package-link"]'),link=>({href:link.href,tag:link.tagName}))`);
     assert(packageLinks.length > 0 && packageLinks.every(link=>link.tag === "A" && link.href.startsWith(`${origin}/marketplace/`)), "package actions navigate to React detail pages");
     async function imagesLoaded() {
