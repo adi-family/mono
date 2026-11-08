@@ -8,6 +8,7 @@ import { useTheme } from "../lib/theme";
 import { ComponentSidebar } from "./ComponentSidebar";
 import { ShowcaseNavigation } from "./ShowcaseNavigation";
 import { AppChatSidebar } from "./AppChatSidebar";
+import { NodeSelector } from "./NodeSelector";
 
 export function ShowcaseLayout() {
   const [focusMode, setFocusMode] = useState(false);
@@ -71,7 +72,10 @@ export function ShowcaseLayout() {
             <ChevronRight aria-hidden="true" className="text-muted-foreground hidden size-3.5 sm:block" />
             <h1 className="truncate text-sm font-medium">{title}</h1>
           </div>
-          <ThemeToggle size="sm" className="h-7 gap-1.5 px-2 text-xs" theme={theme} onThemeChange={setTheme} />
+          <div className="flex shrink-0 items-center gap-1.5">
+            {isInterface && <NodeSelector />}
+            <ThemeToggle size="sm" className="h-7 gap-1.5 px-2 text-xs" theme={theme} onThemeChange={setTheme} />
+          </div>
         </>
       )}
       contentProps={{ id: "page-content", tabIndex: -1, className: isInterface ? "flex min-h-0 flex-col overflow-hidden p-0 sm:p-0" : isHome ? "flex" : undefined }}

@@ -1,22 +1,21 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown, Filter, LockKeyhole, Network, Plus, Search, Star } from "lucide-react";
+import { Check, ChevronDown, Filter, Plus, Search, Star } from "lucide-react";
 
 import { Button, cn } from "@design-system/ui";
 
 import { useAppChat } from "../lib/app-chat-state";
-import { appHref } from "../lib/app-api";
 import { conversationAge, conversationFilters, conversationGroups, conversationSections } from "../lib/app-chat-sidebar";
 import { sameConversation } from "../lib/app-chat-sources";
 import { conversationHref } from "../lib/app-chat-transcript";
 
 import { ChatContextMenu, type ChatContextTarget } from "./ChatContextMenu";
+import { NodeSelector } from "./NodeSelector";
 
-type Menu = "filters" | "sources";
 const menuItemClass = "focus:bg-accent hover:bg-accent flex min-h-8 w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs outline-none disabled:opacity-50 disabled:hover:bg-transparent";
 
-function SidebarMenu({ menu, anchor, onClose }: { menu: Menu; anchor: RefObject<HTMLButtonElement | null>; onClose: (restoreFocus?: boolean) => void }) {
-  const { sources, fleetNodes, fleetLoading, fleetError, toggleSource, filter, setFilter, group, setGroup } = useAppChat();
+function FilterMenu({ anchor, onClose }: { anchor: RefObject<HTMLButtonElement | null>; onClose: (restoreFocus?: boolean) => void }) {
+  const { filter, setFilter, group, setGroup } = useAppChat();
   const element = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ left: 0, top: 0 });
 
@@ -26,7 +25,7 @@ function SidebarMenu({ menu, anchor, onClose }: { menu: Menu; anchor: RefObject<
     const selected = element.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]:not(:disabled)')
       ?? element.current?.querySelector<HTMLButtonElement>('[role^="menuitem"]:not(:disabled)');
     selected?.focus();
-  }, [anchor, menu]);
+  }, [anchor]);
 
   useEffect(() => {
     const outside = (event: PointerEvent) => {
@@ -46,7 +45,7 @@ function SidebarMenu({ menu, anchor, onClose }: { menu: Menu; anchor: RefObject<
       ref={element}
       data-slot="app-chat-menu"
       role="menu"
-      aria-label={menu === "filters" ? "Conversation filters" : "Conversation sources"}
+      aria-label="Conversation filters"
       className="bg-popover text-popover-foreground border-border fixed z-50 max-h-[70svh] w-60 overflow-y-auto rounded-md border p-1 shadow-md"
       style={position}
       onKeyDown={(event) => {
@@ -63,55 +62,21 @@ function SidebarMenu({ menu, anchor, onClose }: { menu: Menu; anchor: RefObject<
         } else if (event.key === "Tab") onClose();
       }}
     >
-      {menu === "filters" ? (
-        <>
-          <p className="text-muted-foreground px-2 py-1.5 text-[11px] font-medium">Show sessions</p>
-          {conversationFilters.map((option) => (
-            <button key={option.value} type="button" role="menuitemradio" aria-checked={filter === option.value} className={menuItemClass} onClick={() => { setFilter(option.value); onClose(); }}>
-              <Check aria-hidden="true" className={cn("size-3.5 shrink-0", filter !== option.value && "invisible")} />
-              {option.label}
-            </button>
-          ))}
-          <div role="separator" className="bg-border my-1 h-px" />
-          <p className="text-muted-foreground px-2 py-1.5 text-[11px] font-medium">Group by</p>
-          {conversationGroups.map((option) => (
-            <button key={option.value} type="button" role="menuitemradio" aria-checked={group === option.value} className={menuItemClass} onClick={() => { setGroup(option.value); onClose(); }}>
-              <Check aria-hidden="true" className={cn("size-3.5 shrink-0", group !== option.value && "invisible")} />
-              {option.label}
-            </button>
-          ))}
-        </>
-      ) : (
-        <>
-          <p className="text-muted-foreground px-2 py-1.5 text-[11px] font-medium">Sessions from</p>
-          <button type="button" role="menuitemcheckbox" aria-checked={sources.local} title={sources.local && sources.nodes.length === 0 ? "Keep at least one source selected." : undefined} className={menuItemClass} onClick={() => toggleSource()}>
-            <Check aria-hidden="true" className={cn("size-3.5 shrink-0", !sources.local && "invisible")} />
-            This machine
-          </button>
-          {fleetNodes.map((node) => {
-            const selected = sources.nodes.includes(node.node);
-            return (
-              <button key={node.node} type="button" role="menuitemcheckbox" aria-checked={selected} disabled={node.locked && !selected} title={node.locked && !selected ? "Unlock this source on the Fleet page first." : undefined} className={menuItemClass} onClick={() => toggleSource(node.node)}>
-                <Check aria-hidden="true" className={cn("size-3.5 shrink-0", !selected && "invisible")} />
-                <span className="min-w-0 flex-1 truncate">{node.node}</span>
-                {node.locked && <LockKeyhole aria-hidden="true" className="text-muted-foreground size-3 shrink-0" />}
-              </button>
-            );
-          })}
-          {/* Stored sources remain removable if the fleet is offline or they were unpaired. */}
-          {sources.nodes.filter((source) => !fleetNodes.some((node) => node.node === source)).map((source) => (
-            <button key={source} type="button" role="menuitemcheckbox" aria-checked="true" className={menuItemClass} onClick={() => toggleSource(source)}>
-              <Check aria-hidden="true" className="size-3.5 shrink-0" />
-              <span className="min-w-0 truncate">{source}</span>
-            </button>
-          ))}
-          {fleetLoading && <p role="status" className="text-muted-foreground px-2 py-2 text-xs">Loading sources…</p>}
-          {fleetError && <p role="alert" className="text-muted-foreground px-2 py-2 text-xs leading-relaxed">{fleetError}</p>}
-          {!fleetLoading && !fleetError && fleetNodes.length === 0 && <p className="text-muted-foreground px-2 py-2 text-xs leading-relaxed">No paired nodes yet.</p>}
-          <div role="separator" className="bg-border my-1 h-px" />
-          <a role="menuitem" href={appHref("/extended/settings/fleet")} className={menuItemClass}>Manage sources in Fleet</a>
-        </>
-      )}
+      <p className="text-muted-foreground px-2 py-1.5 text-[11px] font-medium">Show sessions</p>
+      {conversationFilters.map((option) => (
+        <button key={option.value} type="button" role="menuitemradio" aria-checked={filter === option.value} className={menuItemClass} onClick={() => { setFilter(option.value); onClose(); }}>
+          <Check aria-hidden="true" className={cn("size-3.5 shrink-0", filter !== option.value && "invisible")} />
+          {option.label}
+        </button>
+      ))}
+      <div role="separator" className="bg-border my-1 h-px" />
+      <p className="text-muted-foreground px-2 py-1.5 text-[11px] font-medium">Group by</p>
+      {conversationGroups.map((option) => (
+        <button key={option.value} type="button" role="menuitemradio" aria-checked={group === option.value} className={menuItemClass} onClick={() => { setGroup(option.value); onClose(); }}>
+          <Check aria-hidden="true" className={cn("size-3.5 shrink-0", group !== option.value && "invisible")} />
+          {option.label}
+        </button>
+      ))}
     </div>,
     document.body,
   );
@@ -123,22 +88,21 @@ export function AppChatSidebar() {
   const [query, setQuery] = useState("");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [visibleCounts, setVisibleCounts] = useState<Record<string, number>>({});
-  const [menu, setMenu] = useState<Menu | null>(null);
+  const [filterMenuOpen, setFilterMenuOpen] = useState(false);
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 30_000);
     return () => window.clearInterval(timer);
   }, []);
   const filterRef = useRef<HTMLButtonElement>(null);
-  const sourceRef = useRef<HTMLButtonElement>(null);
   const navigationId = useId();
   const sections = conversationSections(conversations, sourceStates, group, query);
   const count = sections.reduce((total, section) => total + section.conversations.length, 0);
   const sourceCount = Number(sources.local) + sources.nodes.length;
   const currentFilter = conversationFilters.find((option) => option.value === filter)?.label;
-  const closeMenu = (restoreFocus = true) => {
-    if (restoreFocus) (menu === "filters" ? filterRef : sourceRef).current?.focus();
-    setMenu(null);
+  const closeFilterMenu = (restoreFocus = true) => {
+    if (restoreFocus) filterRef.current?.focus();
+    setFilterMenuOpen(false);
   };
 
   return (
@@ -146,11 +110,8 @@ export function AppChatSidebar() {
       <div id={navigationId} className="flex min-h-0 flex-1 flex-col">
         <div className="mb-2 flex shrink-0 items-center gap-1 px-1 pt-3 md:pt-0">
           <h2 className="mr-auto pl-1 text-sm font-semibold">Chats</h2>
-          <Button ref={sourceRef} variant="ghost" size="icon" className={cn("size-7 shrink-0", sourceCount > 1 && "w-auto min-w-7 gap-1 px-1.5", sourceCount > 1 || !sources.local ? "text-foreground" : "text-muted-foreground")} aria-label="Conversation sources" title={`Sessions from ${[...(sources.local ? ["This machine"] : []), ...sources.nodes].join(", ")}`} aria-haspopup="menu" aria-expanded={menu === "sources"} onClick={() => setMenu((current) => current === "sources" ? null : "sources")}>
-            <Network aria-hidden="true" className="size-3.5" />
-            {sourceCount > 1 && <span className="text-[10px]">{sourceCount}</span>}
-          </Button>
-          <Button ref={filterRef} variant="ghost" size="icon" className={cn("size-7 shrink-0", filter === "all" ? "text-muted-foreground" : "text-foreground bg-foreground/8")} aria-label="Filter conversations" title={currentFilter} aria-haspopup="menu" aria-expanded={menu === "filters"} onClick={() => setMenu((current) => current === "filters" ? null : "filters")}>
+          <NodeSelector mobileOnly/>
+          <Button ref={filterRef} variant="ghost" size="icon" className={cn("size-7 shrink-0", filter === "all" ? "text-muted-foreground" : "text-foreground bg-foreground/8")} aria-label="Filter conversations" title={currentFilter} aria-haspopup="menu" aria-expanded={filterMenuOpen} onClick={() => setFilterMenuOpen((current) => !current)}>
             <Filter aria-hidden="true" className="size-3.5" />
           </Button>
           <Button variant="ghost" size="icon" className="text-muted-foreground size-7 shrink-0 hover:text-foreground" aria-label="New conversation" title="New conversation" onClick={() => newConversation()}>
@@ -196,11 +157,11 @@ export function AppChatSidebar() {
                       return (
                         <li key={conversationHref(conversation)}>
                           <a onContextMenu={(event) => {
-                            event.preventDefault(); setMenu(null);
+                            event.preventDefault(); setFilterMenuOpen(false);
                             setContextTarget({ conversation, x: event.clientX, y: event.clientY, trigger: event.currentTarget });
                           }} onKeyDown={(event) => {
                             if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
-                              event.preventDefault(); setMenu(null);
+                              event.preventDefault(); setFilterMenuOpen(false);
                               const bounds = event.currentTarget.getBoundingClientRect();
                               setContextTarget({ conversation, x: bounds.left, y: bounds.bottom, trigger: event.currentTarget });
                             }
@@ -241,7 +202,7 @@ export function AppChatSidebar() {
         </nav>
       </div>
       {contextTarget && <ChatContextMenu key={conversationHref(contextTarget.conversation)} target={contextTarget} onClose={() => setContextTarget(null)} />}
-      {menu && <SidebarMenu menu={menu} anchor={menu === "filters" ? filterRef : sourceRef} onClose={closeMenu} />}
+      {filterMenuOpen && <FilterMenu anchor={filterRef} onClose={closeFilterMenu} />}
     </aside>
   );
 }

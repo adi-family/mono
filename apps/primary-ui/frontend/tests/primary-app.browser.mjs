@@ -242,7 +242,7 @@ try {
       assert.equal(await evaluate(`${q('[data-slot="chat-composer-input"]')}.value`), "");
       await settingsLink();
       await click('button[aria-label="Conversation sources"]');
-      const fleet = '[data-slot="app-chat-menu"] a[role="menuitem"]';
+      const fleet = '[data-slot="node-selector-menu"] a[role="menuitem"]';
       await until(() => evaluate(`!!${q(fleet)}`), "Fleet link is exposed in the sources menu");
       assert.equal(await evaluate(`${q(fleet)}.href`), `${origin}/extended/settings/fleet`);
       assert.match(await evaluate(`${q(fleet)}.textContent`), /Fleet/);
