@@ -199,7 +199,8 @@ Mobile navigation keeps its stacked layout. Pass `sidebarWidthStorageKey` to rem
 chosen width across reloads. The live app uses `adi.sidebar-width.v1` across its pages.
 Double-clicking the resize edge also clears the saved preference. Invalid saved values
 fall back to the default; numeric values stay within the 160–480px bounds. Storage
-failures leave resizing usable.
+failures leave resizing usable. The width is kept with `useLocalStorageState` (see
+[State helpers](#state-helpers)), so a resize in another tab is followed as well.
 
 The absolute expand button at the workspace’s upper-left toggles `focusMode`, hiding
 only the outer icon rail and topbar. The section sidebar and content fill the window
@@ -745,6 +746,35 @@ the full ID, and a checkmark confirms copying. HTTP hosts use a clipboard fallba
 Use the pencil beside an open chat’s title to rename it. Enter saves, Escape cancels, and
 an empty name restores the generated title. Changes use the existing run rename endpoint on
 the conversation’s owning machine and update both the header and sidebar.
+
+## State helpers
+
+Two hooks cover state that comes from outside the component and is then edited locally.
+
+`useStateWithDeps(read, deps)` is `useMemo` with a setter: the value starts from `read()`,
+local edits stick, and whenever `deps` change the value is read again. The reset happens during
+render, so no frame shows the previous source's value and no trailing effect is needed. Use it
+for a draft of a prop-selected record, or anything that must start over when a key changes.
+
+```tsx
+const [draft, setDraft] = useStateWithDeps(() => record.name, [record.id]);
+```
+
+`useLocalStorageState(key, fallback, codec?)` is `useState` whose value outlives the page.
+It starts from what `window.localStorage` holds under `key` (or `fallback` when nothing usable
+does), writes every change back, and follows changes made in other tabs or by other hooks on
+the same key in this tab. The default codec is JSON; pass `{ parse, serialize }` to validate
+what is read or to keep a legacy format. `parse` returns `undefined` for unusable input, which
+falls back; `serialize` returns `undefined` to remove the key. An `undefined` key gives plain
+state, and unavailable storage (private mode, sandboxed frames) degrades to that without
+throwing.
+
+```tsx
+const [theme, setTheme] = useLocalStorageState<Theme | null>("design-system-theme", null, {
+  parse: (stored) => (stored === "light" || stored === "dark" ? stored : undefined),
+  serialize: (value) => value ?? undefined,
+});
+```
 
 ## Browser checks
 
