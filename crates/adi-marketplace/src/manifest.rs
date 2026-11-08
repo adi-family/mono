@@ -25,6 +25,7 @@
 //!       "slug": "crm-suite",
 //!       "name": "CRM suite",
 //!       "description": "A follow-up agent, its import tool, and the dashboard that watches both.",
+//!       "summary": "Follow-ups, imports and the board that watches them.",
 //!       "repo": "https://github.com/adi-family/crm-suite.git",
 //!       "commit": "9f2c1d4e5a6b7c8d9e0f1a2b3c4d5e6f70819a2b",
 //!       "elements": [
@@ -78,6 +79,13 @@ pub struct BundleEntry {
     /// One line on what the app is for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// The short form of [`BundleEntry::description`], for the one place that has room for a
+    /// single line: the card on the listing page. Absent is ordinary — the card then shows the
+    /// description itself, clipped to one line — so this is worth publishing when the
+    /// description runs to a sentence or two and the clipped form would stop mid-thought.
+    /// Display only; the app's own page still shows the description in full.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
     /// The app's mark: an `https://` URL, or a `data:image/…` URI for a publisher who would
     /// rather the listing fetched nothing from anywhere. Display only — it is drawn beside the
     /// entry and nothing is decided by it. Absent is ordinary, and reads as a placeholder glyph
@@ -313,6 +321,16 @@ impl BundleEntry {
             .collect()
     }
 
+    /// The one-line form this entry publishes for the listing card, if it publishes one. Trimmed,
+    /// and an empty string is no summary rather than an empty line on the card.
+    #[must_use]
+    pub fn summary(&self) -> Option<&str> {
+        self.summary
+            .as_deref()
+            .map(str::trim)
+            .filter(|summary| !summary.is_empty())
+    }
+
     /// The long form this entry publishes, if it publishes one.
     #[must_use]
     pub fn readme(&self) -> Option<&str> {
@@ -490,6 +508,11 @@ mod tests {
         assert_eq!(parsed.name, None);
         assert_eq!(parsed.bundles.len(), 1);
         assert_eq!(parsed.bundles[0].version, None);
+        assert_eq!(
+            parsed.bundles[0].summary(),
+            None,
+            "the card falls back to the description"
+        );
         assert_eq!(parsed.bundles[0].icon(), None, "and no mark to draw beside it");
         assert!(parsed.bundles[0].keywords().is_empty());
         assert_eq!(parsed.bundles[0].branch(), None, "the default branch, then");
@@ -649,6 +672,40 @@ mod tests {
         )
         .expect("parses");
         assert_eq!(blank.bundles[0].icon(), None);
+    }
+
+    #[test]
+    fn an_entry_carries_a_one_line_summary_for_the_listing_card() {
+        let parsed = parse(
+            format!(
+                r#"{{"apps":[{{"slug":"crm","name":"CRM",
+                   "description":"A follow-up agent, its import tool, and the dashboard that watches both.",
+                   "summary":"  Follow-ups, imports and the board that watches them.  ",
+                   "repo":"https://example/crm.git","commit":"{SHA}"}}]}}"#
+            )
+            .as_bytes(),
+        )
+        .expect("parses");
+        assert_eq!(
+            parsed.bundles[0].summary(),
+            Some("Follow-ups, imports and the board that watches them."),
+            "trimmed, and the description is left as published"
+        );
+        assert_eq!(
+            parsed.bundles[0].description.as_deref(),
+            Some("A follow-up agent, its import tool, and the dashboard that watches both.")
+        );
+
+        // Blank is no summary, not an empty line on the card: a publisher's template left unfilled.
+        let blank = parse(
+            format!(
+                r#"{{"apps":[{{"slug":"crm","name":"CRM","summary":"   ",
+                   "repo":"https://example/crm.git","commit":"{SHA}"}}]}}"#
+            )
+            .as_bytes(),
+        )
+        .expect("parses");
+        assert_eq!(blank.bundles[0].summary(), None);
     }
 
     #[test]

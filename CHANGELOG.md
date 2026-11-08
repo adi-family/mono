@@ -20,6 +20,10 @@ extraction script cares about.
 
 ## Unreleased
 
+### Added
+
+- A marketplace entry can publish a `summary`: a one-line form of its description that the catalog card shows in its place. Cards keep that line to a single row either way, and no longer show the version; the package page still shows the description in full and the version beside the name.
+
 ## 1.36.3 — 2026-11-06
 
 ### Added

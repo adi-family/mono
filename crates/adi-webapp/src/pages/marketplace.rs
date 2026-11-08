@@ -274,7 +274,9 @@ fn entry_row(app: &MarketplaceApp, open: OpenApp) -> AnyView {
     let (name, version, description) = (
         app.name.clone(),
         app.version.clone(),
-        app.description.clone(),
+        // The row's line is the publisher's short form when there is one; the description in
+        // full is the item page's business.
+        app.summary.clone().or_else(|| app.description.clone()),
     );
     let (icon, elements) = (app_icon(app), bundle_elements(app));
     let contents = contents_note(&elements);
