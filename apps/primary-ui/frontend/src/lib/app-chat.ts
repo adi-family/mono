@@ -448,13 +448,16 @@ export async function getConversations(
   return (await getConversationIndex(signal, source, options)).conversations;
 }
 
+/** Turns in the first transcript page. A reply's response always carries exactly this page. */
+export const snapshotPageSize = 20;
+
 export async function getConversation(
   ref: ConversationRef,
   signal?: AbortSignal,
   view: { limit?: number; before?: number } = {},
 ): Promise<AgentPeek> {
   return peekOf(await request("/agents/run/peek", signal, {
-    ...runBody(ref), limit: view.limit ?? 20, fold: true,
+    ...runBody(ref), limit: view.limit ?? snapshotPageSize, fold: true,
     ...(view.before === undefined ? {} : { before: view.before }),
   }, ref.source));
 }
@@ -466,15 +469,31 @@ export async function getSteps(
   return array(data.steps).map(stepOf);
 }
 
-export async function startConversation(agent: string, message: string, signal?: AbortSignal, source?: string, attachments: string[] = []): Promise<ConversationRef> {
+export interface StartConversationOptions {
+  signal?: AbortSignal;
+  source?: string;
+  attachments?: string[];
+}
+
+export interface ReplyOptions {
+  signal?: AbortSignal;
+  attachments?: string[];
+  mode?: "regular" | "asap";
+}
+
+export async function startConversation(
+  agent: string, message: string, { signal, source, attachments = [] }: StartConversationOptions = {},
+): Promise<ConversationRef> {
   const data = await request("/agents/run", signal, { name: agent, message, attachments, launched_by: "human" }, source);
   if (!text(data.run_id)) throw new Error("This agent did not open a conversation.");
   return { agent, runId: text(data.run_id), ...(source === undefined ? {} : { source }) };
 }
 
-export async function replyToConversation(ref: ConversationRef, message: string, signal?: AbortSignal, attachments: string[] = [], mode: "regular" | "asap" = "regular"): Promise<AgentPeek> {
+export async function replyToConversation(
+  ref: ConversationRef, message: string, { signal, attachments = [], mode = "regular" }: ReplyOptions = {},
+): Promise<AgentPeek> {
   return peekOf(await request("/agents/run/reply", signal, {
-    ...runBody(ref), message, attachments, mode, limit: 20, fold: true,
+    ...runBody(ref), message, attachments, mode, limit: snapshotPageSize, fold: true,
   }, ref.source));
 }
 

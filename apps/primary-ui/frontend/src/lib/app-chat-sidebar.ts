@@ -34,8 +34,8 @@ export interface SidebarSourceState {
   source?: string;
   conversations: Conversation[];
   total: number;
-  held?: number;
-  groups?: { project?: string; label: string; conversations: Conversation[]; total: number; held?: number }[];
+  loaded?: number;
+  groups?: { project?: string; label: string; conversations: Conversation[]; total: number; loaded?: number }[];
   isLoading: boolean;
   error: string | null;
 }
@@ -44,7 +44,7 @@ interface SidebarPage {
   source?: string;
   project?: string;
   total: number;
-  held: number;
+  loaded: number;
 }
 
 export interface ConversationSection {
@@ -90,7 +90,7 @@ export function conversationSections(
     conversation.title, conversation.agent, conversation.source ?? "This machine", projectLabel(conversation),
   ].join(" ").toLocaleLowerCase().includes(search);
   const visible = sorted(conversations.filter(matches));
-  const pages = sources.map((source) => ({ source: source.source, total: source.total, held: source.held ?? source.conversations.length }));
+  const pages = sources.map((source) => ({ source: source.source, total: source.total, loaded: source.loaded ?? source.conversations.length }));
 
   if (group === "flat") {
     return [{ key: "all", conversations: visible, pages }];
@@ -100,15 +100,15 @@ export function conversationSections(
       key: JSON.stringify([source.source ?? ""]),
       label: source.source ?? "This machine",
       conversations: visible.filter((conversation) => conversation.source === source.source),
-      pages: [{ source: source.source, total: source.total, held: source.held ?? source.conversations.length }],
-    })).filter((section) => section.conversations.length > 0 || (!search && section.pages.some((page) => page.total > page.held)));
+      pages: [{ source: source.source, total: source.total, loaded: source.loaded ?? source.conversations.length }],
+    })).filter((section) => section.conversations.length > 0 || (!search && section.pages.some((page) => page.total > page.loaded)));
   }
 
   const sections = new Map<string, ConversationSection>();
   for (const source of sources) {
     for (const project of source.groups ?? []) {
       const section = sections.get(project.label) ?? { key: `project:${project.label}`, label: project.label, conversations: [], pages: [] };
-      section.pages.push({ source: source.source, project: project.project ?? "~", total: project.total, held: project.held ?? project.conversations.length });
+      section.pages.push({ source: source.source, project: project.project ?? "~", total: project.total, loaded: project.loaded ?? project.conversations.length });
       sections.set(project.label, section);
     }
   }
@@ -122,5 +122,5 @@ export function conversationSections(
   const unfiled = sections.get("No project");
   sections.delete("No project");
   if (unfiled) sections.set("No project", unfiled);
-  return [...sections.values()].filter((section) => section.conversations.length > 0 || (!search && section.pages.some((page) => page.total > page.held)));
+  return [...sections.values()].filter((section) => section.conversations.length > 0 || (!search && section.pages.some((page) => page.total > page.loaded)));
 }

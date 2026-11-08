@@ -4,7 +4,9 @@ import { Check, ChevronDown, Filter, Plus, Search, Star } from "lucide-react";
 
 import { Button, cn } from "@design-system/ui";
 
-import { useAppChat } from "../lib/app-chat-state";
+import { useChatSelection } from "../lib/app-chat-selection";
+import { useChatList } from "../lib/app-chat-list";
+import { useChatThread } from "../lib/app-chat-thread";
 import { conversationAge, conversationFilters, conversationGroups, conversationSections } from "../lib/app-chat-sidebar";
 import { sameConversation } from "../lib/app-chat-sources";
 import { conversationHref } from "../lib/app-chat-transcript";
@@ -15,7 +17,7 @@ import { NodeSelector } from "./NodeSelector";
 const menuItemClass = "focus:bg-accent hover:bg-accent flex min-h-8 w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs outline-none disabled:opacity-50 disabled:hover:bg-transparent";
 
 function FilterMenu({ anchor, onClose }: { anchor: RefObject<HTMLButtonElement | null>; onClose: (restoreFocus?: boolean) => void }) {
-  const { filter, setFilter, group, setGroup } = useAppChat();
+  const { filter, setFilter, group, setGroup } = useChatSelection();
   const element = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ left: 0, top: 0 });
 
@@ -83,7 +85,9 @@ function FilterMenu({ anchor, onClose }: { anchor: RefObject<HTMLButtonElement |
 }
 
 export function AppChatSidebar() {
-  const { conversations, active, isLoading, indexError, sourceStates, sources, filter, group, loadMore, openConversation, newConversation, refresh } = useAppChat();
+  const { active, sources, filter, group, openConversation, newConversation } = useChatSelection();
+  const { conversations, isLoading, indexError, sourceStates, loadMore } = useChatList();
+  const { refresh } = useChatThread();
   const [contextTarget, setContextTarget] = useState<ChatContextTarget | null>(null);
   const [query, setQuery] = useState("");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -137,7 +141,7 @@ export function AppChatSidebar() {
             const isCollapsed = !query.trim() && !!collapsed[sectionKey];
             const visibleCount = group === "machine" && !query.trim() ? visibleCounts[sectionKey] ?? 5 : section.conversations.length;
             const hiddenCount = Math.max(0, section.conversations.length - visibleCount);
-            const remaining = hiddenCount + section.pages.reduce((total, page) => total + Math.max(0, page.total - page.held), 0);
+            const remaining = hiddenCount + section.pages.reduce((total, page) => total + Math.max(0, page.total - page.loaded), 0);
             return (
               <section key={section.key} data-slot="app-conversation-group" className="mb-2 last:mb-0" aria-label={section.label}>
                 {section.label && (
@@ -187,7 +191,7 @@ export function AppChatSidebar() {
                   </ul>
                   {remaining > 0 && !query.trim() && <button type="button" className="text-muted-foreground focus-visible:ring-ring hover:text-foreground mt-1 rounded px-2 py-1.5 text-left text-[11px] outline-none focus-visible:ring-2" data-slot="app-conversation-group-more" onClick={() => {
                     if (group === "machine") setVisibleCounts((current) => ({ ...current, [sectionKey]: visibleCount + 5 }));
-                    if (hiddenCount === 0) section.pages.forEach((page) => { if (page.total > page.held) loadMore(page.source, page.project); });
+                    if (hiddenCount === 0) section.pages.forEach((page) => { if (page.total > page.loaded) loadMore(page.source, page.project); });
                   }}>Load more · {remaining} older</button>}
                 </div>
               </section>

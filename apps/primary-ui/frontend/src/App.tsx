@@ -4,6 +4,7 @@
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { lazy, Suspense } from "react";
 
+import { ChatMutationNotice } from "./components/ChatMutationNotice";
 import { ShowcaseLayout } from "./components/ShowcaseLayout";
 import { Home } from "./pages/Home";
 import { AppChatProvider } from "./lib/app-chat-state";
@@ -53,6 +54,7 @@ export default function App() {
           </Route>
         </Routes>
       </Suspense>
+      <ChatMutationNotice />
     </AppChatProvider>
   );
 }

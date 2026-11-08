@@ -2,11 +2,11 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Pencil, Star } from "lucide-react";
 import type { Agent } from "../lib/app-chat";
-import { useAppChat } from "../lib/app-chat-state";
+import { useChatSelection } from "../lib/app-chat-selection";
 
 export type AgentContextTarget = { agent: Agent; x: number; y: number; trigger: HTMLElement };
 export function AgentContextMenu({ target, onClose }: { target: AgentContextTarget; onClose: () => void }) {
-  const { setAgentOverride } = useAppChat();
+  const { setAgentOverride } = useChatSelection();
   const element = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ left: target.x, top: target.y });
   const [renaming, setRenaming] = useState(false);

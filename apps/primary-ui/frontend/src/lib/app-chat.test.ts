@@ -92,7 +92,7 @@ test("All, any-user and starred filters keep their distinct wire values; hidden 
 test("every conversation read and action uses its own source, including same-id chats", async () => {
   const remote = { ...ref, source: "laptop-b" };
   mockResponse({ run_id: "created", turns: [], steps: [] });
-  assert.deepEqual(await startConversation(ref.agent, "Start remotely", undefined, remote.source), { agent: ref.agent, runId: "created", source: remote.source });
+  assert.deepEqual(await startConversation(ref.agent, "Start remotely", { source: remote.source }), { agent: ref.agent, runId: "created", source: remote.source });
   await getConversation(remote);
   await getSteps(remote, 2, 3, 5);
   await replyToConversation(remote, "Remote reply");
@@ -293,10 +293,10 @@ test("image uploads use raw bytes, preserve machine routing and send only attach
   assert.equal(new Headers(calls[0].init?.headers).get("Content-Type"), "image/png");
   assert.equal(attachmentUrl(image.id, "laptop-b"), "/api/app/node/laptop-b/api/agents/attachment/image-one");
   mockResponse({ turns: [] });
-  await replyToConversation({ ...ref, source: "laptop-b" }, "", undefined, [image.id]);
+  await replyToConversation({ ...ref, source: "laptop-b" }, "", { attachments: [image.id] });
   assert.deepEqual((body(1) as { attachments: string[] }).attachments, ["image-one"]);
   mockResponse({ run_id: "new" });
-  await startConversation("designer", "", undefined, "laptop-b", [image.id]);
+  await startConversation("designer", "", { source: "laptop-b", attachments: [image.id] });
   assert.deepEqual((body(2) as { attachments: string[] }).attachments, ["image-one"]);
 });
 
@@ -368,7 +368,7 @@ test("Hide persists on the owning machine and reports failed saves", async () =>
 
 test("ASAP replies retain attachments and target the owning machine", async () => {
   mockResponse({ running: true, turns: [{ role: "user", text: "Update", queued: true, mode: "asap" }] });
-  const peek = await replyToConversation({ ...ref, source: "remote" }, "Update", undefined, ["file-id"], "asap");
+  const peek = await replyToConversation({ ...ref, source: "remote" }, "Update", { attachments: ["file-id"], mode: "asap" });
   assert.equal(calls[0].url, "/api/app/node/remote/api/agents/run/reply");
   assert.deepEqual(body(), { name: ref.agent, run_id: ref.runId, message: "Update", attachments: ["file-id"], mode: "asap", limit: 20, fold: true });
   assert.equal(peek.turns[0].mode, "asap");

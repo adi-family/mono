@@ -91,8 +91,8 @@ test("project groups merge display labels while pagination retains each owning s
   assert.deepEqual(sections.map((section) => section.label), ["Design", "No project"]);
   assert.deepEqual(sections[0].conversations.map((row) => row.runId), ["local-design", "remote-design"]);
   assert.deepEqual(sections[0].pages, [
-    { source: undefined, project: "local-id", total: 10, held: 1 },
-    { source: "studio", project: "remote-id", total: 8, held: 1 },
+    { source: undefined, project: "local-id", total: 10, loaded: 1 },
+    { source: "studio", project: "remote-id", total: 8, loaded: 1 },
   ]);
   assert.equal(sections[1].pages[0].project, "~");
 });
@@ -104,27 +104,27 @@ test("search includes source and server project names without creating empty hea
   assert.equal(conversationSections([row], sources, "flat", "studio")[0].conversations.length, 1);
   assert.deepEqual(conversationSections([row], sources, "project", "unmatched"), []);
   assert.deepEqual(conversationSections([row], sources, "machine", "unmatched"), []);
-  assert.equal(conversationSections([row], sources, "project", "")[0].pages[0].held, 1);
+  assert.equal(conversationSections([row], sources, "project", "")[0].pages[0].loaded, 1);
 });
 
 test("pagination counts fetched rows before active exemptions and compatibility filters", () => {
   const fetched = conversation("fetched");
   const active = conversation("injected-active");
   const source = state(undefined, [fetched, active], {
-    total: 2, held: 1,
-    groups: [{ project: "p", label: "Design", conversations: [fetched, active], total: 2, held: 1 }],
+    total: 2, loaded: 1,
+    groups: [{ project: "p", label: "Design", conversations: [fetched, active], total: 2, loaded: 1 }],
   });
   for (const group of ["flat", "machine", "project"] as const) {
     const page = conversationSections([fetched, active], [source], group, "")[0].pages[0];
-    assert.equal(page.total - page.held, 1, "an injected active row must not consume the last fetched slot");
+    assert.equal(page.total - page.loaded, 1, "an injected active row must not consume the last fetched slot");
   }
 
   const filtered = state(undefined, [fetched], {
-    total: 5, held: 5,
-    groups: [{ project: "p", label: "Design", conversations: [fetched], total: 5, held: 5 }],
+    total: 5, loaded: 5,
+    groups: [{ project: "p", label: "Design", conversations: [fetched], total: 5, loaded: 5 }],
   });
   for (const group of ["flat", "machine", "project"] as const) {
     const page = conversationSections([fetched], [filtered], group, "")[0].pages[0];
-    assert.equal(page.total - page.held, 0, "client filtering must not promise another page of already fetched rows");
+    assert.equal(page.total - page.loaded, 0, "client filtering must not promise another page of already fetched rows");
   }
 });

@@ -5,7 +5,7 @@ import { useLocation } from "react-router-dom";
 
 import { Button, cn } from "@design-system/ui";
 
-import { useAppChat } from "../lib/app-chat-state";
+import { useChatSelection } from "../lib/app-chat-selection";
 import { appHref } from "../lib/app-api";
 import { hasSource, selectedSources, sourceName } from "../lib/app-chat-sources";
 import { useMarketplaceSource } from "../lib/marketplace-source";
@@ -39,7 +39,7 @@ type Selection = {
 
 function useSelection(): Selection {
   const { pathname } = useLocation();
-  const { sources, toggleSource } = useAppChat();
+  const { sources, toggleSource } = useChatSelection();
   const [marketplaceSource, setMarketplaceSource] = useMarketplaceSource();
   if (pathname === "/marketplace" || pathname.startsWith("/marketplace/")) {
     return {
@@ -58,7 +58,7 @@ function useSelection(): Selection {
 }
 
 function NodeSelectorMenu({ anchor, selection, onClose }: { anchor: RefObject<HTMLButtonElement | null>; selection: Selection; onClose: (restoreFocus?: boolean) => void }) {
-  const { fleetNodes, fleetLoading, fleetError } = useAppChat();
+  const { fleetNodes, fleetLoading, fleetError } = useChatSelection();
   const element = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ left: 0, top: 0 });
   const role = selection.multiple ? "menuitemcheckbox" : "menuitemradio";
