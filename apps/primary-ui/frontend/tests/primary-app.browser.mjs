@@ -21,8 +21,15 @@ const chrome = Bun.spawn([
 ], { stdout: "ignore", stderr: "ignore" });
 
 const readPosts = new Set(["/api/agents/run/peek", "/api/agents/run/steps"]);
+// The native Settings page refreshes the updater's record with `POST /api/update/check` whenever
+// that record has gone stale (about half a day). That request leaves the machine and rewrites
+// ~/.adi/mono/update/state.json, which a read-only smoke must not do — and which could flip the
+// panel into an auto-update mid-check — so it is answered with the current `GET /api/update`
+// record instead of being blocked. Listed in the summary so a run shows it happened.
+const stubbedPosts = new Set(["/api/update/check"]);
 const errors = [];
 const blocked = [];
+const stubbed = [];
 const interceptionErrors = [];
 const requests = [];
 const checks = [];
@@ -53,6 +60,14 @@ async function intercept({ requestId, request }) {
   if (url.origin === origin && (request.method === "GET" || request.method === "HEAD"
     || (request.method === "POST" && readPosts.has(nativePath)))) {
     await send("Fetch.continueRequest", { requestId });
+  } else if (url.origin === origin && request.method === "POST" && stubbedPosts.has(nativePath)) {
+    stubbed.push(label);
+    const record = await fetch(`${url.origin}${path.replace(/\/check$/, "")}`);
+    await send("Fetch.fulfillRequest", {
+      requestId, responseCode: record.status,
+      responseHeaders: [{ name: "Content-Type", value: record.headers.get("content-type") ?? "application/json" }],
+      body: Buffer.from(await record.arrayBuffer()).toString("base64"),
+    });
   } else {
     blocked.push(label);
     await send("Fetch.fulfillRequest", {
@@ -245,11 +260,12 @@ try {
     });
 
   }
-  console.log(`\n${checks.length} primary app smoke checks passed; zero writes, exceptions or console errors.`);
+  console.log(`\n${checks.length} primary app smoke checks passed; zero writes, exceptions or console errors.${stubbed.length ? ` Answered locally instead of forwarding: ${JSON.stringify(stubbed)}` : ""}`);
 } catch (error) {
   console.error(`Primary app smoke failed during ${stage}; ${checks.length} checks completed.`);
   if (errors.length) console.error(`Browser errors: ${JSON.stringify(errors)}`);
   if (blocked.length) console.error(`Blocked API requests: ${JSON.stringify(blocked)}`);
+  if (stubbed.length) console.error(`Stubbed API requests: ${JSON.stringify(stubbed)}`);
   if (interceptionErrors.length) console.error(`Interception errors: ${JSON.stringify(interceptionErrors)}`);
   console.error(`API request paths: ${JSON.stringify(requests)}`);
   if (evaluate && socket?.readyState === WebSocket.OPEN) {
