@@ -11,6 +11,7 @@ import {
   selectedSources, sourcesPreferenceKey, toggledSource, withSource, type ChatFilter, type ChatGroup, type LastLaunchedAgent,
 } from "./app-chat-sources";
 import { conversationHref } from "./app-chat-transcript";
+import { reportEvent } from "./event-log";
 import { applyOverrides, entityOverrideKey, usePersonalOverrides } from "./personal-overrides";
 
 const noAgents: Agent[] = [];
@@ -36,6 +37,11 @@ function useSelectionState() {
   // The machine selector sits in every page's topbar, so the fleet is read everywhere; the
   // session reads stay confined to the chat page.
   const fleetQuery = useQuery({ queryKey: chatQueryKeys.fleet, queryFn: ({ signal }) => getFleetNodes(signal), retry: false, refetchInterval: fleetPollMs });
+  const fleetError = fleetQuery.error ? errorText(fleetQuery.error) : null;
+  // The fleet is polled on every page; a failure goes to the event log once per outage.
+  useEffect(() => {
+    if (fleetError) reportEvent({ level: "error", area: "Fleet", message: fleetError });
+  }, [fleetError]);
   const agentResults = useQueries({
     queries: sourceList.map((source) => ({
       queryKey: chatQueryKeys.agents(source),
@@ -110,7 +116,7 @@ function useSelectionState() {
   return {
     enabled, invalidSource, sources, sourceList, activeSource, toggleSource,
     filter, setFilter, group, setGroup,
-    fleetNodes: fleetQuery.data ?? [], fleetLoading: fleetQuery.isPending, fleetError: fleetQuery.error ? errorText(fleetQuery.error) : null,
+    fleetNodes: fleetQuery.data ?? [], fleetLoading: fleetQuery.isPending, fleetError,
     agents, agentsBySource, agentResults, newChatAgents: agentsBySource.flat(),
     agentsLoading: agentResults.some((result) => result.isPending),
     activeAgentsPending: agentResults[activeSourceIndex]?.isPending === true,

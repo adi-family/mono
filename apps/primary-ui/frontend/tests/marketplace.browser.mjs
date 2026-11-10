@@ -277,10 +277,14 @@ try {
     await until(()=>evaluate(`!!${q('main[aria-label="Marketplace"]')}`),'back to catalog');
   });
   await check("Refresh catalog uses the configured source API",async()=>{
+    // The package count and the refresh button share one row: same vertical centre, count on the left.
+    const row=await evaluate(`(()=>{const count=${q('[data-slot="marketplace-count"]')}.getBoundingClientRect();const button=Array.from(document.querySelectorAll('main button')).find(button=>button.textContent==='Refresh catalog').getBoundingClientRect();return {count:count.top+count.height/2,button:button.top+button.height/2,ordered:count.right<button.left,text:${q('[data-slot="marketplace-count"]')}.textContent};})()`);
+    assert.match(row.text,/^\d+ packages?$/,'the count reads as a package total');
+    assert(Math.abs(row.count-row.button)<4&&row.ordered,`count and refresh share a row: ${JSON.stringify(row)}`);
     await evaluate(`Array.from(document.querySelectorAll('main button')).find(button=>button.textContent==='Refresh catalog').click()`);
     await until(()=>mutations.at(-1)?.path==='/api/marketplace/sync','catalog sync request');
     await until(()=>evaluate(`Array.from(document.querySelectorAll('main button')).some(button=>button.textContent==='Refresh catalog'&&!button.disabled)`),'catalog sync settles');
-    assert(await evaluate(`document.querySelector('main').textContent.includes('custom')`));
+    assert(await evaluate(`document.querySelector('main').textContent.includes('Action completed')`),'the sync result is reported');
   });
   await check("Marketplace follows the machine chosen in the topbar",async()=>{
     await navigate('/marketplace','main[aria-label="Marketplace"]');
@@ -288,7 +292,6 @@ try {
     const item=(name)=>`[...document.querySelectorAll('[data-slot="node-selector-menu"] [role="menuitemradio"]')].find(node=>node.textContent.trim()===${JSON.stringify(name)})`;
     const remoteReads=()=>requests.filter(r=>r.path==='/api/marketplace'&&r.source==='studio').length;
     assert.match(await evaluate(`${q(picker)}.textContent`),/This machine/,'the topbar names the machine being browsed');
-    assert.match(await evaluate(`${q('[data-slot="marketplace-machine"]')}.textContent`),/This machine/,'the catalog line names the machine');
     await click(picker);
     await until(()=>evaluate(`!!${item('studio')}`),'paired machines are offered');
     assert.equal(await evaluate(`${item('vault')}.disabled`),true,'a locked machine cannot be chosen');
@@ -296,7 +299,7 @@ try {
     await evaluate(`${item('studio')}.click()`);
     await until(()=>evaluate(`!document.querySelector('[role="menu"]')`),'choosing a machine closes the menu');
     await until(()=>remoteReads()>0,'the catalog is read from the chosen machine');
-    await until(()=>evaluate(`${q('[data-slot="marketplace-machine"]')}.textContent.includes('studio')&&document.querySelector('main').textContent.includes('studio-catalog')`),'the page shows that machine and its marketplace sources');
+    await until(()=>evaluate(`document.querySelector('main').textContent.includes('install it on studio')&&document.querySelector('main').textContent.includes('Dashboard package on another machine.')`),'the page names that machine and shows its catalog');
     assert.match(await evaluate(`${q(picker)}.textContent`),/studio/);
     await click('[data-slot="marketplace-package-link"]');
     await until(()=>evaluate(`!!${q('[data-slot="marketplace-installed"]')}`),'the remote package page shows its installs');

@@ -149,6 +149,16 @@ const messageCode = `<ChatMessage from="assistant">
 
 <ChatTypingIndicator label="Assistant is preparing a reply" />`;
 
+const sampleWaits = [
+  { id: "build", label: "Waiting for the build to finish." },
+  { id: "review", label: "Waiting for the layout reviewer’s result." },
+];
+
+const sampleQueued = [
+  { id: "mobile", label: "Queued", text: "Please also check the mobile layout after this response." },
+  { id: "urgent", label: "Queued · ASAP", text: "Stop before pushing; the branch name changed." },
+];
+
 const composerCode = `const [draft, setDraft] = useState("");
 
 <ChatComposer
@@ -158,7 +168,10 @@ const composerCode = `const [draft, setDraft] = useState("");
     await sendMessage(message);
   }}
   textareaProps={{ name: "message" }}
-/>`;
+/>
+
+<ChatWaitingStatus items={waits} onCancel={(id) => cancelWait(id)} cancellingIds={cancellingIds} />
+<ChatQueuedMessage text={message.text} onCancel={() => cancelQueued(message)} cancelling={message.cancelling} />`;
 
 const toolsCode = `<ChatToolCall kind="terminal" title="exec_command" description="bun run typecheck" status="running">
   <ChatToolOutput label="Terminal output">{output}</ChatToolOutput>
@@ -290,6 +303,8 @@ export function ChatExamples() {
   const [simulateFailure, setSimulateFailure] = useState(false);
   const [lastSent, setLastSent] = useState("");
   const [locked, setLocked] = useState(false);
+  const [waits, setWaits] = useState(sampleWaits);
+  const [queued, setQueued] = useState(sampleQueued);
 
   useEffect(() => () => { if (timer.current) clearInterval(timer.current); }, []);
 
@@ -456,12 +471,23 @@ export function ChatExamples() {
           <p role="status" className={lastSent ? "text-muted-foreground text-sm [overflow-wrap:anywhere]" : "sr-only"}>
             {lastSent ? `Message sent: ${lastSent}` : ""}
           </p>
-          <ChatWaitingStatus items={[
-            { id: "build", label: "Waiting for the build to finish." },
-            { id: "review", label: "Waiting for the layout reviewer’s result." },
-          ]} />
-          <ChatQueuedMessage text="Please also check the mobile layout after this response." />
-          <p className="text-muted-foreground text-xs">Queued messages stay compact until expanded. In the live Interface, attach images using the paperclip, paste, or drag and drop.</p>
+          <ChatWaitingStatus items={waits} onCancel={(id) => setWaits((current) => current.filter((item) => item.id !== id))} />
+          {queued.map((message) => (
+            <ChatQueuedMessage
+              key={message.id}
+              text={message.text}
+              label={message.label}
+              onCancel={() => setQueued((current) => current.filter((item) => item.id !== message.id))}
+            />
+          ))}
+          <p className="text-muted-foreground text-xs">
+            Queued messages stay compact until expanded, and each one can be cancelled before it is sent. Expand the waiting status to cancel a task the agent is waiting on. In the live Interface, attach images using the paperclip, paste, or drag and drop.
+          </p>
+          {(waits.length < sampleWaits.length || queued.length < sampleQueued.length) && (
+            <Button type="button" size="sm" variant="outline" onClick={() => { setWaits(sampleWaits); setQueued(sampleQueued); }}>
+              Restore cancelled samples
+            </Button>
+          )}
           <CodeExample code={composerCode} label="Chat composer" />
         </CardContent>
       </Card>

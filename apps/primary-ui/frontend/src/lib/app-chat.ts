@@ -325,6 +325,14 @@ function markerOf(value: unknown): TurnMarker {
   }
 }
 
+function awaitOf(value: unknown): AgentAwait {
+  const item = object(value);
+  return {
+    id: text(item.id), note: text(item.note), summary: text(item.summary),
+    ...(typeof item.check === "string" ? { check: item.check } : {}),
+  };
+}
+
 function peekOf(data: JsonObject): AgentPeek {
   const stats = statsOf(data.stats);
   const turns = (Array.isArray(data.turns) ? data.turns : []).map((value, position): AgentTurn => {
@@ -349,13 +357,7 @@ function peekOf(data: JsonObject): AgentPeek {
     turns, total_turns: number(data.total_turns) || turns.length,
     ...(typeof data.state === "string" ? { state: data.state } : {}),
     ...(isObject(data.pending_question) ? { pending_question: askOf(data.pending_question) } : {}),
-    awaits: (Array.isArray(data.awaits) ? data.awaits : []).map((value) => {
-      const item = object(value);
-      return {
-        id: text(item.id), note: text(item.note), summary: text(item.summary),
-        ...(typeof item.check === "string" ? { check: item.check } : {}),
-      };
-    }),
+    awaits: (Array.isArray(data.awaits) ? data.awaits : []).map(awaitOf),
     ...(stats ? { stats } : {}),
   };
 }
@@ -499,6 +501,51 @@ export async function replyToConversation(
 
 export async function stopConversation(ref: ConversationRef, signal?: AbortSignal): Promise<void> {
   await request("/agents/run/stop", signal, runBody(ref), ref.source);
+}
+
+/** The queued turns of a snapshot, in the order the app counts its queue. */
+export function queuedTurns(snapshot: AgentPeek): AgentTurn[] {
+  return snapshot.turns.filter((turn) => turn.queued);
+}
+
+function sameQueuedMessage(left: AgentTurn, right: AgentTurn): boolean {
+  return left.text === right.text && left.mode === right.mode && left.images.length === right.images.length
+    && left.images.every((image, position) => image.id === right.images[position].id);
+}
+
+/**
+ * Where a queued message sits now, given where it sat in an older snapshot.
+ * Messages join at the back and leave from anywhere, so a waiting one's position can only fall.
+ */
+export function queuedPosition(snapshot: AgentPeek, target: AgentTurn, lastKnown: number): number | null {
+  const queue = queuedTurns(snapshot);
+  for (let position = Math.min(lastKnown, queue.length - 1); position >= 0; position -= 1) {
+    if (sameQueuedMessage(queue[position], target)) return position;
+  }
+  return null;
+}
+
+/**
+ * Takes a queued message back before the agent sees it.
+ * The app addresses its queue by position, and a position read a second ago can name a
+ * different message by now, so the position is read again immediately before the write.
+ */
+export async function cancelQueuedMessage(
+  ref: ConversationRef, target: AgentTurn, lastKnown: number, signal?: AbortSignal,
+): Promise<AgentPeek> {
+  const current = await getConversation(ref, signal);
+  const index = queuedPosition(current, target, lastKnown);
+  // Already asked: there is nothing left to cancel, and the fresh snapshot says so.
+  if (index === null) return current;
+  return peekOf(await request("/agents/run/unqueue", signal, {
+    ...runBody(ref), index, limit: snapshotPageSize, fold: true,
+  }, ref.source));
+}
+
+/** Drops one pending await and returns what the conversation is still waiting on. */
+export async function cancelAwait(ref: ConversationRef, id: string, signal?: AbortSignal): Promise<AgentAwait[]> {
+  const data = await request("/agents/await/ignore", signal, { ...runBody(ref), id }, ref.source);
+  return (Array.isArray(data.awaits) ? data.awaits : []).map(awaitOf);
 }
 
 export async function answerQuestion(

@@ -717,10 +717,21 @@ count and a truncated reason on a single line. Expand it to see all reasons. It 
 collapsed and renders nothing when the list is empty. The live Interface pins
 it above the composer, uses await notes with server summaries as a fallback, and keeps raw
 check commands out of the status. It stays visible even when the agent is not running.
+Pass `onCancel(id)` to give every task in the expanded list a Cancel button; `cancellingIds`
+disables the ones whose cancellation is still in flight. The live Interface drops the await
+through the app’s `POST /api/agents/await/ignore`.
 
 `ChatQueuedMessage` renders a compact expandable row with a `text` preview, optional `label`
 (default: “Queued”), and optional attachment children. The live Interface keeps these rows
 above its composer until the server marks their turns as sent, then shows the ordinary messages.
+Pass `onCancel` to put a Cancel button beside the row (outside the expandable summary) and
+`cancelling` while the request is in flight. The row is wrapped in a `chat-queued-row` element
+that receives `className`; every other prop still reaches the `details` element.
+
+The live Interface cancels regular and ASAP queued messages through the app’s
+`POST /api/agents/run/unqueue`. That endpoint addresses the queue by position, so the client
+reads the queue again immediately before the write and cancels the message only if it is still
+waiting; a message that has already started is left alone.
 
 The live Interface uploads files including PDFs (up to 25 MB each) and PNG, JPEG, WebP, and GIF images (up to 5 MB each), with six attachments per message
 to the conversation’s own machine. Image drafts survive switching conversations and failed

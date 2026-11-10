@@ -8,8 +8,9 @@ import { errorText } from "./app-chat-errors";
 import { buildSourceRows, clearOverlayField, indexRows, patchIndex, previewText, rememberRows, type ChatOverlay, type ChatOverlays } from "./app-chat-model";
 import { chatQueryKeys, indexPageSize, indexPollMs, projectPageSize, queryOutcomes } from "./app-chat-queries";
 import { useChatSelection } from "./app-chat-selection";
-import { conversationKey, sourceKey, sourceName } from "./app-chat-sources";
+import { conversationKey, sourceKey } from "./app-chat-sources";
 import { useChatThread } from "./app-chat-thread";
+import { reportEvent } from "./event-log";
 
 interface ChatEdit<F extends keyof ChatOverlay> {
   ref: ConversationRef;
@@ -62,6 +63,21 @@ function useListState() {
   });
   const conversations = sourceStates.flatMap((state) => state.conversations).sort((a, b) => b.lastActivity - a.lastActivity);
 
+  // A machine's polls fail in the background, so a failure goes to the event log rather than
+  // the page: once when it starts, and a note when the machine answers again. The signature is
+  // a string so that steady failure across polls reports nothing new.
+  const errorSignature = JSON.stringify(sourceStates.map((state) => [sourceKey(state.source), state.error]));
+  const previousErrors = useRef<ReadonlyMap<string, string | null>>(new Map());
+  useEffect(() => {
+    const entries = JSON.parse(errorSignature) as [string, string | null][];
+    for (const [key, error] of entries) {
+      const before = previousErrors.current.get(key) ?? null;
+      if (error && error !== before) reportEvent({ level: "error", area: "Chats", source: key || undefined, message: error });
+      else if (!error && before) reportEvent({ level: "info", area: "Chats", source: key || undefined, message: "Responding again." });
+    }
+    previousErrors.current = new Map(entries);
+  }, [errorSignature]);
+
   function loadMore(source?: string, project?: string) {
     const key = sourceKey(source);
     if (project === undefined) {
@@ -90,6 +106,7 @@ function useListState() {
       await client.invalidateQueries({ queryKey: chatQueryKeys.allIndexes });
     } catch (error) {
       setMutationError(`${failure} ${errorText(error)}`);
+      reportEvent({ level: "error", area: "Chats", source: ref.source, message: `${failure} ${errorText(error)}` });
     } finally {
       setOverlays((current) => clearOverlayField(current, key, field));
       pendingEdits.current.delete(editKey);
@@ -112,7 +129,8 @@ function useListState() {
   return {
     sourceStates, conversations, loadMore, renameChat, hideChat, starChat,
     isLoading: activeAgentsPending || indexResults.some((result) => result.isPending),
-    indexError: sourceStates.filter((state) => state.error).map((state) => `${sourceName(state.source)}: ${state.error}`).join(" ") || null,
+    /** Whether any selected machine is failing to answer; the messages themselves are in the event log. */
+    indexFailing: sourceStates.some((state) => state.error),
     mutationError,
     dismissMutationError: () => setMutationError(null),
   };

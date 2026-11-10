@@ -178,9 +178,9 @@ try {
     // Cards are summaries only: no inline preview toggle, galleries live on the package page.
     assert.equal(await evaluate(`document.querySelectorAll('main[aria-label="Marketplace"] [data-slot="card"] button[aria-expanded]').length`), 0, "cards have no quick preview toggle");
     await tokenColor('main[aria-label="Marketplace"] [data-slot="card"]');
-    // The topbar says whose marketplace this is, and the catalog line repeats it.
+    // The topbar alone says whose marketplace this is; the page does not repeat it.
     assert.match(await evaluate(`${q('button[aria-label="Marketplace machine"]')}?.textContent ?? ''`), /This machine/, "the topbar names the machine being browsed");
-    assert.match(await evaluate(`${q('[data-slot="marketplace-machine"]')}?.textContent ?? ''`), /This machine/, "the catalog names its machine");
+    assert.equal(await evaluate(`document.querySelectorAll('[data-slot="marketplace-machine"]').length`), 0, "no machine and sources line under the filters");
     if (process.env.MARKETPLACE_ONLY !== "1") await settingsLink();
     await screenshot("marketplace");
   });

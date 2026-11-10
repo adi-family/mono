@@ -8,7 +8,7 @@ import { NewChatSetup } from "../components/NewChatSetup";
 import { ChatTitle } from "../components/ChatTitle";
 
 import { AppChatAttachments, appChatTranscriptEntries } from "../components/AppChatTranscript";
-import type { AgentAsk } from "../lib/app-chat";
+import { queuedTurns, type AgentAsk } from "../lib/app-chat";
 import { useChatComposer } from "../lib/app-chat-composer";
 import { useChatList } from "../lib/app-chat-list";
 import { useChatSelection } from "../lib/app-chat-selection";
@@ -104,8 +104,11 @@ function PendingQuestion({ ask, onAnswer }: {
 
 export function Interface() {
   const { agents, active, agent, selectionKey, activeSource, openConversation } = useChatSelection();
-  const { snapshot, isLoadingConversation, conversationError, actionError, isStopping, refresh, stopResponse, submitAnswer, loadEarlier, isLoadingEarlier } = useChatThread();
-  const { conversations, isLoading, indexError, renameChat, starChat } = useChatList();
+  const {
+    snapshot, isLoadingConversation, conversationError, actionError, isStopping, refresh, stopResponse, submitAnswer, loadEarlier, isLoadingEarlier,
+    cancelQueued, isCancellingQueued, cancelWaiting, cancellingWaits,
+  } = useChatThread();
+  const { conversations, isLoading, renameChat, starChat } = useChatList();
   const { draft, setDraft, appendDraft, images, addImages, removeImage, imageError, sendMessage } = useChatComposer();
   const [voiceBusy, setVoiceBusy] = useState(false);
   const selected = agents.find((item) => item.name === agent);
@@ -113,8 +116,8 @@ export function Interface() {
   const title = active ? conversation?.title || "Conversation" : "New chat";
   const running = active !== null && (snapshot?.running ?? conversation?.running ?? false);
   const ask = snapshot?.pending_question;
+  const queued = snapshot ? queuedTurns(snapshot) : [];
   const loading = active ? isLoadingConversation && !snapshot : isLoading && !agents.length;
-  const error = conversationError || (!active ? indexError : null);
   const disabledReason = !agent ? "Choose an agent to start a chat."
     : loading ? "The chat is loading."
       : active && !snapshot ? "Load this conversation before sending a message."
@@ -153,10 +156,7 @@ export function Interface() {
         </div>
       </header>
 
-      {error && (!loading || snapshot) && <div className="flex shrink-0 items-center gap-3 border-b px-4 py-2 text-xs sm:px-5">
-        <p role="alert" className="text-destructive min-w-0 flex-1 [overflow-wrap:anywhere]">{error}</p>
-        <Button type="button" size="sm" variant="ghost" onClick={retry}>Retry</Button>
-      </div>}
+      {/* A refresh that fails over a loaded transcript goes to the event log; only a user's own action reports here. */}
       {actionError && <p role="alert" className="text-destructive shrink-0 px-4 py-2 text-xs sm:px-5">{actionError}</p>}
 
       {active && snapshot ? <ChatThread key={selectionKey} label="Chat messages" aria-live="off" className="mx-auto w-full max-w-4xl">
@@ -169,17 +169,34 @@ export function Interface() {
         {ask && <PendingQuestion key={`${selectionKey}:${ask.id}`} ask={ask} onAnswer={submitAnswer} />}
       </ChatThread> : <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 overflow-y-auto px-6 py-8 text-center">
         {loading ? <p role="status" className="text-muted-foreground text-sm">{active ? "Loading conversation…" : "Loading agents…"}</p>
-          : active ? <p className="text-muted-foreground text-sm">This conversation could not be loaded.</p>
+          : active ? <>
+            {/* With no transcript to show, the failure is the content. */}
+            <p className="text-muted-foreground text-sm">This conversation could not be loaded.</p>
+            {conversationError && <p role="alert" className="text-destructive max-w-md text-xs [overflow-wrap:anywhere]">{conversationError}</p>}
+            <Button type="button" size="sm" variant="ghost" onClick={retry}>Retry</Button>
+          </>
             : <NewChatSetup />}
       </div>}
 
       <div className="mx-auto w-full max-w-4xl shrink-0 px-3 pb-3 pt-2 sm:px-4 sm:pb-4">
-        <ChatWaitingStatus className="mb-2" items={(snapshot?.awaits ?? []).map((item) => ({
-          id: item.id,
-          label: item.note.trim() || item.summary.trim() || "Waiting for a background task to finish.",
-        }))} />
-        {snapshot?.turns.some((turn) => turn.queued) && <div aria-label="Queued messages" className="mb-2 max-h-52 space-y-1 overflow-y-auto">
-          {snapshot.turns.filter((turn) => turn.queued).map((turn) => <ChatQueuedMessage key={`${selectionKey}:${turn.seq}`} data-queued="true" text={turn.text} label={turn.mode === "asap" ? "Queued · ASAP" : "Queued"}>
+        <ChatWaitingStatus
+          className="mb-2"
+          items={(snapshot?.awaits ?? []).map((item) => ({
+            id: item.id,
+            label: item.note.trim() || item.summary.trim() || "Waiting for a background task to finish.",
+          }))}
+          onCancel={(id) => { void cancelWaiting(id); }}
+          cancellingIds={cancellingWaits}
+        />
+        {queued.length > 0 && <div aria-label="Queued messages" className="mb-2 max-h-52 space-y-1 overflow-y-auto">
+          {queued.map((turn, position) => <ChatQueuedMessage
+            key={`${selectionKey}:${turn.seq}`}
+            data-queued="true"
+            text={turn.text}
+            label={turn.mode === "asap" ? "Queued · ASAP" : "Queued"}
+            onCancel={() => cancelQueued(turn, position)}
+            cancelling={isCancellingQueued(turn)}
+          >
             <AppChatAttachments turn={turn} source={activeSource} />
           </ChatQueuedMessage>)}
         </div>}

@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   AppChatError, answerQuestion, getAgents, getConversation, getConversationIndex, getConversations, getFleetNodes, getSteps,
   replyToConversation, startConversation, stopConversation, uploadImage, attachmentUrl, renameConversation, starConversation, hideConversation, getVoice, transcribeAudio,
+  cancelAwait, cancelQueuedMessage, queuedPosition, queuedTurns, type AgentPeek, type AgentTurn,
 } from "./app-chat";
 import { groupErrorCount } from "./app-chat-activity";
 
@@ -372,4 +373,70 @@ test("ASAP replies retain attachments and target the owning machine", async () =
   assert.equal(calls[0].url, "/api/app/node/remote/api/agents/run/reply");
   assert.deepEqual(body(), { name: ref.agent, run_id: ref.runId, message: "Update", attachments: ["file-id"], mode: "asap", limit: 20, fold: true });
   assert.equal(peek.turns[0].mode, "asap");
+});
+
+/** Answers each request with the next response in turn; the last one repeats. */
+function mockResponses(...responses: unknown[]): void {
+  let next = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push({ url: String(input), init });
+    return Response.json(responses[Math.min(next++, responses.length - 1)]);
+  }) as typeof fetch;
+}
+
+const queuedTurn = (text: string, extra: Record<string, unknown> = {}) => ({ role: "user", text, queued: true, ...extra });
+const answered = { role: "user", text: "Earlier question" };
+
+async function queuedOf(...turns: unknown[]): Promise<{ peek: AgentPeek; queue: AgentTurn[] }> {
+  mockResponse({ running: true, turns });
+  const peek = await getConversation(ref);
+  calls.length = 0;
+  return { peek, queue: queuedTurns(peek) };
+}
+
+test("cancelling a queued message re-reads the queue and drops it by its current position", async () => {
+  const { queue } = await queuedOf(answered, queuedTurn("First"), queuedTurn("Second"), queuedTurn("Third"));
+  assert.deepEqual(queue.map((turn) => turn.text), ["First", "Second", "Third"]);
+  // "First" started its turn after the snapshot on screen was read.
+  mockResponses(
+    { running: true, turns: [answered, { role: "user", text: "First" }, queuedTurn("Second"), queuedTurn("Third")] },
+    { running: true, turns: [answered, { role: "user", text: "First" }, queuedTurn("Third")] },
+  );
+  const after = await cancelQueuedMessage({ ...ref, source: "studio" }, queue[1], 1);
+  assert.deepEqual(calls.map((call) => call.url), [
+    "/api/app/node/studio/api/agents/run/peek", "/api/app/node/studio/api/agents/run/unqueue",
+  ]);
+  assert.deepEqual(body(1), { name: ref.agent, run_id: ref.runId, index: 0, limit: 20, fold: true });
+  assert.deepEqual(queuedTurns(after).map((turn) => turn.text), ["Third"]);
+});
+
+test("a queued message that already started is not cancelled, and no other message is dropped in its place", async () => {
+  const { queue } = await queuedOf(queuedTurn("First"), queuedTurn("Second"));
+  mockResponse({ running: true, turns: [{ role: "user", text: "First" }, queuedTurn("Second")] });
+  const after = await cancelQueuedMessage(ref, queue[0], 0);
+  assert.deepEqual(calls.map((call) => call.url), ["/api/app/agents/run/peek"]);
+  assert.deepEqual(queuedTurns(after).map((turn) => turn.text), ["Second"]);
+});
+
+test("queued positions tell identical text apart by mode, attachments and order", async () => {
+  const image = { id: "image-one", name: "one.png", media_type: "image/png", size: 1 };
+  const { peek, queue } = await queuedOf(
+    queuedTurn("Same"), queuedTurn("Same", { mode: "asap" }), queuedTurn("Same", { images: [image] }), queuedTurn("Same"),
+  );
+  assert.deepEqual(queue.map((turn, position) => queuedPosition(peek, turn, position)), [0, 1, 2, 3]);
+  // A message never moves back, so a later twin is not mistaken for one that has gone.
+  const { peek: later } = await queuedOf(queuedTurn("Other"), queuedTurn("Same"));
+  assert.equal(queuedPosition(later, queue[0], 0), null);
+  assert.equal(queuedPosition(later, queue[3], 3), 1);
+});
+
+test("cancelling an await names the conversation and returns what is still pending", async () => {
+  mockResponse({ awaits: [{ id: "review", note: "Reviewer result", summary: "on review.done", check: "private-command" }] });
+  const remaining = await cancelAwait({ ...ref, source: "studio" }, "build");
+  assert.equal(calls[0].url, "/api/app/node/studio/api/agents/await/ignore");
+  assert.deepEqual(body(), { name: ref.agent, run_id: ref.runId, id: "build" });
+  assert.deepEqual(remaining, [{ id: "review", note: "Reviewer result", summary: "on review.done", check: "private-command" }]);
+  mockResponse({ ok: false, error: "await build changed or fired before this reached it" }, 400);
+  await assert.rejects(cancelAwait(ref, "build"), /changed or fired/);
+  assert.equal(calls.length, 2);
 });

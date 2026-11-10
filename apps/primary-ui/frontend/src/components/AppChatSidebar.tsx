@@ -10,6 +10,7 @@ import { useChatThread } from "../lib/app-chat-thread";
 import { conversationAge, conversationFilters, conversationGroups, conversationSections } from "../lib/app-chat-sidebar";
 import { sameConversation } from "../lib/app-chat-sources";
 import { conversationHref } from "../lib/app-chat-transcript";
+import { setEventLogOpen } from "../lib/event-log";
 
 import { ChatContextMenu, type ChatContextTarget } from "./ChatContextMenu";
 import { NodeSelector } from "./NodeSelector";
@@ -86,7 +87,7 @@ function FilterMenu({ anchor, onClose }: { anchor: RefObject<HTMLButtonElement |
 
 export function AppChatSidebar() {
   const { active, sources, filter, group, openConversation, newConversation } = useChatSelection();
-  const { conversations, isLoading, indexError, sourceStates, loadMore } = useChatList();
+  const { conversations, isLoading, indexFailing, sourceStates, loadMore } = useChatList();
   const { refresh } = useChatThread();
   const [contextTarget, setContextTarget] = useState<ChatContextTarget | null>(null);
   const [query, setQuery] = useState("");
@@ -128,13 +129,7 @@ export function AppChatSidebar() {
           <input type="search" aria-label="Search conversations" placeholder="Search chats" value={query} onChange={(event) => setQuery(event.target.value)} className="border-input/60 bg-background/40 placeholder:text-muted-foreground focus-visible:ring-ring h-8 w-full rounded-md border py-1 pr-2 pl-8 text-xs outline-none focus-visible:ring-2" />
         </div>
 
-        {indexError && (
-          <div className="mb-2 shrink-0 px-2 text-xs leading-relaxed">
-            <p className="text-muted-foreground break-words" role="alert">{indexError}</p>
-            <button type="button" className="focus-visible:ring-ring mt-1 rounded underline underline-offset-4 outline-none focus-visible:ring-2" onClick={refresh}>Retry</button>
-          </div>
-        )}
-
+        {/* A machine that stops answering is reported in the event log; the list keeps what it has. */}
         <nav aria-label="Conversations" aria-busy={isLoading} className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
           {sections.map((section) => {
             const sectionKey = `${group}:${filter}:${section.key}`;
@@ -199,8 +194,12 @@ export function AppChatSidebar() {
           })}
           {count === 0 && (
             <p className="text-muted-foreground px-2 py-3 text-xs leading-relaxed" role={isLoading ? "status" : undefined}>
-              {isLoading && conversations.length === 0 ? "Loading conversations…" : query.trim() ? "No conversations match your search." : indexError ? "Conversations are unavailable." : filter === "all" ? "No conversations yet. Start a new chat." : "No sessions match this filter."}
-              {!isLoading && !query.trim() && filter !== "all" && <button type="button" className="focus-visible:ring-ring mt-1 block rounded underline underline-offset-4 outline-none focus-visible:ring-2" onClick={() => filterRef.current?.click()}>Change filter</button>}
+              {isLoading && conversations.length === 0 ? "Loading conversations…" : query.trim() ? "No conversations match your search." : indexFailing ? "Conversations are unavailable." : filter === "all" ? "No conversations yet. Start a new chat." : "No sessions match this filter."}
+              {!isLoading && !query.trim() && indexFailing && <span className="mt-1 flex flex-wrap gap-x-3">
+                <button type="button" className="focus-visible:ring-ring rounded underline underline-offset-4 outline-none focus-visible:ring-2" onClick={refresh}>Retry</button>
+                <button type="button" data-slot="app-chat-open-event-log" className="focus-visible:ring-ring rounded underline underline-offset-4 outline-none focus-visible:ring-2" onClick={() => setEventLogOpen(true)}>Open event log</button>
+              </span>}
+              {!isLoading && !query.trim() && !indexFailing && filter !== "all" && <button type="button" className="focus-visible:ring-ring mt-1 block rounded underline underline-offset-4 outline-none focus-visible:ring-2" onClick={() => filterRef.current?.click()}>Change filter</button>}
             </p>
           )}
         </nav>

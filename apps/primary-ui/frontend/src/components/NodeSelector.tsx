@@ -9,22 +9,9 @@ import { useChatSelection } from "../lib/app-chat-selection";
 import { appHref } from "../lib/app-api";
 import { hasSource, selectedSources, sourceName } from "../lib/app-chat-sources";
 import { useMarketplaceSource } from "../lib/marketplace-source";
+import { useIsMobile } from "../lib/use-is-mobile";
 
 const menuItemClass = "focus:bg-accent hover:bg-accent flex min-h-8 w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs outline-none disabled:opacity-50 disabled:hover:bg-transparent";
-// Matches index.css's own mobile breakpoint, where the chat page hides the topbar this control
-// normally sits in, in favor of each screen's own header.
-const mobileQuery = "(max-width: 767px)";
-
-function useIsMobile() {
-  const [mobile, setMobile] = useState(() => window.matchMedia(mobileQuery).matches);
-  useEffect(() => {
-    const media = window.matchMedia(mobileQuery);
-    const update = () => setMobile(media.matches);
-    media.addEventListener("change", update);
-    return () => media.removeEventListener("change", update);
-  }, []);
-  return mobile;
-}
 
 /** What the machine choice drives on the current page. The chat list merges sessions from any
  * number of machines; a marketplace, with its sources and installs, is one machine's at a time. */
