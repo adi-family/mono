@@ -20,6 +20,12 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.39.1 — 2026-11-11
+
+### Changed
+
+- The update dialog's error message for a licence-gated Enterprise channel now tells licence problems apart by their status code instead of lumping them all into "private channel, no access token": no licence set up, an expired one, a revoked or unrecognised one, and every seat already taken by another machine each get their own plain-words explanation. A plain GitHub channel's 401/403/404 still reads as the private-channel message, unchanged.
+
 ## 1.39.0 — 2026-11-11
 
 ### Changed
