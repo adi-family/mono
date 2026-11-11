@@ -158,23 +158,44 @@ adi-mono update enable | disable   # the periodic background agent
 
 ## 5. From the control panel
 
-The same three things the CLI does, in the top bar of every adi screen — the chat at `/`, the
-setup wizard, and the workbench at `/extended`. A quiet `v0.2.0` chip beside the other bar
-controls, and, only while there is one to take, a green **Update to 0.3.0** button next to it.
-Hover the chip for what it knows; click it to check now. Both live in
+The same three things the CLI does, reached from one dialog that opens the same way from
+every screen: the version chip in the workbench's bar (`/extended`), the version row in the
+⌘K menu (the chat at `/`, the setup wizard, and the marketplace door), and the "Updates" line
+in the About window. All of them only *open* the dialog — none of them checks or installs by
+itself any more, which is the bug this was rewritten over: a click used to sometimes ask the
+manifest in silence and sometimes open an offer, so a machine that was never checking (an
+Enterprise install with no channel credentials, for one) read as a control that did nothing
+at all. Hover the chip for a one-line summary; click anything to open the dialog and see the
+whole story. It all lives in
 [`crates/adi-webapp/src/update.rs`](../crates/adi-webapp/src/update.rs).
 
-**The button opens the changelog; it does not install.** Taking an update restarts everything
-the machine is running, which is not a thing to do to someone who meant to click its
-neighbour — and the release carries notes precisely so there is an answer to "what for?". So
-it opens *What's new*: the section of `CHANGELOG.md` published with that release, rendered as
-markdown, with what installing will do said beside the two ways out — **Install 0.3.0** and
-**Not now**. A release cut without notes still offers the update, on the version number
-alone.
+The dialog always shows what this machine is on and what it last heard, then exactly one of:
+checking (after you press **Check for updates**), installing (with the restart it is about to
+do said plainly), a rolled-back notice, an error **in plain words** — not the raw curl
+output, though that is shown underneath for whoever wants it — up to date, or an offer.
+
+**The offer opens the changelog; installing is a separate press.** Taking an update restarts
+everything the machine is running, which is not a thing to do to someone who meant to just
+look — and the release carries notes precisely so there is an answer to "what for?". The
+offer is the section of `CHANGELOG.md` published with that release, rendered as markdown,
+with what installing will do said beside the two ways out — **Install 0.3.0** and **Not
+now**. A release cut without notes still offers the update, on the version number alone.
+Pressing Install does not close the dialog: it switches to the installing state in place,
+which is where the restart and its outcome are watched.
 
 The notes reach the machine through `state.json`: `Engine::check` records the manifest's
 `notes` alongside the version, so the dialog opens on what the last check already fetched
 rather than going back to the network to find out what it is offering.
+
+**An error is translated, not just relayed.** `GET /api/update`'s `error_kind` is a coarse
+read of `error`'s own wording — `"private-channel"` when the manifest host answered
+401/403/404 and no `auth_header` is configured (exactly an Enterprise install nobody has
+minted a token for yet, §2's `manifest_url`/`auth_header` pair), `"offline"` when the fetch
+never reached a server, or absent when neither pattern matches, in which case the dialog
+falls back to a generic line rather than guessing. The classification lives in
+`handlers/update.rs`'s `classify_error`, matched off the persisted message text rather than
+a new `adi_update::Error` variant — `state.json` already holds a human string, and the two
+things worth telling apart both show up in it as different wording.
 
 | endpoint | cost | what |
 |----------|------|------|

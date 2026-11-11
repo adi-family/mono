@@ -1,15 +1,14 @@
-//! The version pill in the top bar: what this machine is on, and — when a newer release is
-//! published *for this platform* — the one control that installs it.
+//! The version pill in the top bar, the ⌘K menu's version row, and the About screen's version
+//! line: three doors into the same thing — [`dialog`] — so a click answers the same way
+//! wherever it was made.
 //!
-//! Two halves, because they are two different things. The chip is identity: it is always
-//! there, it says the installed version, and clicking it asks the release manifest again.
-//! The button beside it is an offer, and it exists only while there is something to accept.
-//!
-//! **The offer opens the changelog, it does not install.** Taking an update restarts the
-//! whole stack, which is not something to do to somebody who meant to click the thing next to
-//! it — and the release has notes precisely so there is an answer to "what for?". So the
-//! button opens *What's new*: the section of `CHANGELOG.md` published with that release
-//! (`docs/adi-update.md` §5), and the two ways out of it — Install, or not now.
+//! The chip is identity: it is always there and it says the installed version. The button
+//! beside it, while there is one, is a louder version of the same door. **Neither checks nor
+//! installs by itself any more** — clicking either only opens the dialog, which is where a
+//! check, a result and an install all happen in view, including the install's own progress
+//! and its restart outcome. A click that silently asked the manifest and then said nothing
+//! (the state this module used to leave a quiet check in) is the bug this file now refuses to
+//! reproduce: every door opens *something*, every time.
 //!
 //! Nothing here knows a DMG from a tarball. The server hands back the same
 //! [`UpdateState`] on every platform (`docs/adi-update.md`), so a Mac, a Linux node and a
@@ -19,13 +18,14 @@
 //! **The install restarts the app.** `POST /api/update/run` answers as soon as the updater
 //! is running, and a minute later that updater kickstarts the service this page is talking
 //! to. So a failed poll must not clear what we know: the pill keeps saying "updating…"
-//! through the gap and settles on the new version once the backend answers again.
+//! through the gap, the dialog keeps showing the installing state, and both settle on the new
+//! version once the backend answers again.
 
 use gloo_timers::callback::Interval;
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
-use adi_ui::{Button, ButtonSize, ButtonVariant, Markdown, Modal};
+use adi_ui::{Button, ButtonSize, ButtonVariant, Icon, IconSize, Lucide, Markdown, Modal};
 use adi_webapp_api::types::UpdateState;
 
 use crate::fetch;
@@ -51,23 +51,24 @@ pub(crate) struct UpdateWatch {
     /// A check or an install this pill started hasn't answered yet. Distinct from
     /// [`UpdateState::installing`], which is the *machine's* business and outlives the page.
     busy: RwSignal<bool>,
-    /// Whether *What's new* is open. Here rather than in [`version_pill`] because the bar it
+    /// Whether [`dialog`] is open. Here rather than in [`version_pill`] because the bar it
     /// renders into is rebuilt whenever the page's own state moves, and a dialog that closes
     /// itself because something behind it changed is a dialog nobody can finish reading.
-    offer: RwSignal<bool>,
+    open: RwSignal<bool>,
 }
 
 /// Start watching for updates: read the state, ask the manifest if the record has gone
 /// stale, and keep both fresh.
 ///
 /// Call once per mounted app — it owns a timer, the way [`crate::pwa::installable`] owns an
-/// event handler. The three entry points in [`main`](../main.rs) are mutually exclusive, so
-/// that holds.
+/// event handler. The four entry points in [`main`](../main.rs) and [`crate::new_ui`] are
+/// mutually exclusive, so that holds; each one also mounts [`dialog`] exactly once beside it,
+/// so the version row it carries always has somewhere to open into.
 pub(crate) fn watch() -> UpdateWatch {
     let watch = UpdateWatch {
         state: RwSignal::new(None),
         busy: RwSignal::new(false),
-        offer: RwSignal::new(false),
+        open: RwSignal::new(false),
     };
 
     // The first read, and — only if the server says its record is older than the configured
@@ -119,7 +120,21 @@ impl UpdateWatch {
             .map(|u| (u.installed, u.platform))
     }
 
-    /// Ask the release manifest now — what the chip does when clicked.
+    /// The watched state, read reactively — for the one reader that renders off it directly
+    /// rather than through [`dialog`] or [`version_pill`]: the About screen's version line and
+    /// its own "Updates" row, which needs the live value to stay right while the window sits
+    /// open.
+    pub(crate) fn state(self) -> Option<UpdateState> {
+        self.state.get()
+    }
+
+    /// Open [`dialog`] from outside this module — the About screen's "Updates" row has no
+    /// pill or menu row of its own to borrow the click from.
+    pub(crate) fn open_dialog(self) {
+        self.open.set(true);
+    }
+
+    /// Ask the release manifest now — what the dialog's Check button does.
     fn check(self) {
         if self.busy.get_untracked() {
             return;
@@ -133,18 +148,19 @@ impl UpdateWatch {
         });
     }
 
-    /// Hand the install to the updater — what *What's new* ends in.
+    /// Hand the install to the updater — what the dialog's Install button ends in.
     fn install(self) {
         if self.busy.get_untracked() {
             return;
         }
-        // Closed here rather than when the answer lands: the reply arrives moments before the
-        // app restarts, and a dialog still up at that point sits over a page whose backend is
-        // going away, with a button that would start a second install.
-        self.offer.set(false);
         self.busy.set(true);
         spawn_local(async move {
             match fetch::run_update().await {
+                // Left open on purpose, unlike the old pill-and-button pair this replaced: the
+                // dialog is now where install progress and the restart outcome are watched, so
+                // closing it the moment the install starts would hide the one thing it was just
+                // opened to show. The server's own reply already carries `installing: true`
+                // (see the handler), so the next render shows the progress state immediately.
                 Ok(u) => self.state.set(Some(u)),
                 // Report it where the user is already looking rather than through the page's
                 // flash: this control lives in a bar shared by three different screens, and
@@ -153,6 +169,7 @@ impl UpdateWatch {
                     if let Some(s) = s {
                         s.outcome = Some("error".to_string());
                         s.error = Some(e);
+                        s.error_kind = None;
                     }
                 }),
             }
@@ -161,22 +178,18 @@ impl UpdateWatch {
     }
 }
 
-/// The version, as a row in the root screens' menu.
+/// The version, as a row in the ⌘K menu.
 ///
-/// The bar this replaced said the version *and*, when there was one to take, offered it in a
-/// button beside the chip. A menu row is one thing, so the two are one row that changes what
-/// it says: normally the installed version, clicking to re-ask the manifest; while a release
-/// is actually available, the offer.
-///
-/// Nothing is short-circuited on the way to an install — the row opens *What's new* exactly
-/// as the button did, and the notes are still the only door to it. See the module header for
-/// why that matters.
+/// Every state the row can be in opens the same [`dialog`] — the row only ever changes what
+/// it *says*, never what pressing it does. That is the whole fix for the bug this module was
+/// rewritten over: a click used to sometimes ask the manifest in silence and sometimes open an
+/// offer, so a reader who got the silent branch learned that the version row does nothing.
 pub(crate) fn action(watch: UpdateWatch) -> Action {
     let Some(u) = watch.state.get() else {
         // Before the first answer we do not know the version, so the row offers the one thing
-        // that is true regardless: ask.
+        // that is true regardless: open the dialog, which will say so itself.
         return Action::new("Check for updates", "", icons::Icon::Box, move || {
-            watch.check()
+            watch.open.set(true);
         });
     };
     if u.installing {
@@ -184,7 +197,7 @@ pub(crate) fn action(watch: UpdateWatch) -> Action {
             "Updating\u{2026}",
             "The stack is restarting onto the new version",
             icons::Icon::Upgrade,
-            move || watch.check(),
+            move || watch.open.set(true),
         );
     }
     match u.latest.clone().filter(|_| u.update_available) {
@@ -192,35 +205,35 @@ pub(crate) fn action(watch: UpdateWatch) -> Action {
             format!("Update to {latest}"),
             "See what is in it, then install",
             icons::Icon::Upgrade,
-            move || watch.offer.set(true),
+            move || watch.open.set(true),
         ),
         None => Action::new(
             format!("adi v{}", u.installed),
             "Check for a newer release",
             icons::Icon::Box,
-            move || watch.check(),
+            move || watch.open.set(true),
         ),
     }
 }
 
-/// *What's new*, mounted on its own.
+/// The dialog, mounted on its own.
 ///
-/// [`version_pill`] carries this dialog inside it; the root screens have no pill any more, so
-/// they mount it beside the menu whose row opens it. Same dialog either way — the offer is
-/// one place, however it was reached.
-pub(crate) fn offer_dialog(watch: UpdateWatch) -> impl IntoView {
-    move || {
-        watch.state.get().and_then(|u| {
-            (u.update_available && !u.installing)
-                .then(|| whats_new(watch, u.latest.clone().unwrap_or_default(), u.notes.clone()))
-        })
+/// [`version_pill`] stands beside this rather than carrying it, so the panel, the root screen,
+/// the marketplace door and the About window all open the exact same thing — one modal per
+/// mounted [`UpdateWatch`], never rebuilt while it is open: only [`body`] re-renders as the
+/// state underneath it moves, which is what lets the install's progress tick by without the
+/// header, the scroll position or the close button ever flickering.
+pub(crate) fn dialog(watch: UpdateWatch) -> impl IntoView {
+    view! {
+        <Modal open=watch.open title="Software update">
+            {move || body(watch)}
+        </Modal>
     }
 }
 
-/// The pill itself: the version chip, and the update button when there is one to offer.
-///
-/// Renders nothing until the first answer lands — an empty bar for half a second beats a
-/// placeholder version that then changes into a real one.
+/// The pill itself: the version chip, and — while there is one to take — a louder button
+/// beside it. Both only open [`dialog`]; see the module header for why that is the whole
+/// point of this rewrite.
 pub(crate) fn version_pill(watch: UpdateWatch) -> impl IntoView {
     move || {
         watch.state.get().map(|u| {
@@ -231,7 +244,6 @@ pub(crate) fn version_pill(watch: UpdateWatch) -> impl IntoView {
             } else {
                 format!("v{}", u.installed)
             };
-            let dialog = offer.then(|| whats_new(watch, latest.clone(), u.notes.clone()));
             // A rollback is the one state that has to catch the eye: the machine is running
             // the version it started on because the new one failed its health check, and
             // nothing else on screen says so.
@@ -245,11 +257,10 @@ pub(crate) fn version_pill(watch: UpdateWatch) -> impl IntoView {
                     type="button"
                     class=format!(
                         "inline-flex h-7 shrink-0 cursor-pointer items-center rounded-md \
-                         px-2 text-small hover:bg-hover disabled:cursor-default {tone}"
+                         px-2 text-small hover:bg-hover {tone}"
                     )
                     title=tooltip(&u)
-                    disabled=move || watch.busy.get()
-                    on:click=move |_| watch.check()
+                    on:click=move |_| watch.open.set(true)
                 >
                     {label}
                 </button>
@@ -260,73 +271,234 @@ pub(crate) fn version_pill(watch: UpdateWatch) -> impl IntoView {
                                 size=ButtonSize::Small
                                 variant=ButtonVariant::Primary
                                 icon=icons::Icon::Upgrade.lucide()
-                                disabled=watch.busy
                                 attr:title=format!("See what is in {latest}, then install it")
-                                on:click=move |_| watch.offer.set(true)
+                                on:click=move |_| watch.open.set(true)
                             >
                                 {format!("Update to {latest}")}
                             </Button>
                         }
                     })}
-                {dialog}
             }
         })
     }
 }
 
-/// *What's new* — the release's own case for being taken: the changelog section published
-/// with it, and the two ways out.
+/// The dialog's whole body, rebuilt whenever the watched state or an in-flight call changes —
+/// the one reactive seam [`dialog`] has, so everything around it (the title, the close button,
+/// the scrim) stays put.
+fn body(watch: UpdateWatch) -> AnyView {
+    let Some(u) = watch.state.get() else {
+        return view! { <p class="text-ui text-ink-2">"Reading the installed version…"</p> }
+            .into_any();
+    };
+    let info = facts(&u).into_any();
+    view! {
+        <div class="flex flex-col gap-4">
+            {info}
+            {status(watch, &u)}
+        </div>
+    }
+    .into_any()
+}
+
+/// What this machine is on and what it last heard — the part of the dialog that never goes
+/// away, whatever [`status`] below it is showing.
+fn facts(u: &UpdateState) -> impl IntoView {
+    let mut lines = vec![format!("Running {}", u.installed)];
+    if u.running != u.installed {
+        // Worth saying out loud rather than hiding: the panel you are looking at was built
+        // from a checkout, so the number beside it is the bundle's, not this binary's.
+        lines.push(format!(
+            "This panel is running {} from a checkout",
+            u.running
+        ));
+    }
+    match &u.latest {
+        Some(latest) => lines.push(format!("Latest published: {latest}")),
+        None => lines.push("No release checked yet".to_string()),
+    }
+    if let Some(secs) = u.checked_secs_ago {
+        lines.push(format!("Checked {}", ago(secs)));
+    }
+    view! {
+        <div class="flex flex-col gap-1 text-small text-ink-3">
+            {lines.into_iter().map(|l| view! { <p>{l}</p> }).collect_view()}
+        </div>
+    }
+}
+
+/// The dialog's result: checking, installing, a rollback, an error, an offer, or plain
+/// up-to-date — exactly one of these at a time, in the order a reader should hear them in.
+fn status(watch: UpdateWatch, u: &UpdateState) -> AnyView {
+    if u.installing {
+        return installing_view().into_any();
+    }
+    if watch.busy.get() {
+        return checking_view().into_any();
+    }
+    if u.outcome.as_deref() == Some("rolled-back") {
+        return rolled_back_view(watch, u).into_any();
+    }
+    if u.outcome.as_deref() == Some("error") {
+        return error_view(watch, u).into_any();
+    }
+    match u.latest.clone().filter(|_| u.update_available) {
+        Some(latest) => offer_view(watch, &latest, u.notes.clone()).into_any(),
+        None => up_to_date_view(watch, u).into_any(),
+    }
+}
+
+fn checking_view() -> impl IntoView {
+    view! {
+        <div class="flex items-center gap-2 text-ui text-ink-2">
+            <Icon icon=Lucide::LoaderCircle size=IconSize::Md class="animate-spin" label="Checking"/>
+            "Checking for updates…"
+        </div>
+    }
+}
+
+fn installing_view() -> impl IntoView {
+    view! {
+        <div class="flex flex-col gap-2">
+            <div class="flex items-center gap-2 text-ui text-ink-2">
+                <Icon
+                    icon=Lucide::LoaderCircle
+                    size=IconSize::Md
+                    class="animate-spin"
+                    label="Installing"
+                />
+                "Installing the update."
+            </div>
+            <p class="text-small text-ink-3">
+                "The stack is restarting onto the new version. This page reconnects on its own, "
+                "and the update rolls itself back automatically if the services do not come up."
+            </p>
+        </div>
+    }
+}
+
+fn rolled_back_view(watch: UpdateWatch, u: &UpdateState) -> impl IntoView {
+    let detail = u.error.clone();
+    let installed = u.installed.clone();
+    view! {
+        <div class="flex flex-col gap-3">
+            <p class="text-ui text-err">
+                {format!("The last update was rolled back — this machine is back on {installed}.")}
+            </p>
+            {detail.map(|d| view! { <p class="text-small text-ink-3">{d}</p> })}
+            <div class="flex justify-end">
+                <Button disabled=watch.busy on:click=move |_| watch.check()>
+                    "Check again"
+                </Button>
+            </div>
+        </div>
+    }
+}
+
+fn error_view(watch: UpdateWatch, u: &UpdateState) -> impl IntoView {
+    let human = human_error(u);
+    let detail = u.error.clone();
+    view! {
+        <div class="flex flex-col gap-3">
+            <p class="text-ui text-ink">{human}</p>
+            {detail.map(|d| view! { <p class="text-small text-ink-3">{d}</p> })}
+            <div class="flex justify-end">
+                <Button disabled=watch.busy on:click=move |_| watch.check()>
+                    "Try again"
+                </Button>
+            </div>
+        </div>
+    }
+}
+
+/// `error`'s plain-English reading. [`UpdateState::error_kind`] is a hint off the raw message
+/// (`handlers/update.rs`'s `classify_error`, matched here by the same string), not a promise —
+/// an unrecognised shape falls back to the generic line rather than guessing at one.
+fn human_error(u: &UpdateState) -> String {
+    match u.error_kind.as_deref() {
+        Some("private-channel") => {
+            "This machine's update channel is private and has no access token configured, so \
+             it cannot see a new release until one is added."
+                .to_string()
+        }
+        Some("offline") => {
+            "Could not reach the update server. Check this machine's network connection and \
+             try again."
+                .to_string()
+        }
+        _ => "The last attempt to talk to the updater failed.".to_string(),
+    }
+}
+
+/// The release's own case for being taken: the changelog section published with it, and the
+/// two ways out.
 ///
 /// The notes are markdown from `CHANGELOG.md`, rendered by the same component that draws a
 /// chat message. They scroll in their own box rather than the dialog's, so a long release
 /// never pushes Install off the bottom of the screen.
-fn whats_new(watch: UpdateWatch, latest: String, notes: Option<String>) -> impl IntoView {
+fn offer_view(watch: UpdateWatch, latest: &str, notes: Option<String>) -> impl IntoView {
     // A release may be cut without notes — by hand, or off another channel. Say so, rather
-    // than opening an empty dialog that reads as a page which failed to load.
+    // than opening an empty box that reads as a page which failed to load.
     let unnoted = format!("Release {latest} was published without release notes.");
     view! {
-        <Modal open=watch.offer title=format!("What's new in {latest}")>
-            <div class="flex flex-col gap-4">
-                // The notes scroll in their own box and not the dialog's, so a long release
-                // never pushes Install off the bottom of the screen.
-                <div class="max-h-[50vh] overflow-y-auto pr-1">
-                    // Cloned per render: `Modal` takes a `ChildrenFn`, so this body is a
-                    // `Fn` and cannot hand its captures away.
-                    {match notes.clone() {
-                        Some(md) => view! { <Markdown source=md/> }.into_any(),
-                        None => {
-                            view! { <p class="text-ui text-ink-2">{unnoted.clone()}</p> }
-                                .into_any()
-                        }
-                    }}
-                </div>
-                <div class="flex flex-wrap items-center justify-between gap-3 border-t \
-                            border-line pt-3">
-                    // The consequence, beside the button rather than discovered after it.
-                    <p class="min-w-0 flex-1 text-small text-ink-3">
-                        "Installing restarts the stack onto the new version. This page "
-                        "reconnects on its own, and the update rolls itself back if the "
-                        "services do not come up."
-                    </p>
-                    <div class="flex shrink-0 items-center gap-2">
-                        <Button
-                            variant=ButtonVariant::Ghost
-                            on:click=move |_| watch.offer.set(false)
-                        >
-                            "Not now"
-                        </Button>
-                        <Button
-                            variant=ButtonVariant::Primary
-                            icon=icons::Icon::Upgrade.lucide()
-                            disabled=watch.busy
-                            on:click=move |_| watch.install()
-                        >
-                            {format!("Install {latest}")}
-                        </Button>
-                    </div>
+        <div class="flex flex-col gap-4">
+            <p class="text-ui font-semibold text-ink">{format!("{latest} is available")}</p>
+            <div class="max-h-[40vh] overflow-y-auto pr-1">
+                {match notes {
+                    Some(md) => view! { <Markdown source=md/> }.into_any(),
+                    None => view! { <p class="text-ui text-ink-2">{unnoted}</p> }.into_any(),
+                }}
+            </div>
+            <div class="flex flex-wrap items-center justify-between gap-3 border-t \
+                        border-line pt-3">
+                // The consequence, beside the button rather than discovered after it.
+                <p class="min-w-0 flex-1 text-small text-ink-3">
+                    "Installing restarts the stack onto the new version. This page "
+                    "reconnects on its own, and the update rolls itself back if the "
+                    "services do not come up."
+                </p>
+                <div class="flex shrink-0 items-center gap-2">
+                    <Button
+                        variant=ButtonVariant::Ghost
+                        on:click=move |_| watch.open.set(false)
+                    >
+                        "Not now"
+                    </Button>
+                    <Button
+                        variant=ButtonVariant::Primary
+                        icon=icons::Icon::Upgrade.lucide()
+                        disabled=watch.busy
+                        on:click=move |_| watch.install()
+                    >
+                        {format!("Install {latest}")}
+                    </Button>
                 </div>
             </div>
-        </Modal>
+        </div>
+    }
+}
+
+fn up_to_date_view(watch: UpdateWatch, u: &UpdateState) -> impl IntoView {
+    // A newer version exists but was never offered, because it ships no build for this
+    // platform — worth saying, since otherwise this reads identically to "nothing published".
+    let no_artifact = match (&u.latest, u.has_artifact) {
+        (Some(latest), Some(false)) if latest != &u.installed => Some(format!(
+            "{latest} is published but includes no {} build, so it is not offered to this \
+             machine.",
+            u.platform
+        )),
+        _ => None,
+    };
+    view! {
+        <div class="flex flex-col gap-3">
+            <div class="flex items-center justify-between gap-3">
+                <p class="text-ui text-ink-2">"You're up to date."</p>
+                <Button disabled=watch.busy on:click=move |_| watch.check()>
+                    "Check for updates"
+                </Button>
+            </div>
+            {no_artifact.map(|n| view! { <p class="text-small text-ink-3">{n}</p> })}
+        </div>
     }
 }
 
@@ -335,8 +507,6 @@ fn whats_new(watch: UpdateWatch, latest: String, notes: Option<String>) -> impl 
 fn tooltip(u: &UpdateState) -> String {
     let mut lines = vec![format!("Installed {}", u.installed)];
     if u.running != u.installed {
-        // Worth saying out loud rather than hiding: the panel you are looking at was built
-        // from a checkout, so the number beside it is the bundle's, not this binary's.
         lines.push(format!(
             "This panel is running {} from a checkout",
             u.running
@@ -363,7 +533,7 @@ fn tooltip(u: &UpdateState) -> String {
     if let Some(err) = &u.error {
         lines.push(err.clone());
     }
-    lines.push("Click to check for updates".to_string());
+    lines.push("Click for details".to_string());
     lines.join("\n")
 }
 

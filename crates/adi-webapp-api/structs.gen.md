@@ -507,6 +507,7 @@ pub struct UpdateState {
     pub notes: Option<String>,
     pub outcome: Option<String>,
     pub error: Option<String>,
+    pub error_kind: Option<String>,
     pub checked_secs_ago: Option<u64>,
     pub installed_secs_ago: Option<u64>,
     pub stale: bool,

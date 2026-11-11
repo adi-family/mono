@@ -217,14 +217,12 @@ pub(crate) enum Shell {
 
 ### struct `Facts`
 
-What the window shows, gathered from four reads; each part stays `None` until its read answers, and for good if it fails.
+What the window shows from its three one-shot reads; each part stays `None` until its read answers, and for good if it fails. The version line has a fourth source, `update::UpdateWatch`, read live rather than stored here — see the module header.
 
 ```rust
 #[derive(Clone, Default)]
 struct Facts {
     version: Option<(String, String)>,
-    platform: Option<String>,
-    update: Option<String>,
     uptime: Option<u64>,
     services: Option<(usize, usize)>,
     agents: Option<u32>,
@@ -2667,7 +2665,7 @@ The pill's state: the machine's, plus whether a call this page made is in flight
 pub(crate) struct UpdateWatch {
     state: RwSignal<Option<UpdateState>>,
     busy: RwSignal<bool>,
-    offer: RwSignal<bool>,
+    open: RwSignal<bool>,
 }
 ```
 

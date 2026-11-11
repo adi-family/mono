@@ -1,23 +1,26 @@
 //! "About adi", at `/about` — the new UI's About This Mac: the mark, the version, and a few lines
 //! on the instance this page is talking to. Opened from the mark in the top bar.
 //!
-//! Everything here is read from endpoints the panel already serves — `/api/update`, `/api/health`,
-//! `/api/system`, `/api/fleet` — once, as the window opens. An About window is looked at, not
-//! watched. A read that fails leaves its lines out rather than drawing them empty.
+//! Everything here is read from endpoints the panel already serves — `/api/health`,
+//! `/api/system`, `/api/fleet` — once, as the window opens; `update` is the one exception,
+//! since its "Updates" row has to stay live and clickable while the window sits open
+//! (`docs/adi-update.md` §5). A read that fails leaves its lines out rather than drawing them
+//! empty.
 
 use adi_ui::Mark;
+use adi_webapp_api::types::UpdateState;
 use leptos::prelude::*;
 
-use crate::{fetch, ui};
+use crate::{fetch, ui, update};
 
-/// What the window shows, gathered from four reads; each part stays `None` until its read
-/// answers, and for good if it fails.
+/// What the window shows from its three one-shot reads; each part stays `None` until its read
+/// answers, and for good if it fails. The version line has a fourth source, [`update::UpdateWatch`],
+/// read live rather than stored here — see the module header.
 #[derive(Clone, Default)]
 struct Facts {
-    /// `(installed, running)` — they differ on a development build.
+    /// `(installed, running)` — they differ on a development build. Filled from `/api/health`
+    /// only, as a fallback for the instant before `updates` has answered at all.
     version: Option<(String, String)>,
-    platform: Option<String>,
-    update: Option<String>,
     uptime: Option<u64>,
     /// `(running, total)`.
     services: Option<(usize, usize)>,
@@ -27,22 +30,10 @@ struct Facts {
 }
 
 #[component]
-pub(super) fn About() -> impl IntoView {
+pub(super) fn About(updates: update::UpdateWatch) -> impl IntoView {
     let facts = RwSignal::new(Facts::default());
-    // Four independent reads, each filling its own part as it answers — side by side, not one
+    // Three independent reads, each filling its own part as it answers — side by side, not one
     // after another, and a slow or failed one holds up nothing else.
-    leptos::task::spawn_local(async move {
-        if let Ok(u) = fetch::update_state().await {
-            facts.update(|f| {
-                f.version = Some((u.installed.clone(), u.running.clone()));
-                f.platform = Some(u.platform.clone());
-                f.update = Some(match (u.update_available, u.latest) {
-                    (true, Some(latest)) => format!("{latest} available"),
-                    _ => "Up to date".into(),
-                });
-            });
-        }
-    });
     leptos::task::spawn_local(async move {
         if let Ok(h) = fetch::health().await {
             facts.update(|f| {
@@ -75,39 +66,44 @@ pub(super) fn About() -> impl IntoView {
             <Mark class="adi-new-about__mark"/>
             <h2 class="adi-new-about__name">"adi"</h2>
             <p class="adi-new-about__version">
-                {move || match facts.get().version {
-                    Some((installed, _)) => format!("Version {installed}"),
+                {move || match updates.state().map(|u| u.installed).or_else(|| {
+                    facts.get().version.map(|(installed, _)| installed)
+                }) {
+                    Some(installed) => format!("Version {installed}"),
                     // Holds the line's height, so the rows below do not jump when it lands.
                     None => "\u{00a0}".into(),
                 }}
             </p>
-            {move || rows(facts.get(), host.clone())}
+            {move || rows(updates, facts.get(), host.clone())}
         </div>
     }
 }
 
 /// The key-value lines, in the order macOS's About window puts its own: what it is first, what
-/// it is doing after.
-fn rows(f: Facts, host: String) -> impl IntoView {
-    let mut rows: Vec<(&'static str, String, bool)> = vec![("Address", host, true)];
-    if let Some((installed, running)) = &f.version
-        && installed != running
-    {
-        // A development build reports its crate version, not the release it came from — worth
-        // saying, because it is why the two lines disagree.
-        rows.push(("Running build", running.clone(), true));
+/// it is doing after. "Updates" is the one row that is also a button — see [`updates_row`].
+fn rows(updates: update::UpdateWatch, f: Facts, host: String) -> impl IntoView {
+    let mut rows: Vec<AnyView> = vec![fact_row("Address", host, true)];
+    let u = updates.state();
+    match (&u, &f.version) {
+        (Some(u), _) if u.running != u.installed => {
+            // A development build reports its crate version, not the release it came from —
+            // worth saying, because it is why the two lines disagree.
+            rows.push(fact_row("Running build", u.running.clone(), true));
+        }
+        (None, Some((installed, running))) if installed != running => {
+            rows.push(fact_row("Running build", running.clone(), true));
+        }
+        _ => {}
     }
-    if let Some(p) = f.platform {
-        rows.push(("Platform", platform_name(&p), false));
-    }
-    if let Some(u) = f.update {
-        rows.push(("Updates", u, false));
+    if let Some(u) = &u {
+        rows.push(fact_row("Platform", platform_name(&u.platform), false));
+        rows.push(updates_row(updates, u));
     }
     if let Some(s) = f.uptime {
-        rows.push(("Up for", ui::fmt_uptime(s), false));
+        rows.push(fact_row("Up for", ui::fmt_uptime(s), false));
     }
     if let Some((running, total)) = f.services {
-        rows.push(("Services", format!("{running} of {total} running"), false));
+        rows.push(fact_row("Services", format!("{running} of {total} running"), false));
     }
     if let Some(n) = f.agents {
         let runs = match n {
@@ -115,10 +111,10 @@ fn rows(f: Facts, host: String) -> impl IntoView {
             1 => "1 running".to_string(),
             n => format!("{n} running"),
         };
-        rows.push(("Agents", runs, false));
+        rows.push(fact_row("Agents", runs, false));
     }
     if let Some((active, paired)) = f.machines {
-        rows.push((
+        rows.push(fact_row(
             "Machines",
             format!("{paired} paired, {active} active now"),
             false,
@@ -126,15 +122,49 @@ fn rows(f: Facts, host: String) -> impl IntoView {
     }
     view! {
         <dl class="adi-new-about__facts">
-            {rows
-                .into_iter()
-                .map(|(k, v, mono)| view! {
-                    <dt>{k}</dt>
-                    <dd class:mono=mono>{v}</dd>
-                })
-                .collect_view()}
+            {rows.into_iter().collect_view()}
         </dl>
     }
+}
+
+/// One plain `dt`/`dd` pair.
+fn fact_row(k: &'static str, v: String, mono: bool) -> AnyView {
+    view! {
+        <dt>{k}</dt>
+        <dd class:mono=mono>{v}</dd>
+    }
+    .into_any()
+}
+
+/// "Updates": the one row that is also a door. The About window has no pill and no menu of
+/// its own, so this is the only way into [`update::dialog`] on this screen — the same dialog
+/// the pill and the ⌘K row open everywhere else, not a fourth copy of the flow.
+fn updates_row(updates: update::UpdateWatch, u: &UpdateState) -> AnyView {
+    let text = if u.installing {
+        "Installing…".to_string()
+    } else if u.update_available {
+        format!("{} available", u.latest.clone().unwrap_or_default())
+    } else if u.outcome.as_deref() == Some("error") {
+        "Could not check".to_string()
+    } else if u.outcome.as_deref() == Some("rolled-back") {
+        "Last update rolled back".to_string()
+    } else {
+        "Up to date".to_string()
+    };
+    view! {
+        <dt>"Updates"</dt>
+        <dd>
+            <button
+                type="button"
+                class="cursor-pointer underline decoration-ink-3 underline-offset-[3px] \
+                       hover:text-ink"
+                on:click=move |_| updates.open_dialog()
+            >
+                {text}
+            </button>
+        </dd>
+    }
+    .into_any()
 }
 
 /// `macos` → "macOS", and so on; anything unknown as it came.

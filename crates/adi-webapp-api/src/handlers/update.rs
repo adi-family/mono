@@ -167,6 +167,11 @@ fn snapshot() -> UpdateState {
         Version::is_newer(latest, &installed) && state.latest_has_artifact != Some(false)
     });
 
+    let error_kind = state
+        .last_error
+        .as_deref()
+        .map(|e| classify_error(e, engine.settings().auth_header.is_some()).to_string());
+
     let now = now_unix();
     UpdateState {
         installed,
@@ -178,6 +183,7 @@ fn snapshot() -> UpdateState {
         notes: state.latest_notes,
         outcome: state.last_outcome,
         error: state.last_error,
+        error_kind,
         checked_secs_ago: state.last_check_unix.map(|at| now.saturating_sub(at)),
         installed_secs_ago: state.last_install_unix.map(|at| now.saturating_sub(at)),
         stale: state
@@ -185,6 +191,36 @@ fn snapshot() -> UpdateState {
             .is_none_or(|at| now.saturating_sub(at) >= stale_after),
         installing: installing(engine.module()).is_some(),
     }
+}
+
+/// A rough category for a persisted manifest-fetch error, for a panel that wants to say
+/// something more specific than curl's own words. Matched off the message rather than a new
+/// `adi_update::Error` variant threaded all the way through `state.json` — the file already
+/// holds a human string, and the two things worth telling apart here both show up in it as
+/// different wording:
+///
+/// - `curl -fsSL` reports any HTTP failure response as `(22)` with the status code quoted in
+///   the text (`docs/adi-update.md` §8's manifest-fetch path); a 401/403/404 with no
+///   `auth_header` configured is precisely a private channel nobody has given this machine a
+///   token for, which is the Enterprise-install default until one is minted.
+/// - DNS, connection and timeout failures from the same curl are offline in the ordinary
+///   sense — nothing answered, rather than something answering "no".
+///
+/// Anything else is reported through `error` as plain text instead of guessing at a category.
+fn classify_error(err: &str, auth_header_set: bool) -> &'static str {
+    let looks_denied = err.contains("404") || err.contains("403") || err.contains("401");
+    if looks_denied && !auth_header_set {
+        return "private-channel";
+    }
+    let looks_unreachable = err.contains("Could not resolve host")
+        || err.contains("Couldn't connect")
+        || err.contains("Connection refused")
+        || err.contains("Operation timed out")
+        || err.contains("SSL certificate problem");
+    if looks_unreachable {
+        return "offline";
+    }
+    "other"
 }
 
 /// The install still running, if there is one — clearing the marker when there isn't.
@@ -250,6 +286,43 @@ fn now_unix() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The real string this records on an Enterprise box with the manifest private and no
+    /// `auth_header` set yet — the exact shape of ADI-34's known-good failure (see
+    /// `~/.adi/mono/update/config.toml`'s own comment on that box).
+    #[test]
+    fn a_404_with_no_auth_header_is_a_private_channel() {
+        let err = "could not fetch the release manifest: curl: (22) The requested URL returned \
+                    error: 404 (https://github.com/adi-family/mono-enterprise/releases/latest/\
+                    download/manifest.json)";
+        assert_eq!(classify_error(err, false), "private-channel");
+    }
+
+    /// The same response with a token configured is a *real* 404 — wrong URL, deleted release,
+    /// anything but "no credentials" — and must not be reported as the credentials case.
+    #[test]
+    fn the_same_404_with_an_auth_header_set_is_not_a_private_channel() {
+        let err = "could not fetch the release manifest: curl: (22) The requested URL returned \
+                    error: 404 (…)";
+        assert_eq!(classify_error(err, true), "other");
+    }
+
+    #[test]
+    fn dns_and_timeout_failures_are_offline() {
+        assert_eq!(
+            classify_error("could not fetch the release manifest: Could not resolve host: github.com", false),
+            "offline"
+        );
+        assert_eq!(
+            classify_error("could not fetch the release manifest: Operation timed out after 30000 milliseconds", true),
+            "offline"
+        );
+    }
+
+    #[test]
+    fn an_unrecognised_message_is_just_other() {
+        assert_eq!(classify_error("the download failed its checksum", false), "other");
+    }
 
     fn scratch(tag: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(

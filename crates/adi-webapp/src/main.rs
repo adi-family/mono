@@ -542,10 +542,9 @@ fn Home() -> impl IntoView {
                     {launcher::overlay(launcher, move || {
                         root_actions(state, watch, onb, updates, can_install)
                     })}
-                    // *What's new*: the version pill used to carry this dialog, and the menu
-                    // row that replaced the pill only opens it. So it is mounted here, where
-                    // nothing rebuilds it mid-read.
-                    {update::offer_dialog(updates)}
+                    // The root screen has no pill, only the menu row above — so the update
+                    // dialog it opens is mounted here, once, where nothing rebuilds it mid-read.
+                    {update::dialog(updates)}
                 }
             })
         }}
@@ -702,6 +701,9 @@ fn Market() -> impl IntoView {
         {launcher::overlay(launcher, move || {
             menu::rows(menu::Shell::Root, state, updates, can_install)
         })}
+        // The menu row above opens this — without it the version row here did nothing at all
+        // (the gap this module was rewritten to close everywhere, not just on the chip).
+        {update::dialog(updates)}
     }
 }
 
@@ -1611,9 +1613,7 @@ fn App() -> impl IntoView {
         </div>
 
         // Outside the workbench rather than inside it: the mark is fixed to the viewport and
-        // belongs to no column of the frame. *What's new* is not mounted beside it here — the
-        // version pill in the bar above already carries that dialog, and a second copy would
-        // open two.
+        // belongs to no column of the frame.
         {launcher::floating(launcher)}
         {launcher::overlay(launcher, move || {
             menu::rows(
@@ -1623,6 +1623,9 @@ fn App() -> impl IntoView {
                 can_install,
             )
         })}
+        // The update dialog the pill above and the menu row just built both open — one per
+        // `updates`, mounted once, same as every other shell.
+        {update::dialog(updates)}
     }
 }
 

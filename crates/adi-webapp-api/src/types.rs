@@ -56,6 +56,12 @@ pub struct UpdateState {
     pub outcome: Option<String>,
     /// What went wrong on the last check or install, when `outcome` is `error` or `rolled-back`.
     pub error: Option<String>,
+    /// A rough category for `error`, so the panel can say something more specific than the
+    /// raw curl output — `"private-channel"` (the manifest host answered 401/403/404 and no
+    /// `auth_header` is configured, which is exactly an Enterprise install with no token
+    /// minted yet), `"offline"` (the fetch never reached a server), or `None` when `error` is
+    /// `None` too. Anything else `error` might be reads as plain text instead of guessing.
+    pub error_kind: Option<String>,
     /// How long ago the last check completed, successful or not. Seconds rather than a
     /// timestamp because the reader is a browser: the page that renders this may be on
     /// another machine (a node's panel, read over the mesh), and two clocks that disagree

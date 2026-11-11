@@ -42,7 +42,7 @@ use adi_ui::Lucide;
 use leptos::{ev, prelude::*};
 
 use crate::launcher::Action;
-use crate::{icons, menu, pwa, rerenders, routing, ui};
+use crate::{icons, menu, pwa, rerenders, routing, ui, update};
 use background::Appearance;
 use palette::Item;
 use shell::{Island, Shell, TopBar};
@@ -268,6 +268,10 @@ pub(crate) fn NewUi() -> impl IntoView {
     let palette_open = RwSignal::new(false);
     // Once per mounted app (see `pwa::installable`); this screen is mounted instead of `Home`.
     let can_install = pwa::installable();
+    // This screen has no version pill (yet — nothing shows it today), but About opens the
+    // same update dialog every other screen does, so it needs the watch too. One per mounted
+    // app for the same reason `can_install` is: it owns a timer.
+    let updates = update::watch();
 
     // Back and forward change the address without a reload; the window it names comes forward.
     let pop = window_event_listener(ev::popstate, move |_| desk.arrive(&routing::current_path()));
@@ -336,7 +340,7 @@ pub(crate) fn NewUi() -> impl IntoView {
                                 Win::Settings => {
                                     view! { <settings::Settings wall shell/> }.into_any()
                                 }
-                                Win::About => view! { <about::About/> }.into_any(),
+                                Win::About => view! { <about::About updates/> }.into_any(),
                                 Win::Chat => view! { <chat::Chat desk win=Win::Chat/> }.into_any(),
                                 Win::Device => {
                                     view! { <device::Device fleet desk/> }.into_any()
@@ -369,5 +373,7 @@ pub(crate) fn NewUi() -> impl IntoView {
         <Island shell desk palette=palette_open light=light/>
         <sites::AddSite sites fleet light=light/>
         <palette::Palette items=move || commands(wall, desk, apps, home, sites, can_install) light=light open=palette_open/>
+        // About's version line opens this — mounted once here, same as every other shell.
+        {update::dialog(updates)}
     }
 }
