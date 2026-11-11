@@ -20,6 +20,12 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.39.0 — 2026-11-11
+
+### Changed
+
+- Clicking the version — the chip in the workbench bar, the ⌘K menu's version row, or About's "Updates" line — always opens one update dialog now, instead of some of those clicks doing nothing. It shows the version this machine is on and what it last heard, then exactly one of: checking (live), an error in plain words (including "private channel, no access token" for an Enterprise install nobody has minted a token for), up to date, the release offer, or install progress shown in place rather than closing the dialog.
+
 ## 1.38.0 — 2026-11-11
 
 ### Added
