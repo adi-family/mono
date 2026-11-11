@@ -20,6 +20,8 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.38.0 — 2026-11-11
+
 ### Added
 
 - A machine selector sits in the top bar of every page. On Home and Chats it chooses which machines' sessions are listed; on Marketplace it picks the one machine whose catalog you browse and install into, and a package started on a paired machine opens through the mesh.
