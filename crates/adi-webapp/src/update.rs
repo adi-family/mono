@@ -421,6 +421,23 @@ fn human_error(u: &UpdateState) -> String {
              it cannot see a new release until one is added."
                 .to_string()
         }
+        Some("licence-unauthenticated") => {
+            "This machine isn't licensed. Open Settings → Licence to add one.".to_string()
+        }
+        Some("licence-expired") => {
+            "This machine's licence has expired. Renew it to keep receiving updates."
+                .to_string()
+        }
+        // `licence-unknown` reads the same as a revoked licence: from here a vanished code
+        // and a revoked one look identical, and both end the same way — someone has to sort
+        // it out on the licence side, not by retrying the fetch.
+        Some("licence-revoked" | "licence-unknown") => {
+            "This machine's licence was revoked. Contact support@withadi.dev.".to_string()
+        }
+        Some("licence-seat-conflict") => {
+            "This licence's seats are all in use by other machines. Free one up, or contact              support@withadi.dev."
+                .to_string()
+        }
         Some("offline") => {
             "Could not reach the update server. Check this machine's network connection and \
              try again."

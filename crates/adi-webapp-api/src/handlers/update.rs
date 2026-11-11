@@ -167,10 +167,14 @@ fn snapshot() -> UpdateState {
         Version::is_newer(latest, &installed) && state.latest_has_artifact != Some(false)
     });
 
-    let error_kind = state
-        .last_error
-        .as_deref()
-        .map(|e| classify_error(e, engine.settings().auth_header.is_some()).to_string());
+    let error_kind = state.last_error.as_deref().map(|e| {
+        classify_error(
+            e,
+            engine.settings().auth_header.is_some(),
+            is_licence_service(&engine.settings().manifest_url),
+        )
+        .to_string()
+    });
 
     let now = now_unix();
     UpdateState {
@@ -193,6 +197,22 @@ fn snapshot() -> UpdateState {
     }
 }
 
+/// The licence-service's own host (`docs/enterprise-update-channel.md` §3, §9): once a box's
+/// `manifest_url` points here, a 401/402/403/404/409 is one of *this* host's licence states, not
+/// a plain GitHub repository's bare "no credentials" 404 — see [`classify_error`].
+const LICENCE_SERVICE_HOST: &str = "licence.withadi.dev";
+
+/// Whether `manifest_url` is pointed at the licence-service host, by its host alone — the
+/// licence service's two routes (§3) live at paths under it, but any path on that host answers
+/// the same status table.
+fn is_licence_service(manifest_url: &str) -> bool {
+    manifest_url
+        .split("://")
+        .nth(1)
+        .and_then(|rest| rest.split(['/', ':']).next())
+        .is_some_and(|host| host == LICENCE_SERVICE_HOST)
+}
+
 /// A rough category for a persisted manifest-fetch error, for a panel that wants to say
 /// something more specific than curl's own words. Matched off the message rather than a new
 /// `adi_update::Error` variant threaded all the way through `state.json` — the file already
@@ -200,17 +220,43 @@ fn snapshot() -> UpdateState {
 /// different wording:
 ///
 /// - `curl -fsSL` reports any HTTP failure response as `(22)` with the status code quoted in
-///   the text (`docs/adi-update.md` §8's manifest-fetch path); a 401/403/404 with no
-///   `auth_header` configured is precisely a private channel nobody has given this machine a
-///   token for, which is the Enterprise-install default until one is minted.
+///   the text (`docs/adi-update.md` §8's manifest-fetch path), and that status digit is the
+///   only signal that survives `-f`'s discarded body — which is exactly why the licence-service
+///   (`docs/enterprise-update-channel.md` §5) assigns one status per licence state instead of
+///   distinguishing them in a body nobody downstream ever reads.
+/// - Pointed at the licence-service host, those codes are licence states: `401` no/garbage
+///   credentials, `402` expired, `403` revoked, `404` a licence code the service has never
+///   heard of, `409` this deployment isn't a seat holder. Pointed anywhere else, a 401/403/404
+///   with no `auth_header` configured is the older, simpler case this used to be the only
+///   reading of: a private channel nobody has given this machine a token for, which is the
+///   Enterprise-install default until one is minted (or a manifest someone hand-reverted to
+///   plain GitHub, per §5's note that `private-channel` is not retired).
 /// - DNS, connection and timeout failures from the same curl are offline in the ordinary
 ///   sense — nothing answered, rather than something answering "no".
 ///
 /// Anything else is reported through `error` as plain text instead of guessing at a category.
-fn classify_error(err: &str, auth_header_set: bool) -> &'static str {
-    let looks_denied = err.contains("404") || err.contains("403") || err.contains("401");
-    if looks_denied && !auth_header_set {
-        return "private-channel";
+fn classify_error(err: &str, auth_header_set: bool, licence_service_host: bool) -> &'static str {
+    if licence_service_host {
+        if err.contains("401") {
+            return "licence-unauthenticated";
+        }
+        if err.contains("402") {
+            return "licence-expired";
+        }
+        if err.contains("403") {
+            return "licence-revoked";
+        }
+        if err.contains("404") {
+            return "licence-unknown";
+        }
+        if err.contains("409") {
+            return "licence-seat-conflict";
+        }
+    } else {
+        let looks_denied = err.contains("404") || err.contains("403") || err.contains("401");
+        if looks_denied && !auth_header_set {
+            return "private-channel";
+        }
     }
     let looks_unreachable = err.contains("Could not resolve host")
         || err.contains("Couldn't connect")
@@ -289,13 +335,15 @@ mod tests {
 
     /// The real string this records on an Enterprise box with the manifest private and no
     /// `auth_header` set yet — the exact shape of ADI-34's known-good failure (see
-    /// `~/.adi/mono/update/config.toml`'s own comment on that box).
+    /// `~/.adi/mono/update/config.toml`'s own comment on that box). Not a licence-service host,
+    /// so this must stay `private-channel` exactly as before (`docs/enterprise-update-channel.md`
+    /// §5: "`private-channel` itself is not retired").
     #[test]
     fn a_404_with_no_auth_header_is_a_private_channel() {
         let err = "could not fetch the release manifest: curl: (22) The requested URL returned \
                     error: 404 (https://github.com/adi-family/mono-enterprise/releases/latest/\
                     download/manifest.json)";
-        assert_eq!(classify_error(err, false), "private-channel");
+        assert_eq!(classify_error(err, false, false), "private-channel");
     }
 
     /// The same response with a token configured is a *real* 404 — wrong URL, deleted release,
@@ -304,24 +352,67 @@ mod tests {
     fn the_same_404_with_an_auth_header_set_is_not_a_private_channel() {
         let err = "could not fetch the release manifest: curl: (22) The requested URL returned \
                     error: 404 (…)";
-        assert_eq!(classify_error(err, true), "other");
+        assert_eq!(classify_error(err, true, false), "other");
     }
 
     #[test]
     fn dns_and_timeout_failures_are_offline() {
         assert_eq!(
-            classify_error("could not fetch the release manifest: Could not resolve host: github.com", false),
+            classify_error("could not fetch the release manifest: Could not resolve host: github.com", false, false),
             "offline"
         );
         assert_eq!(
-            classify_error("could not fetch the release manifest: Operation timed out after 30000 milliseconds", true),
+            classify_error("could not fetch the release manifest: Operation timed out after 30000 milliseconds", true, false),
             "offline"
         );
     }
 
     #[test]
     fn an_unrecognised_message_is_just_other() {
-        assert_eq!(classify_error("the download failed its checksum", false), "other");
+        assert_eq!(classify_error("the download failed its checksum", false, false), "other");
+    }
+
+    /// §5's table, one status per row, against the licence-service host — none of these may
+    /// read as `private-channel` or `other`, however `auth_header_set` is passed, since a
+    /// licence-service host always has one (§9's licence handler keeps it in sync every beam).
+    #[test]
+    fn licence_service_statuses_map_to_the_table_in_section_5() {
+        let cases: &[(&str, &str)] = &[
+            ("401", "licence-unauthenticated"),
+            ("402", "licence-expired"),
+            ("403", "licence-revoked"),
+            ("404", "licence-unknown"),
+            ("409", "licence-seat-conflict"),
+        ];
+        for (code, kind) in cases {
+            let err = format!(
+                "could not fetch the release manifest: curl: (22) The requested URL returned \
+                 error: {code} (https://licence.withadi.dev/v1/updates/manifest?deployment_id=…)"
+            );
+            assert_eq!(classify_error(&err, true, true), *kind, "status {code}");
+        }
+    }
+
+    /// The same five status codes against a non-licence-service host read through the old
+    /// table instead — proving the branch is keyed on the host, not the status digit alone.
+    #[test]
+    fn the_same_statuses_off_the_licence_service_host_are_unaffected() {
+        assert_eq!(classify_error("curl: (22) ... 401 ...", false, false), "private-channel");
+        assert_eq!(classify_error("curl: (22) ... 401 ...", true, false), "other");
+        assert_eq!(classify_error("curl: (22) ... 402 ...", true, false), "other");
+        assert_eq!(classify_error("curl: (22) ... 409 ...", true, false), "other");
+    }
+
+    #[test]
+    fn is_licence_service_matches_the_host_alone() {
+        assert!(is_licence_service(
+            "https://licence.withadi.dev/v1/updates/manifest?deployment_id=1"
+        ));
+        assert!(!is_licence_service(
+            "https://github.com/adi-family/mono-enterprise/releases/latest/download/manifest.json"
+        ));
+        assert!(!is_licence_service("https://evil.example/licence.withadi.dev"));
+        assert!(!is_licence_service("not a url"));
     }
 
     fn scratch(tag: &str) -> std::path::PathBuf {

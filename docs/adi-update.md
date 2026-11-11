@@ -188,14 +188,21 @@ The notes reach the machine through `state.json`: `Engine::check` records the ma
 rather than going back to the network to find out what it is offering.
 
 **An error is translated, not just relayed.** `GET /api/update`'s `error_kind` is a coarse
-read of `error`'s own wording — `"private-channel"` when the manifest host answered
-401/403/404 and no `auth_header` is configured (exactly an Enterprise install nobody has
-minted a token for yet, §2's `manifest_url`/`auth_header` pair), `"offline"` when the fetch
-never reached a server, or absent when neither pattern matches, in which case the dialog
-falls back to a generic line rather than guessing. The classification lives in
-`handlers/update.rs`'s `classify_error`, matched off the persisted message text rather than
-a new `adi_update::Error` variant — `state.json` already holds a human string, and the two
-things worth telling apart both show up in it as different wording.
+read of `error`'s own wording. Off the licence-service host (`licence.withadi.dev`, the
+Enterprise update channel's own doc), a 401/403/404 with no `auth_header` configured is
+`"private-channel"` — exactly an Enterprise install nobody has minted a token for yet, §2's
+`manifest_url`/`auth_header` pair. *On* the licence-service host, the status digit is a
+licence state instead: `"licence-unauthenticated"` (401, no/garbage credentials),
+`"licence-expired"` (402), `"licence-revoked"` (403), `"licence-unknown"` (404, a licence
+code the service has never heard of), `"licence-seat-conflict"` (409, allowance full and this
+deployment isn't a holder). `"offline"` covers a fetch that never reached a server either
+way, and the field is absent when nothing matches, in which case the dialog falls back to a
+generic line rather than guessing. The classification lives in `handlers/update.rs`'s
+`classify_error`, matched off the persisted message text and the configured host rather than
+a new `adi_update::Error` variant — `curl -fsSL` discards the response body on any HTTP
+error, so the status digit quoted in its one line of stderr is the only signal that survives
+to this handler, and `manifest_url`'s host is what says whether that digit means "no GitHub
+token" or "this licence".
 
 | endpoint | cost | what |
 |----------|------|------|
