@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { LoaderCircle, Mic, Square } from "lucide-react";
 import { Button } from "@design-system/ui";
 import { getVoice, transcribeAudio } from "../lib/app-chat";
+import { chatQueryKeys } from "../lib/app-chat-queries";
 
 type Recognition = {
   continuous: boolean; interimResults: boolean; lang: string;
@@ -17,7 +18,7 @@ type SpeechWindow = Window & { SpeechRecognition?: new () => Recognition; webkit
 export function ChatMicrophone({ onText, disabledReason = "", onBusyChange }: {
   onText: (text: string) => void; disabledReason?: string; onBusyChange: (busy: boolean) => void;
 }) {
-  const voice = useQuery({ queryKey: ["app-chat", "voice"], queryFn: getVoice, staleTime: 60_000, retry: false });
+  const voice = useQuery({ queryKey: chatQueryKeys.voice, queryFn: getVoice, staleTime: 60_000, retry: false });
   const [engine] = useState(() => { try { return localStorage.getItem("adi.voice.engine.v1") || ""; } catch { return ""; } });
   const [state, setState] = useState<"idle" | "opening" | "recording" | "transcribing">("idle");
   const [error, setError] = useState("");

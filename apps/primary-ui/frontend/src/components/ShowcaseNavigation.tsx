@@ -4,6 +4,7 @@ import { NavLink } from "react-router-dom";
 import { cn } from "@design-system/ui";
 
 import { AdiLogo } from "./AdiLogo";
+import { EventLogButton } from "./EventLog";
 import { appHref } from "../lib/app-api";
 
 const pages = [
@@ -46,10 +47,14 @@ export function ShowcaseNavigation() {
           </NavLink>
         ))}
       </div>
-      <a href={appHref("/extended/settings")} aria-label="Settings" title="Settings" className={cn(tabClass(false), "md:mt-auto md:shrink-0")}>
-        <TabIcon icon={Settings} active={false} />
-        <span className="md:sr-only">Settings</span>
-      </a>
+      {/* Background failures land in the event log, above Settings, rather than in the page. */}
+      <div className="contents md:mt-auto md:flex md:shrink-0 md:flex-col md:items-center md:gap-1">
+        <EventLogButton tabClass={tabClass} />
+        <a href={appHref("/extended/settings")} aria-label="Settings" title="Settings" className={tabClass(false)}>
+          <TabIcon icon={Settings} active={false} />
+          <span className="md:sr-only">Settings</span>
+        </a>
+      </div>
     </nav>
   );
 }

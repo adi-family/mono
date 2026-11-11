@@ -1,6 +1,7 @@
 import * as React from "react";
 
 import { cn } from "../lib/cn";
+import { type LocalStorageCodec, useLocalStorageState } from "../lib/use-local-storage-state";
 import { AppContent, AppShell, AppSidebar, AppTopbar } from "./app-shell";
 
 type AppLayoutProps = Omit<React.ComponentProps<"div">, "children"> & {
@@ -23,6 +24,21 @@ type AppLayoutProps = Omit<React.ComponentProps<"div">, "children"> & {
   secondaryNavigationProps?: Omit<React.ComponentProps<"div">, "children" | "hidden">;
   topbarProps?: Omit<React.ComponentProps<"header">, "children">;
   contentProps?: Omit<React.ComponentProps<"div">, "children">;
+};
+
+const defaultSidebarWidth = 200;
+
+function clampSidebarWidth(value: number) {
+  return Math.max(160, Math.min(480, value));
+}
+
+// The width is stored as a bare number, as earlier releases wrote it; anything else resets to the default.
+const sidebarWidthCodec: LocalStorageCodec<number | undefined> = {
+  parse: (stored) => {
+    const value = stored.trim() ? Number(stored) : NaN;
+    return Number.isFinite(value) ? clampSidebarWidth(value) : undefined;
+  },
+  serialize: (value) => (value === undefined ? undefined : String(value)),
 };
 
 function AppLayout({
@@ -48,28 +64,10 @@ function AppLayout({
   const showSecondaryNavigation = hasSecondaryNavigation && !hideSecondaryNavigation;
   const joined = surface === "joined";
 
-  function readWidth() {
-    try {
-      const stored = sidebarWidthStorageKey ? window.localStorage.getItem(sidebarWidthStorageKey) : null;
-      const value = stored?.trim() ? Number(stored) : NaN;
-      return Number.isFinite(value) ? Math.max(160, Math.min(480, value)) : undefined;
-    } catch { return undefined; }
-  }
-  const [sidebarWidth, setSidebarWidth] = React.useState<number | undefined>(readWidth);
-  React.useEffect(() => { setSidebarWidth(readWidth()); }, [sidebarWidthStorageKey]);
+  const [sidebarWidth, setSidebarWidth] = useLocalStorageState(sidebarWidthStorageKey, undefined, sidebarWidthCodec);
   const drag = React.useRef<{ pointerId: number; x: number; width: number } | null>(null);
-  const defaultWidth = 200;
-  const width = sidebarWidth ?? defaultWidth;
-  const resize = (value?: number) => {
-    const next = value === undefined ? undefined : Math.max(160, Math.min(480, value));
-    setSidebarWidth(next);
-    try {
-      if (sidebarWidthStorageKey) {
-        if (next === undefined) window.localStorage.removeItem(sidebarWidthStorageKey);
-        else window.localStorage.setItem(sidebarWidthStorageKey, String(next));
-      }
-    } catch { /* Resizing still works when browser storage is unavailable. */ }
-  };
+  const width = sidebarWidth ?? defaultSidebarWidth;
+  const resize = (value?: number) => setSidebarWidth(value === undefined ? undefined : clampSidebarWidth(value));
 
   return (
     <AppShell

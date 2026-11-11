@@ -11,10 +11,11 @@
     "test:home:browser": "bun tests/home-apps.browser.mjs",
     "test:primary": "bun test src/lib/primary-routes.test.ts src/lib/app-api.test.ts && VITE_APP_API_BASE=/api bun test src/lib/app-api.test.ts",
     "test:primary:browser": "bun tests/primary-app.browser.mjs",
-    "test:chat": "bun test src/lib/personal-overrides.test.ts src/lib/app-chat.test.ts src/lib/app-chat-sources.test.ts src/lib/app-chat-sidebar.test.ts tests/app-chat-transcript.test.ts",
+    "test:chat": "bun test src/lib/personal-overrides.test.ts src/lib/app-chat.test.ts src/lib/app-chat-sources.test.ts src/lib/app-chat-sidebar.test.ts src/lib/app-chat-model.test.ts src/lib/event-log.test.ts tests/app-chat-transcript.test.ts",
     "test:chat:browser": "bun tests/app-chat.browser.mjs",
     "preview": "vite preview",
     "test:chat:sources": "bun tests/app-chat-sources.browser.mjs",
+    "test:marketplace": "bun test src/lib/marketplace.test.ts",
     "test:marketplace:browser": "bun tests/marketplace.browser.mjs"
   },
   "dependencies": {

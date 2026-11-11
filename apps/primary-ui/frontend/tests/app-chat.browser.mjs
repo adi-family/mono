@@ -87,12 +87,14 @@ let holdNextStart = false;
 let heldStart = null;
 let created = 0;
 let failNextStar = false;
+let fireAwaitOnCancel = false;
 let failNextRename = false;
 let holdNextEdit = false;
 let heldEdit = null;
 const hiddenRuns = new Set();
 let failNextHide = false;
 let holdIndexRefresh = false;
+let failNextIndex = false;
 const heldIndexes = [];
 async function releaseIndexRefresh() {
   holdIndexRefresh = false;
@@ -234,6 +236,7 @@ async function intercept({ requestId, request }) {
     }
     if (request.method === "GET" && path === "/api/app/agents/runs/all") {
       assert.equal(url.searchParams.get("hidden"), "false");
+      if (failNextIndex) { failNextIndex = false; await fulfill(requestId, { ok: false, error: "Fixture index refused" }); return; }
       if (holdIndexRefresh) { heldIndexes.push(() => fulfill(requestId, allRuns())); return; }
       await fulfill(requestId, allRuns());
       return;
@@ -322,6 +325,21 @@ async function intercept({ requestId, request }) {
       snapshot.running = false;
       snapshot.turns.forEach((turn) => { turn.pending = false; });
       await fulfill(requestId, { name: ref.agent, runs: [] });
+      return;
+    }
+    if (request.method === "POST" && path === "/api/app/agents/run/unqueue" && snapshot) {
+      const dropped = snapshot.turns.filter((turn) => turn.queued)[body.index];
+      if (dropped) snapshot.turns.splice(snapshot.turns.indexOf(dropped), 1);
+      snapshot.total_turns = snapshot.turns.length;
+      await fulfill(requestId, copy(snapshot));
+      return;
+    }
+    if (request.method === "POST" && path === "/api/app/agents/await/ignore" && snapshot) {
+      const pending = !fireAwaitOnCancel && snapshot.awaits.some((item) => item.id === body.id);
+      fireAwaitOnCancel = false;
+      snapshot.awaits = snapshot.awaits.filter((item) => item.id !== body.id);
+      await fulfill(requestId, pending ? { awaits: copy(snapshot.awaits) }
+        : { ok: false, error: `await ${body.id} changed or fired before this reached it` });
       return;
     }
     if (request.method === "POST" && path === "/api/app/agents/run/answer" && snapshot) {
@@ -898,6 +916,22 @@ try {
     assert.equal(await evaluate(`${q('[data-slot="chat-queued-message"]')}.open`), true);
     assert.equal(await evaluate(`!!${q(chat)}.querySelector('[aria-label="Send ASAP"]')`), false, "composer only offers regular queue submission");
     assert.equal(mutations("run/reply").length, before + 1);
+    await type(composer, "Second queued follow-up");
+    await key("Enter");
+    const queuedRows = `document.querySelectorAll('[data-slot="chat-queued-row"]')`;
+    await until(() => evaluate(`${queuedRows}.length === 2`), "second queued turn renders");
+    const cancelQueued = '[data-slot="chat-queued-cancel"]';
+    assert.equal(await evaluate(`${q(cancelQueued)}.closest('summary')`), null, "Cancel is not nested in the disclosure control");
+    assert.equal(await evaluate(`${q(cancelQueued)}.getAttribute('aria-label')`), "Cancel queued message: Queued fixture follow-up");
+    await click(cancelQueued);
+    await until(() => mutations("run/unqueue").length === 1, "queued message cancel request");
+    assert.deepEqual(mutations("run/unqueue")[0].body, { name: main.agent, run_id: main.runId, index: 0, limit: 20, fold: true });
+    await until(() => evaluate(`${queuedRows}.length === 1 && ${queuedRows}[0].textContent.includes('Second queued follow-up')`), "only the cancelled message leaves the queue");
+    assert.equal(await evaluate(`${q('[data-slot="chat-thread"]')}.textContent.includes('Queued fixture follow-up')`), false, "a cancelled message never reaches the transcript");
+    await click(cancelQueued);
+    await until(() => evaluate(`${queuedRows}.length === 0`), "the last queued message can be cancelled too");
+    assert.equal(mutations("run/unqueue").length, 2);
+    assert.equal(mutations("run/reply").length, before + 2, "cancelling never resends a message");
     await click(`${chat} [aria-label="Stop response"]`);
     await until(() => mutations("run/stop").length === 1, "Stop request");
     assert.deepEqual(mutations("run/stop")[0].body, { name: main.agent, run_id: main.runId });
@@ -936,9 +970,25 @@ try {
       const capture = await send("Page.captureScreenshot", {format:"png"});
       await writeFile(resolve(process.env.BROWSER_SCREENSHOTS_DIR,"waiting-status.png"),Buffer.from(capture.data,"base64"));
     }
+    const cancelWait = `${status} [data-slot="chat-waiting-cancel"]`;
+    assert.equal(await evaluate(`${q(cancelWait)}.checkVisibility()`), false, "Cancel stays out of the collapsed status");
+    await click(`${status} summary`);
+    assert.equal(await evaluate(`document.querySelectorAll(${JSON.stringify(cancelWait)}).length`), 2);
+    assert.equal(await evaluate(`${q(cancelWait)}.getAttribute('aria-label')`), "Cancel waiting: Waiting for the build to finish.");
+    await click(cancelWait);
+    await until(() => mutations("await/ignore").length === 1, "await cancel request");
+    assert.deepEqual(mutations("await/ignore")[0].body, { name: main.agent, run_id: main.runId, id: "build" });
+    await until(() => evaluate(`${q(status)}?.textContent.includes('Waiting on 1 task') && !${q(status)}.textContent.includes('build to finish')`), "cancelled wait leaves the status");
+    assert.equal(await evaluate(`${q(status)}.open`), true, "remaining waits stay expanded");
+    fireAwaitOnCancel = true;
+    await click(cancelWait);
+    await until(() => evaluate(`${q(`${chat} [role="alert"]`)}?.textContent.includes('no longer waiting')`), "a wait that fired first is reported, not cancelled");
+    assert.deepEqual(mutations("await/ignore")[1].body, { name: main.agent, run_id: main.runId, id: "review" });
+    await until(() => evaluate(`!${q(status)}`), "a fired wait leaves the status");
     snapshot.awaits = [{ id: "unknown", note: " ", summary: "", check: "never-show-this-command" }];
     await click('[aria-label="Refresh chat"]');
     await until(() => evaluate(`${q(status)}?.textContent.includes('Waiting on 1 task')`), "count updates");
+    assert.equal(await evaluate(`!!${q(`${chat} [role="alert"]`)}`), false, "a refresh clears the reported cancel failure");
     assert.ok(await evaluate(`${q(status)}.textContent.includes('Waiting for a background task to finish.')`));
     snapshot.awaits = [];
     await click('[aria-label="Refresh chat"]');
@@ -1019,13 +1069,19 @@ try {
     await click(`${menu} button:nth-of-type(2)`);
     await until(() => heldEdit !== null, "star request held");
     await until(() => evaluate(`${q(listLink(other))}?.querySelector('[aria-label="Starred chat"]') !== null`), "star updates before response");
+    const indexReadsBeforeStar = requests.filter((request) => request.method === "GET" && request.path === "/api/app/agents/runs/all").length;
     heldEdit();
     await until(() => evaluate(`!document.querySelector('${menu}')`), "star saved");
     assert.ok(stars.has(`${other.agent}:${other.runId}`));
     assert.ok(await evaluate(`${q(listLink(main))}.getAttribute('aria-current')==='page'`));
+    // The star edit is still pending until its follow-up index read lands; a second edit of the
+    // same field in that window is deliberately dropped, so wait for the read before un-starring.
+    await until(() => requests.filter((request) => request.method === "GET" && request.path === "/api/app/agents/runs/all").length > indexReadsBeforeStar, "star refresh read");
+    await pause(100);
     await rightClick();
     assert.equal(await evaluate(`document.querySelector('${menu} button:nth-of-type(2)').textContent`), "Unstar");
     await click(`${menu} button:nth-of-type(2)`);
+    await until(() => mutations("run/star").length === 2, "unstar request sent");
     await until(() => evaluate(`!document.querySelector('${menu}')`), "unstar saved");
     await rightClick();
     await click(`${menu} button`);
@@ -1187,6 +1243,44 @@ try {
     await type(composer,"");
   });
 
+  await check("a failed background poll goes to the event log, not into the page", async () => {
+    await open(main, "Mock main answer");
+    const button = '[data-slot="event-log-button"]';
+    const panel = '[data-slot="event-log"]';
+    const item = `${panel} [data-slot="event-log-item"]`;
+    // Earlier scenarios refused edits on purpose; those are mirrored into the log, so empty it first.
+    await click(button);
+    await until(() => evaluate(`!!document.querySelector('${panel}')`), "the panel opens");
+    assert.ok(await evaluate(`${q(panel)}.textContent.includes('Fixture hide refused')`), "a refused edit was recorded alongside its toast");
+    await click(`${panel} button:not([aria-label])`);
+    await until(() => evaluate(`${q(panel)}?.textContent.includes('Nothing to report')`), "Clear empties the log");
+    await key("Escape");
+    await until(() => evaluate(`document.querySelector('${panel}') === null`), "the panel closes");
+    assert.equal(await evaluate(`${q(button)}.dataset.unread`), undefined, "a cleared log has nothing unread");
+    failNextIndex = true;
+    await until(() => evaluate(`${q(button)}.dataset.unread === '1'`), "the rail button shows one unread event", 9000);
+    assert.equal(await evaluate(`!!document.querySelector('[data-slot="app-chat-sidebar"] [role="alert"]')`), false, "the sidebar shows no banner");
+    assert.equal(await evaluate(`!!document.querySelector('${chat} > [role="alert"]')`), false, "the chat header shows no banner");
+    assert.ok(await contains("Mock main answer"), "the transcript is untouched");
+    assert.ok(await evaluate(`document.querySelectorAll('[data-slot="app-conversation-link"]').length > 0`), "the list keeps its rows");
+    await click(button);
+    await until(() => evaluate(`${q(item)}?.textContent.includes('Fixture index refused')`), "the panel lists the failure");
+    assert.equal(await evaluate(`${q(item)}.dataset.level`), "error");
+    assert.ok(await evaluate(`${q(item)}.textContent.includes('This machine · Chats')`), "the row names the machine and the area");
+    assert.ok(await evaluate(`!!${q(`${item} [data-slot="event-log-new"]`)}`), "the fresh row is marked new");
+    await until(() => evaluate(`document.querySelectorAll('${item}').length === 2 && ${q(item)}.dataset.level === 'info' && ${q(item)}.textContent.includes('Responding again')`), "the next good poll logs a recovery", 9000);
+    await key("Escape");
+    await until(() => evaluate(`document.querySelector('${panel}') === null`), "Escape closes the panel");
+    assert.equal(await evaluate(`document.activeElement === ${q(button)}`), true, "focus returns to the rail button");
+    assert.equal(await evaluate(`${q(button)}.dataset.unread`), undefined, "closing marks everything read");
+    await click(button);
+    await until(() => evaluate(`document.querySelectorAll('${item}').length === 2`), "the panel reopens with both rows");
+    await click(`${panel} button:not([aria-label])`);
+    await until(() => evaluate(`${q(panel)}?.textContent.includes('Nothing to report')`), "Clear empties the log");
+    await key("Escape");
+    await until(() => evaluate(`document.querySelector('${panel}') === null`), "the panel closes again");
+  });
+
   await check("mobile navigation, keyboard dismissal and both themes keep chat within the viewport", async () => {
     await open(main, "Mock main answer");
     for (const mode of ["light", "dark", "mobile"]) {
@@ -1203,9 +1297,9 @@ try {
         assert.equal(await evaluate(`getComputedStyle(${q('[data-slot="app-topbar"]')}).display`), "none", "inbox uses its own header instead of the outer topbar");
         assert.equal(await evaluate(`${q('[data-slot="app-chat-sidebar"]')}.getBoundingClientRect().top < 20`), true);
         assert.equal(await evaluate(`${q('[data-slot="app-chat-sidebar"] nav')}.getBoundingClientRect().height > 400`), true);
-        const tabs = await evaluate(`Array.from(document.querySelectorAll('[data-slot="global-navigation"] a')).map(a => {const r=a.getBoundingClientRect();return {width:r.width,bottom:r.bottom};})`);
-        assert.equal(tabs.length, 4);
-        assert.ok(tabs.every(tab => tab.width >= 80 && Math.abs(tab.bottom - 900) < 1), JSON.stringify(tabs));
+        const tabs = await evaluate(`Array.from(document.querySelectorAll('[data-slot="global-navigation"] a, [data-slot="global-navigation"] button')).map(a => {const r=a.getBoundingClientRect();return {width:r.width,bottom:r.bottom};})`);
+        assert.equal(tabs.length, 5, "Home, Chats, Marketplace, Events and Settings share the tab bar");
+        assert.ok(tabs.every(tab => tab.width >= 64 && Math.abs(tab.bottom - 900) < 1), JSON.stringify(tabs));
         await click('[aria-label="Filter conversations"]');
         await key("Escape");
         assert.equal(await evaluate(`document.querySelector('[data-slot="app-chat-menu"]') === null`), true);

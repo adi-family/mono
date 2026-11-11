@@ -199,7 +199,8 @@ Mobile navigation keeps its stacked layout. Pass `sidebarWidthStorageKey` to rem
 chosen width across reloads. The live app uses `adi.sidebar-width.v1` across its pages.
 Double-clicking the resize edge also clears the saved preference. Invalid saved values
 fall back to the default; numeric values stay within the 160–480px bounds. Storage
-failures leave resizing usable.
+failures leave resizing usable. The width is kept with `useLocalStorageState` (see
+[State helpers](#state-helpers)), so a resize in another tab is followed as well.
 
 The absolute expand button at the workspace’s upper-left toggles `focusMode`, hiding
 only the outer icon rail and topbar. The section sidebar and content fill the window
@@ -716,10 +717,21 @@ count and a truncated reason on a single line. Expand it to see all reasons. It 
 collapsed and renders nothing when the list is empty. The live Interface pins
 it above the composer, uses await notes with server summaries as a fallback, and keeps raw
 check commands out of the status. It stays visible even when the agent is not running.
+Pass `onCancel(id)` to give every task in the expanded list a Cancel button; `cancellingIds`
+disables the ones whose cancellation is still in flight. The live Interface drops the await
+through the app’s `POST /api/agents/await/ignore`.
 
 `ChatQueuedMessage` renders a compact expandable row with a `text` preview, optional `label`
 (default: “Queued”), and optional attachment children. The live Interface keeps these rows
 above its composer until the server marks their turns as sent, then shows the ordinary messages.
+Pass `onCancel` to put a Cancel button beside the row (outside the expandable summary) and
+`cancelling` while the request is in flight. The row is wrapped in a `chat-queued-row` element
+that receives `className`; every other prop still reaches the `details` element.
+
+The live Interface cancels regular and ASAP queued messages through the app’s
+`POST /api/agents/run/unqueue`. That endpoint addresses the queue by position, so the client
+reads the queue again immediately before the write and cancels the message only if it is still
+waiting; a message that has already started is left alone.
 
 The live Interface uploads files including PDFs (up to 25 MB each) and PNG, JPEG, WebP, and GIF images (up to 5 MB each), with six attachments per message
 to the conversation’s own machine. Image drafts survive switching conversations and failed
@@ -745,6 +757,35 @@ the full ID, and a checkmark confirms copying. HTTP hosts use a clipboard fallba
 Use the pencil beside an open chat’s title to rename it. Enter saves, Escape cancels, and
 an empty name restores the generated title. Changes use the existing run rename endpoint on
 the conversation’s owning machine and update both the header and sidebar.
+
+## State helpers
+
+Two hooks cover state that comes from outside the component and is then edited locally.
+
+`useStateWithDeps(read, deps)` is `useMemo` with a setter: the value starts from `read()`,
+local edits stick, and whenever `deps` change the value is read again. The reset happens during
+render, so no frame shows the previous source's value and no trailing effect is needed. Use it
+for a draft of a prop-selected record, or anything that must start over when a key changes.
+
+```tsx
+const [draft, setDraft] = useStateWithDeps(() => record.name, [record.id]);
+```
+
+`useLocalStorageState(key, fallback, codec?)` is `useState` whose value outlives the page.
+It starts from what `window.localStorage` holds under `key` (or `fallback` when nothing usable
+does), writes every change back, and follows changes made in other tabs or by other hooks on
+the same key in this tab. The default codec is JSON; pass `{ parse, serialize }` to validate
+what is read or to keep a legacy format. `parse` returns `undefined` for unusable input, which
+falls back; `serialize` returns `undefined` to remove the key. An `undefined` key gives plain
+state, and unavailable storage (private mode, sandboxed frames) degrades to that without
+throwing.
+
+```tsx
+const [theme, setTheme] = useLocalStorageState<Theme | null>("design-system-theme", null, {
+  parse: (stored) => (stored === "light" || stored === "dark" ? stored : undefined),
+  serialize: (value) => value ?? undefined,
+});
+```
 
 ## Browser checks
 

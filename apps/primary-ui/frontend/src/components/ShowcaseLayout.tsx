@@ -73,7 +73,8 @@ export function ShowcaseLayout() {
             <h1 className="truncate text-sm font-medium">{title}</h1>
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
-            {isInterface && <NodeSelector />}
+            {/* The chat page hides this topbar on phones and shows its own copy in the sidebar. */}
+            <NodeSelector hideOnMobile={isInterface} />
             <ThemeToggle size="sm" className="h-7 gap-1.5 px-2 text-xs" theme={theme} onThemeChange={setTheme} />
           </div>
         </>

@@ -3,6 +3,8 @@
 // drop `components/<name>.tsx`, then re-export it here (and add an entry in vite.config.ts if you
 // want it importable as its own dist file).
 export * from "./lib/cn";
+export * from "./lib/use-state-with-deps";
+export * from "./lib/use-local-storage-state";
 export * from "./components/button";
 export * from "./components/card";
 export * from "./components/app-shell";

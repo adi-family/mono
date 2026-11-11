@@ -8,8 +8,11 @@ import { NewChatSetup } from "../components/NewChatSetup";
 import { ChatTitle } from "../components/ChatTitle";
 
 import { AppChatAttachments, appChatTranscriptEntries } from "../components/AppChatTranscript";
-import type { AgentAsk } from "../lib/app-chat";
-import { useAppChat } from "../lib/app-chat-state";
+import { queuedTurns, type AgentAsk } from "../lib/app-chat";
+import { useChatComposer } from "../lib/app-chat-composer";
+import { useChatList } from "../lib/app-chat-list";
+import { useChatSelection } from "../lib/app-chat-selection";
+import { useChatThread } from "../lib/app-chat-thread";
 import { sameConversation } from "../lib/app-chat-sources";
 import { appConversationHref } from "../lib/app-chat-transcript";
 
@@ -100,20 +103,21 @@ function PendingQuestion({ ask, onAnswer }: {
 }
 
 export function Interface() {
+  const { agents, active, agent, selectionKey, activeSource, openConversation } = useChatSelection();
   const {
-    starChat, renameChat, appendDraft, agents, conversations, active, agent, draftKey, snapshot, draft, setDraft, images, addImages, removeImage, imageError,
-    isLoading, isLoadingConversation, indexError, conversationError, actionError,
-    isStopping, openConversation, refresh, sendMessage, stopResponse,
-    submitAnswer, loadEarlier, isLoadingEarlier, activeSource,
-  } = useAppChat();
+    snapshot, isLoadingConversation, conversationError, actionError, isStopping, refresh, stopResponse, submitAnswer, loadEarlier, isLoadingEarlier,
+    cancelQueued, isCancellingQueued, cancelWaiting, cancellingWaits,
+  } = useChatThread();
+  const { conversations, isLoading, renameChat, starChat } = useChatList();
+  const { draft, setDraft, appendDraft, images, addImages, removeImage, imageError, sendMessage } = useChatComposer();
   const [voiceBusy, setVoiceBusy] = useState(false);
   const selected = agents.find((item) => item.name === agent);
   const conversation = active && conversations.find((item) => sameConversation(item, active));
   const title = active ? conversation?.title || "Conversation" : "New chat";
   const running = active !== null && (snapshot?.running ?? conversation?.running ?? false);
   const ask = snapshot?.pending_question;
+  const queued = snapshot ? queuedTurns(snapshot) : [];
   const loading = active ? isLoadingConversation && !snapshot : isLoading && !agents.length;
-  const error = conversationError || (!active ? indexError : null);
   const disabledReason = !agent ? "Choose an agent to start a chat."
     : loading ? "The chat is loading."
       : active && !snapshot ? "Load this conversation before sending a message."
@@ -133,7 +137,7 @@ export function Interface() {
           <Link to="/interface" aria-label="Back to chats"><ArrowLeft aria-hidden="true" className="size-5" /></Link>
         </Button>
         <div className="min-w-0 flex-1">
-          <ChatTitle key={draftKey} title={title} conversation={active} onRename={renameChat} starred={conversation?.starred === true} onStar={starChat} />
+          <ChatTitle key={selectionKey} title={title} conversation={active} onRename={renameChat} starred={conversation?.starred === true} onStar={starChat} />
           {active && <p className="text-muted-foreground mt-0.5 truncate text-xs">{active.agent}{active.source ? ` · ${active.source}` : ""}</p>}
 
         </div>
@@ -152,44 +156,58 @@ export function Interface() {
         </div>
       </header>
 
-      {error && (!loading || snapshot) && <div className="flex shrink-0 items-center gap-3 border-b px-4 py-2 text-xs sm:px-5">
-        <p role="alert" className="text-destructive min-w-0 flex-1 [overflow-wrap:anywhere]">{error}</p>
-        <Button type="button" size="sm" variant="ghost" onClick={retry}>Retry</Button>
-      </div>}
+      {/* A refresh that fails over a loaded transcript goes to the event log; only a user's own action reports here. */}
       {actionError && <p role="alert" className="text-destructive shrink-0 px-4 py-2 text-xs sm:px-5">{actionError}</p>}
 
-      {active && snapshot ? <ChatThread key={draftKey} label="Chat messages" aria-live="off" className="mx-auto w-full max-w-4xl">
+      {active && snapshot ? <ChatThread key={selectionKey} label="Chat messages" aria-live="off" className="mx-auto w-full max-w-4xl">
         {snapshot.total_turns > snapshot.turns.length && <div key="earlier" className="flex justify-center">
           <Button type="button" size="sm" variant="ghost" onClick={loadEarlier} disabled={isLoadingEarlier} disabledReason="Earlier messages are loading.">
             {isLoadingEarlier ? "Loading earlier messages…" : "Load earlier messages"}
           </Button>
         </div>}
         {appChatTranscriptEntries({ conversation: active, snapshot, conversations, onOpenConversation: openConversation })}
-        {ask && <PendingQuestion key={`${draftKey}:${ask.id}`} ask={ask} onAnswer={submitAnswer} />}
+        {ask && <PendingQuestion key={`${selectionKey}:${ask.id}`} ask={ask} onAnswer={submitAnswer} />}
       </ChatThread> : <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 overflow-y-auto px-6 py-8 text-center">
         {loading ? <p role="status" className="text-muted-foreground text-sm">{active ? "Loading conversation…" : "Loading agents…"}</p>
-          : active ? <p className="text-muted-foreground text-sm">This conversation could not be loaded.</p>
+          : active ? <>
+            {/* With no transcript to show, the failure is the content. */}
+            <p className="text-muted-foreground text-sm">This conversation could not be loaded.</p>
+            {conversationError && <p role="alert" className="text-destructive max-w-md text-xs [overflow-wrap:anywhere]">{conversationError}</p>}
+            <Button type="button" size="sm" variant="ghost" onClick={retry}>Retry</Button>
+          </>
             : <NewChatSetup />}
       </div>}
 
       <div className="mx-auto w-full max-w-4xl shrink-0 px-3 pb-3 pt-2 sm:px-4 sm:pb-4">
-        <ChatWaitingStatus className="mb-2" items={(snapshot?.awaits ?? []).map((item) => ({
-          id: item.id,
-          label: item.note.trim() || item.summary.trim() || "Waiting for a background task to finish.",
-        }))} />
-        {snapshot?.turns.some((turn) => turn.queued) && <div aria-label="Queued messages" className="mb-2 max-h-52 space-y-1 overflow-y-auto">
-          {snapshot.turns.filter((turn) => turn.queued).map((turn) => <ChatQueuedMessage key={`${draftKey}:${turn.seq}`} data-queued="true" text={turn.text} label={turn.mode === "asap" ? "Queued · ASAP" : "Queued"}>
+        <ChatWaitingStatus
+          className="mb-2"
+          items={(snapshot?.awaits ?? []).map((item) => ({
+            id: item.id,
+            label: item.note.trim() || item.summary.trim() || "Waiting for a background task to finish.",
+          }))}
+          onCancel={(id) => { void cancelWaiting(id); }}
+          cancellingIds={cancellingWaits}
+        />
+        {queued.length > 0 && <div aria-label="Queued messages" className="mb-2 max-h-52 space-y-1 overflow-y-auto">
+          {queued.map((turn, position) => <ChatQueuedMessage
+            key={`${selectionKey}:${turn.seq}`}
+            data-queued="true"
+            text={turn.text}
+            label={turn.mode === "asap" ? "Queued · ASAP" : "Queued"}
+            onCancel={() => cancelQueued(turn, position)}
+            cancelling={isCancellingQueued(turn)}
+          >
             <AppChatAttachments turn={turn} source={activeSource} />
           </ChatQueuedMessage>)}
         </div>}
         {imageError && <p role="alert" className="text-destructive mb-2 text-xs">{imageError}</p>}
         <ChatComposer
-          key={draftKey}
+          key={selectionKey}
           value={draft}
           onValueChange={setDraft}
           onSend={sendMessage}
           attachments={images}
-          attachmentsBusy={images.some((image) => !image.attachmentId && !image.error)}
+          attachmentsBusy={images.some((image) => image.status === "uploading")}
           onFilesSelect={addImages}
           onAttachmentRemove={removeImage}
           disabled={Boolean(disabledReason) || voiceBusy}
@@ -197,7 +215,7 @@ export function Interface() {
           placeholder={running ? "Send a follow-up…" : "Write a message…"}
           sendLabel={running ? "Queue message" : "Send message"}
         >
-          <ChatMicrophone key={draftKey} onText={appendDraft} disabledReason={disabledReason} onBusyChange={setVoiceBusy} />
+          <ChatMicrophone key={selectionKey} onText={appendDraft} disabledReason={disabledReason} onBusyChange={setVoiceBusy} />
         </ChatComposer>
       </div>
     </main>

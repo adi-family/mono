@@ -1,6 +1,6 @@
 import {
-  Activity, Blocks, BookOpen, Bot, Braces, Bug, FlaskConical,
-  HeartPulse, MessageCircleQuestion, MessageSquare, ShieldCheck, Video, Wallet, Zap,
+  Activity, Blocks, BookOpen, Bot, Braces, Bug, Code, FlaskConical,
+  HeartPulse, MessageCircleQuestion, MessageSquare, ShieldCheck, Terminal, Video, Wallet, Zap,
   type LucideIcon,
 } from "lucide-react";
 
@@ -28,9 +28,9 @@ export type HomeMachine = {
 
 const icons: Record<string, LucideIcon> = {
   activity: Activity, blocks: Blocks, "book-open": BookOpen, bot: Bot, braces: Braces,
-  bug: Bug, "flask-conical": FlaskConical, "heart-pulse": HeartPulse,
+  bug: Bug, code: Code, "flask-conical": FlaskConical, "heart-pulse": HeartPulse,
   "message-circle-question": MessageCircleQuestion, "message-square": MessageSquare,
-  "shield-check": ShieldCheck, video: Video, wallet: Wallet, zap: Zap,
+  "shield-check": ShieldCheck, terminal: Terminal, video: Video, wallet: Wallet, zap: Zap,
 };
 const defaultIcons: Record<string, LucideIcon> = {
   adin: Bot, "agent-board": MessageSquare, "ask-the-founder": MessageCircleQuestion,

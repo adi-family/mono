@@ -1,32 +1,61 @@
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { Check, LockKeyhole, Network } from "lucide-react";
+import { useLocation } from "react-router-dom";
 
 import { Button, cn } from "@design-system/ui";
 
-import { useAppChat } from "../lib/app-chat-state";
+import { useChatSelection } from "../lib/app-chat-selection";
 import { appHref } from "../lib/app-api";
+import { hasSource, selectedSources, sourceName } from "../lib/app-chat-sources";
+import { useMarketplaceSource } from "../lib/marketplace-source";
+import { useIsMobile } from "../lib/use-is-mobile";
 
 const menuItemClass = "focus:bg-accent hover:bg-accent flex min-h-8 w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs outline-none disabled:opacity-50 disabled:hover:bg-transparent";
-// Matches index.css's own mobile breakpoint, where the topbar this control normally sits in is
-// hidden on `/interface` in favor of each screen's own header.
-const mobileQuery = "(max-width: 767px)";
 
-function useIsMobile() {
-  const [mobile, setMobile] = useState(() => window.matchMedia(mobileQuery).matches);
-  useEffect(() => {
-    const media = window.matchMedia(mobileQuery);
-    const update = () => setMobile(media.matches);
-    media.addEventListener("change", update);
-    return () => media.removeEventListener("change", update);
-  }, []);
-  return mobile;
+/** What the machine choice drives on the current page. The chat list merges sessions from any
+ * number of machines; a marketplace, with its sources and installs, is one machine's at a time. */
+type Selection = {
+  heading: string;
+  label: string;
+  multiple: boolean;
+  chosen: (string | undefined)[];
+  isChosen: (source?: string) => boolean;
+  choose: (source?: string) => void;
+};
+
+function useSelection(): Selection {
+  const { pathname } = useLocation();
+  const { sources, toggleSource } = useChatSelection();
+  const [marketplaceSource, setMarketplaceSource] = useMarketplaceSource();
+  if (pathname === "/marketplace" || pathname.startsWith("/marketplace/")) {
+    return {
+      heading: "Marketplace on", label: "Marketplace machine", multiple: false,
+      chosen: [marketplaceSource],
+      isChosen: (source) => source === marketplaceSource,
+      choose: setMarketplaceSource,
+    };
+  }
+  return {
+    heading: "Sessions from", label: "Conversation sources", multiple: true,
+    chosen: selectedSources(sources),
+    isChosen: (source) => hasSource(sources, source),
+    choose: toggleSource,
+  };
 }
 
-function NodeSelectorMenu({ anchor, onClose }: { anchor: RefObject<HTMLButtonElement | null>; onClose: (restoreFocus?: boolean) => void }) {
-  const { sources, fleetNodes, fleetLoading, fleetError, toggleSource } = useAppChat();
+function NodeSelectorMenu({ anchor, selection, onClose }: { anchor: RefObject<HTMLButtonElement | null>; selection: Selection; onClose: (restoreFocus?: boolean) => void }) {
+  const { fleetNodes, fleetLoading, fleetError } = useChatSelection();
   const element = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ left: 0, top: 0 });
+  const role = selection.multiple ? "menuitemcheckbox" : "menuitemradio";
+  const onlyLocal = selection.multiple && selection.isChosen() && selection.chosen.length === 1;
+  // Chosen machines remain listed, and removable, if the fleet is offline or they were unpaired.
+  const stored = selection.chosen.filter((source): source is string => !!source && !fleetNodes.some((node) => node.node === source));
+  const pick = (source?: string) => {
+    selection.choose(source);
+    if (!selection.multiple) onClose();
+  };
 
   useLayoutEffect(() => {
     const bounds = anchor.current?.getBoundingClientRect();
@@ -54,7 +83,7 @@ function NodeSelectorMenu({ anchor, onClose }: { anchor: RefObject<HTMLButtonEle
       ref={element}
       data-slot="node-selector-menu"
       role="menu"
-      aria-label="Conversation sources"
+      aria-label={selection.label}
       className="bg-popover text-popover-foreground border-border fixed z-50 max-h-[70svh] w-60 overflow-y-auto rounded-md border p-1 shadow-md"
       style={position}
       onKeyDown={(event) => {
@@ -71,24 +100,23 @@ function NodeSelectorMenu({ anchor, onClose }: { anchor: RefObject<HTMLButtonEle
         } else if (event.key === "Tab") onClose();
       }}
     >
-      <p className="text-muted-foreground px-2 py-1.5 text-[11px] font-medium">Sessions from</p>
-      <button type="button" role="menuitemcheckbox" aria-checked={sources.local} title={sources.local && sources.nodes.length === 0 ? "Keep at least one source selected." : undefined} className={menuItemClass} onClick={() => toggleSource()}>
-        <Check aria-hidden="true" className={cn("size-3.5 shrink-0", !sources.local && "invisible")} />
+      <p className="text-muted-foreground px-2 py-1.5 text-[11px] font-medium">{selection.heading}</p>
+      <button type="button" role={role} aria-checked={selection.isChosen()} title={onlyLocal ? "Keep at least one source selected." : undefined} className={menuItemClass} onClick={() => pick()}>
+        <Check aria-hidden="true" className={cn("size-3.5 shrink-0", !selection.isChosen() && "invisible")} />
         This machine
       </button>
       {fleetNodes.map((node) => {
-        const selected = sources.nodes.includes(node.node);
+        const selected = selection.isChosen(node.node);
         return (
-          <button key={node.node} type="button" role="menuitemcheckbox" aria-checked={selected} disabled={node.locked && !selected} title={node.locked && !selected ? "Unlock this source on the Fleet page first." : undefined} className={menuItemClass} onClick={() => toggleSource(node.node)}>
+          <button key={node.node} type="button" role={role} aria-checked={selected} disabled={node.locked && !selected} title={node.locked && !selected ? "Unlock this source on the Fleet page first." : undefined} className={menuItemClass} onClick={() => pick(node.node)}>
             <Check aria-hidden="true" className={cn("size-3.5 shrink-0", !selected && "invisible")} />
             <span className="min-w-0 flex-1 truncate">{node.node}</span>
             {node.locked && <LockKeyhole aria-hidden="true" className="text-muted-foreground size-3 shrink-0" />}
           </button>
         );
       })}
-      {/* Stored sources remain removable if the fleet is offline or they were unpaired. */}
-      {sources.nodes.filter((source) => !fleetNodes.some((node) => node.node === source)).map((source) => (
-        <button key={source} type="button" role="menuitemcheckbox" aria-checked="true" className={menuItemClass} onClick={() => toggleSource(source)}>
+      {stored.map((source) => (
+        <button key={source} type="button" role={role} aria-checked="true" className={menuItemClass} onClick={() => pick(source)}>
           <Check aria-hidden="true" className="size-3.5 shrink-0" />
           <span className="min-w-0 truncate">{source}</span>
         </button>
@@ -103,35 +131,38 @@ function NodeSelectorMenu({ anchor, onClose }: { anchor: RefObject<HTMLButtonEle
   );
 }
 
-/** Which machines' sessions the chat interface reads from — lives in the topbar since it
- * affects every source on the page, not just the sidebar's own list. The topbar itself is
- * hidden below the mobile breakpoint on `/interface` (see index.css), so `mobileOnly` renders
- * this same control inside the sidebar's own header there instead of leaving it unreachable. */
-export function NodeSelector({ mobileOnly = false }: { mobileOnly?: boolean }) {
+/** Which machine the page is looking at — in every page's topbar, since it decides what the
+ * page shows: whose sessions the chat lists, whose marketplace is being browsed. The topbar is
+ * hidden below the mobile breakpoint on the chat page (see index.css), so `hideOnMobile` drops
+ * that copy there and `mobileOnly` renders the same control inside the chat sidebar's own header. */
+export function NodeSelector({ mobileOnly = false, hideOnMobile = false }: { mobileOnly?: boolean; hideOnMobile?: boolean }) {
   const isMobile = useIsMobile();
-  const { sources } = useAppChat();
+  const selection = useSelection();
   const [open, setOpen] = useState(false);
   const anchor = useRef<HTMLButtonElement>(null);
-  const sourceCount = Number(sources.local) + sources.nodes.length;
-  if (isMobile !== mobileOnly) return null;
+  if (mobileOnly ? !isMobile : isMobile && hideOnMobile) return null;
+
+  const names = selection.chosen.map(sourceName);
+  const count = names.length;
+  const shared = {
+    ref: anchor, "data-slot": "node-selector", "aria-label": selection.label, title: `${selection.heading} ${names.join(", ")}`,
+    "aria-haspopup": "menu" as const, "aria-expanded": open, onClick: () => setOpen((current) => !current),
+  };
 
   return (
     <>
-      <Button
-        ref={anchor}
-        variant="ghost"
-        size="icon"
-        className={cn("size-7 shrink-0", sourceCount > 1 && "w-auto min-w-7 gap-1 px-1.5", sourceCount > 1 || !sources.local ? "text-foreground" : "text-muted-foreground")}
-        aria-label="Conversation sources"
-        title={`Sessions from ${[...(sources.local ? ["This machine"] : []), ...sources.nodes].join(", ")}`}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={() => setOpen((current) => !current)}
-      >
-        <Network aria-hidden="true" className="size-3.5" />
-        {sourceCount > 1 && <span className="text-[10px]">{sourceCount}</span>}
-      </Button>
-      {open && <NodeSelectorMenu anchor={anchor} onClose={(restoreFocus = true) => {
+      {mobileOnly ? (
+        <Button {...shared} variant="ghost" size="icon" className={cn("size-7 shrink-0", count > 1 && "w-auto min-w-7 gap-1 px-1.5", count > 1 || !selection.isChosen() ? "text-foreground" : "text-muted-foreground")}>
+          <Network aria-hidden="true" className="size-3.5" />
+          {count > 1 && <span className="text-[10px]">{count}</span>}
+        </Button>
+      ) : (
+        <Button {...shared} variant="ghost" size="sm" className="h-7 shrink-0 gap-1.5 px-2 text-xs">
+          <Network aria-hidden="true" className="size-3.5" />
+          <span className="max-w-32 truncate">{count === 1 ? names[0] : `${count} machines`}</span>
+        </Button>
+      )}
+      {open && <NodeSelectorMenu anchor={anchor} selection={selection} onClose={(restoreFocus = true) => {
         if (restoreFocus) anchor.current?.focus();
         setOpen(false);
       }}/>}

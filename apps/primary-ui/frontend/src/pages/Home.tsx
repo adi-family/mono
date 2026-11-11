@@ -5,7 +5,7 @@ import { Link } from "react-router-dom";
 
 import { Button, Card, cn } from "@design-system/ui";
 
-import { useAppChat } from "../lib/app-chat-state";
+import { useChatSelection } from "../lib/app-chat-selection";
 import { getFleetMachines, getLocalApps, lockMachine, unlockMachine, type HomeMachine } from "../lib/home-apps";
 import { UnlockMachineDialog } from "../components/UnlockMachineDialog";
 
@@ -15,7 +15,7 @@ function appInitials(name: string) {
 }
 
 export function Home() {
-  const { newConversation } = useAppChat();
+  const { newConversation } = useChatSelection();
   const client = useQueryClient();
   const [query, setQuery] = useState("");
   const [machine, setMachine] = useState("*");

@@ -40,26 +40,43 @@ async function until(fn, description, timeout = 20000) {
 const pixel = "data:image/svg+xml;base64," + Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="60"><rect width="100" height="60" fill="red"/></svg>').toString("base64");
 const fixture = { sources: [{name:"custom",url:"https://example.test/manifest.json"}], apps: [
   {marketplace:"custom",slug:"legacy",name:"Legacy App",description:"Dashboard package with a description that runs past one line.",summary:"One line for the card",version:"1.0",repo:"https://github.com/example/legacy.git",commit:"a".repeat(40),keywords:[],gallery:[{url:pixel,kind:"image",caption:"Preview"},{url:pixel,kind:"image",caption:"Second preview"}],elements:[],installs:[{id:"legacy-copy",name:"My copy",started:false,outdated:true,commit:"b".repeat(40)}],bundle:null},
-  {marketplace:"custom",slug:"bundle",name:"Worker Bundle",description:"A scoped bundle",version:"1.0",repo:"https://github.com/example/bundle.git",commit:"a".repeat(40),keywords:[],gallery:[],elements:[{kind:"service",name:"worker"}],installs:[],bundle:{declared:1,elements:[{kind:"services",name:"worker",description:"Background service"}],installs:[{project:"project-one",project_name:"One",commit:"b".repeat(40),outdated:true,missing_secrets:["API_TOKEN"],elements:[{kind:"services",name:"worker",id:"worker",started:false}]},{project:"project-two",project_name:"Two",commit:"b".repeat(40),outdated:true,missing_secrets:[],elements:[{kind:"services",name:"worker",id:"worker",started:false}]}]}}
+  {marketplace:"custom",slug:"bundle",name:"Worker Bundle",description:"A scoped bundle",version:"1.0",repo:"https://github.com/example/bundle.git",commit:"a".repeat(40),keywords:[],gallery:[],elements:[{kind:"service",name:"worker"},{kind:"dashboard",name:"board"}],installs:[],bundle:{declared:2,elements:[{kind:"services",name:"worker",description:"Background service"},{kind:"dashboards",name:"board",description:"The board"}],installs:[{project:"project-one",project_name:"One",commit:"b".repeat(40),outdated:true,missing_secrets:["API_TOKEN"],elements:[{kind:"services",name:"worker",id:"worker",started:false}]},{project:"project-two",project_name:"Two",commit:"b".repeat(40),outdated:true,missing_secrets:[],elements:[{kind:"services",name:"worker",id:"worker",started:false},{kind:"dashboards",name:"board",id:"board"}]}]}}
+]};
+// The bundle's dashboard element is a row in this machine's Dashboards registry: archived until started.
+let boardStarted=false;
+const dashboards=()=>({dashboards:[{id:"board",name:"board",host:"board.adi",archived_at:boardStarted?null:1}]});
+// The paired machine "studio" has its own catalog: another marketplace source, and a started copy
+// whose `.adi` host is only reachable from here through the mesh. "vault" is paired but locked.
+const machines={nodes:[{node:"studio",locked:false},{node:"vault",locked:true}]};
+const remoteFixture={ sources:[{name:"studio-catalog",url:"https://studio.test/manifest.json"}], apps:[
+  {marketplace:"custom",slug:"legacy",name:"Legacy App",description:"Dashboard package on another machine.",version:"2.0",repo:"https://github.com/example/legacy.git",commit:"c".repeat(40),keywords:[],gallery:[],elements:[],installs:[{id:"legacy-remote",name:"Remote copy",host:"legacy.adi",started:true,outdated:false,commit:"c".repeat(40)}],bundle:null},
 ]};
 const mutations=[];
 let failNextInstall=false;
 async function intercept({requestId,request}) {
   const url=new URL(request.url);
-  const path=url.pathname.replace(/^\/api\/app(?=\/)/,"/api");
-  requests.push({stage,method:request.method,path});
+  let path=url.pathname.replace(/^\/api\/app(?=\/)/,"/api");
+  // A paired machine's API is addressed through the node relay.
+  const relayed=/^\/api\/node\/([a-z0-9-]+)\/api(\/.*)$/.exec(path);
+  const source=relayed?.[1];
+  if(relayed) path=`/api${relayed[2]}`;
+  const tag=source?{source}:{};
+  requests.push({stage,method:request.method,path,...tag});
+  const state=source==="studio"?remoteFixture:fixture;
   let data={}; let status=200;
-  if (request.method === "GET" && path === "/api/marketplace") data=fixture;
+  if (request.method === "GET" && path === "/api/fleet/nodes") data=machines;
+  else if (request.method === "GET" && path === "/api/marketplace") data=state;
   else if (request.method === "GET" && path === "/api/projects") data={projects:[{id:"project-one",name:"One"},{id:"project-two",name:"Two"}]};
+  else if (request.method === "GET" && path === "/api/dashboards") data=source?{dashboards:[]}:dashboards();
   else if(request.method === "POST" && path.startsWith("/api/marketplace/")) {
     const body=JSON.parse(request.postData??"null");
-    mutations.push({path,body});
+    mutations.push({path,body,...tag});
     await pause(150);
     if (failNextInstall && path.endsWith("/install")) {failNextInstall=false;status=409;data={error:"Destination already exists"};}
     else {
-      if(path.endsWith("/start")) fixture.apps[0].installs[0].started=true;
-      if(path.endsWith("/uninstall")) fixture.apps[1].bundle.installs.find(copy=>copy.project===body.project).elements=[];
-      data={state:fixture,message:"Action completed"};
+      if(!source&&path.endsWith("/start")) { if(body?.id==="board") boardStarted=true; else fixture.apps[0].installs[0].started=true; }
+      if(!source&&path.endsWith("/uninstall")) fixture.apps[1].bundle.installs.find(copy=>copy.project===body.project).elements=[];
+      data={state,message:"Action completed"};
     }
   } else if(request.method !== "GET") {blocked.push(request.method+" "+path);status=403;}
   await send("Fetch.fulfillRequest",{requestId,responseCode:status,responseHeaders:[{name:"Content-Type",value:"application/json"}],body:Buffer.from(JSON.stringify(data)).toString("base64")});
@@ -243,6 +260,16 @@ try {
     assert.equal(await evaluate(`document.querySelectorAll('button[aria-label="Uninstall worker"]').length`),1,'other project is untouched');
     await screenshot('bundle-management');
   });
+  await check("A bundle's dashboard element starts through the registry and then opens on its host",async()=>{
+    await until(()=>evaluate(`!!${q('button[aria-label="Start board"]')}`),'an archived dashboard element offers Start');
+    assert.match(await evaluate(`${q('button[aria-label="Start board"]')}.closest('li').textContent`),/Not started/);
+    await click('button[aria-label="Start board"]');
+    await until(()=>mutations.at(-1)?.path==='/api/marketplace/start','dashboard start request');
+    assert.deepEqual(mutations.at(-1).body,{id:'board'});
+    await until(()=>evaluate(`${q('a[aria-label="Open board"]')}?.href==='http://board.adi/'`),'a started dashboard element opens on its host');
+    assert.match(await evaluate(`${q('a[aria-label="Open board"]')}.closest('li').textContent`),/Started/);
+    assert.equal(await evaluate(`!!${q('button[aria-label="Start board"]')}`),false,'Start is gone once started');
+  });
   await check("Unknown package has an explicit not found state and a way back",async()=>{
     await navigate('/marketplace/custom/missing','main h2');
     assert.equal(await evaluate(`${q('main h2')}.textContent`),'Package not found');
@@ -250,10 +277,49 @@ try {
     await until(()=>evaluate(`!!${q('main[aria-label="Marketplace"]')}`),'back to catalog');
   });
   await check("Refresh catalog uses the configured source API",async()=>{
+    // The package count and the refresh button share one row: same vertical centre, count on the left.
+    const row=await evaluate(`(()=>{const count=${q('[data-slot="marketplace-count"]')}.getBoundingClientRect();const button=Array.from(document.querySelectorAll('main button')).find(button=>button.textContent==='Refresh catalog').getBoundingClientRect();return {count:count.top+count.height/2,button:button.top+button.height/2,ordered:count.right<button.left,text:${q('[data-slot="marketplace-count"]')}.textContent};})()`);
+    assert.match(row.text,/^\d+ packages?$/,'the count reads as a package total');
+    assert(Math.abs(row.count-row.button)<4&&row.ordered,`count and refresh share a row: ${JSON.stringify(row)}`);
     await evaluate(`Array.from(document.querySelectorAll('main button')).find(button=>button.textContent==='Refresh catalog').click()`);
     await until(()=>mutations.at(-1)?.path==='/api/marketplace/sync','catalog sync request');
     await until(()=>evaluate(`Array.from(document.querySelectorAll('main button')).some(button=>button.textContent==='Refresh catalog'&&!button.disabled)`),'catalog sync settles');
-    assert(await evaluate(`document.querySelector('main').textContent.includes('custom')`));
+    assert(await evaluate(`document.querySelector('main').textContent.includes('Action completed')`),'the sync result is reported');
+  });
+  await check("Marketplace follows the machine chosen in the topbar",async()=>{
+    await navigate('/marketplace','main[aria-label="Marketplace"]');
+    const picker='button[aria-label="Marketplace machine"]';
+    const item=(name)=>`[...document.querySelectorAll('[data-slot="node-selector-menu"] [role="menuitemradio"]')].find(node=>node.textContent.trim()===${JSON.stringify(name)})`;
+    const remoteReads=()=>requests.filter(r=>r.path==='/api/marketplace'&&r.source==='studio').length;
+    assert.match(await evaluate(`${q(picker)}.textContent`),/This machine/,'the topbar names the machine being browsed');
+    await click(picker);
+    await until(()=>evaluate(`!!${item('studio')}`),'paired machines are offered');
+    assert.equal(await evaluate(`${item('vault')}.disabled`),true,'a locked machine cannot be chosen');
+    assert.equal(await evaluate(`${item('This machine')}.getAttribute('aria-checked')`),'true');
+    await evaluate(`${item('studio')}.click()`);
+    await until(()=>evaluate(`!document.querySelector('[role="menu"]')`),'choosing a machine closes the menu');
+    await until(()=>remoteReads()>0,'the catalog is read from the chosen machine');
+    await until(()=>evaluate(`document.querySelector('main').textContent.includes('install it on studio')&&document.querySelector('main').textContent.includes('Dashboard package on another machine.')`),'the page names that machine and shows its catalog');
+    assert.match(await evaluate(`${q(picker)}.textContent`),/studio/);
+    await click('[data-slot="marketplace-package-link"]');
+    await until(()=>evaluate(`!!${q('[data-slot="marketplace-installed"]')}`),'the remote package page shows its installs');
+    assert.match(await evaluate(`${q('[data-slot="marketplace-package-machine"]')}.textContent`),/studio/);
+    assert.match(await evaluate(`${q('[data-slot="marketplace-installed"] h3')}.textContent`),/studio/);
+    assert.equal(await evaluate(`${q('[data-slot="marketplace-installed"] a')}.href`),'http://legacy.studio.n.adi/','a remote copy opens through the mesh');
+    await openInstall();
+    assert.match(await evaluate(`${q('dialog[open] h2')}.textContent`),/on studio$/,'the install dialog names the machine');
+    await submitInstall();
+    assert.equal(mutations.at(-1).path,'/api/marketplace/install');
+    assert.equal(mutations.at(-1).source,'studio','the install goes to the chosen machine');
+    const before=remoteReads();
+    await send('Page.reload');
+    await until(()=>remoteReads()>before,'the chosen machine survives a reload');
+    await until(()=>evaluate(`${q('[data-slot="marketplace-package-machine"]')}?.textContent.includes('studio')`),'the reloaded page names the machine');
+    await click(picker);
+    await until(()=>evaluate(`!!${item('This machine')}`),'menu reopens');
+    await evaluate(`${item('This machine')}.click()`);
+    await until(()=>evaluate(`${q('[data-slot="marketplace-package-machine"]')}?.textContent.includes('This machine')`),'back to this machine');
+    assert.equal(await evaluate("localStorage.getItem('adi-marketplace-source')"),'""');
   });
   await check("Mobile package and install dialog fit the viewport",async()=>{
     await send("Emulation.setDeviceMetricsOverride", { width:390, height:844, deviceScaleFactor:1, mobile:true });

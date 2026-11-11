@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Check, Copy, LoaderCircle, Pencil, Star, X } from "lucide-react";
-import { Button } from "@design-system/ui";
+import { Button, useStateWithDeps } from "@design-system/ui";
 import type { ConversationRef } from "../lib/app-chat";
 
 export function ChatTitle({ title, conversation, onRename, starred, onStar }: {
@@ -12,8 +12,7 @@ export function ChatTitle({ title, conversation, onRename, starred, onStar }: {
   const [name, setName] = useState(title);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [copiedId, setCopiedId] = useState("");
-  useEffect(() => { setCopiedId(""); }, [conversation?.agent, conversation?.runId, conversation?.source]);
+  const [copiedId, setCopiedId] = useStateWithDeps(() => "", [conversation?.agent, conversation?.runId, conversation?.source]);
   useEffect(() => {
     if (!copiedId) return;
     const timer = window.setTimeout(() => setCopiedId(""), 2000);

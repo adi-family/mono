@@ -274,11 +274,23 @@ function ChatTypingIndicator({ label = "Assistant is typing", className, ...prop
   );
 }
 
+const rowCancelClass = "h-6 shrink-0 px-2 text-xs";
+
+/** Enough of a row's text to tell its Cancel button from its neighbours'. */
+function excerpt(text: string): string {
+  const flat = text.trim().replace(/\s+/g, " ");
+  return flat.length > 60 ? `${flat.slice(0, 60)}…` : flat;
+}
+
 type ChatWaitingStatusProps = Omit<React.ComponentProps<"details">, "children"> & {
   items: readonly { id: string; label: string }[];
+  /** Adds a Cancel button to every task in the expanded list. */
+  onCancel?: (id: string) => void;
+  /** Tasks whose cancellation is still in flight. */
+  cancellingIds?: readonly string[];
 };
 
-function ChatWaitingStatus({ items, className, ...props }: ChatWaitingStatusProps) {
+function ChatWaitingStatus({ items, onCancel, cancellingIds = [], className, ...props }: ChatWaitingStatusProps) {
   if (!items.length) return null;
   return (
     <details data-slot="chat-waiting-status" aria-label="Waiting status" className={cn("group/waiting text-muted-foreground min-w-0 rounded-md bg-foreground/5 text-xs", className)} {...props}>
@@ -288,8 +300,25 @@ function ChatWaitingStatus({ items, className, ...props }: ChatWaitingStatusProp
         <span className="min-w-0 flex-1 truncate">{items[0].label}</span>
         <ChevronDown aria-hidden="true" className="size-3 shrink-0 group-open/waiting:rotate-180" />
       </summary>
-      <ul className="max-h-32 space-y-1 overflow-y-auto px-3 pb-2 pl-8.5 leading-5 [overflow-wrap:anywhere]">
-        {items.map((item) => <li key={item.id}>{item.label}</li>)}
+      <ul className={cn("max-h-32 space-y-1 overflow-y-auto pb-2 pl-8.5 leading-5 [overflow-wrap:anywhere]", onCancel ? "pr-1" : "pr-3")}>
+        {items.map((item) => onCancel ? (
+          <li key={item.id} className="flex min-w-0 items-start gap-2">
+            <span className="min-w-0 flex-1 py-0.5">{item.label}</span>
+            <Button
+              data-slot="chat-waiting-cancel"
+              type="button"
+              size="sm"
+              variant="ghost"
+              className={rowCancelClass}
+              aria-label={`Cancel waiting: ${excerpt(item.label)}`}
+              disabled={cancellingIds.includes(item.id)}
+              disabledReason="This task is being cancelled."
+              onClick={() => onCancel(item.id)}
+            >
+              Cancel
+            </Button>
+          </li>
+        ) : <li key={item.id}>{item.label}</li>)}
       </ul>
     </details>
   );
@@ -298,18 +327,40 @@ function ChatWaitingStatus({ items, className, ...props }: ChatWaitingStatusProp
 type ChatQueuedMessageProps = React.ComponentProps<"details"> & {
   text: string;
   label?: string;
+  /** Adds a Cancel button beside the row. */
+  onCancel?: () => void;
+  /** The cancellation is still in flight. */
+  cancelling?: boolean;
 };
 
-function ChatQueuedMessage({ text, label = "Queued", children, className, ...props }: ChatQueuedMessageProps) {
+function ChatQueuedMessage({ text, label = "Queued", onCancel, cancelling = false, children, className, ...props }: ChatQueuedMessageProps) {
   return (
-    <details data-slot="chat-queued-message" className={cn("text-muted-foreground min-w-0 rounded-md bg-foreground/5 text-xs", className)} {...props}>
-      <summary className="focus-visible:ring-ring flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-md px-3 py-2 outline-none focus-visible:ring-2 [&::-webkit-details-marker]:hidden">
-        <Clock3 aria-hidden="true" className="size-3.5 shrink-0" />
-        <span className="shrink-0 font-medium">{label}</span>
-        <span className="min-w-0 flex-1 truncate">{text || "Image attachment"}</span>
-      </summary>
-      <div className="max-h-48 overflow-y-auto px-3 pb-3 whitespace-pre-wrap [overflow-wrap:anywhere]">{text}{children}</div>
-    </details>
+    // The button sits beside the details, never inside its summary: a summary is itself a control.
+    <div data-slot="chat-queued-row" className={cn("text-muted-foreground flex min-w-0 items-start rounded-md bg-foreground/5 text-xs", className)}>
+      <details data-slot="chat-queued-message" className="min-w-0 flex-1" {...props}>
+        <summary className="focus-visible:ring-ring flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-md px-3 py-2 outline-none focus-visible:ring-2 [&::-webkit-details-marker]:hidden">
+          <Clock3 aria-hidden="true" className="size-3.5 shrink-0" />
+          <span className="shrink-0 font-medium">{label}</span>
+          <span className="min-w-0 flex-1 truncate">{text || "Image attachment"}</span>
+        </summary>
+        <div className="max-h-48 overflow-y-auto px-3 pb-3 whitespace-pre-wrap [overflow-wrap:anywhere]">{text}{children}</div>
+      </details>
+      {onCancel && (
+        <Button
+          data-slot="chat-queued-cancel"
+          type="button"
+          size="sm"
+          variant="ghost"
+          className={cn(rowCancelClass, "m-1")}
+          aria-label={`Cancel queued message: ${excerpt(text) || "Image attachment"}`}
+          disabled={cancelling}
+          disabledReason="This message is being cancelled."
+          onClick={onCancel}
+        >
+          Cancel
+        </Button>
+      )}
+    </div>
   );
 }
 

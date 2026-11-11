@@ -164,7 +164,8 @@ try {
     assert.equal(await evaluate(`${q('a[aria-label="Marketplace"]')}.getAttribute('aria-current')`), "page");
     await until(() => evaluate(`document.querySelectorAll('main[aria-label="Marketplace"] [data-slot="card"]').length > 0`), "marketplace packages load");
     const media = await evaluate(`fetch('${process.env.MARKETPLACE_ONLY === "1" ? "/api/app" : "/api"}/marketplace').then(response=>response.json()).then(data=>({icons:data.apps.filter(item=>item.icon).length,previews:data.apps.filter(item=>item.gallery?.length).length}))`);
-    assert(media.icons > 0 && media.previews > 0, "live catalog publishes images");
+    // The catalog is operator data: icons are expected of every entry, a gallery is the publisher's choice.
+    assert(media.icons > 0, "live catalog publishes icons");
     assert.equal(await evaluate(`document.querySelectorAll('[data-slot="marketplace-icon"]').length`), media.icons, "catalog icons render");
     // Cards carry no banner: the gallery is the package page's business.
     assert.equal(await evaluate(`document.querySelectorAll('[data-slot="marketplace-preview"]').length`), 0, "catalog cards show no gallery banner");
@@ -177,21 +178,29 @@ try {
     // Cards are summaries only: no inline preview toggle, galleries live on the package page.
     assert.equal(await evaluate(`document.querySelectorAll('main[aria-label="Marketplace"] [data-slot="card"] button[aria-expanded]').length`), 0, "cards have no quick preview toggle");
     await tokenColor('main[aria-label="Marketplace"] [data-slot="card"]');
+    // The topbar alone says whose marketplace this is; the page does not repeat it.
+    assert.match(await evaluate(`${q('button[aria-label="Marketplace machine"]')}?.textContent ?? ''`), /This machine/, "the topbar names the machine being browsed");
+    assert.equal(await evaluate(`document.querySelectorAll('[data-slot="marketplace-machine"]').length`), 0, "no machine and sources line under the filters");
     if (process.env.MARKETPLACE_ONLY !== "1") await settingsLink();
     await screenshot("marketplace");
   });
 
   if (process.env.MARKETPLACE_ONLY !== "1") {
     await check("Package page opens the React installation dialog", async () => {
+      // The live catalog is operator data, so the package is picked from it rather than named here — a
+      // published entry can be withdrawn. The project-name prefill follows the page's own rule: the
+      // scaffold element's published name, else the package name.
+      const sample = await evaluate(`fetch('/api/marketplace').then(response=>response.json()).then(data=>{const apps=data.apps.filter(app=>app.marketplace==='adi');const app=apps.find(app=>!(app.elements??[]).some(el=>el.kind==='project'))??apps[0];return app?{slug:app.slug,name:app.name,project:(app.elements??[]).find(el=>el.kind==='project')?.name??app.name}:null;})`);
+      assert(sample, "the live catalog lists at least one package");
       await navigate("/marketplace", '[data-slot="marketplace-package-link"]');
-      await click('[data-slot="marketplace-package-link"][href="/marketplace/adi/reviewer"]');
-      await until(() => evaluate(`location.pathname === '/marketplace/adi/reviewer' && ${q('[data-slot="marketplace-package"]')}?.textContent.includes('Code reviewer')`), "React reviewer detail page loads");
+      await click(`[data-slot="marketplace-package-link"][href="/marketplace/adi/${sample.slug}"]`);
+      await until(() => evaluate(`location.pathname === '/marketplace/adi/${sample.slug}' && ${q('[data-slot="marketplace-package"]')}?.textContent.includes(${JSON.stringify(sample.name)})`), `React ${sample.slug} detail page loads`);
       assert(await evaluate(`!!${q('[data-slot="global-navigation"]')}`), 'package keeps the React application shell');
       await send('Page.reload');
       await until(() => evaluate(`!!${q('[data-slot="marketplace-install"]')}`), 'direct reload keeps the React package page');
       await click('[data-slot="marketplace-install"]');
       await until(() => evaluate(`!!${q('[data-slot="marketplace-install-form"] input[aria-label="Project name"]')}`), "existing installation destination form opens");
-      assert.equal(await evaluate(`${q('input[aria-label="Project name"]')}.value`), "Code reviewer");
+      assert.equal(await evaluate(`${q('input[aria-label="Project name"]')}.value`), sample.project);
       await screenshot("package-install");
       await click('[data-slot="marketplace-install-form"] button[type="button"]');
       await until(() => evaluate(`!${q('[data-slot="marketplace-install-form"]')}`), "installation dialog closes without installing");
@@ -223,6 +232,7 @@ try {
       assert(requests.some((request) => request.stage === stage && request.path === "/api/dashboards"), "Home reads the native catalog directly");
       assert(requests.some((request) => request.stage === stage && request.path === "/api/fleet/dashboards"), "Home reads the native fleet catalog directly");
       assert.equal(await evaluate(`document.querySelectorAll('main[aria-label="Home"] [role="alert"]').length`), 0, "live catalog has no request errors");
+      assert(await evaluate(`!!${q('[data-slot="app-topbar"] button[aria-label="Conversation sources"]')}`), "the machine selector is in the Home topbar");
       await screenshot("home");
     });
 
