@@ -22,11 +22,17 @@ extraction script cares about.
 
 ### Added
 
+- A machine selector sits in the top bar of every page. On Home and Chats it chooses which machines' sessions are listed; on Marketplace it picks the one machine whose catalog you browse and install into, and a package started on a paired machine opens through the mesh.
+- Cancel a message that is still queued, or a task the agent is waiting on, straight from the conversation.
+- An Event log in the left navigation (a tab on phones) collects failures of background refreshes, marks unread ones with a dot, and notes when a machine responds again.
+- A package page can start and open the dashboard that arrived as part of a bundle, such as the VS Code launcher, instead of leaving it archived and out of reach.
 - A marketplace entry can publish a `summary`: a one-line form of its description that the catalog card shows in its place.
 
 ### Changed
 
+- A background refresh that fails no longer puts a banner over the chat list and header on every attempt; it goes to the Event log. A failure of something you did yourself still shows where you did it, and a conversation that cannot load offers Retry in place of the transcript.
 - Marketplace catalog cards are a single row: the package icon, its name, and one line of summary, and the whole card opens the package page. The preview image, tags, version, and View package button have left the card; the package page still shows the gallery, keywords, version, and full description.
+- The Marketplace catalog shows its package count and Refresh on one row, and drops the machine and sources line now that the top bar names the machine.
 
 ## 1.37.0 — 2026-11-07
 
