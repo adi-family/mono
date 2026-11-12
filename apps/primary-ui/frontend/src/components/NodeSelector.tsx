@@ -14,7 +14,8 @@ import { useIsMobile } from "../lib/use-is-mobile";
 const menuItemClass = "focus:bg-accent hover:bg-accent flex min-h-8 w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs outline-none disabled:opacity-50 disabled:hover:bg-transparent";
 
 /** What the machine choice drives on the current page. The chat list merges sessions from any
- * number of machines; a marketplace, with its sources and installs, is one machine's at a time. */
+ * number of machines, and Home lists the apps of that same set; a marketplace, with its sources
+ * and installs, is one machine's at a time. */
 type Selection = {
   heading: string;
   label: string;
@@ -37,7 +38,7 @@ function useSelection(): Selection {
     };
   }
   return {
-    heading: "Sessions from", label: "Conversation sources", multiple: true,
+    heading: pathname === "/" ? "Apps and sessions from" : "Sessions from", label: "Conversation sources", multiple: true,
     chosen: selectedSources(sources),
     isChosen: (source) => hasSource(sources, source),
     choose: toggleSource,
@@ -132,9 +133,10 @@ function NodeSelectorMenu({ anchor, selection, onClose }: { anchor: RefObject<HT
 }
 
 /** Which machine the page is looking at — in every page's topbar, since it decides what the
- * page shows: whose sessions the chat lists, whose marketplace is being browsed. The topbar is
- * hidden below the mobile breakpoint on the chat page (see index.css), so `hideOnMobile` drops
- * that copy there and `mobileOnly` renders the same control inside the chat sidebar's own header. */
+ * page shows: whose sessions the chat lists, whose apps Home lists, whose marketplace is being
+ * browsed. The topbar is hidden below the mobile breakpoint on the chat page (see index.css), so
+ * `hideOnMobile` drops that copy there and `mobileOnly` renders the same control inside the chat
+ * sidebar's own header. */
 export function NodeSelector({ mobileOnly = false, hideOnMobile = false }: { mobileOnly?: boolean; hideOnMobile?: boolean }) {
   const isMobile = useIsMobile();
   const selection = useSelection();

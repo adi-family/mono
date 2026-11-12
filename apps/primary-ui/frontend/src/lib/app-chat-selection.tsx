@@ -100,7 +100,9 @@ function useSelectionState() {
   function toggleSource(source?: string) {
     const next = toggledSource(sources, source);
     setSources(next);
-    if (!hasSource(next, activeSource)) newConversationOn(selectedSources(next)[0]);
+    // Only the chat page has an open conversation to move off a deselected machine; on Home the
+    // same control just changes whose apps are listed, and must not navigate away.
+    if (enabled && !hasSource(next, activeSource)) newConversationOn(selectedSources(next)[0]);
   }
 
   function setGroup(value: ChatGroup) {

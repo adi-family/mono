@@ -1,6 +1,6 @@
 /**
  * Home catalog regressions against isolated Chrome and intercepted app API fixtures.
- * Every /api/* request is fulfilled here; even lock/unlock checks cannot change real credentials.
+ * Every /api/* request is fulfilled here, and Home is expected to make reads only.
  * Run: bun frontend/tests/home-apps.browser.mjs
  * Optional: SHOWCASE_URL, CHROME_BIN, BROWSER_SCREENSHOTS_DIR
  */
@@ -44,14 +44,6 @@ const mockErrors = [];
 const checks = [];
 let failLocal = false;
 let failFleet = false;
-let failForget = false;
-let holdUnlock = false;
-let pendingUnlock;
-const unlockBodies = [];
-const forgetBodies = [];
-const validPassword = " fixture-unlock-password "; // Password whitespace must be preserved verbatim.
-const wrongPassword = "fixture-incorrect-password";
-const unlockedDashboard = { id: "remote-notes", name: "Remote notes", description: "An app revealed after unlocking", service: "remote-notes", url: "http://remote-notes.locked-machine.n.adi/", allowed: true, running: true };
 let socket;
 let send;
 let evaluate;
@@ -59,14 +51,11 @@ const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const q = (selector) => `document.querySelector(${JSON.stringify(selector)})`;
 const grid = 'main[aria-label="Home"] ul[aria-label="Applications"]';
 const links = `${grid} [data-slot="home-app-link"]`;
-const filter = (machine) => `[data-slot="home-machine-filter"][data-machine="${machine}"]`;
 const app = (source, name) => `${grid} li[data-source="${source}"] [aria-label^="${name} · "]`;
-const unlockButton = 'button[aria-label="Unlock locked-machine"]';
-const unlockDialog = 'dialog[aria-label="Unlock locked-machine"]';
-const unlockSubmit = `${unlockDialog} button[type="submit"]`;
-const passwordInput = `${unlockDialog} [aria-label="Password"]`;
-const usernameInput = `${unlockDialog} [aria-label="Username"]`;
-const lockButton = (machine) => `button[aria-label="Lock ${machine}"]`;
+const selector = '[data-slot="app-topbar"] [data-slot="node-selector"]';
+const menu = '[data-slot="node-selector-menu"]';
+const menuItem = (name) => `[...document.querySelectorAll('${menu} [role="menuitemcheckbox"]')].find(node=>node.textContent.trim()===${JSON.stringify(name)})`;
+const eventLog = `JSON.parse(sessionStorage.getItem('adi.event-log.v1') ?? '{"events":[]}').events`;
 
 async function until(fn, description, timeout = 10000) {
   const deadline = Date.now() + timeout;
@@ -102,36 +91,9 @@ async function intercept({ requestId, request }) {
   } else if (request.method === "GET" && fixturePath(url.pathname) === "/api/app/fleet/nodes") {
     // The topbar machine selector lists the paired fleet on every page, Home included.
     await fulfill(requestId, { nodes: fleet.nodes.map(({ node, locked }) => ({ node, locked })) });
-  } else if (request.method === "POST" && fixturePath(url.pathname) === "/api/app/fleet/dashboards/unlock") {
-    const body = JSON.parse(request.postData ?? "{}");
-    unlockBodies.push(body);
-    if (holdUnlock) {
-      if (pendingUnlock) mockErrors.push("Duplicate unlock request while an unlock is pending.");
-      pendingUnlock = { requestId, body };
-      return;
-    }
-    if (body.password !== validPassword) {
-      await fulfill(requestId, { ok: false, error: "Invalid username or password." });
-    } else {
-      const machine = fleet.nodes.find((item) => item.node === body.node);
-      machine.locked = false;
-      machine.dashboards = [unlockedDashboard];
-      await fulfill(requestId, fleet);
-    }
-  } else if (request.method === "POST" && fixturePath(url.pathname) === "/api/app/fleet/dashboards/forget") {
-    const body = JSON.parse(request.postData ?? "{}");
-    forgetBodies.push(body);
-    if (failForget) {
-      await fulfill(requestId, { ok: false, error: "The saved access could not be removed." });
-    } else {
-      const machine = fleet.nodes.find((item) => item.node === body.petname);
-      machine.locked = true;
-      machine.dashboards = [];
-      await fulfill(requestId, fleet);
-    }
   } else {
     mockErrors.push(`Unexpected API request: ${request.method} ${url.pathname}`);
-    await fulfill(requestId, { error: "Only Home catalog reads and fixture lock/unlock requests are allowed." });
+    await fulfill(requestId, { error: "Only Home catalog reads are allowed." });
   }
 }
 
@@ -192,12 +154,26 @@ try {
     await send("Input.dispatchKeyEvent", { type: "keyUp", key, code, windowsVirtualKeyCode });
     await evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
   }
-  async function assertPasswordIsNotStored() {
-    const retained = await evaluate(`JSON.stringify({local: {...localStorage},session: {...sessionStorage},url:location.href,body:document.body.innerText}).includes(${JSON.stringify(validPassword)}) || JSON.stringify({local: {...localStorage},session: {...sessionStorage},url:location.href,body:document.body.innerText}).includes(${JSON.stringify(wrongPassword)})`);
-    assert.equal(retained, false, "credentials are absent from browser storage, URL and rendered text");
+  /** Ticks or unticks machines in the topbar selector, the only machine control Home has. */
+  async function toggleMachines(...names) {
+    await click(selector);
+    await until(() => evaluate(`!!${q(menu)}`), "machine selector opens");
+    for (const name of names) {
+      const before = await evaluate(`${menuItem(name)}.getAttribute('aria-checked')`);
+      await evaluate(`${menuItem(name)}.click()`);
+      await until(() => evaluate(`${menuItem(name)}.getAttribute('aria-checked')!==${JSON.stringify(before)}`), `${name} is toggled`);
+    }
+    await key("Escape", "Escape", 27);
+    await until(() => evaluate(`!${q(menu)}`), "machine selector closes");
   }
   async function check(name, fn) { await fn(); checks.push(name); console.log(`PASS ${name}`); }
-  async function ready(count = 7) {
+  /** Reloads and waits for the new document: the old one would still satisfy a `ready()` that expects the same count. */
+  async function reload() {
+    await evaluate("window.staleDocument = true");
+    await send("Page.reload", { ignoreCache: true });
+    await until(() => evaluate(`!window.staleDocument && !!${q(grid)}`), "the reloaded Home is mounted");
+  }
+  async function ready(count = 2) {
     await until(() => evaluate(`${q(grid)}?.getAttribute('aria-busy')==='false' && ${q('[data-slot="home-app-count"]')}?.textContent==='${count}'`), "Home catalog is settled");
   }
   async function setTheme(dark) {
@@ -230,16 +206,51 @@ try {
     assert.equal(await evaluate(`getComputedStyle(document.querySelector('[data-slot="app-topbar"]')).display`), 'flex');
   });
 
-  await check("Home combines local and remote apps with source labels and accurate counts", async () => {
-    assert.equal(await evaluate(`document.querySelectorAll('${grid} > li').length`), 7);
-    assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('[data-slot="home-machine-filter"]'), el => ({machine:el.dataset.machine,label:el.textContent.trim()}))`), [
-      { machine: "*", label: "All machines7" }, { machine: "", label: "This machine2" },
-      { machine: "server-alpha", label: "server-alpha4" }, { machine: "server-beta", label: "server-beta1" },
-    ]);
-    assert.equal(await evaluate(`${q(app("", "Sleeping app"))}.textContent.includes('This machine')`), true);
-    assert.equal(await evaluate(`${q(app("server-alpha", "CRM"))}.textContent.includes('server-alpha')`), true);
-    assert.equal(await evaluate(`${q(grid)}.textContent.includes('Archived app')`), false);
+  await check("Home has no machine filter, lock or unlock controls of its own", async () => {
+    const home = 'main[aria-label="Home"]';
+    assert.equal(await evaluate(`document.querySelectorAll('${home} nav, ${home} [data-slot="home-machine-filter"], ${home} [aria-label="Unavailable machines"]').length`), 0);
+    assert.equal(await evaluate(`[...document.querySelectorAll('${home} button')].filter(el=>/^(Lock|Unlock)\\b/.test(el.getAttribute('aria-label') ?? el.textContent.trim())).length`), 0);
+    assert.equal(await evaluate(`${q(home)}.innerText.includes('All machines')`), false);
+    assert.equal(await evaluate(`!!${q('dialog')}`), false);
     assert.equal(await evaluate(`${q('[data-slot="home-new-chat"]')}.textContent.trim()`), "New chat");
+  });
+
+  await check("a fresh visit lists this machine's apps, matching the topbar selector", async () => {
+    assert.equal(await evaluate(`${q(selector)}.textContent.trim()`), "This machine");
+    assert.equal(await evaluate(`document.querySelectorAll('${grid} > li').length`), 2);
+    assert.equal(await evaluate(`document.querySelectorAll('${grid} > li[data-source=""]').length`), 2);
+    assert.equal(await evaluate(`${q(app("", "Sleeping app"))}.textContent.includes('This machine')`), true);
+    assert.equal(await evaluate(`${q(grid)}.textContent.includes('Archived app')`), false);
+    assert.equal(await evaluate(`${q('[data-slot="home-app-count"]')}.textContent`), "2");
+  });
+
+  await check("ticking machines in the topbar selector adds their apps without leaving Home", async () => {
+    await click(selector);
+    await until(() => evaluate(`${q(`${menu} p`)}?.textContent==='Apps and sessions from'`), "the selector says it decides Home's apps");
+    await key("Escape", "Escape", 27);
+    await until(() => evaluate(`!${q(menu)}`), "machine selector closes");
+    await toggleMachines("server-alpha");
+    await ready(6);
+    assert.equal(await evaluate(`${q(selector)}.textContent.trim()`), "2 machines");
+    assert.equal(await evaluate(`document.querySelectorAll('${grid} > li[data-source="server-alpha"]').length`), 4);
+    await toggleMachines("server-beta");
+    await ready(7);
+    assert.equal(await evaluate(`${q(app("server-beta", "CRM"))}.textContent.includes('server-beta')`), true);
+    assert.equal(await evaluate("location.pathname + location.search"), "/");
+    assert.deepEqual(await evaluate("JSON.parse(localStorage.getItem('adi-session-sources'))"), { local: true, nodes: ["server-alpha", "server-beta"] });
+  });
+
+  await check("unticking a machine, this one included, removes its apps and stays on Home", async () => {
+    await toggleMachines("This machine");
+    await ready(5);
+    assert.equal(await evaluate(`document.querySelectorAll('${grid} > li[data-source=""]').length`), 0);
+    assert.equal(await evaluate(`!!${q('main[aria-label="Home"]')} && location.pathname + location.search`), "/");
+    await toggleMachines("server-alpha");
+    await ready(1);
+    assert.equal(await evaluate(`${q(selector)}.textContent.trim()`), "server-beta");
+    assert.equal(await evaluate("location.pathname + location.search"), "/");
+    await toggleMachines("This machine", "server-alpha");
+    await ready(7);
   });
 
   await check("duplicate remote IDs, stopped apps and remote gallery copies keep their own URLs", async () => {
@@ -257,172 +268,33 @@ try {
     assert.equal(await evaluate(`${q(app("server-alpha", "Restricted app"))}.textContent.includes('Access required')`), true);
     assert.equal(await evaluate(`${q(app("server-alpha", "Unroutable app"))}.dataset.slot`), "home-app-unavailable");
     assert.equal(await evaluate(`${q(app("server-alpha", "Unroutable app"))}.textContent.includes('No app address is available.')`), true);
-    assert.equal(requests.some((request) => request.method !== "GET"), false);
   });
 
-  await check("locked and unavailable machines expose their status and control panel links", async () => {
-    const states = await evaluate(`Array.from(document.querySelectorAll('[aria-label="Unavailable machines"] li'), el => ({text:el.textContent.trim(),href:el.querySelector('a').href,title:el.querySelector('a').title}))`);
-    assert.deepEqual(states.map(({ href, title }) => ({ href, title })), [
-      { href: "http://app.locked-machine.n.adi/", title: "Unlock this machine to see its apps." },
-      { href: "http://app.failed-machine.n.adi/", title: "The machine could not be reached." },
-    ]);
-    assert.match(states[0].text, /locked-machine.*Locked/);
-    assert.match(states[1].text, /failed-machine.*Unavailable/);
-    assert.equal(await evaluate(`${q(unlockButton)}.textContent.trim()`), "Unlock");
+  await check("an unreachable chosen machine is recorded in the event log, not on the page", async () => {
+    assert.equal(await evaluate(`${eventLog}.some(event=>event.area==='Apps')`), false, "machines that are not chosen report nothing");
+    await toggleMachines("failed-machine");
+    await until(() => evaluate(`${eventLog}.some(event=>event.area==='Apps' && event.source==='failed-machine' && event.level==='error' && event.message==='The machine could not be reached.')`), "the failure reaches the event log");
+    await ready(7);
+    assert.equal(await evaluate(`document.querySelectorAll('main[aria-label="Home"] [role="alert"]').length`), 0);
+    assert.equal(await evaluate(`${q('main[aria-label="Home"]')}.innerText.includes('failed-machine')`), false);
+    await toggleMachines("failed-machine");
   });
 
-  await check("unlock opens a modal with username and password fields; Cancel clears it without a request", async () => {
-    const before = unlockBodies.length;
-    await click(unlockButton);
-    await until(() => evaluate(`${q(unlockDialog)}?.open`), "unlock dialog opens");
-    assert.equal(await evaluate(`${q(unlockDialog)}.matches(':modal')`), true);
-    assert.equal(await evaluate(`${q(usernameInput)}.value`), "adi");
-    assert.equal(await evaluate(`${q(passwordInput)}.type`), "password");
-    assert.equal(await evaluate(`${q(passwordInput)}.value`), "");
-    assert.equal(await evaluate(`${q(passwordInput)}.required`), true);
-    assert.equal(await evaluate(`${q(unlockDialog)}.contains(document.activeElement)`), true);
-    await fill(passwordInput, wrongPassword);
-    await click(`${unlockDialog} button[type="button"]`);
-    await until(() => evaluate(`!${q(unlockDialog)}?.open`), "Cancel closes unlock dialog");
-    assert.equal(unlockBodies.length, before);
-    assert.equal(await evaluate(`document.activeElement===${q(unlockButton)}`), true);
-    await assertPasswordIsNotStored();
-    await click(unlockButton);
-    assert.equal(await evaluate(`${q(passwordInput)}.value`), "");
+  await check("a locked machine cannot be chosen and none of its state shows on Home", async () => {
+    await click(selector);
+    await until(() => evaluate(`!!${q(menu)}`), "machine selector opens");
+    assert.equal(await evaluate(`${menuItem("locked-machine")}.disabled`), true);
     await key("Escape", "Escape", 27);
+    await until(() => evaluate(`!${q(menu)}`), "machine selector closes");
+    assert.equal(await evaluate(`${q('main[aria-label="Home"]')}.innerText.includes('locked-machine')`), false);
   });
 
-  await check("Escape dismisses unlock and restores focus without retaining the password", async () => {
-    const before = unlockBodies.length;
-    await click(unlockButton);
-    await fill(passwordInput, wrongPassword);
-    await key("Escape", "Escape", 27);
-    await until(() => evaluate(`!${q(unlockDialog)}?.open`), "Escape closes unlock dialog");
-    assert.equal(await evaluate(`document.activeElement===${q(unlockButton)}`), true);
-    assert.equal(unlockBodies.length, before);
-    await click(unlockButton);
-    assert.equal(await evaluate(`${q(passwordInput)}.value`), "");
-    await key("Escape", "Escape", 27);
-    await assertPasswordIsNotStored();
-  });
-
-  await check("empty passwords cannot submit and keyboard focus stays inside the modal", async () => {
-    const before = unlockBodies.length;
-    await click(unlockButton);
-    await click(unlockSubmit);
-    assert.equal(await evaluate(`${q(passwordInput)}.validity.valueMissing`), true);
-    assert.equal(unlockBodies.length, before);
-    for (let index = 0; index < 6; index += 1) {
-      await key("Tab", "Tab", 9);
-      assert.equal(await evaluate(`${q(unlockDialog)}.contains(document.activeElement)`), true);
-    }
-    await key("Escape", "Escape", 27);
-  });
-
-  await check("incorrect credentials show the API error and keep the machine locked", async () => {
-    await click(unlockButton);
-    await fill(usernameInput, "operator");
-    await fill(passwordInput, wrongPassword);
-    await click(unlockSubmit);
-    await until(() => evaluate(`${q(`${unlockDialog} [role="alert"]`)}?.textContent.includes('Invalid username or password.')`), "unlock error is visible");
-    assert.deepEqual(unlockBodies.at(-1), { node: "locked-machine", username: "operator", password: wrongPassword });
-    assert.equal(await evaluate(`${q(unlockDialog)}.open`), true);
-    assert.equal(await evaluate(`${q(unlockSubmit)}.disabled`), false);
-    assert.equal(await evaluate(`!!${q(app("locked-machine", "Remote notes"))}`), false);
-    assert.equal(await evaluate(`${q('[data-slot="home-app-count"]')}.textContent`), "7");
-    await assertPasswordIsNotStored();
-    await key("Escape", "Escape", 27);
-  });
-
-  await check("Cancel dismisses a pending unlock and reopening starts with empty credentials", async () => {
-    holdUnlock = true;
-    await click(unlockButton);
-    await fill(passwordInput, wrongPassword);
-    await click(unlockSubmit);
-    await until(() => pendingUnlock, "canceled unlock request is held by fixture");
-    await click(`${unlockDialog} button[type="button"]`);
-    await until(() => evaluate(`!${q(unlockDialog)}?.open`), "pending dialog closes on Cancel");
-    assert.equal(await evaluate(`document.activeElement===${q(unlockButton)}`), true);
-    await fulfill(pendingUnlock.requestId, { ok: false, error: "A canceled request must not display this error." });
-    pendingUnlock = undefined;
-    holdUnlock = false;
-    await click(unlockButton);
-    assert.equal(await evaluate(`${q(passwordInput)}.value`), "");
-    assert.equal(await evaluate(`!!${q(`${unlockDialog} [role="alert"]`)}`), false);
-    assert.equal(await evaluate(`${q(usernameInput)}.disabled`), false);
-    await key("Escape", "Escape", 27);
-    await assertPasswordIsNotStored();
-  });
-
-  await check("unlock disables pending submission and reveals returned apps immediately without reload", async () => {
-    holdUnlock = true;
-    const before = unlockBodies.length;
-    const navigation = await evaluate("performance.timeOrigin");
-    await click(unlockButton);
-    await fill(usernameInput, "adi");
-    await fill(passwordInput, validPassword);
-    await click(unlockSubmit);
-    await until(() => pendingUnlock, "unlock request is held by fixture");
-    assert.equal(await evaluate(`${q(unlockSubmit)}.disabled`), true);
-    assert.equal(await evaluate(`${q(usernameInput)}.disabled`), true);
-    assert.equal(await evaluate(`${q(passwordInput)}.disabled`), true);
-    assert.equal(await evaluate(`${q(unlockSubmit)}.textContent.trim()`), "Unlocking…");
-    await evaluate(`${q(unlockDialog)}.querySelector('form').requestSubmit()`);
-    await key("Enter", "Enter", 13);
-    await pause(100);
-    assert.equal(unlockBodies.length, before + 1, "pending unlock cannot be submitted twice");
-    assert.deepEqual(pendingUnlock.body, { node: "locked-machine", username: "adi", password: validPassword });
-    const machine = fleet.nodes.find((item) => item.node === "locked-machine");
-    machine.locked = false;
-    machine.dashboards = [unlockedDashboard];
-    await fulfill(pendingUnlock.requestId, fleet);
-    pendingUnlock = undefined;
-    holdUnlock = false;
-    await ready(8);
-    await until(() => evaluate(`!${q(unlockDialog)}?.open`), "successful unlock closes dialog");
-    assert.equal(await evaluate(`${q(app("locked-machine", "Remote notes"))}.getAttribute('href')`), unlockedDashboard.url);
-    assert.equal(await evaluate(`${q(filter("locked-machine"))}.textContent.trim()`), "locked-machine1");
-    assert.equal(await evaluate(`!!${q(unlockButton)}`), false);
-    await until(() => evaluate(`document.activeElement===${q(filter("locked-machine"))}`), "successful unlock focuses the machine filter");
-    assert.equal(await evaluate("performance.timeOrigin"), navigation, "catalog updates without a document reload");
-    await assertPasswordIsNotStored();
-  });
-
-  await check("locking reports a failed request while preserving the machine's apps", async () => {
-    failForget = true;
-    await click(lockButton("locked-machine"));
-    await until(() => evaluate(`Array.from(document.querySelectorAll('[role="alert"]')).some(el=>el.textContent.includes('The saved access could not be removed.'))`), "lock error is visible");
-    assert.deepEqual(forgetBodies.at(-1), { petname: "locked-machine" });
-    assert.equal(await evaluate(`!!${q(app("locked-machine", "Remote notes"))}`), true);
-    assert.equal(await evaluate(`${q(lockButton("locked-machine"))}.disabled`), false);
-    assert.equal(await evaluate(`${q('[data-slot="home-app-count"]')}.textContent`), "8");
-    failForget = false;
-  });
-
-  await check("locking forgets saved machine access and updates app counts immediately", async () => {
-    await click(filter("locked-machine"));
-    assert.equal(await evaluate(`document.querySelectorAll('${grid} > li').length`), 1);
-    await click(lockButton("locked-machine"));
-    await ready();
-    assert.deepEqual(forgetBodies.at(-1), { petname: "locked-machine" });
-    assert.equal(await evaluate(`!!${q(app("locked-machine", "Remote notes"))}`), false);
-    assert.equal(await evaluate(`!!${q(unlockButton)}`), true);
-    assert.equal(await evaluate(`${q(filter("*"))}.getAttribute('aria-pressed')`), "true");
-    assert.equal(await evaluate(`document.querySelectorAll('${grid} > li').length`), 7);
-    await click(unlockButton);
-    assert.equal(await evaluate(`${q(passwordInput)}.value`), "");
-    await key("Escape", "Escape", 27);
-    await assertPasswordIsNotStored();
-  });
-
-  await check("machine filters and search compose across app names, descriptions and machines", async () => {
-    await click(filter("server-alpha"));
-    assert.equal(await evaluate(`${q(filter("server-alpha"))}.getAttribute('aria-pressed')`), "true");
-    assert.equal(await evaluate(`document.querySelectorAll('${grid} > li').length`), 4);
+  await check("search composes with the chosen machines across names, descriptions and machines", async () => {
     await type("CRM");
-    assert.equal(await evaluate(`document.querySelectorAll('${grid} > li').length`), 1);
-    await click(filter("*"));
     assert.equal(await evaluate(`document.querySelectorAll('${grid} > li').length`), 2);
+    await toggleMachines("server-beta");
+    assert.equal(await evaluate(`document.querySelectorAll('${grid} > li').length`), 1);
+    await toggleMachines("server-beta");
     await type("server-beta");
     assert.equal(await evaluate(`document.querySelectorAll('${grid} > li').length`), 1);
     await type("shared component");
@@ -432,35 +304,51 @@ try {
     assert.equal(await evaluate(`${q('main[aria-label="Home"] [role="status"]')}.textContent`), "No apps found for “missing application”.");
     await click('[aria-label="Clear app search"]');
     assert.equal(await evaluate(`document.activeElement.getAttribute('aria-label')`), "Search apps");
-    await click(filter(""));
-    assert.equal(await evaluate(`document.querySelectorAll('${grid} > li').length`), 2);
-    await click(filter("*"));
+    assert.equal(await evaluate(`document.querySelectorAll('${grid} > li').length`), 7);
   });
 
   await check("a local catalog failure preserves remote apps and Retry recovers independently", async () => {
     failLocal = true;
-    await send("Page.reload", { ignoreCache: true });
+    await reload();
     await ready(5);
     await until(() => evaluate(`Array.from(document.querySelectorAll('[role="alert"]')).some(el=>el.textContent.startsWith('This machine:'))`), "local failure is visible");
     assert.equal(await evaluate(`document.querySelectorAll('${grid} > li').length`), 5);
     assert.equal(await evaluate(`!!${q(app("server-beta", "CRM"))}`), true);
     failLocal = false;
     await click('[role="alert"] button');
-    await ready();
+    await ready(7);
     assert.equal(await evaluate(`document.querySelectorAll('[role="alert"]').length`), 0);
   });
 
   await check("a fleet catalog failure preserves local apps and Retry restores remote machines", async () => {
     failFleet = true;
-    await send("Page.reload", { ignoreCache: true });
+    await reload();
     await ready(2);
     await until(() => evaluate(`Array.from(document.querySelectorAll('[role="alert"]')).some(el=>el.textContent.startsWith('Other machines:'))`), "fleet failure is visible");
     assert.equal(await evaluate(`document.querySelectorAll('${grid} > li').length`), 2);
     assert.equal(await evaluate(`${q(app("", "Design System"))}.getAttribute('href')`), "/library");
     failFleet = false;
     await click('[role="alert"] button');
-    await ready();
+    await ready(7);
     assert.equal(await evaluate(`document.querySelectorAll('[role="alert"]').length`), 0);
+  });
+
+  await check("a fleet catalog failure is not shown while only this machine is chosen", async () => {
+    await toggleMachines("server-alpha", "server-beta");
+    await ready(2);
+    failFleet = true;
+    const before = requests.length;
+    await reload();
+    await ready(2);
+    await until(() => requests.slice(before).some((request) => request.path === "/api/app/fleet/dashboards"), "the failing fleet catalog was read");
+    await pause(150);
+    assert.equal(await evaluate(`document.querySelectorAll('main[aria-label="Home"] [role="alert"]').length`), 0);
+    assert.equal(await evaluate(`${q('main[aria-label="Home"] [role="status"]')}.textContent`), "2 apps.");
+    failFleet = false;
+    await reload();
+    await ready(2);
+    await toggleMachines("server-alpha", "server-beta");
+    await ready(7);
   });
 
   await check("mobile app tiles wrap into multiple columns without horizontal overflow", async () => {
@@ -472,22 +360,6 @@ try {
       assert.ok(layout.left >= 0 && layout.right <= width + 1, `${width}px app grid fits the viewport`);
       assert.equal(layout.overflow, false, `${width}px page does not overflow horizontally`);
     }
-  });
-
-  await check("unlock form fits a mobile viewport with reachable credentials and actions", async () => {
-    await send("Emulation.setDeviceMetricsOverride", { width: 390, height: 900, deviceScaleFactor: 1, mobile: true });
-    await click(unlockButton);
-    const layout = await evaluate(`(() => {const dialog=${q(unlockDialog)};const rect=dialog.getBoundingClientRect();return {left:rect.left,right:rect.right,top:rect.top,bottom:rect.bottom,overflow:document.documentElement.scrollWidth>innerWidth};})()`);
-    assert.ok(layout.left >= 0 && layout.right <= 391, "dialog fits viewport width");
-    assert.ok(layout.top >= 0 && layout.bottom <= 901, "dialog actions fit viewport height");
-    assert.equal(layout.overflow, false);
-    assert.equal(await evaluate(`${q(passwordInput)}.value`), "");
-    if (process.env.BROWSER_SCREENSHOTS_DIR) {
-      await mkdir(process.env.BROWSER_SCREENSHOTS_DIR, { recursive: true });
-      const screenshot = await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
-      await writeFile(resolve(process.env.BROWSER_SCREENSHOTS_DIR, "design-system-home-unlock-mobile.png"), Buffer.from(screenshot.data, "base64"));
-    }
-    await key("Escape", "Escape", 27);
   });
 
   await check("light and dark Home apply theme tokens with rendered components and no errors", async () => {
@@ -510,7 +382,7 @@ try {
 
   assert.deepEqual(mockErrors, [], "all API requests stayed within the Home fixture contract");
   assert.deepEqual(errors, [], "zero browser exceptions or console errors");
-  assert.equal(requests.filter((request) => request.method !== "GET").every((request) => request.method === "POST" && ["/api/app/fleet/dashboards/unlock", "/api/app/fleet/dashboards/forget"].includes(request.path)), true, "only expected lock/unlock mutations were requested");
+  assert.deepEqual(requests.filter((request) => request.method !== "GET"), [], "Home only reads");
   console.log(`\n${checks.length} Home browser scenarios passed; all API requests intercepted; zero real mutations, exceptions or console errors.`);
 } catch (error) {
   console.error(`Home browser check failed after ${checks.length} completed scenarios.`);
