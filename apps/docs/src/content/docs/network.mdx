@@ -12,7 +12,7 @@ how to disable each one.
 | What | On by default? | Off switch |
 | --- | --- | --- |
 | [The update check](#the-update-check) | Yes | `adi-mono update disable` |
-| [Usage events](#usage-events) <VersionBadge version="1.31.0" /> | Yes | Settings → Usage events, or `DO_NOT_TRACK=1` |
+| [Usage events](#usage-events) | Yes | Settings → Usage events, or `DO_NOT_TRACK=1` |
 | [The embedding model download](#the-embedding-model-download) | Yes, once | Reassign the backend before first use |
 | [The mesh relay](#the-mesh-relay) | No | `adi-mono mesh disable` |
 | [The OAuth router](#the-oauth-router) | No | Don't use an OAuth-sourced secret |
@@ -36,9 +36,10 @@ turns the background check back on. See
 [[installation#Updates and removal|Updates and removal]] for what the check does with what it
 learns.
 
-## Usage events <VersionBadge version="1.31.0" />
+## Usage events
 
-The desktop app sends a small, fixed set of first-party usage events to `relay.withadi.dev/v1/app`
+The desktop app sends a small, fixed set of first-party usage events,
+<VersionBadge version="1.31.0" />, to `relay.withadi.dev/v1/app`
 — `app_first_launch`, `onboarding_completed`, `agent_run_started`, `agent_run_finished`,
 `app_daily_active`, `dashboard_created`, `store_item_installed` and `fleet_invite_created`. Each
 one carries the ADI version, the OS, the architecture, and a random install id kept in
