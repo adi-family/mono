@@ -4,7 +4,7 @@
 
 > The adi app: a Rust HTTP backend serving a control-panel SPA at / and a JSON API at /api, fronted by adi-hive at app.adi.
 
-27 structs · 1 enum · 2 type aliases across 10 files.
+30 structs · 2 enums · 2 type aliases across 11 files.
 
 ## Index
 
@@ -14,6 +14,7 @@
 - [`src/main.rs`](#srcmainrs) — `App`, `MeshCtl`, `Reads`, `EmbeddedHit`
 - [`src/node.rs`](#srcnoders) — `CallError`, `Payload`
 - [`src/primary_ui.rs`](#srcprimary_uirs) — `PrimaryUi`, `Asset`
+- [`src/relay.rs`](#srcrelayrs) — `Registered`, `PulledRecord`, `SenderRequest`, `Plan`
 - [`src/scan.rs`](#srcscanrs) — `Proc`, `ProcessTable`
 - [`src/shared_assets.rs`](#srcshared_assetsrs) — `SharedAssets`
 - [`src/viewer.rs`](#srcviewerrs) — `Credential`, `Credentials`, `HeldCredentials`
@@ -303,6 +304,65 @@ pub(crate) struct PrimaryUi {
 pub(crate) struct Asset {
     pub(crate) relative: String,
     pub(crate) bytes: Vec<u8>,
+}
+```
+
+---
+
+## `src/relay.rs`
+
+### struct `Registered`
+
+What `register` persists into the trigger's own `extra` (§10). `url` (§5.2's own echo of the public sender-facing URL) isn't kept here — the panel/CLI reconstruct it the same way the relay built it, `{relay_url}/h/{endpoint_id}`, from `relay` + `relay_endpoint`, so there's no fourth `extra` key for it (§10 names exactly three: `relay`, `relay_retention`, `relay_endpoint`).
+
+```rust
+#[derive(Debug, Clone)]
+pub struct Registered {
+    pub endpoint_id: String,
+}
+```
+
+### struct `PulledRecord`
+
+One record off `GET /v1/pull` (§5.5), decoded from the wire.
+
+```rust
+#[derive(Debug, Clone)]
+struct PulledRecord {
+    id: i64,
+    endpoint_id: String,
+    sealed: Sealed,
+}
+```
+
+### struct `SenderRequest`
+
+The sealed envelope's own shape (`docs/webhook-relay.md` §4): the sender's request exactly as `/h/<endpoint-id>` captured it.
+
+```rust
+#[derive(Debug, serde::Deserialize)]
+struct SenderRequest {
+    method: String,
+    headers: HashMap<String, String>,
+    query: String,
+    body_b64: String,
+}
+```
+
+### enum `Plan`
+
+Whether, and how, a save needs to touch the relay before anything is persisted.
+
+```rust
+enum Plan {
+    Unchanged,
+    Register {
+        url: String,
+    },
+    Deregister {
+        url: String,
+        endpoint_id: String,
+    },
 }
 ```
 

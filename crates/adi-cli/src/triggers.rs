@@ -78,6 +78,10 @@ pub(crate) enum TriggersCommand {
     Rm { name: String },
     /// Delete a trigger definition.
     Delete { name: String },
+    /// Print this node's webhook-relay public signing key (docs/webhook-relay.md §10) — paste
+    /// into a self-host relay's `authorized_keys` file. One key for the whole node, shared by
+    /// every relay-backed trigger; generated on first use.
+    RelayKey,
 }
 
 /// Dispatch a `triggers` subcommand over the shared trigger-definition store.
@@ -217,6 +221,10 @@ pub(crate) fn run_triggers(adi: Adi, command: TriggersCommand) -> Result<(), Str
             } else {
                 println!("No such trigger: {name}.");
             }
+        }
+        TriggersCommand::RelayKey => {
+            let identity = adi_relay::keys::load_or_create().map_err(|e| e.to_string())?;
+            println!("{}", identity.public_key_line());
         }
     }
     Ok(())

@@ -13,6 +13,7 @@ mod node;
 mod primary_ui;
 mod prober;
 mod projects;
+mod relay;
 mod scan;
 mod shared_assets;
 mod transfer;
@@ -303,6 +304,10 @@ async fn main() -> anyhow::Result<()> {
     // (ADI-MONO-180 P2.4's own gap, closed by ADI-MONO-181) — this machine acting as a paired
     // peer dialling *out*, independent of whether this machine's own `[user_secrets]` is enabled.
     lease_worker::start(secrets.clone());
+    // The webhook relay poller (docs/webhook-relay.md §10, ADI-MONO-223) — always loopback, for
+    // the same reason `agents.with_lease_url` above is: the replay this exercises is honoured
+    // only from this process's own listener, never the address a peer would dial this node at.
+    relay::start(triggers.clone(), format!("http://127.0.0.1:{}", local.port()));
     let dist = webapp_dist_override();
     if let Some(dir) = dist.as_ref() {
         info!(dist = %dir.display(), "serving webapp from disk (dev mode)");
@@ -531,6 +536,12 @@ async fn async_route(app: &App, req: &http::Request) -> Option<Response> {
         }
         ("POST", "/api/mesh/forwards/remove") => {
             handlers::mesh_remove_forward(app.mesh.running().await, &req.body)
+        }
+        ("POST", "/api/triggers/save") => {
+            relay::save_trigger(&app.triggers, &app.trigger_supervisor, &req.body).await
+        }
+        ("POST", "/api/triggers/delete") => {
+            relay::delete_trigger(&app.triggers, &app.trigger_supervisor, &req.body)
         }
         _ => return None,
     };
@@ -1089,12 +1100,8 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/agents/peek") => handlers::peek_agent(agents, &req.body),
         ("POST", "/api/agents/send-keys") => handlers::send_agent_keys(agents, &req.body),
         ("GET", "/api/triggers") => handlers::triggers(triggers),
-        ("POST", "/api/triggers/save") => {
-            handlers::save_trigger(triggers, trigger_supervisor, &req.body)
-        }
-        ("POST", "/api/triggers/delete") => {
-            handlers::delete_trigger(triggers, trigger_supervisor, &req.body)
-        }
+        // Relay-aware (docs/webhook-relay.md §10, ADI-MONO-223): register/deregister against a
+        // relay before anything persists, which needs the async runtime — see `async_route`.
         ("POST", "/api/triggers/fire") => handlers::fire_trigger(triggers, &req.body),
         ("POST", "/api/triggers/restart") => {
             handlers::restart_trigger(triggers, trigger_supervisor, &req.body)

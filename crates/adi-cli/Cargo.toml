@@ -18,6 +18,11 @@ path = "src/main.rs"
 adi-config = { workspace = true }
 adi-core = { workspace = true }
 
+# `triggers relay-key` prints this node's OpenSSH public signing key — read-only, never through
+# `adi-core`'s store facade for the same reason this crate keeps clear of `adi-secrets`: it's node
+# identity material, not a `Config`-shaped store value.
+adi-relay = { workspace = true }
+
 # The `mesh` command group. This is what pulls iroh into `adi-mono`, and it is
 # a deliberate trade: a node is enrolled over ssh or cloud-init, where there is no control panel
 # and often no second binary, so pairing has to be reachable from a shell on the box itself. The

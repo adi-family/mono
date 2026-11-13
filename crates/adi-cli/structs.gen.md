@@ -1853,6 +1853,7 @@ pub(crate) enum TriggersCommand {
     Delete {
         name: String,
     },
+    RelayKey,
 }
 ```
 

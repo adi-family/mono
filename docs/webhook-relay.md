@@ -524,6 +524,17 @@ schema migration, no new `ALTER TABLE`:
   registration succeeds. Its presence is what the poller (below) uses to know which relay record
   belongs to which local trigger.
 
+**Deviation: a fourth key, `extra["licence_code"]`, for enterprise-mode registration.** §5.2's
+`register` body requires `licence_code` only when the target relay is enterprise-mode, and this
+section's own list names only three keys — an oversight caught implementing ADI-MONO-223, not a
+deliberate cut. The update channel already carries an analogous credential
+(`engine.settings().auth_header`, `adi-webapp-api/src/handlers/update.rs`), but it's a different
+shape for a different consumer (an HTTP `Authorization` header for fetching a manifest, not a
+plaintext `licence_code` string for a beam body) and reusing it without confirming the two are
+actually the same value would be a guess dressed as a fix. Smallest sound fix: a fourth,
+operator-supplied `extra` key, same mechanism as the other three. Revisit once there's a single
+place this install's ADI Enterprise licence code already lives in a form safe to read back out.
+
 Saving a trigger with `relay` set (or changing it) is the moment `adi-app` calls out: register
 against the named relay (or the `custom:<url>` one) with the node's sealing key, and only write
 `relay_endpoint`/persist the trigger once that call succeeds — a failed registration is a failed
@@ -691,15 +702,27 @@ Phase numbers match the task. This document is phase 1.
       construction (§9).
 
 ### Phase 4 — node side in `adi-mono`
-- [ ] `extra["relay"]` / `extra["relay_retention"]` / `extra["relay_endpoint"]` on webhook
-      triggers (§10); register-on-save, best-effort delete-on-remove.
-- [ ] Node keypair: `adi-relay`'s `load_or_create` for `signing.key`/`sealing.key` under
-      `~/.adi/mono/relay/`.
-- [ ] The built-in poller in `adi-app`: one loop per distinct relay in use, reconnect/backoff,
-      unseal, replay via a real loopback HTTP call to `/api/hooks/<name>`.
+- [x] `extra["relay"]` / `extra["relay_retention"]` / `extra["relay_endpoint"]` (+ the deviation
+      above, `extra["licence_code"]`) on webhook triggers (§10); register-on-save, best-effort
+      delete-on-remove — `crates/adi-app/src/relay.rs`, wired into `async_route` for
+      `/api/triggers/save`/`/delete` (moved out of the sync `dispatch`, matching
+      `/api/secrets/refresh`'s own shape). **Scoped to the API layer, not the store**: the CLI's
+      `triggers save --extra relay=…` (`adi-cli/src/triggers.rs`) writes the field directly, as
+      it always has, and does not register — there is nobody waiting on an HTTP response for it
+      to fail against, which is what "a failed registration is a failed save" needs. The task
+      names no CLI verb that would register; the panel is this feature's one surface for it.
+- [x] Node keypair: `adi-relay`'s `load_or_create` for `signing.key`/`sealing.key` under
+      `~/.adi/mono/relay/` (landed in WR-A/WR-B, `crates/adi-relay/src/keys.rs`); `relay.rs`'s
+      `identity()` is the one place `adi-app` calls it.
+- [x] The built-in poller in `adi-app`: one loop per distinct relay in use (rescanned every 15s,
+      §10's "collected from every enabled trigger's `extra["relay"]`"), reconnect/backoff
+      (1s→30s), unseal, replay via a real loopback HTTP call to `/api/hooks/<name>` preserving
+      the sender's original method and headers (dropping only the hop-by-hop ones a client sets
+      for itself) and appending the trigger's own `secret` as a query param. Tested against a
+      real socket (`replay_opens_and_forwards_a_sealed_record_…`).
 - [ ] Panel: relay picker + retention field on the trigger editor, public URL display, copy
-      public key.
-- [ ] CLI: `adi-mono triggers relay-key` (or folded into `triggers show`).
+      public key. Not built this pass.
+- [x] CLI: `adi-mono triggers relay-key`, printing the node's OpenSSH public signing key.
 
 ### Phase 5 — self-host guide
 - [ ] Docker Compose example, `relay.toml` for self-host mode, `authorized_keys` walkthrough,

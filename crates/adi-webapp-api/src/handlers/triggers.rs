@@ -13,7 +13,7 @@ use crate::types::{
     TriggerRuntimeOption, TriggersState,
 };
 
-use super::response::{FromBody, Response, clean, error, mutate, ok_json};
+use super::response::{FromBody, Response, clean, error, ok_json, require};
 
 /// Trim dynamic backend parameters and drop empty or unsafe keys. Which keys are *meaningful*
 /// is the code block's business (its preset declares them, and each reaches it as `ADI_<KEY>`),
@@ -82,53 +82,94 @@ fn event_types() -> Vec<EventTypeDto> {
         .collect()
 }
 
-/// `POST /api/triggers/save` — create or update a trigger definition (an upsert keyed by
-/// `name`), then report the fresh list. `name` and `kind` are required.
+/// Decode a `/api/triggers/save` body into the `(name, TriggerManifest)` it describes, without
+/// writing anything. Split out of [`save_trigger`] so a caller who needs to act *before* the
+/// write lands can inspect the manifest first — ADI-MONO-223's relay register-on-save, which
+/// must not persist a trigger whose registration it just failed.
+///
+/// # Errors
+/// The 400 [`Response`] `name`/`kind` being absent or a malformed body would produce.
+pub fn parse_save_trigger(body: &[u8]) -> Result<(String, TriggerManifest), Response> {
+    let req = require::<SaveTrigger>(body)?;
+    let manifest = TriggerManifest {
+        // The store normalizes both onto the kinds/runtimes this build understands.
+        kind: req.kind.trim().to_string(),
+        runtime: req.runtime.trim().to_string(),
+        code: req.code,
+        preset: clean(req.preset),
+        description: req.description.trim().to_string(),
+        enabled: req.enabled,
+        project: clean(req.project),
+        extra: clean_extra(req.extra),
+        events: clean_events(req.events),
+        trigger_on: clean_trigger_on(req.trigger_on),
+        // The store owns the timestamps.
+        created_at: 0,
+        updated_at: 0,
+    };
+    Ok((req.name.trim().to_string(), manifest))
+}
+
+/// Write `manifest` under `name` and report the fresh list — the tail half of
+/// `/api/triggers/save`, after whatever pre-write work (if any) a caller like
+/// [`parse_save_trigger`]'s needed to do first.
 ///
 /// Saving is also how a background trigger is started and stopped: the supervisor runs exactly
 /// the enabled ones, so it is poked here to pick the change up now rather than at its next tick.
 #[must_use]
-pub fn save_trigger(store: &Triggers, supervisor: &Supervisor, body: &[u8]) -> Response {
-    mutate(
-        body,
-        |req: SaveTrigger| {
-            let manifest = TriggerManifest {
-                // The store normalizes both onto the kinds/runtimes this build understands.
-                kind: req.kind.trim().to_string(),
-                runtime: req.runtime.trim().to_string(),
-                code: req.code,
-                preset: clean(req.preset),
-                description: req.description.trim().to_string(),
-                enabled: req.enabled,
-                project: clean(req.project),
-                extra: clean_extra(req.extra),
-                events: clean_events(req.events),
-                trigger_on: clean_trigger_on(req.trigger_on),
-                // The store owns the timestamps.
-                created_at: 0,
-                updated_at: 0,
-            };
-            store.save(req.name.trim(), manifest)
-        },
-        || {
+pub fn commit_trigger(store: &Triggers, supervisor: &Supervisor, name: &str, manifest: TriggerManifest) -> Response {
+    match store.save(name, manifest) {
+        Ok(_) => {
             supervisor.poke();
             triggers(store)
-        },
-    )
+        }
+        Err(e) => Response::from(&e),
+    }
 }
 
-/// `POST /api/triggers/delete` — delete a trigger definition, then report the fresh list. A
-/// deleted background trigger's process is stopped by the supervisor on its next reconcile.
+/// `POST /api/triggers/save` — create or update a trigger definition (an upsert keyed by
+/// `name`), then report the fresh list. `name` and `kind` are required.
 #[must_use]
-pub fn delete_trigger(store: &Triggers, supervisor: &Supervisor, body: &[u8]) -> Response {
-    mutate(
-        body,
-        |req: TriggerRef| store.delete(req.name.trim()),
-        || {
+pub fn save_trigger(store: &Triggers, supervisor: &Supervisor, body: &[u8]) -> Response {
+    match parse_save_trigger(body) {
+        Ok((name, manifest)) => commit_trigger(store, supervisor, &name, manifest),
+        Err(resp) => resp,
+    }
+}
+
+/// Decode a `{ "name": "…" }` body into the trimmed name it names — the shape
+/// `/api/triggers/delete`, `/fire`, `/restart`, and `/log` all share. Split out for the same
+/// reason [`parse_save_trigger`] is: a caller needing to act *before* the delete lands
+/// (ADI-MONO-223's relay deregister-on-delete, a best-effort call this crate has no business
+/// making) needs the name without yet deleting anything.
+///
+/// # Errors
+/// The 400 [`Response`] a missing or blank `name` produces.
+pub fn parse_trigger_ref(body: &[u8]) -> Result<String, Response> {
+    let req = require::<TriggerRef>(body)?;
+    Ok(req.name.trim().to_string())
+}
+
+/// Delete `name` and report the fresh list — the tail half of `/api/triggers/delete`. A deleted
+/// background trigger's process is stopped by the supervisor on its next reconcile.
+#[must_use]
+pub fn commit_delete_trigger(store: &Triggers, supervisor: &Supervisor, name: &str) -> Response {
+    match store.delete(name) {
+        Ok(_) => {
             supervisor.poke();
             triggers(store)
-        },
-    )
+        }
+        Err(e) => Response::from(&e),
+    }
+}
+
+/// `POST /api/triggers/delete` — delete a trigger definition, then report the fresh list.
+#[must_use]
+pub fn delete_trigger(store: &Triggers, supervisor: &Supervisor, body: &[u8]) -> Response {
+    match parse_trigger_ref(body) {
+        Ok(name) => commit_delete_trigger(store, supervisor, &name),
+        Err(resp) => resp,
+    }
 }
 
 /// `POST /api/triggers/restart` — replace a supervised background trigger's process with a
