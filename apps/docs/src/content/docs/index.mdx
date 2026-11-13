@@ -37,8 +37,8 @@ ADI is made of a small number of concepts that build on each other:
 2. **[[Agents]]** — the AI workers: a model, a prompt, and what they're allowed to touch.
 3. **[[Tools]]** — small CLIs you give an agent, so it doesn't retype the same shell command.
 4. **[[Tasks]]** — the to-do list an agent and you both read and write.
-5. **[[Triggers]]** — what runs an agent automatically, on a webhook, a schedule, or an event.
-6. **[[Secrets]]** — the credentials an agent is explicitly allowed to see.
+5. **[[triggers|Triggers]]** — what runs an agent automatically, on a webhook, a schedule, or an event.
+6. **[[secrets|Secrets]]** — the credentials an agent is explicitly allowed to see.
 7. **[[Database]]** — the shared SQLite store agents, tools, and dashboards read and write.
 8. **[[Hive]]** — the supervisor and front door that gives a long-running process a real
    `<name>.adi` address.
@@ -57,7 +57,7 @@ leaf it signs isn't a certificate any real browser will accept for anything outs
 machine's own names, however its key is handled. Services meant to stay up are supervised and
 restarted under their own restart policy instead of left to quietly die, and the whole routing
 table is one API call away rather than scattered across shell history and config files. See
-[[Hive]] for the routing, HTTPS, and supervision detail, and [[Secrets]] for how a credential is
+[[Hive]] for the routing, HTTPS, and supervision detail, and [[secrets|Secrets]] for how a credential is
 encrypted at rest and scoped to exactly the agent that needs it.
 
 ## For the technically curious <Flags>Expert area</Flags>
@@ -71,8 +71,8 @@ leases ports instead of guessing at them (see [[Ports]]).
 
 ## Where to start
 
-Nothing installed yet: [[Installation]] gets you from a download to a control panel open in your
+Nothing installed yet: [[installation|Installation]] gets you from a download to a control panel open in your
 browser. Already installed: read [[Projects]], then [[Agents]] — those two explain most of what
-the panel shows you when you first open it. Setting something up to run unattended: [[Triggers]]
-and [[Secrets]]. Confused about why a hostname works at all: [[DNS and the front door]].
+the panel shows you when you first open it. Setting something up to run unattended: [[triggers|Triggers]]
+and [[secrets|Secrets]]. Confused about why a hostname works at all: [[DNS and the front door]].
 Connecting a second machine: [[Fleet]].

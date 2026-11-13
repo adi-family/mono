@@ -6,7 +6,7 @@ description: An agent is a saved definition — model, prompt, tools, secrets �
 import Flags from '../../components/Flags.astro';
 
 An agent is a definition, not a process: a name, a backend (which CLI or engine runs it), a
-model, a system prompt, which [[Tools]] and [[Secrets]] it's allowed to touch. Launching it
+model, a system prompt, which [[Tools]] and [[secrets|Secrets]] it's allowed to touch. Launching it
 starts a run; the definition itself just sits in `~/.adi/mono/agents/` until you do. `adi-agent`,
 the environment's own default agent, is a definition like any other — nothing about it is
 special-cased except that it starts with every tool enabled.
@@ -15,7 +15,7 @@ special-cased except that it starts with every tool enabled.
 
 Point a coding CLI at a terminal and it forgets everything the moment you close the tab. An
 agent definition survives that: the same prompt, the same tools, the same model choice, run
-again tomorrow or by a [[Triggers|trigger]] at 3am, with every run's outcome kept
+again tomorrow or by a [[triggers|trigger]] at 3am, with every run's outcome kept
 (`adi-mono agents runs`) so "did it work" is a question you ask the store instead of hunting
 logs.
 
@@ -65,5 +65,5 @@ refused once a cap is full; a human overrides it with `--force`.
 
 ## See also
 
-[[Tools]] for what an agent can run, [[Triggers]] for what starts one without a person clicking
-Run, [[Secrets]] for what credentials it can see.
+[[Tools]] for what an agent can run, [[triggers|Triggers]] for what starts one without a person clicking
+Run, [[secrets|Secrets]] for what credentials it can see.

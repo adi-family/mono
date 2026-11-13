@@ -1,14 +1,18 @@
 ---
-title: Models and backends
-description: What runs an agent's turn, what makes knowledge search work, and what picking either one costs you to set up.
+title: "Models: bring your own Claude, OpenAI or other provider account"
+description: "Which model runs an ADI agent, whose account pays for it: your Claude or ChatGPT login, or your own API key; and how embeddings can stay local."
 ---
 
 import Flags from '../../components/Flags.astro';
 
-"Model" means two different things here: a **text generation** backend runs an agent's turn —
-reads the conversation, writes the reply. An **embedding** backend turns a note into a vector so
-[[Knowledge]] can search it by meaning. They're configured separately, billed separately, and a
-problem with one never explains the other.
+Every agent turn runs on a provider account you already hold — your own Claude or ChatGPT login,
+or an API key you set as a [[secrets|secret]]. ADI has no credits of its own standing between an
+agent and the model it calls; it picks the backend, the backend's credential pays for the call.
+
+"Model" means two different things here, though: a **text generation** backend runs an agent's
+turn — reads the conversation, writes the reply. An **embedding** backend turns a note into a
+vector so [[Knowledge]] can search it by meaning. They're configured separately, billed
+separately, and a problem with one never explains the other.
 
 ## Text generation <Flags>Expert area</Flags>
 
@@ -17,24 +21,58 @@ An [[Agents|agent]]'s backend says which CLI or engine answers its turns — see
 
 - **`pty:claude`, `process:claude`, `harness:claude-sdk`** all run the `claude` CLI, so the model
   comes from that CLI's own login — whatever subscription is signed into `claude` on this
-  machine, or the [[Secrets|secret]] carrying `CLAUDE_CODE_OAUTH_TOKEN` for a run that isn't your
+  machine, or the [[secrets|secret]] carrying `CLAUDE_CODE_OAUTH_TOKEN` for a run that isn't your
   own terminal. You hold no separate key for these; billing runs on the account already logged
   in. `pty:codex` / `process:codex` are the same shape for Codex, against a ChatGPT login or
   `OPENAI_API_KEY`.
 - **`harness:adi`** is ADI's own multi-provider agent loop, and it needs a credential of its
   own: a **backend** — a named runtime, model, and where the key comes from — is what you define
-  to point an agent at GLM, Kimi, a second Anthropic account, or anything else `harness:adi`
-  can reach.
+  to point an agent at a second Anthropic account, OpenAI, or anything else `harness:adi` can
+  reach.
 
 An agent can list backends in failover order for usage limits or outages. `adi-mono llm backends`
 lists them; `adi-mono llm test <id>` tests one. The panel's `/extended/settings/llm-backends`
 shows the same list with live hold state.
 
-### Where a key lives
+### Which accounts work <Flags>Expert area</Flags>
 
-A `harness:adi` backend's credential is a [[Secrets|secret]] — encrypted at rest, injected only
-into the runs it's attached to, never returned by listing. A backend definition names which
-secret to read; it never holds the raw value itself.
+| Backend | Account | Credential |
+| --- | --- | --- |
+| `pty:claude` / `process:claude` / `harness:claude-sdk` | Claude, via the `claude` CLI | its own login, or a secret carrying `CLAUDE_CODE_OAUTH_TOKEN` |
+| `pty:codex` / `process:codex` | ChatGPT, via the Codex CLI | its own login, or `OPENAI_API_KEY` |
+| `harness:adi` with `provider: anthropic` | Anthropic, your own key | an API-key secret |
+| `harness:adi` with `provider: openai` | OpenAI, your own key | an API-key secret |
+| `harness:adi` with `provider: monshoot` | Moonshot / Kimi, your own key | an API-key secret |
+| `harness:adi` with `provider: zai` | z.ai / GLM, your own key | an API-key secret |
+| `harness:adi` with `provider: gemini` | Google Gemini, your own key | an API-key secret |
+| `harness:adi` with `provider: ollama` | a local or remote Ollama server | none — see [Local versus hosted](#local-versus-hosted) |
+
+That's every provider wire `harness:adi` has today; Anthropic, OpenAI and Moonshot all answer
+yes.
+
+### Using a subscription instead of an API key
+
+For Claude and Codex, "bring your own account" can mean the subscription you already pay for
+rather than a metered key: sign into the `claude` CLI, or into Codex's ChatGPT login, on the
+machine ADI runs on, and a `pty:*` / `process:*` / `harness:claude-sdk` backend uses that login
+as-is — no key, no separate bill. Whether your plan's terms allow an automated agent to run turns
+against it is between you and that provider; ADI makes no claim about it. Check
+[Anthropic's](https://support.claude.com) or [OpenAI's](https://help.openai.com) own terms before
+relying on this for anything that matters.
+
+### How the key is stored
+
+A `harness:adi` backend's credential is a [[secrets|secret]] — encrypted at rest, injected only
+into the runs of agents it's attached to, never returned by listing. A backend definition names
+which secret to read by its `api_key_env`; it never holds the raw value itself. Setting one up:
+
+```bash
+adi-mono secrets set ANTHROPIC_API_KEY --description "harness:adi backend"
+adi-mono llm backends save my-anthropic --runtime harness:adi --provider anthropic \
+  --api-key-env ANTHROPIC_API_KEY
+```
+
+See [[secrets|Secrets]] for what "encrypted at rest" means and how a value is read back.
 
 ## Embeddings <Flags>Expert area</Flags>
 
@@ -69,6 +107,6 @@ here covers text generation the same way today.
 
 ## See also
 
-[[Agents]] for the backend list and what a definition looks like. [[Secrets]] for how a
+[[Agents]] for the backend list and what a definition looks like. [[secrets|Secrets]] for how a
 credential actually reaches a run. [[Knowledge]] for what gets embedded, and why a stale base
 needs `reembed`.

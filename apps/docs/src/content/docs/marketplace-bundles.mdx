@@ -85,7 +85,7 @@ being deliberate about:
   definition to ship, no secret to declare. This is the simplest thing that actually runs, and it
   is why the example needs no fourth element.
 - **A named LLM backend is a separate, explicit thing** <Flags>Expert area</Flags> — an
-  `[[backends]]` list referencing an id in [[Models and backends|the LLM backend registry]], the
+  `[[backends]]` list referencing an id in [[models|the LLM backend registry]], the
   way a hand-written agent already can. Writing `backends = [{ backend = "gpt5" }]` here would
   only resolve if a backend called `gpt5` already exists on the machine this lands on, or if the
   *same bundle* also ships `llm/gpt5.toml` as a fourth element — the installer never creates one
@@ -94,7 +94,7 @@ being deliberate about:
   the agent wants does not make it appear. A tool has to be either this bundle's own
   `tools/<name>.sh` (landed under the exact id `bin_tools` names, see below) or something the
   operator already has; a secret is a name the install checks against what is set on the machine,
-  reported if it's missing, never created ([[Secrets]]).
+  reported if it's missing, never created ([[secrets|Secrets]]).
 - **`project` is never written here.** The installer strips whatever a repository ships in that
   field and fills in its own — the destination the operator chose, not the publisher's guess.
 
@@ -482,5 +482,5 @@ Worth stating plainly, because every one of these reads as an obvious feature un
 ## See also
 
 [[Marketplace]] for the installer's side of all of this — scopes, sources, the public ADI Store.
-[[Agents]], [[Tools]], [[Dashboards]] for each kind's own full contract. [[Secrets]] for what a
+[[Agents]], [[Tools]], [[Dashboards]] for each kind's own full contract. [[secrets|Secrets]] for what a
 declared-but-missing secret actually means at launch.

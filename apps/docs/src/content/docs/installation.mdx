@@ -1,13 +1,15 @@
 ---
-title: Installation
-description: From nothing installed to your own control panel open in a browser — one download, one page, and how to undo any of it.
+title: "Install ADI: self-hosted AI agents on macOS, Linux and Windows"
+description: "Install ADI on a Mac, a Linux server or a Windows PC: one download, no ADI account. Where your data lives, what reaches the network, and how to remove it."
 ---
 
 import Flags from '../../components/Flags.astro';
+import VersionBadge from '../../components/VersionBadge.astro';
 
 ADI installs like any other desktop app: download a file, run it, click through a couple of
 prompts. What comes up is a local DNS resolver, a front door, and a control panel in your
-browser — nothing to sign into, nothing running anywhere but this machine.
+browser. No ADI account or ADI cloud service is needed to run it — the install is a local process
+on a machine you control, from a laptop to a server you administer yourself.
 
 ## Before you start
 
@@ -17,15 +19,56 @@ browser — nothing to sign into, nothing running anywhere but this machine.
 | Linux | Any x86-64 distro. The binaries are statically linked; nothing else to install first |
 | Windows | Windows 10 or 11, x64 |
 
-## Self-hosted, and what actually leaves this machine <Flags>Enterprise interest</Flags>
+## Where your data lives <Flags>Enterprise interest</Flags>
 
-There's no account and no server behind this: everything above runs as a local process on the
-machine you install it on, and works fully offline except for two things that reach out on
-purpose — checking `https://github.com/adi-family/mono` for a newer release, and whatever an
-[[Agents|agent]] you configure calls out to. An agent talking to Claude, GPT, or any other hosted
-model sends its conversation to that provider over the network, exactly as any other client of
-that API would — ADI itself doesn't phone home, doesn't store anything off this machine, and
-doesn't ask you to log into anything to use it. See [[Secrets]] for how a credential an agent
+Everything ADI writes stays under one directory on the machine you installed it on —
+`~/.adi` (`%USERPROFILE%\.adi` on Windows). Nothing here is Postgres or a hosted datastore; it's
+plain files and one local SQLite database.
+
+| What | Where | More |
+| --- | --- | --- |
+| Everything below, as one tree | `~/.adi` | [Updates and removal](#updates-and-removal) |
+| Run transcripts and history | `~/.adi/mono/sessions/` | [[Sessions]] |
+| The shared database | `~/.adi/mono/db/global.db` (plus one per project) | [[Database]] |
+| Knowledge, including each agent's own memory | `~/.adi/mono/knowledge/` | [[Knowledge]] |
+| Facts | `~/.adi/mono/facts/` | [[Facts]] |
+| Secrets, encrypted at rest | `~/.adi/mono/secrets/` | [[secrets|Secrets]] |
+
+Removing the program never touches this directory — see [Updates and removal](#updates-and-removal).
+
+## Docker
+
+ADI installs as native binaries, not a container image — there's nothing to `docker run` to get
+the platform itself up. Containers do show up *inside* it: a [[Hive]] service can declare a
+`runner.docker` block, so a dependency like a search index runs as a container supervised by
+ADI, published to `127.0.0.1` only.
+
+## Offline and air-gapped <Flags>Enterprise interest</Flags>
+
+ADI's own store, scheduler and agent loop run entirely locally. What reaches the network, and
+only on purpose:
+
+- **The update check** — polling `https://github.com/adi-family/mono` for a newer release, every
+  few hours in the background. See [Updates and removal](#updates-and-removal) for what that
+  does and doesn't do on its own.
+- **First-party usage events**, <VersionBadge version="1.31.0" /> on by default with an
+  opt-out — a small, fixed set of events (first launch, a run starting and finishing, a dashboard
+  created, and similarly coarse milestones) sent to `relay.withadi.dev`. None of them carries a
+  prompt, task text, a result, a file, a path, a secret, or a cost. Turn it off in **Settings →
+  Usage events**, with `adi-mono analytics disable`, or by setting `DO_NOT_TRACK=1`;
+  `adi-mono analytics forget` deletes the local install id too.
+- **A model's own turn** — an [[Agents|agent]] talking to Claude, GPT, or any other hosted
+  provider sends that conversation to the provider it's configured against, under your own
+  account, exactly as any other client of that API would. See [[models|Models and backends]] for which
+  backends need a network call at all — embeddings can run entirely locally; text generation
+  does not, today.
+- **An OAuth-sourced secret**, if you use one, goes through a small router that holds the OAuth
+  client credentials so you don't have to — see [[secrets#OAuth, without a cloud console|OAuth, without a cloud console]].
+
+That means ADI is not air-gapped: an agent still needs a model provider it can reach over the
+network to do anything. What it does buy you is everything *else* staying local — the store, the
+history, the scheduler, and every byte in [Where your data lives](#where-your-data-lives)
+never leaves the machine you chose to run it on. See [[secrets|Secrets]] for how a credential an agent
 uses is stored, and [[Hive]] for why the front door only ever binds loopback addresses.
 
 ## Install
@@ -48,7 +91,11 @@ spctl -a -t open --context context:primary-signature -v ADI.dmg
 # -> accepted, source=Notarized Developer ID
 ```
 
-### Linux
+### Linux, including a remote server <Flags>Enterprise interest</Flags>
+
+This is a self-contained, statically linked tarball — no package manager, no root, and nothing
+opened for inbound connections, not even briefly. It installs the same way on a laptop and on a
+server you only reach over `ssh`.
 
 1. Download **adi-linux-x64.tar.gz** from the [same release page](https://github.com/adi-family/mono/releases/latest).
 2. ```bash
@@ -59,8 +106,7 @@ spctl -a -t open --context context:primary-signature -v ADI.dmg
 3. In an interactive terminal it asks a couple of questions (where to put things, whether to
    fetch [bun](https://bun.sh) for dashboards); run it non-interactively (`ssh node
    ./install.sh`) and it takes the defaults for both instead. Either way it finishes by printing
-   the control panel's address. No root is needed, and nothing is opened for inbound connections
-   — not even briefly.
+   the control panel's address.
 
 On Linux, that address is `http://127.0.0.1:<port>` — the `.adi` route isn't installed for you
 here the way it is on macOS and Windows, because it means binding `:80`, and a routine install

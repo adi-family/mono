@@ -11,7 +11,7 @@ submission queue, nobody who approves what goes in it.
 
 What it lists is **bundles** — a named collection of platform elements from one git repository:
 [[Agents|agents]], [[Tools|tools]], [[Dashboards|dashboards]], LLM and embedding backends,
-[[Hive|hive services]], [[Triggers|triggers]], a project scaffold. A bundle can carry all of
+[[Hive|hive services]], [[triggers|triggers]], a project scaffold. A bundle can carry all of
 these or just one — a bundle whose only element is a dashboard is what people mean when they say
 "app."
 
@@ -118,7 +118,7 @@ Delete on the Dashboards page, exactly as v1 always has.
 ## Secrets
 
 A bundle never carries a secret's value — only the *name* of one it needs, the same way a
-hand-written agent or backend already can ([[Secrets]]). Installing reads every secret name the
+hand-written agent or backend already can ([[secrets|Secrets]]). Installing reads every secret name the
 bundle's elements declare and checks it against what's actually set on this machine; a missing
 one shows up as a note on the install, not a blocker. Nothing is created and nothing is prompted
 for: an agent missing a secret it wants simply runs without it, same as if you'd forgotten to

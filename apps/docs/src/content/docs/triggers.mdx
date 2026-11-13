@@ -1,6 +1,6 @@
 ---
-title: Triggers
-description: A code block ADI launches for you — on a webhook, as a background process, or in response to a platform event — instead of one you have to remember to run.
+title: "Triggers: run agents on a schedule, a webhook or an event"
+description: "Start an ADI agent without a click: every N seconds, on an inbound webhook, or when a task is created. And see each run's outcome, duration and cost."
 ---
 
 import Flags from '../../components/Flags.astro';
@@ -8,8 +8,9 @@ import Flags from '../../components/Flags.astro';
 A trigger is a `shell` or `typescript` code block the stack runs on your behalf, in one of three
 shapes:
 
+- **background** — a supervised, long-lived process. A loop that sleeps and repeats is how a
+  schedule is actually built — see [On a schedule](#on-a-schedule) below.
 - **webhook** — an inbound HTTP call runs the block.
-- **background** — a supervised, long-lived process.
 - **event** — subscribes to a platform event name and runs on a match.
 
 ## Why it exists
@@ -20,7 +21,43 @@ every night, the follow-up that has to happen the instant a task closes. Without
 automatically" means a cron job or a script babysitting a queue somewhere outside ADI's view;
 with one, it's a definition in `/triggers` like everything else here.
 
+## On a schedule
+
+There's no separate "scheduled trigger" kind — a schedule is a `background` trigger built from
+the `interval` preset: a loop that does the work, sleeps for a fixed number of seconds, and
+repeats, supervised and restarted with backoff if it ever crashes.
+
+```bash
+adi-mono triggers save nightly --kind background --preset interval \
+  --extra interval_secs=86400
+```
+
+`--extra interval_secs=…` is the one setting the preset reads, landing in the code block as
+`$ADI_INTERVAL_SECS`; edit the generated code block afterward (panel or `triggers save
+--code`) to put the actual work where the preset leaves a comment. `adi-mono triggers presets`
+lists every preset, including `http-poll` for "watch a URL and log when it changes."
+
+## An inbound webhook <Flags>Expert area</Flags>
+
+A `webhook` trigger answers `POST /api/hooks/<name>` — but the [[Hive|front door]] that serves
+that path only ever binds a loopback address. Nothing outside this machine can reach it as-is,
+and that's deliberate, not a gap: there's no setting that opens it to the internet, because
+[[Hive#Security model|hive itself never opens a public port]]. [[Mesh]] and [[Fleet]] don't
+answer this either — they connect this machine to *another machine running ADI* that it has
+paired with, which isn't what GitHub or a ticketing tool is.
+
+So before pointing an external service's webhook at `/api/hooks/<name>`, something outside ADI
+has to put it on the public internet first — a reverse proxy or a tunnel (an `ngrok`-style
+service, a Cloudflare Tunnel, your own nginx in front of the machine) that you run and secure
+yourself, forwarding to this machine's front door. ADI does not ship one. Once that's in place,
+the `github-push` preset is the one to start from — it parses a GitHub push delivery and logs
+the commits that landed, and `webhook-echo` just logs whatever arrives, for wiring up a source
+you haven't used yet.
+
 ## Events
+
+An `event` trigger is a different shape again: nothing calls it from outside, it reacts to
+something that already happened inside ADI.
 
 The stack publishes dotted topics — `adi.tasks.created`, `adi.agents.run.finished` — and an
 `event` trigger subscribes to a name pattern (`*` matches one segment, `**` the tail) and fires
@@ -32,12 +69,45 @@ adi-mono events emit adi.test.probe --payload '{"from":"me"}'
 adi-mono events list
 ```
 
+## When a task is created
+
+The common version of "react to an event" is starting an agent the moment a task lands, routed
+by which project, tag, or assignee it names — all three are real, nullable fields on
+`adi.tasks.created` (see [[Events#What's published]]).
+
+```bash
+adi-mono triggers save on-task-created --kind event --preset event --event adi.tasks.created
+```
+
+That starts from the `event` preset's own echo-and-log code block (see [Events](#events) above);
+edit it to route by tag and launch the agent that owns this kind of task:
+
+```ts
+const payload = JSON.parse(process.env.ADI_PAYLOAD ?? "{}");
+if (payload.tag !== "needs-triage") {
+  process.exit(0); // not ours — a trigger that does nothing is the normal case
+}
+
+console.log(`routing task ${payload.id} in project ${payload.project ?? "(none)"}`);
+// `adi-agents run triager --task ${payload.id}` — launch the agent that handles it
+```
+
 ## A trigger that launches an agent is capped <Flags>Expert area</Flags>
 
 A block that runs `adi-agents run` is an *automatic* launch, so it's bound by the same run caps
 as everything else — see [[Agents#When a run can't decide]]. At a full cap the run is refused
 with the reason on stderr rather than piling on; retry on the next event, or give the trigger's
 project its own slot so one noisy pipeline can't eat the whole machine's capacity.
+
+## Run history and cost <Flags>Expert area</Flags>
+
+A trigger that launches an agent leaves the same trail any other run does — it's not a separate,
+thinner record. `adi-mono agents runs --since 6h` lists every finished run, triggered or not,
+newest first, with its verdict, duration and cost (see [[Sessions#What a run leaves behind]]).
+The underlying event, `adi.agents.run.finished`, carries `duration_ms`, `cost_micro_usd` and
+`terminal_reason` — so an `event` trigger subscribed to it can alert when a run comes back over
+budget, instead of only finding out at the end of the month. See
+[[Events#What's published|its exact payload shape]].
 
 ## Do it
 
