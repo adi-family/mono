@@ -338,6 +338,35 @@ ip_allowlist = ["10.0.0.0/8"]
         assert_eq!(sh.ip_allowlist, vec!["10.0.0.0/8".to_string()]);
     }
 
+    /// `docs/webhook-relay-self-host.md` §2's sample `relay.toml`, verbatim — a guide that quietly
+    /// drifts from the real schema is worse than no guide, so this is a regression test, not a
+    /// one-off check.
+    #[test]
+    fn self_host_guides_sample_config_parses_and_resolves_unlimited_by_omission() {
+        let toml = r#"
+mode     = "self-host"
+bind     = "0.0.0.0:8080"
+db_path  = "/data/relay.db"
+hostname = "hooks.example.com"
+
+[limits]
+max_body_bytes                      = 2097152
+max_requests_per_minute_per_endpoint = 600
+default_retention_secs              = 300
+pull_batch_max                      = 200
+pull_long_poll_secs                 = 25
+
+[self_host]
+authorized_keys_path = "/data/authorized_keys"
+shared_secret_env    = "RELAY_SHARED_SECRET"
+ip_allowlist          = ["203.0.113.0/24"]
+"#;
+        let cfg = Config::parse(toml).expect("the self-host guide's sample relay.toml must parse");
+        assert_eq!(cfg.limits.max_endpoints_per_key, u32::MAX);
+        assert_eq!(cfg.limits.max_retention_secs, u64::MAX);
+        assert_eq!(cfg.self_host.unwrap().ip_allowlist, vec!["203.0.113.0/24".to_string()]);
+    }
+
     #[test]
     fn an_unknown_mode_is_refused() {
         let toml = PUBLIC_TOML.replace("public", "pro");

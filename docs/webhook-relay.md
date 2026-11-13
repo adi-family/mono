@@ -740,6 +740,9 @@ Phase numbers match the task. This document is phase 1.
 - [x] CLI: `adi-mono triggers relay-key`, printing the node's OpenSSH public signing key.
 
 ### Phase 5 — self-host guide
-- [ ] Docker Compose example, `relay.toml` for self-host mode, `authorized_keys` walkthrough,
-      the optional shared-secret/IP-allowlist layers, and Q4's honest statement of the
-      delete-at-handout loss window.
+- [x] `docs/webhook-relay-self-host.md`: Docker Compose example (built, not build-verified — no
+      Docker on this box), `relay.toml` for self-host mode (its sample is a regression test,
+      `config::tests::self_host_guides_sample_config_parses_and_resolves_unlimited_by_omission`,
+      so the guide can't silently drift from the real schema), `authorized_keys` walkthrough,
+      the optional shared-secret/IP-allowlist layers (§6, enforced — see the ADI-MONO-222 note
+      above), and Q4's honest statement of the delete-at-handout loss window.
