@@ -1,0 +1,143 @@
+---
+title: "What ADI sends over the network, and how to turn each part off"
+description: "Outbound connections ADI makes — the update check, usage events, the mesh relay, OAuth, the embedding model download, a licence check, a model provider call — what's in each one and the switch that turns it off."
+---
+
+import Flags from '../../components/Flags.astro';
+import VersionBadge from '../../components/VersionBadge.astro';
+
+[[installation|Installation]] covers local storage. The connections below are what ADI sends and
+how to disable each one.
+
+| What | On by default? | Off switch |
+| --- | --- | --- |
+| [The update check](#the-update-check) | Yes | `adi-mono update disable` |
+| [Usage events](#usage-events) <VersionBadge version="1.31.0" /> | Yes | Settings → Usage events, or `DO_NOT_TRACK=1` |
+| [The embedding model download](#the-embedding-model-download) | Yes, once | Reassign the backend before first use |
+| [The mesh relay](#the-mesh-relay) | No | `adi-mono mesh disable` |
+| [The OAuth router](#the-oauth-router) | No | Don't use an OAuth-sourced secret |
+| [A licence check](#a-licence-check) <Flags>Enterprise interest</Flags> | Only if configured | Point `manifest_url` back at a plain host |
+| [A model provider call](#a-model-provider-call) | Yes, to run anything | No supported way for text generation today |
+
+## The update check
+
+Every install polls a release manifest in the background, by default every six hours
+(`update/config.toml`'s `check_interval_hours`, clamped to 1–720), to compare the installed
+version against the published one. The check fetches a static JSON release manifest:
+
+```text
+GET https://github.com/adi-family/mono/releases/latest/download/manifest.json
+```
+
+**Off:** `adi-mono update disable` stops the background agent outright — the scheduled job is
+unregistered (the launchd agent, `systemd --user` timer, or Task Scheduler task, per platform).
+`adi-mono update check` still works whenever you run it by hand, and `adi-mono update enable`
+turns the background check back on. See
+[[installation#Updates and removal|Updates and removal]] for what the check does with what it
+learns.
+
+## Usage events <VersionBadge version="1.31.0" />
+
+The desktop app sends a small, fixed set of first-party usage events to `relay.withadi.dev/v1/app`
+— `app_first_launch`, `onboarding_completed`, `agent_run_started`, `agent_run_finished`,
+`app_daily_active`, `dashboard_created`, `store_item_installed` and `fleet_invite_created`. Each
+one carries the ADI version, the OS, the architecture, and a random install id kept in
+`~/.adi/mono/analytics`. The event payload excludes prompts, task text, results, files, paths,
+secrets, and costs.
+
+**Off:** Settings → Usage events in the panel, `adi-mono analytics disable`, or `DO_NOT_TRACK=1`
+in the environment ADI runs under. `adi-mono analytics forget` deletes the local install id on
+top of turning it off, so a re-enable afterward starts a fresh one rather than resuming the old.
+
+## The embedding model download
+
+[[Knowledge]] and the code indexer turn text into vectors so they can be searched by meaning, and
+on a fresh install both are assigned the `candle` [[models#Embeddings|embedding backend]] — a
+model that runs in-process, with one catch: the first time anything is actually embedded, it
+fetches `jinaai/jina-embeddings-v2-base-code` (a config file, a tokenizer, and the model weights)
+from `https://huggingface.co` and caches the files on disk for reuse. With the model cached,
+`candle` computes embeddings locally. [[Facts]] is assigned a local Ollama backend instead by
+default, which talks only to `127.0.0.1:11434`.
+
+**Off:** reassign `indexer` and `knowledge` away from `candle` *before* either one embeds
+anything for the first time — once the files are cached, there's nothing left to fetch:
+
+```bash
+adi-mono embeddings settings --assign indexer=hash --assign knowledge=hash
+```
+
+`hash` is a deterministic word-overlap stub: no model, no download, no network — the tradeoff is
+that it finds things by shared vocabulary, not by meaning. Point either consumer at your own
+local Ollama instead (`--assign knowledge=ollama`) to keep semantic search without the one-time
+fetch. See [[models#Embeddings|Models and backends]] for what each runtime actually costs you in
+search quality.
+
+## The mesh relay <Flags>Expert area</Flags>
+
+[[Mesh]] is off on a fresh install — nothing here runs until you pair a machine through [[Fleet]]
+or flip it on by hand (`adi-mono mesh enable`). Once it's running, two of your own paired machines
+dial each other directly whenever a path between them exists; the relay is only the fallback for
+when it doesn't, which off the local network is common — two consumer NATs often never manage a
+direct path at all. ADI runs its own relay pair
+(`mad.mono-relay.withadi.dev`, Frankfurt; `iad.mono-relay.withadi.dev`, N. Virginia) rather than
+the public default, because that default silently refuses the browser client's websocket upgrade.
+
+What crosses the relay is QUIC traffic between two machines you paired yourself, encrypted
+end to end by QUIC's own TLS before it ever reaches the relay — the relay forwards ciphertext it
+cannot read, the same way any TURN-style relay does. It sees which of your endpoints are talking
+and roughly how much, never what they're saying.
+
+**Off:** never pair a node (`adi-mono mesh disable` if you'd already started it) and nothing here
+runs. To keep Fleet but move the fallback off ADI's infrastructure, run your own `iroh-relay`
+(TCP 80/443 for the websocket upgrade, UDP 7842 for address discovery) and list its URL in
+`mesh.toml`'s `relays` — an empty list is what lands you on ADI's own pair, not an empty map.
+
+## The OAuth router <Flags>Expert area</Flags>
+
+Nothing calls out here unless you choose it. A [[secrets|secret]] can be sourced from an OAuth
+flow instead of a typed-in value — Google or GitHub, from `/extended/secrets` — and your browser
+is sent to `oauth-router.withadi.dev` to sign in. The router holds the OAuth client credentials
+so you never need your own Google Cloud project, exchanges the sign-in for a token with the
+provider, and hands it back to your browser, which stores it as a secret. From then on, a
+refresh sends the stored refresh token to the same router, which exchanges it with the provider
+again and returns a fresh access token — so the refresh token, not just the access token, passes
+through the router on every renewal.
+
+**Off:** type the token or key in by hand instead of choosing an OAuth source — nothing about a
+typed-in secret ever reaches the router. See [[secrets#OAuth, without a cloud console|Secrets]]
+for the full flow.
+
+## A licence check <Flags>Enterprise interest</Flags>
+
+This is the same update check above, pointed somewhere else. An Enterprise install sets
+`update/config.toml`'s `manifest_url` to `https://licence.withadi.dev/v1/updates/manifest?deployment_id=<yours>`
+and `auth_header` to the credential you were issued; from then on, every scheduled update check
+also tells ADI's licence service this deployment is still live, and its response (one of five
+HTTP statuses — unauthenticated, expired, revoked, unknown, or a seat conflict) is what the panel
+reads back as a licence state. The request carries the deployment id in the URL and the issued
+credential in `auth_header` — the same shape as the plain update check, against a different host.
+
+What happens if this machine can't reach `licence.withadi.dev` — for how long it keeps working,
+and what changes after — isn't published yet. Ask us.
+
+**Off:** point `manifest_url` back at a plain host (the default GitHub one, or your own private
+channel) and the licence check stops with it — along with whatever Enterprise update behaviour
+rode on the same channel.
+
+## A model provider call
+
+Text generation sends the conversation to whichever provider an agent's backend is configured
+against — Anthropic, OpenAI, Moonshot, z.ai, or Gemini — under your own account, exactly like
+any other client of that provider's API. ADI never sits between you and the bill. See
+[[models|Models and backends]] for the full backend list, including where Ollama fits, which
+backends need a key you hold, and what each one sends.
+
+**Off:** there isn't one, today, for text generation — an agent that generates text needs a
+provider it can reach over the network. [[models#Local versus hosted|Local versus hosted]] has
+the exact, current state of what can and can't stay on-device.
+
+## See also
+
+[[installation#Offline and air-gapped|Installation]] for where this fits against "is ADI
+air-gapped." [[secrets|Secrets]] for how a credential this page mentions is actually stored.
+[[models|Models and backends]] for the full provider and embedding-backend reference.

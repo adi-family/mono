@@ -107,6 +107,7 @@ export default defineConfig({
 					items: [
 						{ label: 'The adi-mono CLI', link: '/cli/' },
 						{ label: 'Shared assets', link: '/shared-assets/' },
+						{ label: 'What ADI sends over the network', link: '/network/' },
 					],
 				},
 			],

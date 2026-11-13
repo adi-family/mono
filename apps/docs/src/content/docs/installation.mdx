@@ -45,8 +45,9 @@ ADI, published to `127.0.0.1` only.
 
 ## Offline and air-gapped <Flags>Enterprise interest</Flags>
 
-ADI's own store, scheduler and agent loop run entirely locally. What reaches the network, and
-only on purpose:
+ADI's own store, scheduler and agent loop run entirely locally. What reaches the network — see
+[[network|What ADI sends over the network]] for the complete picture and how to turn each one
+off:
 
 - **The update check** — polling `https://github.com/adi-family/mono` for a newer release, every
   few hours in the background. See [Updates and removal](#updates-and-removal) for what that
@@ -66,10 +67,12 @@ only on purpose:
   client credentials so you don't have to — see [[secrets#OAuth, without a cloud console|OAuth, without a cloud console]].
 
 That means ADI is not air-gapped: an agent still needs a model provider it can reach over the
-network to do anything. What it does buy you is everything *else* staying local — the store, the
-history, the scheduler, and every byte in [Where your data lives](#where-your-data-lives)
-never leaves the machine you chose to run it on. See [[secrets|Secrets]] for how a credential an agent
-uses is stored, and [[Hive]] for why the front door only ever binds loopback addresses.
+network to do anything. ADI's own store, history and scheduler stay local by default; a
+configured model or embedding backend can send content elsewhere, the same way it would for any
+other client of that provider. [[network|What ADI sends over the network]] covers every
+connection ADI itself opens and how to turn each one off. See [[secrets|Secrets]] for how a
+credential an agent uses is stored, and [[Hive]] for why the front door only ever binds loopback
+addresses.
 
 ## Install
 
