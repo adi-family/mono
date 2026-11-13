@@ -9,7 +9,7 @@ A trigger is a `shell` or `typescript` code block the stack runs on your behalf,
 shapes:
 
 - **background** — a supervised, long-lived process. A loop that sleeps and repeats is how a
-  schedule is actually built — see [On a schedule](#on-a-schedule) below.
+  schedule is built — see [On a schedule](#on-a-schedule) below.
 - **webhook** — an inbound HTTP call runs the block.
 - **event** — subscribes to a platform event name and runs on a match.
 
@@ -56,8 +56,8 @@ you haven't used yet.
 
 ## Events
 
-An `event` trigger is a different shape again: nothing calls it from outside, it reacts to
-something that already happened inside ADI.
+An `event` trigger is a different shape again: it reacts to something that already happened
+inside ADI; nothing calls it from outside.
 
 The stack publishes dotted topics — `adi.tasks.created`, `adi.agents.run.finished` — and an
 `event` trigger subscribes to a name pattern (`*` matches one segment, `**` the tail) and fires

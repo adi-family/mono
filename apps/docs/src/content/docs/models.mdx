@@ -7,7 +7,7 @@ import Flags from '../../components/Flags.astro';
 
 Every agent turn runs on a provider account you already hold — your own Claude or ChatGPT login,
 or an API key you set as a [[secrets|secret]]. ADI has no credits of its own standing between an
-agent and the model it calls; it picks the backend, the backend's credential pays for the call.
+agent and the model it calls; it picks the backend, and the backend's credential pays for the call.
 
 "Model" means two different things here, though: a **text generation** backend runs an agent's
 turn — reads the conversation, writes the reply. An **embedding** backend turns a note into a
@@ -47,8 +47,7 @@ shows the same list with live hold state.
 | `harness:adi` with `provider: gemini` | Google Gemini, your own key | an API-key secret |
 | `harness:adi` with `provider: ollama` | a local or remote Ollama server | none — see [Local versus hosted](#local-versus-hosted) |
 
-That's every provider wire `harness:adi` has today; Anthropic, OpenAI and Moonshot all answer
-yes.
+That's every provider wire `harness:adi` has today.
 
 ### Using a subscription instead of an API key
 

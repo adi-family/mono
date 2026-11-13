@@ -32,7 +32,7 @@ plain files and one local SQLite database.
 | The shared database | `~/.adi/mono/db/global.db` (plus one per project) | [[Database]] |
 | Knowledge, including each agent's own memory | `~/.adi/mono/knowledge/` | [[Knowledge]] |
 | Facts | `~/.adi/mono/facts/` | [[Facts]] |
-| Secrets, encrypted at rest | `~/.adi/mono/secrets/` | [[secrets|Secrets]] |
+| Secrets, encrypted at rest | `~/.adi/mono/secrets/` | [[Secrets]] |
 
 Removing the program never touches this directory — see [Updates and removal](#updates-and-removal).
 
@@ -138,7 +138,7 @@ the loopback address `install.sh` printed — nothing else about ADI is differen
 ## What a first run starts
 
 However you got here, `adi-mono up` (run for you by the installer, or by ADI itself on launch) is
-what actually starts the platform: the DNS resolver for `.adi`, the front door that proxies
+what starts the platform: the DNS resolver for `.adi`, the front door that proxies
 `*.adi` addresses to whatever's actually running, the control panel, and a background agent that
 checks for updates every few hours. Each is supervised separately — a launchd `LaunchAgent` on
 macOS, a `systemd --user` service on Linux, a Task Scheduler task on Windows — and restarted if it
