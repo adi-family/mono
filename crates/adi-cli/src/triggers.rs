@@ -197,7 +197,7 @@ pub(crate) fn run_triggers(adi: Adi, command: TriggersCommand) -> Result<(), Str
             println!("Disabled trigger {name}.");
         }
         TriggersCommand::Fire { name } => {
-            let firing = store.fire(&name, None).map_err(|e| e.to_string())?;
+            let firing = store.fire(&name, None, None).map_err(|e| e.to_string())?;
             println!("Fired trigger {name} (pid {}).", firing.pid);
             println!("  log: {}", firing.log.display());
         }

@@ -48,6 +48,7 @@ mod run;
 mod supervisor;
 mod trigger;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use adi_config::{Config, ConfigFile, now_unix};
@@ -240,26 +241,34 @@ impl Triggers {
     }
 
     /// Fire a registered trigger: spawn its code block detached, with `payload` (an event body,
-    /// if the source carries one) handed over via `ADI_PAYLOAD_FILE`/`ADI_PAYLOAD`. This is the
-    /// mechanism every event source funnels into — the webhook endpoint passes the request body,
-    /// a manual fire passes `None`. Enabled-ness is *not* checked here: gating belongs to the
-    /// event source (a manual fire is an explicit user action and always allowed).
+    /// if the source carries one) handed over via `ADI_PAYLOAD_FILE`/`ADI_PAYLOAD`, and `headers`
+    /// (the request's HTTP headers, for a webhook delivery) via `ADI_HEADERS_FILE`. This is the
+    /// mechanism every event source funnels into — the webhook endpoint passes the request body
+    /// and headers, a manual fire passes `None` for both. Enabled-ness is *not* checked here:
+    /// gating belongs to the event source (a manual fire is an explicit user action and always
+    /// allowed).
     ///
     /// # Errors
     /// [`Error::NotFound`] for an unregistered name, plus everything the spawn can return
     /// ([`Error::NoCode`], [`Error::Io`], [`Error::Launch`]).
-    pub fn fire(&self, name: &str, payload: Option<&[u8]>) -> Result<Firing> {
+    pub fn fire(
+        &self,
+        name: &str,
+        payload: Option<&[u8]>,
+        headers: Option<&HashMap<String, String>>,
+    ) -> Result<Firing> {
         let trigger = self
             .get(name)?
             .ok_or_else(|| Error::NotFound(name.to_string()))?;
         let run_env = self.run_env(trigger.manifest.project.as_deref());
-        fire::fire(&self.dir(), &trigger, payload, None, &run_env)
+        fire::fire(&self.dir(), &trigger, payload, headers, None, &run_env)
     }
 
     /// Fire a registered trigger *because a platform event matched it*: like [`fire`](Self::fire),
     /// but the concrete event name is handed to the code block as `ADI_EVENT` in addition to the
     /// payload. This is the path the [`EventDispatcher`] takes for every [event
-    /// trigger](KIND_EVENT) whose patterns match a drained event.
+    /// trigger](KIND_EVENT) whose patterns match a drained event — a platform event carries no
+    /// request headers, so this never writes `ADI_HEADERS_FILE`.
     ///
     /// # Errors
     /// [`Error::NotFound`] for an unregistered name, plus everything the spawn can return
@@ -269,7 +278,7 @@ impl Triggers {
             .get(name)?
             .ok_or_else(|| Error::NotFound(name.to_string()))?;
         let run_env = self.run_env(trigger.manifest.project.as_deref());
-        fire::fire(&self.dir(), &trigger, payload, Some(event), &run_env)
+        fire::fire(&self.dir(), &trigger, payload, None, Some(event), &run_env)
     }
 
     /// The environment a trigger's code block runs with.
@@ -506,7 +515,10 @@ mod tests {
     #[test]
     fn firing_an_unknown_trigger_is_not_found() {
         let store = scratch("fire-missing");
-        assert!(matches!(store.fire("ghost", None), Err(Error::NotFound(_))));
+        assert!(matches!(
+            store.fire("ghost", None, None),
+            Err(Error::NotFound(_))
+        ));
     }
 
     #[test]
@@ -515,7 +527,7 @@ mod tests {
         store
             .save("pinger", spec(KIND_BACKGROUND, "printf fired"))
             .expect("create");
-        let firing = store.fire("pinger", None).expect("fire");
+        let firing = store.fire("pinger", None, None).expect("fire");
         assert!(firing.pid > 0);
         for _ in 0..100 {
             if store.read_log("pinger").as_deref() == Some("fired") {

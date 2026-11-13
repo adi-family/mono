@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use adi_triggers::Error as TriggerStoreError;
 use adi_triggers::RunState;
@@ -161,7 +161,7 @@ pub fn restart_trigger(store: &Triggers, supervisor: &Supervisor, body: &[u8]) -
 pub fn fire_trigger(store: &Triggers, body: &[u8]) -> Response {
     let req = require!(body, TriggerRef);
     let name = req.name.trim();
-    let firing = match store.fire(name, None) {
+    let firing = match store.fire(name, None, None) {
         Ok(firing) => firing,
         Err(e) => return Response::from(&e),
     };
@@ -197,12 +197,20 @@ pub fn trigger_log(store: &Triggers, body: &[u8]) -> Response {
 }
 
 /// `POST|GET /api/hooks/<name>` — the public webhook endpoint: launch the named trigger with the
-/// request body as its payload. Only an **enabled** trigger of the `webhook` kind launches; when
-/// its `secret` extra is set, the caller must match it with a `?secret=` query parameter.
-/// An unknown name and a background trigger answer the same 404, so the endpoint doesn't
-/// reveal which internal names exist.
+/// request body as its payload and the request's headers (`headers`, lowercase names) handed to
+/// the code block via `ADI_HEADERS_FILE` — the only way a trigger can check a provider's HMAC
+/// signature header (`X-Hub-Signature-256`, `Stripe-Signature`, …). Only an **enabled** trigger
+/// of the `webhook` kind launches; when its `secret` extra is set, the caller must match it with
+/// a `?secret=` query parameter. An unknown name and a background trigger answer the same 404,
+/// so the endpoint doesn't reveal which internal names exist.
 #[must_use]
-pub fn hook_trigger(store: &Triggers, name: &str, query: &str, payload: &[u8]) -> Response {
+pub fn hook_trigger(
+    store: &Triggers,
+    name: &str,
+    query: &str,
+    headers: &HashMap<String, String>,
+    payload: &[u8],
+) -> Response {
     let trigger = match store.get(name) {
         Ok(Some(t)) => t,
         // An unregistered and an unsafely-named hook answer identically, revealing nothing.
@@ -235,7 +243,7 @@ pub fn hook_trigger(store: &Triggers, name: &str, query: &str, payload: &[u8]) -
     {
         return error(403, &format!("hook {name} is not enabled for this project"));
     }
-    match store.fire(&trigger.name, Some(payload)) {
+    match store.fire(&trigger.name, Some(payload), Some(headers)) {
         Ok(_) => ok_json(&HookAck {
             ok: true,
             trigger: trigger.name,

@@ -1118,7 +1118,7 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         (m, p) if p.starts_with("/api/hooks/") && matches!(m, "POST" | "GET") => {
             let name = &p["/api/hooks/".len()..];
             let query = req.path.split_once('?').map_or("", |(_, q)| q);
-            handlers::hook_trigger(triggers, name, query, &req.body)
+            handlers::hook_trigger(triggers, name, query, &req.headers, &req.body)
         }
         ("GET", "/api/hive") => {
             let live = scan::listening_ports();
