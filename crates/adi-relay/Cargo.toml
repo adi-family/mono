@@ -1,0 +1,31 @@
+[package]
+name = "adi-relay"
+description = "Client half of the webhook relay (docs/webhook-relay.md, ADI-MONO-220/222): a node's own ed25519 signing key and X25519 sealing key, request signing against the relay's wire contract, sealed-box open/seal, and OpenSSH rendering/parsing of the public signing key. Used by adi-app (the poller) and adi-cli (the node side, ADI-MONO-223) as well as by adi-relay-server (verification and sealing, never a node's own keys)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Where a node's own signing/sealing keys are persisted: a raw-file module dir, never through
+# adi-secrets (docs/webhook-relay.md §2 — this is node identity material, not a run's resolved
+# env). adi-relay-server depends on this crate too, for the signature-verification and
+# OpenSSH-parsing halves only; it never calls `keys::load_or_create`, so linking this dependency
+# never makes the self-hostable server assume `~/.adi/mono/` exists.
+adi-config = { workspace = true }
+
+ed25519-dalek = { workspace = true }
+x25519-dalek = { workspace = true }
+hkdf = { workspace = true }
+sha2 = { workspace = true }
+chacha20poly1305 = { workspace = true }
+zeroize = { workspace = true }
+base64 = { workspace = true }
+rand = { workspace = true }
+anyhow = { workspace = true }
+hex = { workspace = true }
+
+[lints]
+workspace = true

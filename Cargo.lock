@@ -531,6 +531,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "adi-relay"
+version = "0.1.0"
+dependencies = [
+ "adi-config",
+ "anyhow",
+ "base64 0.22.1",
+ "chacha20poly1305",
+ "ed25519-dalek",
+ "hex",
+ "hkdf",
+ "rand 0.10.2",
+ "sha2 0.11.0",
+ "x25519-dalek",
+ "zeroize",
+]
+
+[[package]]
 name = "adi-schedules"
 version = "0.1.0"
 dependencies = [
