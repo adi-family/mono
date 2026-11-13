@@ -2300,6 +2300,7 @@ pub(crate) struct TriggersForm {
     pub(crate) trigger_on: RwSignal<Vec<String>>,
     pub(crate) editing: RwSignal<Option<String>>,
     pub(crate) busy: RwSignal<bool>,
+    pub(crate) relay_key: RwSignal<Option<String>>,
 }
 ```
 

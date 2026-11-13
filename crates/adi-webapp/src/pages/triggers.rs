@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 use adi_ui::Lang;
 use adi_ui::{Row as TableRow, Table};
 use adi_webapp_api::types::{SaveTrigger, TriggerDto, TriggerPreset, TriggersState};
+use leptos::html::Input;
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
@@ -22,8 +23,8 @@ use crate::fetch;
 use crate::routing::scroll_top;
 use crate::state::{Flash, State, TriggersForm, TriggersLogView, read_error};
 use crate::ui::{
-    Key, LogPhase, TextField, apply_mutation, field_hint, flash_view, fmt_date, fmt_uptime,
-    log_pane, menu_item, row_actions, rows_or_status, sort_rows, updated_text,
+    Key, LogPhase, TextField, apply_mutation, copy_row, field_hint, flash_view, fmt_date,
+    fmt_uptime, log_pane, menu_item, row_actions, rows_or_status, sort_rows, updated_text,
 };
 
 /// The Triggers page's columns; the trailing blank one holds the row's ⋯ menu.
@@ -37,6 +38,30 @@ pub(crate) const PROJECT_COLS: &[&str] = &["Name", "Launches", "Status", "Last r
 /// to guard the endpoint, so it isn't any preset's business.
 const WEBHOOK_SECRET: (&str, &str, &str) =
     ("secret", "Secret", "optional — callers must pass ?secret=…");
+
+/// The `extra` keys the relay section (`docs/webhook-relay.md` §10) owns, rendered through its
+/// own dedicated fields below rather than the generic freeform list — `relay_endpoint` is
+/// server-written and must never be a hand-editable text box, and the other three deserve a
+/// select/number input and a licence field rather than a bare `<input>`.
+const RELAY_EXTRA_KEYS: &[&str] = &["relay", "relay_retention", "relay_endpoint", "licence_code"];
+
+/// The four hosted relays `docs/webhook-relay.md` §9 names, plus `custom:<url>` for a self-host
+/// operator's own instance — must mirror `adi-app/src/relay.rs::resolve_url` exactly. Duplicated
+/// rather than shared: this wasm frontend can't depend on that native-only crate, and the
+/// vocabulary is small and settled (the same four names the save form's `<option>`s below offer).
+fn resolve_relay_url(relay: &str) -> Option<String> {
+    match relay {
+        "public-eu" => Some("https://eu.webhooks.withadi.dev".to_string()),
+        "public-us" => Some("https://us.webhooks.withadi.dev".to_string()),
+        "enterprise-eu" => Some("https://eu.ent.webhooks.withadi.dev".to_string()),
+        "enterprise-us" => Some("https://us.ent.webhooks.withadi.dev".to_string()),
+        other => other
+            .strip_prefix("custom:")
+            .map(str::trim)
+            .filter(|u| !u.is_empty())
+            .map(str::to_string),
+    }
+}
 
 /// The Triggers page: the definitions table, the (optional) log view, and the create/edit form.
 pub(crate) fn triggers_view(state: State, form: TriggersForm, log: TriggersLogView) -> AnyView {
@@ -59,8 +84,23 @@ pub(crate) fn triggers_view(state: State, form: TriggersForm, log: TriggersLogVi
         trigger_on,
         editing,
         busy,
+        relay_key,
     } = form;
     let projects = state.projects;
+
+    // Fetch this node's relay public key once, the first time the relay section could possibly
+    // show (a webhook trigger is open) — a per-node constant, so one fetch covers every trigger
+    // edited for the rest of this page's life.
+    Effect::new(move |_| {
+        if kind.get() == "webhook" && relay_key.get_untracked().is_none() {
+            spawn_local(async move {
+                if let Ok(res) = fetch::relay_key().await {
+                    relay_key.set(Some(res.public_key));
+                }
+            });
+        }
+    });
+
     view! {
         {move || log_view(log)}
 
@@ -177,6 +217,7 @@ pub(crate) fn triggers_view(state: State, form: TriggersForm, log: TriggersLogVi
                     <span class="adi-field__label">"Enabled"</span>
                 </label>
                 {move || extra_fields(state, form)}
+                {move || (kind.get() == "webhook").then(|| relay_fields(form))}
                 {move || (kind.get() == "event").then(|| view! {
                     <div class="adi-field adi-field--full">
                         <label class="adi-field__label" for="trigger-events">"Events"</label>
@@ -463,7 +504,12 @@ fn settings_fields(state: State, form: TriggersForm) -> Vec<(String, String, Str
         }
     }
     // Anything already set that no preset claims — an old definition, or a key added by hand.
+    // The relay keys are excluded: `relay_fields` below renders them through its own dedicated
+    // inputs, never this generic freeform one (`relay_endpoint` especially must stay read-only).
     for key in form.extra.get().keys() {
+        if RELAY_EXTRA_KEYS.contains(&key.as_str()) {
+            continue;
+        }
         push(key.clone(), key.clone(), "custom setting".to_string());
     }
     fields
@@ -501,15 +547,106 @@ fn set_extra(extra: RwSignal<BTreeMap<String, String>>, key: &str, value: String
     });
 }
 
-/// The settings that get submitted: only the keys the form is currently offering, trimmed and
-/// non-empty — switching presets never leaks the previous one's settings into the save.
+/// The relay section (`docs/webhook-relay.md` §10): a picker for the four hosted relays or a
+/// self-hosted URL, a retention field, an enterprise relay's licence code, and — once `adi-app`
+/// has registered this trigger and written back `relay_endpoint` — the public URL to hand the
+/// sender and this node's own public key for a self-host operator's `authorized_keys`. Shown for
+/// webhook triggers only: a background/event trigger has no inbound endpoint for a relay to front.
+fn relay_fields(form: TriggersForm) -> AnyView {
+    let extra = form.extra;
+    let relay_value = move || extra.get().get("relay").cloned().unwrap_or_default();
+    let is_custom = move || {
+        let v = relay_value();
+        v == "custom" || v.starts_with("custom:")
+    };
+    let select_value = move || if is_custom() { "custom".to_string() } else { relay_value() };
+    let custom_url = move || relay_value().strip_prefix("custom:").unwrap_or_default().to_string();
+    let endpoint = move || extra.get().get("relay_endpoint").cloned().filter(|s| !s.is_empty());
+    let public_url =
+        move || endpoint().and_then(|id| resolve_relay_url(&relay_value()).map(|base| format!("{base}/h/{id}")));
+
+    let url_field: NodeRef<Input> = NodeRef::new();
+    let key_field: NodeRef<Input> = NodeRef::new();
+
+    view! {
+        <div class="adi-field">
+            <label class="adi-field__label" for="trigger-relay">"Webhook relay"</label>
+            <select class="adi-input" id="trigger-relay"
+                prop:value=select_value
+                on:change=move |ev| {
+                    let v = event_target_value(&ev);
+                    set_extra(extra, "relay", if v == "custom" { "custom:".to_string() } else { v });
+                }>
+                <option value="">"— direct only, no relay —"</option>
+                <option value="public-eu">"Public (EU)"</option>
+                <option value="public-us">"Public (US)"</option>
+                <option value="enterprise-eu">"Enterprise (EU)"</option>
+                <option value="enterprise-us">"Enterprise (US)"</option>
+                <option value="custom">"Self-hosted (custom URL)"</option>
+            </select>
+            {field_hint("lets an outside sender (Stripe, GitHub, …) reach this trigger without exposing \
+                         this node directly — blank keeps it direct-only, as today")}
+        </div>
+        {move || is_custom().then(|| view! {
+            <div class="adi-field">
+                <label class="adi-field__label" for="trigger-relay-url">"Relay URL"</label>
+                <input class="adi-input adi-mono" id="trigger-relay-url" autocomplete="off"
+                    placeholder="https://relay.example.com"
+                    prop:value=custom_url
+                    on:input=move |ev| set_extra(extra, "relay", format!("custom:{}", event_target_value(&ev))) />
+                {field_hint("your own self-hosted relay instance")}
+            </div>
+        })}
+        {move || (!relay_value().is_empty()).then(|| view! {
+            <div class="adi-field">
+                <label class="adi-field__label" for="trigger-relay-retention">"Retention (seconds)"</label>
+                <input class="adi-input adi-mono" type="number" min="0" id="trigger-relay-retention"
+                    prop:value=move || extra.get().get("relay_retention").cloned().unwrap_or_default()
+                    on:input=move |ev| set_extra(extra, "relay_retention", event_target_value(&ev)) />
+                {field_hint("how long an undelivered record is kept on the relay — blank uses the relay's own default")}
+            </div>
+        })}
+        {move || relay_value().starts_with("enterprise-").then(|| view! {
+            <div class="adi-field">
+                <label class="adi-field__label" for="trigger-relay-licence">"Licence code"</label>
+                <input class="adi-input adi-mono" id="trigger-relay-licence" autocomplete="off"
+                    prop:value=move || extra.get().get("licence_code").cloned().unwrap_or_default()
+                    on:input=move |ev| set_extra(extra, "licence_code", event_target_value(&ev)) />
+                {field_hint("checked once, at registration, against this install's ADI Enterprise licence")}
+            </div>
+        })}
+        {move || public_url().map(|url| view! {
+            <div class="adi-field adi-field--full">
+                <span class="adi-field__label">"Public URL — give this to the sender"</span>
+                {copy_row(url_field, move || url.clone())}
+            </div>
+        })}
+        {move || (!relay_value().is_empty()).then(|| view! {
+            <div class="adi-field adi-field--full">
+                <span class="adi-field__label">"This node's public key — for a self-host relay's authorized_keys"</span>
+                {move || form.relay_key.get().map_or_else(
+                    || view! { <span class="adi-muted">"loading…"</span> }.into_any(),
+                    |key| copy_row(key_field, move || key.clone()).into_any(),
+                )}
+            </div>
+        })}
+    }
+    .into_any()
+}
+
+/// The settings that get submitted: the keys the form is currently offering, plus the relay keys
+/// (`relay_fields` owns those through its own dedicated inputs, never `settings_fields`'
+/// generic list) — trimmed and non-empty, so switching presets never leaks the previous one's
+/// settings into the save.
 fn current_extras(state: State, form: TriggersForm) -> BTreeMap<String, String> {
     let offered = settings_fields(state, form);
     form.extra
         .get()
         .into_iter()
         .map(|(k, v)| (k, v.trim().to_string()))
-        .filter(|(k, v)| !v.is_empty() && offered.iter().any(|(key, _, _)| key == k))
+        .filter(|(k, v)| {
+            !v.is_empty() && (RELAY_EXTRA_KEYS.contains(&k.as_str()) || offered.iter().any(|(key, _, _)| key == k))
+        })
         .collect()
 }
 

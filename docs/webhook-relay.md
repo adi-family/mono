@@ -720,8 +720,15 @@ Phase numbers match the task. This document is phase 1.
       the sender's original method and headers (dropping only the hop-by-hop ones a client sets
       for itself) and appending the trigger's own `secret` as a query param. Tested against a
       real socket (`replay_opens_and_forwards_a_sealed_record_…`).
-- [ ] Panel: relay picker + retention field on the trigger editor, public URL display, copy
-      public key. Not built this pass.
+- [x] Panel: relay picker (the four hosted relays or a self-hosted URL) + retention field +
+      an enterprise relay's licence code on the trigger editor, shown for webhook triggers
+      only; once registered, the public URL (reconstructed client-side from `relay` +
+      `relay_endpoint`, never a stored fourth value) with a Copy button; a "copy this node's
+      public key" field, fetched once via a new `GET /api/triggers/relay-key`. Verified in a
+      real headless-Chromium session against the real compiled backend (both the register
+      failure path — an unreachable relay refuses the save with the registration's own error —
+      and the success path — a stub relay's `201` persists `relay_endpoint` and the panel shows
+      the correctly-reconstructed public URL on reopening the trigger).
 - [x] CLI: `adi-mono triggers relay-key`, printing the node's OpenSSH public signing key.
 
 ### Phase 5 — self-host guide

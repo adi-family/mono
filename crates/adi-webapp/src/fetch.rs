@@ -24,7 +24,7 @@ use adi_webapp_api::types::{
     NewWorkspace, NodeServiceRef, PauseChannel, PortsState, ProjectDetail, ProjectHookLog,
     ProjectHookRef, ProjectHookRunResult, ProjectRef, ProjectRenamed, ProjectsState, PromptsOf, QueueMode,
     RealtimeSessionDto, RealtimeSessionRequest,
-    ReleaseResponse, RenameProject, RenameRun, ReplyToRun, ReserveResponse, RevealedSecret,
+    RelayKey, ReleaseResponse, RenameProject, RenameRun, ReplyToRun, ReserveResponse, RevealedSecret,
     RouteChannel, ReviewRun, RewindRun, RunAgent,
     RunDetailDto, RunRef, RunSteps, RunSystemAction, RunTool, RunWorkflow, RunsQuery, RunsState,
     SaveAgent, SaveEmbeddingBackend,
@@ -1308,6 +1308,12 @@ pub async fn restart_trigger(name: String) -> Result<TriggerFireResult, String> 
 
 pub async fn trigger_log(name: String) -> Result<TriggerLog, String> {
     post("/api/triggers/log", &TriggerRef { name }).await
+}
+
+/// This node's webhook-relay public signing key (`docs/webhook-relay.md` §10) — the trigger
+/// editor's "copy public key" button fetches it once the relay section is shown.
+pub async fn relay_key() -> Result<RelayKey, String> {
+    get("/api/triggers/relay-key").await
 }
 
 // ---- workflows (ADI-MONO-141 §F) ------------------------------------------------------

@@ -1084,6 +1084,7 @@ fn App() -> impl IntoView {
         trigger_on: RwSignal::new(Vec::new()),
         editing: RwSignal::new(None::<String>),
         busy: RwSignal::new(false),
+        relay_key: RwSignal::new(None::<String>),
     };
 
     let triggers_log = TriggersLogView::new();

@@ -3895,6 +3895,15 @@ pub struct TriggerLog {
     pub fired_at: Option<u64>,
 }
 
+/// `GET /api/triggers/relay-key` (`docs/webhook-relay.md` §10, ADI-MONO-223) — this node's
+/// webhook-relay public signing key, OpenSSH-rendered, for a self-host operator's own
+/// `authorized_keys` file. Answered by `adi-app` (never this crate: the key lives in
+/// `adi_relay`, a dependency only the binary that actually runs a node takes).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelayKey {
+    pub public_key: String,
+}
+
 /// The response an external webhook caller gets from `/api/hooks/<name>`: an acknowledgement
 /// that the named trigger's code block was spawned.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -502,6 +502,18 @@ pub fn delete_trigger(triggers: &Triggers, supervisor: &Supervisor, body: &[u8])
     handlers::commit_delete_trigger(triggers, supervisor, &name)
 }
 
+/// `GET /api/triggers/relay-key` (§10): this node's webhook-relay public signing key, for the
+/// panel's own "copy public key" button and the CLI's `triggers relay-key`'s own HTTP twin.
+#[must_use]
+pub fn relay_key() -> Response {
+    match identity() {
+        Ok(id) => handlers::ok_json(&adi_webapp_api::types::RelayKey {
+            public_key: id.public_key_line(),
+        }),
+        Err(error) => handlers::error(500, &format!("could not load this node's relay keypair: {error}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

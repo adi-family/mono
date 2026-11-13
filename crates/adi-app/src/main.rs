@@ -1100,6 +1100,7 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/agents/peek") => handlers::peek_agent(agents, &req.body),
         ("POST", "/api/agents/send-keys") => handlers::send_agent_keys(agents, &req.body),
         ("GET", "/api/triggers") => handlers::triggers(triggers),
+        ("GET", "/api/triggers/relay-key") => relay::relay_key(),
         // Relay-aware (docs/webhook-relay.md §10, ADI-MONO-223): register/deregister against a
         // relay before anything persists, which needs the async runtime — see `async_route`.
         ("POST", "/api/triggers/fire") => handlers::fire_trigger(triggers, &req.body),

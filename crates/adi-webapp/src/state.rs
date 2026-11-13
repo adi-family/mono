@@ -1535,6 +1535,9 @@ pub(crate) struct TriggersForm {
     pub(crate) trigger_on: RwSignal<Vec<String>>,
     pub(crate) editing: RwSignal<Option<String>>,
     pub(crate) busy: RwSignal<bool>,
+    /// This node's webhook-relay public signing key (`docs/webhook-relay.md` §10), fetched once
+    /// the relay section is shown and cached here — it's a per-node constant, not per-trigger.
+    pub(crate) relay_key: RwSignal<Option<String>>,
 }
 
 /// The Triggers page's log view: which trigger's fire log is open (`None` = closed) and the
