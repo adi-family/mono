@@ -43,15 +43,18 @@ fn decode_sealing_key(b64: &str) -> Result<[u8; 32], ()> {
 }
 
 /// The shared first step of every route except ingress (§5.1, which has none at all) and
-/// `/healthz`: verify the signature (§3), then — self-host only — check `authorized_keys`
-/// (§6: "a key not in the file is 403 `unknown_key` ... everywhere else, since nothing gets
-/// this far without first registering").
+/// `/healthz`: verify the signature (§3), then — self-host only — check `authorized_keys`, the
+/// optional shared secret, and the optional IP allowlist (§6: "a key not in the file is 403
+/// `unknown_key` ... everywhere else, since nothing gets this far without first registering" —
+/// read here as covering all three self-host gates alike, since the spec names no separate code
+/// for the latter two and they are the same kind of refusal: this caller may not be here).
 fn authenticate(
     state: &AppState,
     headers: &HashMap<String, String>,
     method: &str,
     path_and_query: &str,
     body: &[u8],
+    remote_ip: &str,
 ) -> Result<VerifyingKey, Response> {
     let outcome = auth::authenticate(&state.store, headers, method, path_and_query, body, now_secs())
         .map_err(|e| err(500, "internal_error", e.to_string()))?;
@@ -59,13 +62,19 @@ fn authenticate(
         AuthOutcome::Ok(key) => key,
         other => return Err(err(401, other.error_code(), "signature check failed")),
     };
-    if state.config.mode == Mode::SelfHost {
+    if let Some(self_host) = state.config.self_host.as_ref() {
         let authorized = state
             .authorized_keys
             .as_ref()
             .is_some_and(|keys| keys.is_authorized(&key));
         if !authorized {
             return Err(err(403, "unknown_key", "this key is not in authorized_keys"));
+        }
+        if let Some(refusal) = auth::check_shared_secret(self_host, headers) {
+            return Err(refusal);
+        }
+        if let Some(refusal) = auth::check_ip_allowlist(self_host, remote_ip) {
+            return Err(refusal);
         }
     }
     Ok(key)
@@ -177,7 +186,7 @@ pub async fn register(
     body: &[u8],
     remote_ip: &str,
 ) -> Response {
-    let key = match authenticate(state, headers, "POST", path_and_query, body) {
+    let key = match authenticate(state, headers, "POST", path_and_query, body, remote_ip) {
         Ok(key) => key,
         Err(resp) => return resp,
     };
@@ -287,8 +296,8 @@ async fn check_licence(state: &AppState, req: &RegisterRequest, fingerprint: &Fi
 
 // ---- 5.3 GET /v1/endpoints — list -----------------------------------------------------------
 
-pub fn list(state: &AppState, headers: &HashMap<String, String>, path_and_query: &str) -> Response {
-    let key = match authenticate(state, headers, "GET", path_and_query, b"") {
+pub fn list(state: &AppState, headers: &HashMap<String, String>, path_and_query: &str, remote_ip: &str) -> Response {
+    let key = match authenticate(state, headers, "GET", path_and_query, b"", remote_ip) {
         Ok(key) => key,
         Err(resp) => return resp,
     };
@@ -315,8 +324,8 @@ pub fn list(state: &AppState, headers: &HashMap<String, String>, path_and_query:
 
 // ---- 5.4 DELETE /v1/endpoints/<id> — delete -------------------------------------------------
 
-pub fn delete(state: &AppState, headers: &HashMap<String, String>, path_and_query: &str, id: &str) -> Response {
-    let key = match authenticate(state, headers, "DELETE", path_and_query, b"") {
+pub fn delete(state: &AppState, headers: &HashMap<String, String>, path_and_query: &str, id: &str, remote_ip: &str) -> Response {
+    let key = match authenticate(state, headers, "DELETE", path_and_query, b"", remote_ip) {
         Ok(key) => key,
         Err(resp) => return resp,
     };
@@ -364,8 +373,9 @@ pub async fn pull(
     headers: &HashMap<String, String>,
     path_and_query: &str,
     batch_param: Option<&str>,
+    remote_ip: &str,
 ) -> Response {
-    let key = match authenticate(state, headers, "GET", path_and_query, b"") {
+    let key = match authenticate(state, headers, "GET", path_and_query, b"", remote_ip) {
         Ok(key) => key,
         Err(resp) => return resp,
     };
@@ -459,7 +469,7 @@ mod tests {
         assert!(v["url"].as_str().unwrap().ends_with(&id));
 
         let list_headers = signed_headers(&signing, "GET", "/v1/endpoints", b"");
-        let listed = list(&state, &list_headers, "/v1/endpoints");
+        let listed = list(&state, &list_headers, "/v1/endpoints", "203.0.113.1");
         assert_eq!(listed.status, 200, "{}", listed.body);
         let v: serde_json::Value = serde_json::from_str(&listed.body).unwrap();
         assert_eq!(v["endpoints"].as_array().unwrap().len(), 1);
@@ -468,13 +478,13 @@ mod tests {
         let other = SigningKey::from_bytes(&[2u8; 32]);
         let path = format!("/v1/endpoints/{id}");
         let forbidden_headers = signed_headers(&other, "DELETE", &path, b"");
-        let forbidden = delete(&state, &forbidden_headers, &path, &id);
+        let forbidden = delete(&state, &forbidden_headers, &path, &id, "203.0.113.1");
         assert_eq!(forbidden.status, 403);
 
         let delete_headers = signed_headers(&signing, "DELETE", &path, b"");
-        let deleted = delete(&state, &delete_headers, &path, &id);
+        let deleted = delete(&state, &delete_headers, &path, &id, "203.0.113.1");
         assert_eq!(deleted.status, 204);
-        let again = delete(&state, &signed_headers(&signing, "DELETE", &path, b""), &path, &id);
+        let again = delete(&state, &signed_headers(&signing, "DELETE", &path, b""), &path, &id, "203.0.113.1");
         assert_eq!(again.status, 404);
     }
 
@@ -536,6 +546,57 @@ mod tests {
         assert_eq!(v["error"], "unknown_key");
     }
 
+    /// Self-host's two defence-in-depth layers (§6), both only reached once `authorized_keys`
+    /// already passed — an authorized key from the wrong address, or with no shared secret,
+    /// must still be refused.
+    #[tokio::test]
+    async fn self_host_enforces_its_optional_shared_secret_and_ip_allowlist() {
+        let signing = SigningKey::from_bytes(&[8u8; 32]);
+        let dir = tempfile::tempdir().unwrap();
+        let keys_path = dir.path().join("authorized_keys");
+        std::fs::write(&keys_path, adi_relay::openssh::encode(&signing.verifying_key())).unwrap();
+
+        // SAFETY: test-only, and this name is unique to this test.
+        unsafe { std::env::set_var("ADI_RELAY_ROUTES_TEST_SECRET", "s3cr3t") };
+        let config = crate::config::Config::parse(&format!(
+            "mode=\"self-host\"\nbind=\"0.0.0.0:8080\"\ndb_path=\"x\"\nhostname=\"h\"\n\
+             [self_host]\nauthorized_keys_path=\"{}\"\nshared_secret_env=\"ADI_RELAY_ROUTES_TEST_SECRET\"\nip_allowlist=[\"10.0.0.0/8\"]\n",
+            keys_path.display()
+        ))
+        .expect("parses");
+        let state = AppState {
+            store: Store::open_in_memory().expect("store"),
+            authorized_keys: Some(auth::AuthorizedKeys::new(keys_path)),
+            licence: None,
+            config,
+            notify: tokio::sync::Notify::new(),
+        };
+
+        let (sealing_public, _secret) = node_sealing_public();
+        let body = serde_json::to_vec(&serde_json::json!({
+            "sealing_key": base64::engine::general_purpose::STANDARD.encode(sealing_public),
+        }))
+        .unwrap();
+        // Each call signs its own request — a signature is good for exactly one nonce (§3).
+
+        // The right address, but no shared secret header at all.
+        let headers = signed_headers(&signing, "POST", "/v1/endpoints", &body);
+        let resp = register(&state, &headers, "/v1/endpoints", &body, "10.1.2.3").await;
+        assert_eq!(resp.status, 403, "{}", resp.body);
+
+        // The right secret, but an address outside the allowlist.
+        let mut with_secret = signed_headers(&signing, "POST", "/v1/endpoints", &body);
+        with_secret.insert(auth::HEADER_SHARED_SECRET.to_string(), "s3cr3t".to_string());
+        let resp = register(&state, &with_secret, "/v1/endpoints", &body, "203.0.113.1").await;
+        assert_eq!(resp.status, 403, "{}", resp.body);
+
+        // Both satisfied: through.
+        let mut both = signed_headers(&signing, "POST", "/v1/endpoints", &body);
+        both.insert(auth::HEADER_SHARED_SECRET.to_string(), "s3cr3t".to_string());
+        let resp = register(&state, &both, "/v1/endpoints", &body, "10.1.2.3").await;
+        assert_eq!(resp.status, 201, "{}", resp.body);
+    }
+
     #[tokio::test]
     async fn a_bad_signature_is_refused_before_anything_else() {
         let state = state(ConfigMode::Public);
@@ -575,7 +636,7 @@ mod tests {
         let headers = signed_headers(&signing, "GET", "/v1/pull?batch=10", b"");
         let resp = tokio::time::timeout(
             std::time::Duration::from_secs(1),
-            pull(&state, &headers, "/v1/pull?batch=10", Some("10")),
+            pull(&state, &headers, "/v1/pull?batch=10", Some("10"), "203.0.113.1"),
         )
         .await
         .expect("must not block when a record is already queued");
@@ -590,7 +651,10 @@ mod tests {
         state.config.limits.pull_long_poll_secs = 0;
         let signing = SigningKey::from_bytes(&[5u8; 32]);
         let headers = signed_headers(&signing, "GET", "/v1/pull", b"");
-        let resp = tokio::time::timeout(std::time::Duration::from_secs(2), pull(&state, &headers, "/v1/pull", None))
+        let resp = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            pull(&state, &headers, "/v1/pull", None, "203.0.113.1"),
+        )
             .await
             .expect("must not hang");
         assert_eq!(resp.status, 200);
@@ -618,7 +682,7 @@ mod tests {
 
         let headers = signed_headers(&signing, "GET", "/v1/pull", b"");
         let state2 = std::sync::Arc::clone(&state);
-        let handle = tokio::spawn(async move { pull(&state2, &headers, "/v1/pull", None).await });
+        let handle = tokio::spawn(async move { pull(&state2, &headers, "/v1/pull", None, "203.0.113.1").await });
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         state

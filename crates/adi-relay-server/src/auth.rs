@@ -15,11 +15,18 @@ use std::time::{Instant, SystemTime};
 use adi_relay::openssh::{self, Fingerprint};
 use adi_relay::sign::{self, SignedRequest};
 use ed25519_dalek::VerifyingKey;
+use subtle::ConstantTimeEq as _;
 
+use crate::config::SelfHostConfig;
 use crate::store::Store;
+use crate::{Response, err};
 
 /// §3's clock-skew window.
 pub const SKEW_WINDOW_SECS: u64 = 300;
+
+/// §6's optional extra header: "never part of the signed canonical string, since it's a static
+/// value a signature can't meaningfully protect any further".
+pub const HEADER_SHARED_SECRET: &str = "x-relay-shared-secret";
 
 /// Read the four `X-Relay-*` headers off a request into a [`SignedRequest`]. `None` if any of
 /// them is missing or the timestamp isn't a plain integer — indistinguishable, on the wire, from
@@ -169,6 +176,48 @@ impl AuthorizedKeys {
     }
 }
 
+/// Self-host's optional shared secret (§6: "defence in depth on top of the signature, not
+/// instead of it"). `None` (pass) if the config names no `shared_secret_env`; otherwise the
+/// request must carry [`HEADER_SHARED_SECRET`] matching the named env var's *current* value,
+/// compared in constant time. An env var the config names but this process doesn't have set is
+/// the operator's own misconfiguration — fails closed (every request refused) rather than
+/// silently skipping a check an operator believes is active.
+#[must_use]
+pub fn check_shared_secret(self_host: &SelfHostConfig, headers: &HashMap<String, String>) -> Option<Response> {
+    let env_name = self_host.shared_secret_env.as_ref().filter(|s| !s.is_empty())?;
+    let Ok(expected) = std::env::var(env_name) else {
+        return Some(err(
+            500,
+            "internal_error",
+            format!("self_host.shared_secret_env names {env_name}, which isn't set"),
+        ));
+    };
+    let offered = headers.get(HEADER_SHARED_SECRET).map(String::as_bytes).unwrap_or_default();
+    if offered.ct_eq(expected.as_bytes()).into() {
+        None
+    } else {
+        Some(err(403, "unknown_key", "missing or incorrect X-Relay-Shared-Secret"))
+    }
+}
+
+/// Self-host's optional IP allowlist (§6), the same "defence in depth" stance as the shared
+/// secret above. `None` (pass) if the list is empty (§6: "empty = unrestricted") or `remote_ip`
+/// doesn't even parse — the latter should never happen for a real peer address, and refusing a
+/// request over this crate's own inability to parse the socket's own address would be a strange
+/// kind of defence in depth.
+#[must_use]
+pub fn check_ip_allowlist(self_host: &SelfHostConfig, remote_ip: &str) -> Option<Response> {
+    if self_host.ip_allowlist.is_empty() {
+        return None;
+    }
+    let Ok(ip) = remote_ip.parse() else { return None };
+    if crate::cidr::allows(&self_host.ip_allowlist, ip) {
+        None
+    } else {
+        Some(err(403, "unknown_key", "this address is not in ip_allowlist"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -264,5 +313,60 @@ mod tests {
     fn a_missing_authorized_keys_file_authorizes_nobody() {
         let keys = AuthorizedKeys::new(PathBuf::from("/nonexistent/authorized_keys"));
         assert!(!keys.is_authorized(&key(1)));
+    }
+
+    fn self_host(shared_secret_env: Option<&str>, ip_allowlist: &[&str]) -> SelfHostConfig {
+        SelfHostConfig {
+            authorized_keys_path: PathBuf::from("/nonexistent"),
+            shared_secret_env: shared_secret_env.map(str::to_string),
+            ip_allowlist: ip_allowlist.iter().map(ToString::to_string).collect(),
+        }
+    }
+
+    /// A unique env var name per test — this is process-global state, and the crate's own test
+    /// binary runs tests in parallel threads by default.
+    fn set_env(name: &str, value: &str) {
+        // SAFETY: test-only, and `name` is unique per call site below.
+        unsafe { std::env::set_var(name, value) };
+    }
+
+    #[test]
+    fn no_shared_secret_env_configured_is_a_pass() {
+        let sh = self_host(None, &[]);
+        assert!(check_shared_secret(&sh, &HashMap::new()).is_none());
+    }
+
+    #[test]
+    fn a_matching_shared_secret_passes_and_a_wrong_or_missing_one_is_refused() {
+        set_env("ADI_RELAY_TEST_SECRET_A", "s3cr3t");
+        let sh = self_host(Some("ADI_RELAY_TEST_SECRET_A"), &[]);
+
+        let right = HashMap::from([(HEADER_SHARED_SECRET.to_string(), "s3cr3t".to_string())]);
+        assert!(check_shared_secret(&sh, &right).is_none());
+
+        let wrong = HashMap::from([(HEADER_SHARED_SECRET.to_string(), "nope".to_string())]);
+        assert_eq!(check_shared_secret(&sh, &wrong).unwrap().status, 403);
+
+        assert_eq!(check_shared_secret(&sh, &HashMap::new()).unwrap().status, 403);
+    }
+
+    #[test]
+    fn a_shared_secret_env_the_process_never_set_fails_closed() {
+        let sh = self_host(Some("ADI_RELAY_TEST_SECRET_UNSET_B"), &[]);
+        let refusal = check_shared_secret(&sh, &HashMap::new()).expect("fails closed");
+        assert_eq!(refusal.status, 500);
+    }
+
+    #[test]
+    fn an_empty_ip_allowlist_is_unrestricted() {
+        let sh = self_host(None, &[]);
+        assert!(check_ip_allowlist(&sh, "203.0.113.1").is_none());
+    }
+
+    #[test]
+    fn an_ip_allowlist_refuses_an_address_outside_it() {
+        let sh = self_host(None, &["10.0.0.0/8"]);
+        assert!(check_ip_allowlist(&sh, "10.1.2.3").is_none());
+        assert_eq!(check_ip_allowlist(&sh, "203.0.113.1").unwrap().status, 403);
     }
 }

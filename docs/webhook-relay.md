@@ -394,7 +394,15 @@ Defaults proposed below, within the ranges the task gives — Igor's to adjust:
   `ip_allowlist` are **defence in depth on top of the signature, not instead of it** — an optional
   extra header (`X-Relay-Shared-Secret`, constant-time compared, never part of the signed canonical
   string, since it's a static value a signature can't meaningfully protect any further) and a CIDR
-  check against the connecting IP, both opt-in and both off by default.
+  check against the connecting IP, both opt-in and both off by default. **Both enforced at the
+  same chokepoint `authorized_keys` already is** (`routes::authenticate`, every route but ingress
+  and `/healthz`): a config naming `shared_secret_env` but leaving the process without that env
+  var fails closed (every self-host request `500`s, not a silently-skipped check); an
+  `ip_allowlist` the connecting address isn't in is `403 unknown_key`, reusing that code rather
+  than inventing one the spec never named for a refusal that is, from a sender's perspective, the
+  same kind of "you may not be here." (Caught mid-WR-B as parsed-but-never-read: `cidr.rs` is a
+  small dependency-free IPv4/IPv6 prefix matcher, since the workspace carries no CIDR crate and
+  this is the only place that needs one.)
 
 ## 7. Retention and purge
 

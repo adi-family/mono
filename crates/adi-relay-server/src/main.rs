@@ -73,11 +73,13 @@ async fn dispatch(state: &AppState, req: &http::Request, remote_ip: String) -> R
         ("POST", "/v1/endpoints") => {
             routes::register(state, &req.headers, path_and_query, &req.body, &remote_ip).await
         }
-        ("GET", "/v1/endpoints") => routes::list(state, &req.headers, path_and_query),
-        ("GET", "/v1/pull") => routes::pull(state, &req.headers, path_and_query, req.query_param("batch")).await,
+        ("GET", "/v1/endpoints") => routes::list(state, &req.headers, path_and_query, &remote_ip),
+        ("GET", "/v1/pull") => {
+            routes::pull(state, &req.headers, path_and_query, req.query_param("batch"), &remote_ip).await
+        }
         ("DELETE", p) if p.starts_with("/v1/endpoints/") => {
             let id = &p["/v1/endpoints/".len()..];
-            routes::delete(state, &req.headers, path_and_query, id)
+            routes::delete(state, &req.headers, path_and_query, id, &remote_ip)
         }
         // §5.1: any method is captured, including a provider's GET ping.
         (m, p) if p.starts_with("/h/") && matches!(m, "POST" | "GET" | "PUT" | "PATCH" | "DELETE") => {

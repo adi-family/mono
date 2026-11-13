@@ -47,6 +47,9 @@ base64 = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 rand = { workspace = true }
+# Self-host's optional `X-Relay-Shared-Secret` (§6): compared in constant time, the same reason
+# `adi-mesh`'s own Basic-auth credential check uses it rather than `==`.
+subtle = "2"
 
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

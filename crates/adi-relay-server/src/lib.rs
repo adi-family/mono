@@ -9,6 +9,7 @@
 #![allow(clippy::implicit_hasher)]
 
 pub mod auth;
+pub mod cidr;
 pub mod config;
 pub mod http;
 pub mod licence;
