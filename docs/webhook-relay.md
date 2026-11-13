@@ -646,8 +646,15 @@ Phase numbers match the task. This document is phase 1.
 - [x] Written, grounded in the code as of `main` `9d19100`. Awaiting Igor's review.
 
 ### Before/alongside phase 2
-- [ ] Q1: thread request headers into the webhook trigger execution environment
+- [x] Q1: thread request headers into the webhook trigger execution environment
       (`ADI_HEADERS_FILE`), for both `/api/hooks/<name>` directly and the relay replay path.
+      Landed ADI-MONO-221 (`f42d85d`): `hook_trigger` takes the request's `HashMap<String, String>`
+      headers, `Triggers::fire` gained a matching `headers` parameter (`fire_event` and the
+      supervisor's own launch stay `None` — neither a platform event nor a background process has
+      request headers), and `fire::launch` writes them as JSON to `ADI_HEADERS_FILE`, file-only
+      (no inline `ADI_HEADERS`, unlike the payload's small-body exception — a header map's size
+      isn't bounded by the same `max_body_bytes` reasoning). The relay replay path (§10) still has
+      to pass its unsealed headers through once WR-C builds it; this only unblocks it.
 
 ### Phase 2 — relay service, image, tests
 - [ ] `crates/adi-relay` (client: signing, sealing, OpenSSH encode/decode, key load-or-create) and
