@@ -39,6 +39,7 @@ default-members = [
     "crates/adi-projects",
     "crates/adi-pty",
     "crates/adi-relay",
+    "crates/adi-relay-server",
     "crates/adi-schedules",
     "crates/adi-secrets",
     "crates/adi-tasks",
@@ -97,6 +98,7 @@ adi-ports-manager = { path = "crates/adi-ports-manager" }
 adi-projects = { path = "crates/adi-projects" }
 adi-pty = { path = "crates/adi-pty" }
 adi-relay = { path = "crates/adi-relay" }
+adi-relay-server = { path = "crates/adi-relay-server" }
 adi-schedules = { path = "crates/adi-schedules" }
 adi-secrets = { path = "crates/adi-secrets" }
 adi-tasks = { path = "crates/adi-tasks" }

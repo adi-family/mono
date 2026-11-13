@@ -79,6 +79,10 @@ pub fn aad(endpoint_id: &str, record_id: i64) -> String {
 
 /// Seal `plaintext` to `sealing_public` (the node's long-lived public sealing key) — the relay's
 /// side. A fresh ephemeral keypair every call, discarded after sealing, never reused.
+///
+/// # Panics
+/// Never in practice: encryption only fails on a key/nonce-size mismatch, and both are fixed by
+/// this function's own types.
 #[must_use]
 pub fn seal(sealing_public: &[u8; 32], endpoint_id: &str, record_id: i64, plaintext: &[u8]) -> Sealed {
     let ephemeral_secret = EphemeralSecret::random_from_rng(OsRng);

@@ -46,6 +46,9 @@ pub fn sha256_hex(body: &[u8]) -> String {
 
 /// A fresh nonce: 16 random bytes, base64url, no padding (§3) — call once per request, never
 /// reused, which is the entire defense [`crate::sign`]'s nonce replay check relies on.
+///
+/// # Panics
+/// Only if the OS random source itself is unavailable, which this crate treats as unrecoverable.
 #[must_use]
 pub fn generate_nonce() -> String {
     use rand::TryRng as _;

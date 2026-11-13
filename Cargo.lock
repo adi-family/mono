@@ -548,6 +548,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "adi-relay-server"
+version = "0.1.0"
+dependencies = [
+ "adi-osext",
+ "adi-relay",
+ "anyhow",
+ "base64 0.22.1",
+ "chrono",
+ "ed25519-dalek",
+ "hex",
+ "rand 0.10.2",
+ "reqwest",
+ "rusqlite",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "x25519-dalek",
+]
+
+[[package]]
 name = "adi-schedules"
 version = "0.1.0"
 dependencies = [

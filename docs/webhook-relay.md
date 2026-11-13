@@ -657,15 +657,21 @@ Phase numbers match the task. This document is phase 1.
       to pass its unsealed headers through once WR-C builds it; this only unblocks it.
 
 ### Phase 2 — relay service, image, tests
-- [ ] `crates/adi-relay` (client: signing, sealing, OpenSSH encode/decode, key load-or-create) and
-      `crates/adi-relay-server` (the service binary): schema (§8), the five routes (§5), signing
-      verification + nonce replay (§3), sealing/unsealing (§4), the three modes (§6), retention
-      sweep (§7).
-- [ ] Docker image: static binary, `relay.toml` mounted, `HEALTHCHECK` against `/healthz`.
-- [ ] Tests: signature/replay/skew rejection; seal-then-open round trip against a fixture key;
+- [x] `crates/adi-relay` (client: signing, sealing, OpenSSH encode/decode, key load-or-create,
+      ADI-MONO-222 "WR-A") and `crates/adi-relay-server` (the service binary, "WR-B"): schema
+      (§8), the five routes (§5), signing verification + nonce replay (§3), sealing/unsealing
+      (§4), the three modes (§6), retention sweep (§7). 82 tests across the two crates, `cargo
+      clippy -p adi-relay -p adi-relay-server --all-targets` clean.
+- [x] Docker image: `crates/adi-relay-server/Dockerfile` — multi-stage (`rust:1-slim-bookworm`
+      builder, `debian:bookworm-slim` runtime), non-root user, `/data` volume, `HEALTHCHECK`
+      against `/healthz`. **Written, not build-verified** — this box has no Docker; the deploy
+      agent builds it.
+- [x] Tests: signature/replay/skew rejection; seal-then-open round trip against a fixture key;
       delete-at-handout is atomic under concurrent pulls; retention purge; each mode's limits;
       public self-registration; enterprise licence-lapse pauses pull but not ingress; self-host
-      `authorized_keys` reload and the optional shared-secret/IP-allowlist layers.
+      `authorized_keys` reload and the optional shared-secret/IP-allowlist layers; the enterprise
+      licence client against the real beam contract (§14 Q6), including a real in-process
+      `/v1/verify` HTTP round trip.
 
 ### Phase 3 — deploy eu/us, public + enterprise, AWS + DNS
 - [ ] Confirm `/v1/verify` (Q6) before wiring enterprise licence checks against it.
