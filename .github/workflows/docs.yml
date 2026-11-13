@@ -28,7 +28,13 @@ jobs:
       run:
         working-directory: apps/docs
     steps:
+      # Starlight computes lastUpdated/dateModified from `git log --name-status` over the whole
+      # docs tree. A shallow clone has only one commit, and that commit's diff lists every
+      # tracked file as added — so every page gets stamped with that one commit's time
+      # regardless of when the file actually last changed.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: oven-sh/setup-bun@v2
 
