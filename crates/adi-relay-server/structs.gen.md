@@ -386,6 +386,7 @@ pub struct EndpointSummary {
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PulledRecord {
+    pub id: i64,
     pub endpoint_id: String,
     pub received_at: i64,
     pub sealed: Sealed,

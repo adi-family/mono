@@ -302,10 +302,19 @@ flagged for verification in phase 3, not asserted as already true of any particu
 
 ```json
 { "records": [
-  { "endpoint_id": "wh_7f3kq9m2m2x8qr4n", "received_at": 1793000012,
+  { "id": 4821, "endpoint_id": "wh_7f3kq9m2m2x8qr4n", "received_at": 1793000012,
     "sealed": { "ephemeral_pubkey": "…", "nonce": "…", "ciphertext": "…" } }
 ], "has_more": false }
 ```
+
+**Deviation from the contract as first drafted: `id` rides the wire too.** §4's own AAD is
+`"<endpoint_id>|<record_id>"` — the opener has to rebuild that exact string to decrypt, which
+means it needs the record id back, and nothing else in this response identifies one record among
+a batch. The original draft omitted it entirely (an oversight caught building WR-C's node-side
+opener, not a deliberate cut); `records.db`'s `id` column was always there, the `RETURNING`
+clause and `PulledRecord` just weren't carrying it through. No security cost: `id` is an
+AUTOINCREMENT row counter, not a capability — knowing it grants nothing a holder of the sealed
+bytes couldn't already attempt.
 
 **Delete-at-handout, no ack, no lease.** Every record included in a `200` response is deleted from
 the relay's storage in the same transaction that selected it — `DELETE … RETURNING *` (SQLite

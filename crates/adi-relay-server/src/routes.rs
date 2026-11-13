@@ -342,6 +342,7 @@ fn pull_response(records: Vec<PulledRecord>) -> serde_json::Value {
         .into_iter()
         .map(|r| {
             serde_json::json!({
+                "id": r.id,
                 "endpoint_id": r.endpoint_id,
                 "received_at": r.received_at,
                 "sealed": {
@@ -500,7 +501,7 @@ mod tests {
 
         let pulled = state.store.pull("fp1", 10).expect("pull");
         assert_eq!(pulled.len(), 1);
-        let opened = adi_relay::seal::open(&sealing_secret, "wh_test", 1, &pulled[0].sealed).expect("open");
+        let opened = adi_relay::seal::open(&sealing_secret, "wh_test", pulled[0].id, &pulled[0].sealed).expect("open");
         let record: serde_json::Value = serde_json::from_slice(&opened).unwrap();
         assert_eq!(record["method"], "POST");
         assert_eq!(record["headers"]["x-hub-signature-256"], "sha256=abc");

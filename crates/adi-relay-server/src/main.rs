@@ -231,7 +231,8 @@ mod tests {
             records[0]["sealed"]["ciphertext"].as_str().unwrap(),
         )
         .expect("decodes");
-        let opened = adi_relay::seal::open(&sealing_secret, &endpoint_id, 1, &sealed).expect("opens");
+        let record_id = records[0]["id"].as_i64().expect("id rides the wire so the opener can rebuild the AAD");
+        let opened = adi_relay::seal::open(&sealing_secret, &endpoint_id, record_id, &sealed).expect("opens");
         let record: serde_json::Value = serde_json::from_slice(&opened).unwrap();
         assert_eq!(record["method"], "POST");
         assert_eq!(record["headers"]["x-hub-signature-256"], "sha256=abc");

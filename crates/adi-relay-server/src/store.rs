@@ -98,6 +98,10 @@ pub struct EndpointSummary {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PulledRecord {
+    /// The row id `insert_sealed_record` sealed the AAD against (`adi_relay::seal::aad`) — the
+    /// opener needs it back to rebuild the same AAD, so it rides the wire too (§5.5's own
+    /// deviation, see `docs/webhook-relay.md`).
+    pub id: i64,
     pub endpoint_id: String,
     pub received_at: i64,
     pub sealed: Sealed,
@@ -353,16 +357,17 @@ impl Store {
                 WHERE e.owner_fingerprint = ?1 AND e.paused = 0
                 ORDER BY r.id ASC LIMIT ?2
              )
-             RETURNING endpoint_id, received_at, ephemeral_pubkey, nonce, ciphertext",
+             RETURNING id, endpoint_id, received_at, ephemeral_pubkey, nonce, ciphertext",
         )?;
         let rows = stmt.query_map(params![owner_fingerprint, batch_max], |row| {
             Ok(PulledRecord {
-                endpoint_id: row.get(0)?,
-                received_at: row.get(1)?,
+                id: row.get(0)?,
+                endpoint_id: row.get(1)?,
+                received_at: row.get(2)?,
                 sealed: Sealed {
-                    ephemeral_pubkey: row.get::<_, Vec<u8>>(2)?.try_into().unwrap_or_default(),
-                    nonce: row.get::<_, Vec<u8>>(3)?.try_into().unwrap_or_default(),
-                    ciphertext: row.get(4)?,
+                    ephemeral_pubkey: row.get::<_, Vec<u8>>(3)?.try_into().unwrap_or_default(),
+                    nonce: row.get::<_, Vec<u8>>(4)?.try_into().unwrap_or_default(),
+                    ciphertext: row.get(5)?,
                 },
             })
         })?;
@@ -564,9 +569,32 @@ mod tests {
         assert_eq!(pulled[0].endpoint_id, "wh_a");
         assert_eq!(pulled[0].received_at, 1_111);
 
-        // record_id of the only row ever inserted is 1 (AUTOINCREMENT from a fresh table).
-        let opened = adi_relay::seal::open(&secret, "wh_a", 1, &pulled[0].sealed).expect("open");
+        let opened = adi_relay::seal::open(&secret, "wh_a", pulled[0].id, &pulled[0].sealed).expect("open");
         assert_eq!(&*opened, b"hello webhook");
+    }
+
+    /// §5.5's own deviation (`docs/webhook-relay.md`): `id` has to ride the wire, distinctly per
+    /// record, because the opener needs it back to rebuild §4's AAD. Two records in one batch
+    /// must come back with two different ids, each opening only with its own.
+    #[test]
+    fn pulled_records_in_one_batch_carry_distinct_ids() {
+        let (sealing_public, sealing_secret) = node();
+        let secret = x25519_dalek::StaticSecret::from(sealing_secret);
+        let s = store();
+        s.insert_endpoint("wh_a", "fp1", "k", "seal", 300, 1000).unwrap();
+        s.insert_sealed_record("wh_a", &sealing_public, 1, 9_999, 5, b"first").unwrap();
+        s.insert_sealed_record("wh_a", &sealing_public, 2, 9_999, 6, b"second").unwrap();
+
+        let pulled = s.pull("fp1", 10).expect("pull");
+        assert_eq!(pulled.len(), 2);
+        assert_ne!(pulled[0].id, pulled[1].id);
+
+        let first = adi_relay::seal::open(&secret, "wh_a", pulled[0].id, &pulled[0].sealed).expect("open first");
+        assert_eq!(&*first, b"first");
+        let second = adi_relay::seal::open(&secret, "wh_a", pulled[1].id, &pulled[1].sealed).expect("open second");
+        assert_eq!(&*second, b"second");
+        // The AAD is bound per-record: the wrong id for either never opens.
+        assert!(adi_relay::seal::open(&secret, "wh_a", pulled[1].id, &pulled[0].sealed).is_err());
     }
 
     #[test]
