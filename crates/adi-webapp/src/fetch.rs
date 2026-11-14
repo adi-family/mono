@@ -1310,7 +1310,7 @@ pub async fn trigger_log(name: String) -> Result<TriggerLog, String> {
     post("/api/triggers/log", &TriggerRef { name }).await
 }
 
-/// This node's webhook-relay public signing key (`docs/webhook-relay.md` §10) — the trigger
+/// This node's webhook-relay public signing key — the trigger
 /// editor's "copy public key" button fetches it once the relay section is shown.
 pub async fn relay_key() -> Result<RelayKey, String> {
     get("/api/triggers/relay-key").await

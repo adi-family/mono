@@ -1,5 +1,5 @@
-//! OpenSSH rendering and parsing of the node's ed25519 *public* signing key (`docs/webhook-relay.md`
-//! §2, §6) — the one-line `ssh-ed25519 AAAA… [comment]` format an operator already knows from
+//! OpenSSH rendering and parsing of the node's ed25519 *public* signing key — the one-line
+//! `ssh-ed25519 AAAA… [comment]` format an operator already knows from
 //! `~/.ssh/authorized_keys`, and nothing more of it: no other key type, no private-key format, no
 //! comment-aware editing. Hand-rolled rather than a `ssh-key` dependency: the wire format a
 //! public-key line encodes is two length-prefixed strings (`"ssh-ed25519"`, then the 32 raw
@@ -23,7 +23,8 @@ pub fn encode(key: &VerifyingKey) -> String {
 
 /// The wire blob inside the base64: `string("ssh-ed25519") || string(32 raw bytes)`, each
 /// `string` a 4-byte big-endian length prefix followed by its bytes — the standard OpenSSH
-/// public-key wire format (RFC 4253 §6.6), restricted to the one key type this relay ever uses.
+/// public-key wire format (RFC 4253, section 6.6), restricted to the one key type this relay
+/// ever uses.
 fn blob(public: &[u8; PUBLIC_KEY_LENGTH]) -> Vec<u8> {
     let mut out = Vec::with_capacity(4 + KEY_TYPE.len() + 4 + PUBLIC_KEY_LENGTH);
     push_ssh_string(&mut out, KEY_TYPE.as_bytes());
@@ -120,9 +121,9 @@ fn read_ssh_string<'a>(buf: &'a [u8], pos: &mut usize) -> Result<&'a [u8], Parse
 }
 
 /// Every `ssh-ed25519` line in `text` that parses — one per non-blank, non-`#`-comment line, the
-/// same tolerance real `sshd` has for an `authorized_keys` file (§6's self-host mode): a line that
-/// fails to parse is skipped, not fatal to the rest of the file, because an operator's typo on one
-/// line must not lock every other key out too.
+/// same tolerance real `sshd` has for an `authorized_keys` file (self-host mode's gate): a line
+/// that fails to parse is skipped, not fatal to the rest of the file, because an operator's typo
+/// on one line must not lock every other key out too.
 #[must_use]
 pub fn parse_authorized_keys(text: &str) -> Vec<VerifyingKey> {
     text.lines()
@@ -134,8 +135,8 @@ pub fn parse_authorized_keys(text: &str) -> Vec<VerifyingKey> {
 
 /// A stable identifier for a public key, independent of how many times it's transmitted: sha256
 /// of the OpenSSH line's `type base64` prefix (never a trailing comment, which isn't part of the
-/// key), hex-encoded. This is `endpoints.owner_fingerprint` (`docs/webhook-relay.md` §8's schema)
-/// and the value every nonce row is scoped by (§3).
+/// key), hex-encoded. This is `endpoints.owner_fingerprint` in the relay's schema and the value
+/// every nonce row is scoped by.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Fingerprint(String);
 

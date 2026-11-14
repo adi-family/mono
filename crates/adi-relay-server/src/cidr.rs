@@ -1,5 +1,5 @@
-//! Self-host mode's `ip_allowlist` (`docs/webhook-relay.md` §6): a minimal, dependency-free
-//! CIDR matcher — IPv4 and IPv6, `a.b.c.d/n` or a bare address (an exact match, `/32` or
+//! Self-host mode's `ip_allowlist`: a minimal, dependency-free CIDR matcher — IPv4 and IPv6,
+//! `a.b.c.d/n` or a bare address (an exact match, `/32` or
 //! `/128`). Deliberately not a crate dependency: a CIDR string and an IP prefix comparison are
 //! both already in `std::net`, and this is the one place in the tree that needs either.
 
@@ -26,8 +26,8 @@ fn parse(entry: &str) -> Option<(IpAddr, u8)> {
     (bits <= max_bits).then_some((addr, bits))
 }
 
-/// Does `remote` fall inside any entry of `allowlist`? An empty allowlist is unrestricted (§6:
-/// "empty = unrestricted") — the caller decides whether to consult this at all; an allowlist
+/// Does `remote` fall inside any entry of `allowlist`? An empty allowlist is unrestricted — the
+/// caller decides whether to consult this at all; an allowlist
 /// that is present but names only malformed entries matches nothing, which is a misconfigured
 /// relay refusing every connection rather than one silently wide open.
 #[must_use]

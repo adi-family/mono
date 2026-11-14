@@ -39,13 +39,13 @@ pub(crate) const PROJECT_COLS: &[&str] = &["Name", "Launches", "Status", "Last r
 const WEBHOOK_SECRET: (&str, &str, &str) =
     ("secret", "Secret", "optional — callers must pass ?secret=…");
 
-/// The `extra` keys the relay section (`docs/webhook-relay.md` §10) owns, rendered through its
+/// The `extra` keys the relay section owns, rendered through its
 /// own dedicated fields below rather than the generic freeform list — `relay_endpoint` is
 /// server-written and must never be a hand-editable text box, and the other three deserve a
 /// select/number input and a licence field rather than a bare `<input>`.
 const RELAY_EXTRA_KEYS: &[&str] = &["relay", "relay_retention", "relay_endpoint", "licence_code"];
 
-/// The four hosted relays `docs/webhook-relay.md` §9 names, plus `custom:<url>` for a self-host
+/// The four hosted relays the task names, plus `custom:<url>` for a self-host
 /// operator's own instance — must mirror `adi-app/src/relay.rs::resolve_url` exactly. Duplicated
 /// rather than shared: this wasm frontend can't depend on that native-only crate, and the
 /// vocabulary is small and settled (the same four names the save form's `<option>`s below offer).
@@ -547,7 +547,7 @@ fn set_extra(extra: RwSignal<BTreeMap<String, String>>, key: &str, value: String
     });
 }
 
-/// The relay section (`docs/webhook-relay.md` §10): a picker for the four hosted relays or a
+/// The relay section: a picker for the four hosted relays or a
 /// self-hosted URL, a retention field, an enterprise relay's licence code, and — once `adi-app`
 /// has registered this trigger and written back `relay_endpoint` — the public URL to hand the
 /// sender and this node's own public key for a self-host operator's `authorized_keys`. Shown for

@@ -1,15 +1,16 @@
-//! Background sweeps: retention/nonce/registration purge every 30 seconds (§7), and — enterprise
-//! mode only — the licence recheck once every `recheck_interval_secs` (§6, default 24h).
+//! Background sweeps: retention/nonce/registration purge every 30 seconds, and — enterprise
+//! mode only — the licence recheck once every `recheck_interval_secs` (default 24h).
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use crate::{AppState, now_secs, today};
 
-/// §7: "a background sweep, every 30 seconds".
+/// A background purge pass, every 30 seconds.
 const PURGE_INTERVAL: Duration = Duration::from_secs(30);
 
-/// §7: "`registrations_by_ip` rows older than 2 days (the public cap only needs a rolling day)".
+/// `registrations_by_ip` rows older than this are purged — the public cap only needs a rolling
+/// day, so 2 days of margin is plenty.
 const REGISTRATION_RETENTION_DAYS: u64 = 2;
 
 /// One purge pass: expired records, expired nonces, and old `registrations_by_ip` rows.
@@ -37,12 +38,12 @@ pub async fn run_purge_loop(state: Arc<AppState>) {
     }
 }
 
-/// Re-verify every cached licence verdict (§6: "a background sweep re-verifies every row once
-/// every `recheck_interval_secs`"). **A beam that cannot be trusted this cycle leaves that
-/// fingerprint's cached status untouched**, retried next cycle — unlike `register`'s own
-/// uniform fail-closed choice (§14 Q6), pausing every enterprise customer's endpoints over one
-/// momentary network blip to the licence service would be a worse failure mode than serving one
-/// more interval on a stale-but-last-known-good verdict. Only a successful, signed, decided
+/// Re-verify every cached licence verdict, once every `recheck_interval_secs`. **A beam that
+/// cannot be trusted this cycle leaves that fingerprint's cached status untouched**, retried
+/// next cycle — unlike `register`'s own uniform fail-closed choice, pausing every enterprise
+/// customer's endpoints over one momentary network blip to the licence service would be a worse
+/// failure mode than serving one more interval on a stale-but-last-known-good verdict. Only a
+/// successful, signed, decided
 /// *non-serving* verdict pauses a fingerprint's endpoints; a successful serving verdict unpauses
 /// them (a renewal, or a row that was never paused, both no-ops either way).
 pub async fn recheck_licences_once(state: &AppState) {

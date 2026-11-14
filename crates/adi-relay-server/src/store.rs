@@ -1,8 +1,8 @@
-//! The relay's local SQLite store (`docs/webhook-relay.md` §8) — one `rusqlite::Connection`,
-//! guarded by a `Mutex` (a self-hostable relay's write volume never justifies a pool), with the
-//! same WAL pragmas `adi-db`'s own doc gives for the same reason (readers never block the
-//! writer), duplicated here rather than depending on that crate: a self-hosting customer has
-//! neither `adi-db` nor `~/.adi/mono/` installed, and this store must not assume either (§8).
+//! The relay's local SQLite store — one `rusqlite::Connection`, guarded by a `Mutex` (a
+//! self-hostable relay's write volume never justifies a pool), with the same WAL pragmas
+//! `adi-db`'s own doc gives for the same reason (readers never block the writer), duplicated
+//! here rather than depending on that crate: a self-hosting customer has neither `adi-db` nor
+//! `~/.adi/mono/` installed, and this store must not assume either.
 
 use std::path::Path;
 use std::sync::Mutex;
@@ -53,10 +53,10 @@ CREATE TABLE IF NOT EXISTS nonces (
   PRIMARY KEY (owner_fingerprint, nonce)
 );
 
--- `licence_code` is not in the task's own §8 schema sketch — added here, documented as a
--- deviation in docs/webhook-relay.md §14 Q6: the daily recheck sweep (§6) has to beam the
--- licence service again, and the beam's wire contract requires the code on every call, so it
--- has to be remembered somewhere between register and the next recheck.
+-- `licence_code` is not in the task's own original schema sketch — added here, a deliberate
+-- deviation: the daily recheck sweep has to beam the licence service again, and the beam's wire
+-- contract requires the code on every call, so it has to be remembered somewhere between
+-- register and the next recheck.
 CREATE TABLE IF NOT EXISTS licence_status (
   owner_fingerprint TEXT PRIMARY KEY,
   licence_code      TEXT NOT NULL,
@@ -99,8 +99,8 @@ pub struct EndpointSummary {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PulledRecord {
     /// The row id `insert_sealed_record` sealed the AAD against (`adi_relay::seal::aad`) — the
-    /// opener needs it back to rebuild the same AAD, so it rides the wire too (§5.5's own
-    /// deviation, see `docs/webhook-relay.md`).
+    /// opener needs it back to rebuild the same AAD, so it rides the wire too (a deliberate
+    /// deviation from the pull response's first draft, which omitted it).
     pub id: i64,
     pub endpoint_id: String,
     pub received_at: i64,
@@ -148,7 +148,7 @@ impl Store {
     // ---- endpoints -------------------------------------------------------------------
 
     /// How many endpoints `owner_fingerprint` already owns on this relay — the `register`-time
-    /// check against the mode's `max_endpoints_per_key` (§5.2).
+    /// check against the mode's `max_endpoints_per_key`.
     ///
     /// # Errors
     /// Any `rusqlite` error.
@@ -160,8 +160,8 @@ impl Store {
         )
     }
 
-    /// Insert a freshly minted endpoint. The caller mints `id` (§5.2: unguessable, the relay's
-    /// own namespace) and passes it in rather than this function generating one, so a retry on a
+    /// Insert a freshly minted endpoint. The caller mints `id` (unguessable, the relay's own
+    /// namespace) and passes it in rather than this function generating one, so a retry on a
     /// rare id collision is the caller's loop to run, not this function's.
     ///
     /// # Errors
@@ -194,8 +194,7 @@ impl Store {
             .map(|r| r.is_some())
     }
 
-    /// Look up one endpoint by id, for the sender-ingress path (§5.1) and `delete`'s ownership
-    /// check (§5.4).
+    /// Look up one endpoint by id, for the sender-ingress path and `delete`'s ownership check.
     ///
     /// # Errors
     /// Any `rusqlite` error.
@@ -220,7 +219,7 @@ impl Store {
     }
 
     /// Every endpoint `owner_fingerprint` owns, with its pending-record count — `GET
-    /// /v1/endpoints` (§5.3).
+    /// /v1/endpoints`.
     ///
     /// # Errors
     /// Any `rusqlite` error.
@@ -244,7 +243,7 @@ impl Store {
         rows.collect()
     }
 
-    /// Delete an endpoint and every one of its queued records (§5.4) — `Forbidden` if
+    /// Delete an endpoint and every one of its queued records — `Forbidden` if
     /// `owner_fingerprint` doesn't match the recorded owner, `NotFound` if the id never existed.
     ///
     /// # Errors
@@ -266,7 +265,7 @@ impl Store {
     }
 
     /// Pause or unpause every endpoint `owner_fingerprint` owns — what a licence-status flip
-    /// does (§6: "a lapsed licence pauses every endpoint that fingerprint owns").
+    /// does: a lapsed licence pauses every endpoint that fingerprint owns.
     ///
     /// # Errors
     /// Any `rusqlite` error.
@@ -281,7 +280,7 @@ impl Store {
     // ---- records (ingress, pull) -----------------------------------------------------
 
     /// How many records are already queued for `endpoint_id` — the per-endpoint pending-record
-    /// cap (§7), checked at ingress before accepting one more.
+    /// cap, checked at ingress before accepting one more.
     ///
     /// # Errors
     /// Any `rusqlite` error.
@@ -294,8 +293,8 @@ impl Store {
     }
 
     /// How many records `endpoint_id` has accepted since `since` (unix seconds) — the ingress
-    /// rate limit (§5.1, §6's `max_requests_per_minute_per_endpoint`). The schema (§8) has no
-    /// dedicated counter table for this; counting already-accepted records over the trailing
+    /// rate limit (`max_requests_per_minute_per_endpoint`). The schema has no dedicated counter
+    /// table for this; counting already-accepted records over the trailing
     /// window is free (no new table, no separate sweep) and is exactly the quantity the limit
     /// means: how many deliveries this endpoint has actually taken recently.
     ///
@@ -310,8 +309,8 @@ impl Store {
     }
 
     /// Seal `plaintext` to `sealing_public` and store it for `endpoint_id` — the sender-ingress
-    /// path (§5.1, §4). Sealing happens inside the same transaction as the insert because the
-    /// AAD binds the ciphertext to its own row id (§4), which SQLite only assigns at insert time:
+    /// path. Sealing happens inside the same transaction as the insert because the AAD binds the
+    /// ciphertext to its own row id, which SQLite only assigns at insert time:
     /// a placeholder row is inserted first, then updated with the sealed bytes computed from the
     /// row id `last_insert_rowid()` just returned — both statements commit atomically, so there
     /// is no window where a half-sealed row is visible to a concurrent `pull`.
@@ -342,7 +341,7 @@ impl Store {
         Ok(())
     }
 
-    /// Delete-at-handout (§5.5): atomically take up to `batch_max` queued records across every
+    /// Delete-at-handout: atomically take up to `batch_max` queued records across every
     /// *unpaused* endpoint `owner_fingerprint` owns, oldest first, and return them — gone from
     /// the store the instant this call returns, by construction (`DELETE … RETURNING`), not by a
     /// second step the caller has to remember to run.
@@ -378,7 +377,7 @@ impl Store {
 
     /// Remember `nonce` for `owner_fingerprint`, expiring at `expires_at` — `Ok(true)` if it was
     /// fresh (and is now remembered), `Ok(false)` if it had already been seen inside the window
-    /// (§3's replay check).
+    /// (the replay check).
     ///
     /// # Errors
     /// Any `rusqlite` error other than the expected unique-constraint violation on replay.
@@ -409,9 +408,9 @@ impl Store {
             .optional()
     }
 
-    /// `licence_code` is remembered alongside the verdict so the next recheck sweep (§6) can
-    /// beam the licence service again without asking the node for it a second time — see this
-    /// module's own schema comment.
+    /// `licence_code` is remembered alongside the verdict so the next recheck sweep can beam the
+    /// licence service again without asking the node for it a second time — see this module's
+    /// own schema comment.
     ///
     /// # Errors
     /// Any `rusqlite` error.
@@ -431,7 +430,7 @@ impl Store {
     }
 
     /// Every `(owner_fingerprint, licence_code)` with a cached verdict — what the daily recheck
-    /// sweep (§6) iterates.
+    /// sweep iterates.
     ///
     /// # Errors
     /// Any `rusqlite` error.
@@ -468,7 +467,7 @@ impl Store {
         Ok(())
     }
 
-    // ---- retention / sweep (§7) ----------------------------------------------------------
+    // ---- retention / sweep ----------------------------------------------------------
 
     /// Purge every record whose `expires_at` has passed. Returns how many were removed.
     ///
@@ -488,7 +487,7 @@ impl Store {
             .execute("DELETE FROM nonces WHERE expires_at < ?1", params![now])
     }
 
-    /// Purge `registrations_by_ip` rows older than `before_day` (§7: "2 days" for the rolling
+    /// Purge `registrations_by_ip` rows older than `before_day` (2 days, for the rolling
     /// per-IP daily cap).
     ///
     /// # Errors
@@ -573,9 +572,9 @@ mod tests {
         assert_eq!(&*opened, b"hello webhook");
     }
 
-    /// §5.5's own deviation (`docs/webhook-relay.md`): `id` has to ride the wire, distinctly per
-    /// record, because the opener needs it back to rebuild §4's AAD. Two records in one batch
-    /// must come back with two different ids, each opening only with its own.
+    /// A deliberate deviation from the pull response's first draft: `id` has to ride the wire,
+    /// distinctly per record, because the opener needs it back to rebuild the AAD. Two records
+    /// in one batch must come back with two different ids, each opening only with its own.
     #[test]
     fn pulled_records_in_one_batch_carry_distinct_ids() {
         let (sealing_public, sealing_secret) = node();

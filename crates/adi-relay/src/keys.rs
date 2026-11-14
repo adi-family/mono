@@ -1,4 +1,4 @@
-//! This node's own relay identity (`docs/webhook-relay.md` §2): an ed25519 signing key and an
+//! This node's own relay identity: an ed25519 signing key and an
 //! X25519 sealing key, two independent 32-byte raw files under this shared store's own `relay`
 //! module dir — a sibling of `mesh/`, deliberately not inside it, because this relationship has
 //! nothing to do with mesh/fleet identity. **Never through `adi-secrets`**: these are node
@@ -21,8 +21,8 @@ const SIGNING_KEY_FILE: &str = "signing.key";
 const SEALING_KEY_FILE: &str = "sealing.key";
 
 /// This node's two relay keys, loaded together because every relay-backed trigger on the node
-/// shares the one pair (§10: "one pair per node, not per trigger" — the relay tells triggers
-/// apart by `endpoint_id`, not by key).
+/// shares the one pair: one pair per node, not per trigger — the relay tells triggers apart by
+/// `endpoint_id`, not by key.
 pub struct RelayIdentity {
     pub signing: SigningKey,
     pub sealing: StaticSecret,
@@ -40,14 +40,14 @@ impl std::fmt::Debug for RelayIdentity {
 
 impl RelayIdentity {
     /// This node's OpenSSH-rendered public signing key — what every signed request's
-    /// `X-Relay-Key` header carries (§3) and the panel's "copy public key" button shows (§10).
+    /// `X-Relay-Key` header carries and the panel's "copy public key" button shows.
     #[must_use]
     pub fn public_key_line(&self) -> String {
         crate::openssh::encode(&self.signing.verifying_key())
     }
 
     /// This node's public sealing key, raw 32 bytes — what `register`'s body sends as
-    /// `sealing_key` (§5.2), base64-encoded by the caller, not here.
+    /// `sealing_key`, base64-encoded by the caller, not here.
     #[must_use]
     pub fn sealing_public(&self) -> [u8; 32] {
         *PublicKey::from(&self.sealing).as_bytes()
@@ -56,8 +56,9 @@ impl RelayIdentity {
 
 /// Load this node's relay keys, generating and saving a fresh pair on first use — the same
 /// `load_or_create` shape `adi-mesh::identity`/`devicekey` already use, and deliberately not
-/// sharing their implementation: conflating this with the mesh identity key is exactly the
-/// mistake §2 argues against.
+/// sharing their implementation: conflating this with the mesh identity key would make "can
+/// prove this request came from the node" and "can read this node's inbox" one capability,
+/// which is exactly the mistake to avoid.
 ///
 /// # Errors
 /// Fails if either key file exists but is not exactly 32 bytes, or on any store I/O error.

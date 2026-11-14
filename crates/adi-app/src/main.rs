@@ -304,7 +304,7 @@ async fn main() -> anyhow::Result<()> {
     // (ADI-MONO-180 P2.4's own gap, closed by ADI-MONO-181) — this machine acting as a paired
     // peer dialling *out*, independent of whether this machine's own `[user_secrets]` is enabled.
     lease_worker::start(secrets.clone());
-    // The webhook relay poller (docs/webhook-relay.md §10, ADI-MONO-223) — always loopback, for
+    // The webhook relay poller (ADI-MONO-223) — always loopback, for
     // the same reason `agents.with_lease_url` above is: the replay this exercises is honoured
     // only from this process's own listener, never the address a peer would dial this node at.
     relay::start(triggers.clone(), format!("http://127.0.0.1:{}", local.port()));
@@ -1101,7 +1101,7 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/agents/send-keys") => handlers::send_agent_keys(agents, &req.body),
         ("GET", "/api/triggers") => handlers::triggers(triggers),
         ("GET", "/api/triggers/relay-key") => relay::relay_key(),
-        // Relay-aware (docs/webhook-relay.md §10, ADI-MONO-223): register/deregister against a
+        // Relay-aware (ADI-MONO-223): register/deregister against a
         // relay before anything persists, which needs the async runtime — see `async_route`.
         ("POST", "/api/triggers/fire") => handlers::fire_trigger(triggers, &req.body),
         ("POST", "/api/triggers/restart") => {

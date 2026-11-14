@@ -2,7 +2,7 @@
 
 # `adi-relay-server` — types
 
-> The webhook relay service (docs/webhook-relay.md, ADI-MONO-220/222): a small self-hostable binary that answers unauthenticated sender webhooks at /h/<endpoint-id> and a signed, polled pull API for the node that owns them. One binary, one relay.toml, three modes (public/enterprise/self-host) differing only in whose key is accepted. Deliberately not built on adi-db or adi-config — a self-hosting customer has neither installed.
+> The webhook relay service (ADI-MONO-220/222): a small self-hostable binary that answers unauthenticated sender webhooks at /h/<endpoint-id> and a signed, polled pull API for the node that owns them. One binary, one relay.toml, three modes (public/enterprise/self-host) differing only in whose key is accepted. Deliberately not built on adi-db or adi-config — a self-hosting customer has neither installed.
 
 23 structs · 4 enums · 1 type alias across 7 files.
 
@@ -22,7 +22,7 @@
 
 ### enum `AuthOutcome`
 
-The three ways `authenticate` can refuse a request, named exactly as §5's error codes — `Ok` carries the verified key, so a caller that needs the fingerprint doesn't have to re-derive it from anything.
+The three ways `authenticate` can refuse a request, named exactly as the wire contract's error codes — `Ok` carries the verified key, so a caller that needs the fingerprint doesn't have to re-derive it from anything.
 
 ```rust
 #[derive(Debug)]
@@ -36,7 +36,7 @@ pub enum AuthOutcome {
 
 ### struct `AuthorizedKeys`
 
-Self-host mode's `authorized_keys` file (§6): reloaded by mtime, at most every 5 seconds — the same cadence `adi-mesh`'s own gateway reload uses for `fleet.toml`. A `stat()` is cheap enough to pay on every request; actually re-reading and re-parsing the file only happens when the mtime has moved, and even the stat is skipped for 5 seconds after the last one.
+Self-host mode's `authorized_keys` file: reloaded by mtime, at most every 5 seconds — the same cadence `adi-mesh`'s own gateway reload uses for `fleet.toml`. A `stat()` is cheap enough to pay on every request; actually re-reading and re-parsing the file only happens when the mtime has moved, and even the stat is skipped for 5 seconds after the last one.
 
 ```rust
 pub struct AuthorizedKeys {
@@ -61,7 +61,7 @@ struct KeysState {
 
 ### enum `Mode`
 
-The three modes (§6) — a relay operator picks exactly one per running instance; a node's own `extra["relay"]` setting (§10) later picks a mode by picking which relay it registers with.
+The three modes — a relay operator picks exactly one per running instance; a node's own `extra["relay"]` setting later picks a mode by picking which relay it registers with.
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,7 +74,7 @@ pub enum Mode {
 
 ### struct `Limits`
 
-The resolved limits for one running instance — every field always has a value, either the operator's own or the mode's default (§6's table).
+The resolved limits for one running instance — every field always has a value, either the operator's own or the mode's default (see `Limits::defaults_for`).
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,7 +93,7 @@ pub struct Limits {
 
 ### struct `LicenceConfig`
 
-Enterprise-mode licence gating (§6). **`public_key` is not in the task's own sample `relay.toml` — added here, documented as a deviation in `docs/webhook-relay.md` §14 Q6: the relay must verify the licence service's beam signature itself (the same "CLIENT ACCEPTANCE" rule `adi-enterprise-beam-wire-contract-v1` states for every beam client), and there is nowhere else to configure the key it verifies against.**
+Enterprise-mode licence gating. **`public_key` is not in the task's own sample `relay.toml` — added here, a deliberate deviation from the original design sketch: the relay must verify the licence service's beam signature itself (the same "CLIENT ACCEPTANCE" rule `adi-enterprise-beam-wire-contract-v1` states for every beam client), and there is nowhere else to configure the key it verifies against.**
 
 ```rust
 #[derive(Debug, Clone, Deserialize)]
@@ -107,7 +107,7 @@ pub struct LicenceConfig {
 
 ### struct `SelfHostConfig`
 
-Self-host gating (§6).
+Self-host gating.
 
 ```rust
 #[derive(Debug, Clone, Deserialize)]
@@ -280,7 +280,7 @@ pub struct LicenceOutcome {
 
 ### enum `LicenceError`
 
-Every way a beam can fail to produce a trustworthy `LicenceOutcome` — deliberately not folded into one variant, because the caller treats a transport failure very differently from a decided-but-untrustworthy response (§6: register refuses either way, but the daily recheck sweep must not pause a licence over a network blip — see `sweep.rs`).
+Every way a beam can fail to produce a trustworthy `LicenceOutcome` — deliberately not folded into one variant, because the caller treats a transport failure very differently from a decided-but-untrustworthy response: register refuses either way, but the daily recheck sweep must not pause a licence over a network blip — see `sweep.rs`.
 
 ```rust
 #[derive(Debug)]

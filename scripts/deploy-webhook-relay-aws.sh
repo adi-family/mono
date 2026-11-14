@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bring up one webhook-relay region on AWS EC2 (docs/webhook-relay.md §9, ADI-MONO-224).
+# Bring up one webhook-relay region on AWS EC2 (ADI-MONO-224).
 #
 # One machine per region, two Docker containers on it (mode=public, mode=enterprise — separate
 # relay.toml, db_path and volume each) with Caddy in front terminating TLS and routing by

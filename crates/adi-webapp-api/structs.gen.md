@@ -3457,7 +3457,7 @@ pub struct TriggerLog {
 
 ### struct `RelayKey`
 
-`GET /api/triggers/relay-key` (`docs/webhook-relay.md` §10, ADI-MONO-223) — this node's webhook-relay public signing key, OpenSSH-rendered, for a self-host operator's own `authorized_keys` file. Answered by `adi-app` (never this crate: the key lives in `adi_relay`, a dependency only the binary that actually runs a node takes).
+`GET /api/triggers/relay-key` (ADI-MONO-223) — this node's webhook-relay public signing key, OpenSSH-rendered, for a self-host operator's own `authorized_keys` file. Answered by `adi-app` (never this crate: the key lives in `adi_relay`, a dependency only the binary that actually runs a node takes).
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

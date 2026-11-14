@@ -217,9 +217,10 @@ x25519-dalek = { version = "2", default-features = false, features = ["alloc", "
 # 0.13, not the more commonly cited 0.12: 0.12 pulls `hmac`/`digest` 0.10, which conflicts with
 # this tree's `sha2 = "0.11"` (`digest` 0.11) and fails to resolve `Hkdf<Sha256>`'s trait bounds.
 hkdf = "0.13"
-# The webhook relay's node identity key (adi-relay, ADI-MONO-222 §2/§3) — a signature over every
-# node→relay request, deliberately separate from `x25519-dalek` above (signing a request and
-# sealing a payload are different capabilities, §2's own reasoning). Already in the dependency
+# The webhook relay's node identity key (adi-relay, ADI-MONO-222) — a signature over every
+# node→relay request, deliberately separate from `x25519-dalek` above: signing a request and
+# sealing a payload are different capabilities, the same reasoning `adi-mesh`'s own device-key
+# file gives for not reusing the mesh identity key to wrap secrets. Already in the dependency
 # graph transitively at this exact version (iroh pulls it in via `ed25519`), so pinning "3" here
 # resolves to the same crate rather than a second copy. Default features only: key bytes come
 # from the OS CSPRNG by hand (the same one `adi-mesh`'s own key files use), not the crate's own

@@ -2,7 +2,7 @@
 
 # `adi-relay` — types
 
-> Client half of the webhook relay (docs/webhook-relay.md, ADI-MONO-220/222): a node's own ed25519 signing key and X25519 sealing key, request signing against the relay's wire contract, sealed-box open/seal, and OpenSSH rendering/parsing of the public signing key. Used by adi-app (the poller) and adi-cli (the node side, ADI-MONO-223) as well as by adi-relay-server (verification and sealing, never a node's own keys).
+> Client half of the webhook relay (ADI-MONO-220/222): a node's own ed25519 signing key and X25519 sealing key, request signing against the relay's wire contract, sealed-box open/seal, and OpenSSH rendering/parsing of the public signing key. Used by adi-app (the poller) and adi-cli (the node side, ADI-MONO-223) as well as by adi-relay-server (verification and sealing, never a node's own keys).
 
 5 structs · 2 enums across 4 files.
 
@@ -19,7 +19,7 @@
 
 ### struct `RelayIdentity`
 
-This node's two relay keys, loaded together because every relay-backed trigger on the node shares the one pair (§10: "one pair per node, not per trigger" — the relay tells triggers apart by `endpoint_id`, not by key).
+This node's two relay keys, loaded together because every relay-backed trigger on the node shares the one pair: one pair per node, not per trigger — the relay tells triggers apart by `endpoint_id`, not by key.
 
 ```rust
 pub struct RelayIdentity {
@@ -50,7 +50,7 @@ pub enum ParseError {
 
 ### struct `Fingerprint`
 
-A stable identifier for a public key, independent of how many times it's transmitted: sha256 of the OpenSSH line's `type base64` prefix (never a trailing comment, which isn't part of the key), hex-encoded. This is `endpoints.owner_fingerprint` (`docs/webhook-relay.md` §8's schema) and the value every nonce row is scoped by (§3).
+A stable identifier for a public key, independent of how many times it's transmitted: sha256 of the OpenSSH line's `type base64` prefix (never a trailing comment, which isn't part of the key), hex-encoded. This is `endpoints.owner_fingerprint` in the relay's schema and the value every nonce row is scoped by.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -63,7 +63,7 @@ pub struct Fingerprint(String);
 
 ### struct `Sealed`
 
-One sealed record, exactly the three fields §5.5's wire contract carries and §8's schema stores — base64 on the wire, raw bytes here; the caller decides which it needs.
+One sealed record, exactly the three fields the pull response's wire contract carries and the relay's own schema stores — base64 on the wire, raw bytes here; the caller decides which it needs.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,7 +89,7 @@ pub struct OpenError;
 
 ### struct `SignedRequest`
 
-One signed request's worth of header values, read off or about to be written onto the wire — `key_line` is the full `X-Relay-Key` value, not a fingerprint (§3: "the full public key rides on every request... the signature has to be self-contained").
+One signed request's worth of header values, read off or about to be written onto the wire — `key_line` is the full `X-Relay-Key` value, not a fingerprint: the full public key rides on every request, since the signature has to be self-contained.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,7 +103,7 @@ pub struct SignedRequest {
 
 ### enum `VerifyError`
 
-Everything that can go wrong verifying a signed request — deliberately distinguished (unlike `crate::seal::OpenError`'s single "didn't open"), because the relay's own error codes (§5) are stated per failure: `bad_signature` covers everything here except a timestamp outside the skew window, which the caller checks separately with `within_skew` before ever reaching this function (§3: "cheaper to reject").
+Everything that can go wrong verifying a signed request — deliberately distinguished (unlike `crate::seal::OpenError`'s single "didn't open"), because the relay's own error codes are stated per failure: `bad_signature` covers everything here except a timestamp outside the skew window, which the caller checks separately with `within_skew` before ever reaching this function, since that's cheaper to reject.
 
 ```rust
 #[derive(Debug)]

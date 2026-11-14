@@ -1,5 +1,5 @@
-//! Encryption at rest for a queued webhook record (`docs/webhook-relay.md` §4), modelled
-//! directly on `adi-mesh/src/lease_seal.rs` — the one other place in this codebase anonymously
+//! Encryption at rest for a queued webhook record, modelled directly on
+//! `adi-mesh/src/lease_seal.rs` — the one other place in this codebase anonymously
 //! encrypts a value to a known X25519 public key over an untrusted hop. [`seal`] is the relay's
 //! side, run against the node's **long-lived** public sealing key (unlike `lease_seal`'s
 //! ephemeral session key); [`open`] is the node's, the new half neither `lease_seal` nor
@@ -13,12 +13,13 @@ use sha2::Sha256;
 use x25519_dalek::{EphemeralSecret, PublicKey, StaticSecret};
 use zeroize::Zeroizing;
 
-/// The HKDF `info` binding the derived key to this exact use (§4) — so the same ECDH output,
-/// reused nowhere else, could never collide with a different protocol's key.
+/// The HKDF `info` binding the derived key to this exact use — so the same ECDH output, reused
+/// nowhere else, could never collide with a different protocol's key.
 const INFO: &[u8] = b"adi-webhook-relay-seal-v1";
 
-/// One sealed record, exactly the three fields §5.5's wire contract carries and §8's schema
-/// stores — base64 on the wire, raw bytes here; the caller decides which it needs.
+/// One sealed record, exactly the three fields the pull response's wire contract carries and
+/// the relay's own schema stores — base64 on the wire, raw bytes here; the caller decides which
+/// it needs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Sealed {
     pub ephemeral_pubkey: [u8; 32],
@@ -42,7 +43,7 @@ impl Sealed {
         base64::engine::general_purpose::STANDARD.encode(&self.ciphertext)
     }
 
-    /// Rebuild from the three base64 fields §5.5's JSON carries.
+    /// Rebuild from the three base64 fields the pull response's JSON carries.
     ///
     /// # Errors
     /// `Err` with a short reason if any field isn't valid base64 or isn't the expected length.
@@ -69,7 +70,7 @@ impl Sealed {
     }
 }
 
-/// The AAD binding a ciphertext to the one record it was sealed for (§4): a row copied or
+/// The AAD binding a ciphertext to the one record it was sealed for: a row copied or
 /// replayed into a different record's slot fails to decrypt instead of opening as the wrong
 /// thing — the same reasoning `lease_seal.rs`'s own AAD gives for itself.
 #[must_use]

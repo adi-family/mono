@@ -1,9 +1,9 @@
-//! Node side of the webhook relay (`docs/webhook-relay.md` §10, ADI-MONO-223): this node's
+//! Node side of the webhook relay (ADI-MONO-223): this node's
 //! keypair, the register/deregister calls a trigger save or delete makes against a relay, and
 //! the built-in poller that pulls queued records and replays them into this node's own
 //! `/api/hooks/<name>`.
 //!
-//! **One keypair for the whole node (§2)**, loaded lazily by [`identity`] —
+//! **One keypair for the whole node**, loaded lazily by [`identity`] —
 //! [`adi_relay::keys::load_or_create`] under the hood, the same `load_or_create` shape
 //! `adi-mesh::identity`/`devicekey` already use. Every relay-backed trigger on the node shares
 //! it; the relay tells them apart by `endpoint_id`, not by key.
@@ -11,8 +11,9 @@
 //! **Register-on-save is a property of this API layer, not of the store.** Unlike the
 //! background-trigger [`adi_triggers::Supervisor`], which re-reads *whatever is on disk* on a
 //! timer so any writer (API, CLI, a hand-edited TOML) steers it alike, a relay registration is a
-//! network call with a real failure mode the caller needs to see *before* anything is persisted
-//! (§10: "a failed registration is a failed save, not a trigger left half-configured"). That
+//! network call with a real failure mode the caller needs to see *before* anything is
+//! persisted: a failed registration is meant to be a failed save, not a trigger left
+//! half-configured. That
 //! only works for a caller waiting on the save to answer — which is what `/api/triggers/save`'s
 //! HTTP response is and a raw `Triggers::save` call (the CLI, `adi-cli/src/triggers.rs`) is not.
 //! A CLI `--extra relay=…` therefore sets the field without registering anything; the task names
@@ -29,7 +30,7 @@ use adi_webapp_api::handlers::{self, Response};
 use base64::Engine as _;
 use tracing::{debug, warn};
 
-/// The four hosted relays the task names (`docs/webhook-relay.md` §9), plus `custom:<url>` for a
+/// The four hosted relays the task names, plus `custom:<url>` for a
 /// self-host operator's own instance. `None` for anything else — an unknown name is left for the
 /// panel/CLI's own validation to catch, not guessed at here.
 #[must_use]
@@ -46,7 +47,7 @@ pub fn resolve_url(relay: &str) -> Option<String> {
     }
 }
 
-/// This node's relay keypair, generated on first use (§2) and shared by every relay-backed
+/// This node's relay keypair, generated on first use and shared by every relay-backed
 /// trigger on the node.
 ///
 /// # Errors
@@ -78,8 +79,7 @@ fn now_secs() -> u64 {
         .as_secs()
 }
 
-/// The four `X-Relay-*` headers (`docs/webhook-relay.md` §3) for one request, signed with this
-/// node's key.
+/// The four `X-Relay-*` headers for one request, signed with this node's key.
 fn signed_headers(identity: &RelayIdentity, method: &str, path_and_query: &str, body: &[u8]) -> Vec<(String, String)> {
     let signed = adi_relay::sign::sign(
         &identity.signing,
@@ -97,7 +97,7 @@ fn signed_headers(identity: &RelayIdentity, method: &str, path_and_query: &str, 
     ]
 }
 
-/// The `{ "error": "...", "message": "..." }` body every relay non-2xx answers with (§5) — the
+/// The `{ "error": "...", "message": "..." }` body every relay non-2xx answers with — the
 /// message if it parses as that shape, else a generic one naming the status.
 fn relay_error_message(status: u16, body: &str) -> String {
     serde_json::from_str::<serde_json::Value>(body)
@@ -106,22 +106,21 @@ fn relay_error_message(status: u16, body: &str) -> String {
         .unwrap_or_else(|| format!("relay answered HTTP {status}"))
 }
 
-/// What `register` persists into the trigger's own `extra` (§10). `url` (§5.2's own echo of the
+/// What `register` persists into the trigger's own `extra`. `url` (`register`'s own echo of the
 /// public sender-facing URL) isn't kept here — the panel/CLI reconstruct it the same way the
 /// relay built it, `{relay_url}/h/{endpoint_id}`, from `relay` + `relay_endpoint`, so there's no
-/// fourth `extra` key for it (§10 names exactly three: `relay`, `relay_retention`,
-/// `relay_endpoint`).
+/// fourth `extra` key for it — only `relay`, `relay_retention`, and `relay_endpoint`.
 #[derive(Debug, Clone)]
 pub struct Registered {
     pub endpoint_id: String,
 }
 
-/// `POST /v1/endpoints` (§5.2): register this node's sealing key against `relay_url`. Not
+/// `POST /v1/endpoints`: register this node's sealing key against `relay_url`. Not
 /// best-effort — see this module's own doc comment.
 ///
 /// # Errors
-/// A short, user-facing reason: a transport failure, a non-2xx relay response, or one that didn't
-/// answer the shape §5.2 promises.
+/// A short, user-facing reason: a transport failure, a non-2xx relay response, or one that
+/// didn't answer the shape the register response promises.
 pub async fn register(
     relay_url: &str,
     identity: &RelayIdentity,
@@ -164,9 +163,9 @@ pub async fn register(
     Ok(Registered { endpoint_id })
 }
 
-/// `DELETE /v1/endpoints/<id>` (§5.4), best-effort — a relay delete that never lands costs
-/// nothing beyond retention's own clock (§7), the same stance `docs/fleet.md` §10 takes for a
-/// grant transfer ("a link that refuses, not a transfer that failed"). Fire-and-forget: spawned,
+/// `DELETE /v1/endpoints/<id>`, best-effort — a relay delete that never lands costs
+/// nothing beyond retention's own clock, the same stance a fleet grant transfer takes toward
+/// its own failure mode: "a link that refuses, not a transfer that failed." Fire-and-forget: spawned,
 /// never awaited by the caller, so disabling or deleting a trigger never waits on a relay.
 pub fn spawn_delete_best_effort(relay_url: String, identity: Arc<RelayIdentity>, endpoint_id: String) {
     tokio::spawn(async move {
@@ -184,7 +183,7 @@ pub fn spawn_delete_best_effort(relay_url: String, identity: Arc<RelayIdentity>,
     });
 }
 
-/// One record off `GET /v1/pull` (§5.5), decoded from the wire.
+/// One record off `GET /v1/pull`, decoded from the wire.
 #[derive(Debug, Clone)]
 struct PulledRecord {
     id: i64,
@@ -192,12 +191,12 @@ struct PulledRecord {
     sealed: Sealed,
 }
 
-/// `GET /v1/pull` (§5.5): long-polls server-side for up to the relay's own window, so this call
+/// `GET /v1/pull`: long-polls server-side for up to the relay's own window, so this call
 /// itself paces the poll loop — nothing extra to sleep between calls on success.
 ///
 /// # Errors
-/// A short, user-facing reason: a transport failure, a non-2xx relay response, or one that didn't
-/// answer the shape §5.5 promises.
+/// A short, user-facing reason: a transport failure, a non-2xx relay response, or one that
+/// didn't answer the shape the pull response promises.
 async fn pull(relay_url: &str, identity: &RelayIdentity) -> Result<Vec<PulledRecord>, String> {
     let path = "/v1/pull";
     let url = format!("{}{path}", relay_url.trim_end_matches('/'));
@@ -235,7 +234,7 @@ async fn pull(relay_url: &str, identity: &RelayIdentity) -> Result<Vec<PulledRec
         .collect::<Result<Vec<_>, String>>()
 }
 
-/// The sealed envelope's own shape (`docs/webhook-relay.md` §4): the sender's request exactly as
+/// The sealed envelope's own shape: the sender's request exactly as
 /// `/h/<endpoint-id>` captured it.
 #[derive(Debug, serde::Deserialize)]
 struct SenderRequest {
@@ -251,13 +250,13 @@ struct SenderRequest {
 const HOP_BY_HOP: &[&str] = &["host", "content-length", "connection", "transfer-encoding"];
 
 /// Open `record` with this node's sealing secret and replay it into the local loopback listener
-/// (§10) — never an in-process call straight into `handlers::hook_trigger`, so a relay-delivered
+/// — never an in-process call straight into `handlers::hook_trigger`, so a relay-delivered
 /// hook and a directly-received one are guaranteed to pass through *exactly* the same gating
 /// (`enabled`, `secret`, `trigger_on`), with no second copy of that logic to keep in step.
 ///
 /// `trigger.extra["secret"]` rides as a query param on the replay — the node's own answer to the
 /// local gate a direct caller would otherwise have had to supply, never sent by the external
-/// sender (§1: a sender can't sign with our key, so the sender side stays open in every mode).
+/// sender (a sender can't sign with our key, so the sender side stays open in every mode).
 async fn replay(loopback_base: &str, identity: &RelayIdentity, trigger: &Trigger, record: &PulledRecord) {
     let Ok(opened) = adi_relay::seal::open(&identity.sealing, &record.endpoint_id, record.id, &record.sealed) else {
         warn!(trigger = %trigger.name, endpoint_id = %record.endpoint_id, "a pulled record did not open with this node's sealing key — dropped");
@@ -314,7 +313,7 @@ const RESCAN: Duration = Duration::from_secs(15);
 const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
 
-/// Start the webhook relay poller: one `tokio::spawn`'d loop per distinct relay in use (§10),
+/// Start the webhook relay poller: one `tokio::spawn`'d loop per distinct relay in use,
 /// beside every other background loop in this crate (`prober::start`, `event_log::start`,
 /// `lease_worker::start`). `loopback_base` must always be `http://127.0.0.1:<this boot's own
 /// port>` — never the address a peer would dial this node at, the same reasoning `main`'s own
@@ -385,7 +384,7 @@ async fn poll_loop(url: String, triggers: Triggers, loopback_base: String, ident
     }
 }
 
-// ---- register-on-save / deregister-on-delete, the API-layer half (§10) ----------------------
+// ---- register-on-save / deregister-on-delete, the API-layer half ----------------------
 
 /// Whether, and how, a save needs to touch the relay before anything is persisted.
 enum Plan {
@@ -428,7 +427,7 @@ fn plan(previous: Option<&Trigger>, incoming: &TriggerManifest) -> Plan {
     }
 }
 
-/// `POST /api/triggers/save`, relay-aware (§10): decide whether this save needs to register (or
+/// `POST /api/triggers/save`, relay-aware: decide whether this save needs to register (or
 /// re-register) against a relay *before* writing anything persists, so a registration failure is
 /// a failed save — never a trigger left half-configured with a `relay` nobody answered for.
 pub async fn save_trigger(triggers: &Triggers, supervisor: &Supervisor, body: &[u8]) -> Response {
@@ -480,7 +479,7 @@ pub async fn save_trigger(triggers: &Triggers, supervisor: &Supervisor, body: &[
     handlers::commit_trigger(triggers, supervisor, &name, manifest)
 }
 
-/// `POST /api/triggers/delete`, relay-aware (§10): deregister the trigger's live endpoint (best
+/// `POST /api/triggers/delete`, relay-aware: deregister the trigger's live endpoint (best
 /// effort) before deleting its definition. Not actually async — the best-effort delete is a
 /// fire-and-forget spawn, never awaited here — but called from `async_route` beside
 /// [`save_trigger`], so it takes the same shape.
@@ -502,7 +501,7 @@ pub fn delete_trigger(triggers: &Triggers, supervisor: &Supervisor, body: &[u8])
     handlers::commit_delete_trigger(triggers, supervisor, &name)
 }
 
-/// `GET /api/triggers/relay-key` (§10): this node's webhook-relay public signing key, for the
+/// `GET /api/triggers/relay-key`: this node's webhook-relay public signing key, for the
 /// panel's own "copy public key" button and the CLI's `triggers relay-key`'s own HTTP twin.
 #[must_use]
 pub fn relay_key() -> Response {
@@ -609,7 +608,7 @@ mod tests {
     /// `replay` end to end against a real loopback socket standing in for `adi-app`'s own
     /// listener: opens a record genuinely sealed to this identity's key, and the fake listener
     /// reads back the exact HTTP request it produced — method preserved, the sender's own
-    /// `host` dropped (never forwarded, §10), the trigger's `secret` appended as a query param
+    /// `host` dropped (never forwarded), the trigger's `secret` appended as a query param
     /// nobody but this node ever sees, and the body round-tripped intact.
     #[tokio::test]
     async fn replay_opens_and_forwards_a_sealed_record_preserving_method_headers_and_secret() {
@@ -655,7 +654,7 @@ mod tests {
         let request_line = request.lines().next().unwrap();
         assert_eq!(request_line, "GET /api/hooks/deploy-hook?foo=bar&secret=shh HTTP/1.1");
         assert!(request.to_ascii_lowercase().contains("x-hub-signature-256: sha256=abc"));
-        // The sender's own captured `host` header must never ride the replay (§10) — reqwest
+        // The sender's own captured `host` header must never ride the replay — reqwest
         // still sets its own `Host: 127.0.0.1:<port>` for the request it's actually making, so
         // the assertion is on the *value*, not the header's bare absence.
         assert!(

@@ -1,7 +1,7 @@
-//! The webhook relay service (`docs/webhook-relay.md`, ADI-MONO-222): a small self-hostable
-//! binary answering unauthenticated sender webhooks at `/h/<endpoint-id>` (§5.1) and a signed,
-//! long-polled pull API (§5.2-§5.5) for the one node that owns them. One binary, one
-//! `relay.toml`, three modes differing only in whose key is accepted (§6).
+//! The webhook relay service (ADI-MONO-222): a small self-hostable binary answering
+//! unauthenticated sender webhooks at `/h/<endpoint-id>` and a signed, long-polled pull API for
+//! the one node that owns them. One binary, one `relay.toml`, three modes differing only in
+//! whose key is accepted.
 //!
 //! Every header map in this crate is the one concrete `HashMap<String, String>` [`http::parse`]
 //! builds — there's no caller who'd ever hand in a different hasher — so `clippy::implicit_hasher`
@@ -33,8 +33,8 @@ pub struct AppState {
     pub config: Config,
     pub licence: Option<LicenceClient>,
     pub authorized_keys: Option<AuthorizedKeys>,
-    /// Woken on every accepted ingress (§5.1) so a long-polling `pull` (§5.5) notices new data
-    /// without sleeping through its own window.
+    /// Woken on every accepted ingress so a long-polling `pull` notices new data without
+    /// sleeping through its own window.
     pub notify: tokio::sync::Notify,
 }
 
@@ -78,7 +78,7 @@ pub struct Response {
     pub body: String,
 }
 
-/// §5's error body: `{ "error": "<code>", "message": "<detail>" }`, for every non-2xx response.
+/// The error body: `{ "error": "<code>", "message": "<detail>" }`, for every non-2xx response.
 #[must_use]
 pub fn err(status: u16, code: &str, message: impl Into<String>) -> Response {
     let body = serde_json::json!({ "error": code, "message": message.into() });
@@ -107,7 +107,7 @@ pub fn now_secs() -> u64 {
 }
 
 /// The calendar day `now` (unix seconds, UTC) falls on, as `registrations_by_ip.day` stores it
-/// (§8's schema comment: `"2026-11-13"`).
+/// (e.g. `"2026-11-13"`).
 #[must_use]
 pub fn today(now: u64) -> String {
     let secs = i64::try_from(now).unwrap_or(0);

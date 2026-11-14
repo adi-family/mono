@@ -1,9 +1,10 @@
 //! Minimal HTTP/1.1 request parsing and response writing, trimmed to exactly what the relay
 //! needs: no SPA, no static assets, no WebSocket upgrade, no `Accept-Encoding` negotiation.
 //! Mirrors `adi-webapp-api/src/http.rs`'s shape (every other service binary in this workspace
-//! already does its own HTTP this way) without depending on that crate — §8's "deliberately not
-//! built on adi-db or adi-config" extends to not pulling in the app's own HTTP layer either,
-//! which is tied to that crate's SPA-serving and 32 MiB upload limit.
+//! already does its own HTTP this way) without depending on that crate — this relay deliberately
+//! isn't built on `adi-db` or `adi-config` at all (neither assumes `~/.adi/mono/` is installed,
+//! which a self-hosting customer has not done), and that extends to not pulling in the app's own
+//! HTTP layer either, which is tied to that crate's SPA-serving and 32 MiB upload limit.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -45,14 +46,13 @@ impl Request {
     }
 }
 
-/// Read one request, enforcing `max_body_bytes` on the body (the mode's own limit, §6/§9 — not
-/// a fixed constant, since public and enterprise instances disagree on it). `Ok(None)` means
-/// either the peer closed while idle, or (§5.1's own `413 payload_too_large`) the body declared
-/// by `Content-Length` was over the limit — answered inline here, before the body is even read,
-/// rather than left to the caller: the alternative (bailing with an `Err` and leaving the
-/// connection to just close) is indistinguishable from a crash to the client, and over a reverse
-/// proxy (Caddy in front of this in every deployment, §9) surfaces as a bare `502`, never the
-/// `413` the wire contract promises.
+/// Read one request, enforcing `max_body_bytes` on the body (the mode's own limit, not a fixed
+/// constant, since public and enterprise instances disagree on it). `Ok(None)` means either the
+/// peer closed while idle, or the body declared by `Content-Length` was over the limit, answered
+/// with `413 payload_too_large` inline here, before the body is even read, rather than left to
+/// the caller: the alternative (bailing with an `Err` and leaving the connection to just close)
+/// is indistinguishable from a crash to the client, and over a reverse proxy (Caddy in front of
+/// this in every deployment) surfaces as a bare `502` instead.
 ///
 /// # Errors
 /// I/O, a timeout, an oversized head, or a connection closed mid-head.
@@ -196,9 +196,9 @@ mod tests {
     /// The bug this guards against: before this, an over-limit `Content-Length` made
     /// `read_request` `bail!`, which `main.rs::handle` propagated as a plain connection close —
     /// no response at all, which a reverse proxy in front (Caddy, in every real deployment)
-    /// turns into a bare `502`, not the `413 payload_too_large` §5.1 promises. Found deploying
-    /// ADI-MONO-224's live instances and reproduced here against a real socket, the same way the
-    /// relay actually receives a request.
+    /// turns into a bare `502` instead of the `413 payload_too_large` the wire contract promises.
+    /// Found deploying ADI-MONO-224's live instances and reproduced here against a real socket,
+    /// the same way the relay actually receives a request.
     #[tokio::test]
     async fn an_over_limit_content_length_answers_413_over_the_wire_instead_of_just_closing() {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");

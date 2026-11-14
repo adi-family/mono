@@ -1,16 +1,16 @@
-//! The enterprise-mode licence check (`docs/webhook-relay.md` §6) against the real
-//! `adi-licence-service` contract (`agent:adi-agent/memory`, "ADI Enterprise beam wire contract
-//! v1") — not a guess: `POST {service_url}/v1/verify`, the same request/response shape and the
-//! same ed25519-over-canonical-JSON signature scheme the ADI Enterprise beam client itself uses.
+//! The enterprise-mode licence check against the real `adi-licence-service` contract
+//! (`agent:adi-agent/memory`, "ADI Enterprise beam wire contract v1") — not a guess:
+//! `POST {service_url}/v1/verify`, the same request/response shape and the same
+//! ed25519-over-canonical-JSON signature scheme the ADI Enterprise beam client itself uses.
 //!
-//! **One documented deviation** (`docs/webhook-relay.md` §14 Q6): that contract's `deployment_id`
-//! names an ADI Enterprise control-plane deployment, persisted once in *its own* state store — a
-//! concept a webhook relay endpoint has none of. This relay synthesizes
-//! [`LicenceClient::synthetic_deployment_id`] from the registering key's fingerprint instead of
-//! reading one from the node, which preserves the licence's per-deployment seat allowance for
-//! exactly the case that matters here: one node's long-lived relay key (§2, one pair per node)
-//! occupies one seat regardless of how many relay regions it registers against, and a second
-//! node (a second fingerprint) occupies a second seat, which is what `max_deployments` is for.
+//! **One documented deviation**: that contract's `deployment_id` names an ADI Enterprise
+//! control-plane deployment, persisted once in *its own* state store — a concept a webhook relay
+//! endpoint has none of. This relay synthesizes [`LicenceClient::synthetic_deployment_id`] from
+//! the registering key's fingerprint instead of reading one from the node, which preserves the
+//! licence's per-deployment seat allowance for exactly the case that matters here: one node's
+//! long-lived relay key (one pair per node) occupies one seat regardless of how many relay
+//! regions it registers against, and a second node (a second fingerprint) occupies a second
+//! seat, which is what `max_deployments` is for.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -60,8 +60,8 @@ pub struct LicenceOutcome {
 
 /// Every way a beam can fail to produce a trustworthy [`LicenceOutcome`] — deliberately not
 /// folded into one variant, because the caller treats a transport failure very differently from
-/// a decided-but-untrustworthy response (§6: register refuses either way, but the daily recheck
-/// sweep must not pause a licence over a network blip — see `sweep.rs`).
+/// a decided-but-untrustworthy response: register refuses either way, but the daily recheck
+/// sweep must not pause a licence over a network blip — see `sweep.rs`.
 #[derive(Debug)]
 pub enum LicenceError {
     /// Couldn't reach the service, or it answered a non-2xx status.
@@ -111,7 +111,7 @@ impl std::fmt::Debug for LicenceClient {
 
 impl LicenceClient {
     /// `public_key_b64` is the service's ed25519 public key, raw 32 bytes, base64 — the value
-    /// `relay.toml`'s `[licence] public_key` carries (§14 Q6).
+    /// `relay.toml`'s `[licence] public_key` carries.
     ///
     /// # Errors
     /// `public_key_b64` isn't valid base64, isn't 32 bytes, or isn't a valid ed25519 point; or
@@ -144,7 +144,7 @@ impl LicenceClient {
         }
     }
 
-    /// §14 Q6's synthetic stand-in for a real ADI Enterprise `deployment_id`.
+    /// A synthetic stand-in for a real ADI Enterprise `deployment_id`.
     #[must_use]
     pub fn synthetic_deployment_id(owner_fingerprint: &str) -> String {
         format!("webhook-relay:{owner_fingerprint}")

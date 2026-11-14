@@ -313,7 +313,7 @@ pub(crate) struct Asset {
 
 ### struct `Registered`
 
-What `register` persists into the trigger's own `extra` (§10). `url` (§5.2's own echo of the public sender-facing URL) isn't kept here — the panel/CLI reconstruct it the same way the relay built it, `{relay_url}/h/{endpoint_id}`, from `relay` + `relay_endpoint`, so there's no fourth `extra` key for it (§10 names exactly three: `relay`, `relay_retention`, `relay_endpoint`).
+What `register` persists into the trigger's own `extra`. `url` (`register`'s own echo of the public sender-facing URL) isn't kept here — the panel/CLI reconstruct it the same way the relay built it, `{relay_url}/h/{endpoint_id}`, from `relay` + `relay_endpoint`, so there's no fourth `extra` key for it — only `relay`, `relay_retention`, and `relay_endpoint`.
 
 ```rust
 #[derive(Debug, Clone)]
@@ -324,7 +324,7 @@ pub struct Registered {
 
 ### struct `PulledRecord`
 
-One record off `GET /v1/pull` (§5.5), decoded from the wire.
+One record off `GET /v1/pull`, decoded from the wire.
 
 ```rust
 #[derive(Debug, Clone)]
@@ -337,7 +337,7 @@ struct PulledRecord {
 
 ### struct `SenderRequest`
 
-The sealed envelope's own shape (`docs/webhook-relay.md` §4): the sender's request exactly as `/h/<endpoint-id>` captured it.
+The sealed envelope's own shape: the sender's request exactly as `/h/<endpoint-id>` captured it.
 
 ```rust
 #[derive(Debug, serde::Deserialize)]

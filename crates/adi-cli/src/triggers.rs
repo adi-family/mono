@@ -78,7 +78,7 @@ pub(crate) enum TriggersCommand {
     Rm { name: String },
     /// Delete a trigger definition.
     Delete { name: String },
-    /// Print this node's webhook-relay public signing key (docs/webhook-relay.md §10) — paste
+    /// Print this node's webhook-relay public signing key — paste
     /// into a self-host relay's `authorized_keys` file. One key for the whole node, shared by
     /// every relay-backed trigger; generated on first use.
     RelayKey,

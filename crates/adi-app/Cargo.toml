@@ -48,8 +48,8 @@ adi-knowledge = { workspace = true }
 
 adi-triggers = { workspace = true }
 
-# The relay node-side keypair and request signing/sealing primitives (docs/webhook-relay.md
-# §10, ADI-MONO-223) — never `adi_relay::keys::load_or_create_in` with a non-default store.
+# The relay node-side keypair and request signing/sealing primitives (ADI-MONO-223) — never
+# `adi_relay::keys::load_or_create_in` with a non-default store.
 adi-relay = { workspace = true }
 
 adi-events = { workspace = true }

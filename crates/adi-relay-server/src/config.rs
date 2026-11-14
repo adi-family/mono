@@ -1,8 +1,8 @@
-//! `relay.toml` (`docs/webhook-relay.md` §6): one binary, one config file, `mode` picks the
-//! behaviour. Every limit is optional in the file — an absent one resolves to its mode's own
-//! default from the table in §6, which is why parsing goes through [`RawConfig`] (every limit
-//! `Option<T>`) rather than `#[serde(default)]` on [`Config`] directly: the default a missing
-//! field resolves to depends on `mode`, not on the field alone.
+//! `relay.toml`: one binary, one config file, `mode` picks the behaviour. Every limit is optional
+//! in the file — an absent one resolves to its mode's own default (see [`Limits::defaults_for`]),
+//! which is why parsing goes through [`RawConfig`] (every limit `Option<T>`) rather than
+//! `#[serde(default)]` on [`Config`] directly: the default a missing field resolves to depends on
+//! `mode`, not on the field alone.
 
 use std::fmt;
 use std::net::SocketAddr;
@@ -10,8 +10,8 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
-/// The three modes (§6) — a relay operator picks exactly one per running instance; a node's own
-/// `extra["relay"]` setting (§10) later picks a mode by picking which relay it registers with.
+/// The three modes — a relay operator picks exactly one per running instance; a node's own
+/// `extra["relay"]` setting later picks a mode by picking which relay it registers with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     Public,
@@ -43,7 +43,7 @@ impl std::str::FromStr for Mode {
 }
 
 /// The resolved limits for one running instance — every field always has a value, either the
-/// operator's own or the mode's default (§6's table).
+/// operator's own or the mode's default (see [`Limits::defaults_for`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
     pub max_endpoints_per_key: u32,
@@ -54,15 +54,15 @@ pub struct Limits {
     pub max_retention_secs: u64,
     pub pull_batch_max: u32,
     pub pull_long_poll_secs: u64,
-    /// Not in `relay.toml` (§6 names no knob for it) — the per-endpoint pending-record cap §7
-    /// proposes a single number for (10,000) regardless of mode, so it isn't part of the
-    /// mode-default table below.
+    /// Not in `relay.toml` — the per-endpoint pending-record cap is a single number (10,000)
+    /// regardless of mode, so it isn't part of the mode-default table below.
     pub max_pending_per_endpoint: u64,
 }
 
 impl Limits {
-    /// §6's table, literally — including the two places self-host's own column differs from
-    /// simply reusing enterprise's numbers: `max_endpoints_per_key` and `max_retention_secs` are
+    /// The three modes' limits, literally — including the two places self-host's own column
+    /// differs from simply reusing enterprise's numbers: `max_endpoints_per_key` and
+    /// `max_retention_secs` are
     /// "unlimited" there (`authorized_keys` is already the gate), represented as `u32::MAX` /
     /// `u64::MAX` rather than a sentinel the rest of this crate would have to know about.
     #[must_use]
@@ -105,11 +105,11 @@ impl Limits {
     }
 }
 
-/// Enterprise-mode licence gating (§6). **`public_key` is not in the task's own sample
-/// `relay.toml` — added here, documented as a deviation in `docs/webhook-relay.md` §14 Q6: the
-/// relay must verify the licence service's beam signature itself (the same "CLIENT ACCEPTANCE"
-/// rule `adi-enterprise-beam-wire-contract-v1` states for every beam client), and there is
-/// nowhere else to configure the key it verifies against.**
+/// Enterprise-mode licence gating. **`public_key` is not in the task's own sample `relay.toml` —
+/// added here, a deliberate deviation from the original design sketch: the relay must verify the
+/// licence service's beam signature itself (the same "CLIENT ACCEPTANCE" rule
+/// `adi-enterprise-beam-wire-contract-v1` states for every beam client), and there is nowhere
+/// else to configure the key it verifies against.**
 #[derive(Debug, Clone, Deserialize)]
 pub struct LicenceConfig {
     pub service_url: String,
@@ -123,7 +123,7 @@ fn default_recheck_interval() -> u64 {
     86_400
 }
 
-/// Self-host gating (§6).
+/// Self-host gating.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SelfHostConfig {
     pub authorized_keys_path: PathBuf,
@@ -238,7 +238,7 @@ impl Config {
         Self::parse(&text)
     }
 
-    /// The public URL `register` (§5.2) echoes back for a freshly minted endpoint.
+    /// The public URL `register` echoes back for a freshly minted endpoint.
     #[must_use]
     pub fn endpoint_url(&self, endpoint_id: &str) -> String {
         format!("https://{}/h/{endpoint_id}", self.hostname)
@@ -338,9 +338,9 @@ ip_allowlist = ["10.0.0.0/8"]
         assert_eq!(sh.ip_allowlist, vec!["10.0.0.0/8".to_string()]);
     }
 
-    /// `docs/webhook-relay-self-host.md` §2's sample `relay.toml`, verbatim — a guide that quietly
-    /// drifts from the real schema is worse than no guide, so this is a regression test, not a
-    /// one-off check.
+    /// `crates/adi-relay-server/README.md`'s self-host sample `relay.toml`, verbatim — a guide
+    /// that quietly drifts from the real schema is worse than no guide, so this is a regression
+    /// test, not a one-off check.
     #[test]
     fn self_host_guides_sample_config_parses_and_resolves_unlimited_by_omission() {
         let toml = r#"

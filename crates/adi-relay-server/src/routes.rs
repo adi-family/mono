@@ -1,5 +1,5 @@
-//! The six routes (`docs/webhook-relay.md` §5): sender ingress, register/list/delete, pull, and
-//! health. Each handler is a plain function from state + a already-parsed request to a
+//! The six routes: sender ingress, register/list/delete, pull, and health. Each handler is a
+//! plain function from state + an already-parsed request to a
 //! [`Response`] — `main.rs`'s accept loop owns the socket and the method/path dispatch; nothing
 //! here touches a `TcpStream`, which is what makes every case below testable without one.
 
@@ -17,8 +17,8 @@ use crate::{AppState, Response, err, now_secs, ok, today};
 
 const BASE32_ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
 
-/// `"wh_" + 22 random lowercase-base32 characters` (§5.2: "~110 bits ... unguessable is the
-/// entire protection a sender gets"). `% 32` of a uniform byte is itself uniform (256 is an
+/// `"wh_" + 22 random lowercase-base32 characters` (~110 bits — unguessable is the entire
+/// protection a sender gets). `% 32` of a uniform byte is itself uniform (256 is an
 /// exact multiple of 32), so this needs no rejection sampling.
 fn mint_endpoint_id() -> String {
     use rand::TryRng as _;
@@ -42,12 +42,12 @@ fn decode_sealing_key(b64: &str) -> Result<[u8; 32], ()> {
         .map_err(|_| ())
 }
 
-/// The shared first step of every route except ingress (§5.1, which has none at all) and
-/// `/healthz`: verify the signature (§3), then — self-host only — check `authorized_keys`, the
-/// optional shared secret, and the optional IP allowlist (§6: "a key not in the file is 403
-/// `unknown_key` ... everywhere else, since nothing gets this far without first registering" —
-/// read here as covering all three self-host gates alike, since the spec names no separate code
-/// for the latter two and they are the same kind of refusal: this caller may not be here).
+/// The shared first step of every route except ingress (which has none at all) and `/healthz`:
+/// verify the signature, then — self-host only — check `authorized_keys`, the optional shared
+/// secret, and the optional IP allowlist. A key not in the file is `403 unknown_key` everywhere,
+/// not just at registration, since nothing gets this far without first registering; the same
+/// code covers all three self-host gates alike, since they are the same kind of refusal — this
+/// caller may not be here.
 fn authenticate(
     state: &AppState,
     headers: &HashMap<String, String>,
@@ -95,8 +95,8 @@ struct IngressAck {
 }
 
 /// `POST|GET|PUT|PATCH|DELETE /h/<endpoint-id>` — capture the request verbatim, sealed, queued
-/// for the owning node's next `pull`. Unauthenticated by design (§5.1): a sender cannot sign
-/// with the node's key, so the id itself is the only gate.
+/// for the owning node's next `pull`. Unauthenticated by design: a sender cannot sign with the
+/// node's key, so the id itself is the only gate.
 pub fn ingress(
     state: &AppState,
     endpoint_id: &str,
@@ -139,7 +139,7 @@ pub fn ingress(
         return err(500, "internal_error", "this endpoint's sealing key is corrupt");
     };
 
-    // A paused endpoint (enterprise licence lapsed, §6) still answers 202 and still queues:
+    // A paused endpoint (enterprise licence lapsed) still answers 202 and still queues:
     // refusing intake would make the sender's own retry/alerting treat a billing hiccup as an
     // integration failure. `store::pull` is what withholds a paused endpoint's records, not
     // this function.
@@ -264,12 +264,11 @@ pub async fn register(
     err(500, "internal_error", "could not mint a unique endpoint id")
 }
 
-/// Enterprise mode's register-time licence gate (§6). `None` means proceed; `Some(resp)` is the
+/// Enterprise mode's register-time licence gate. `None` means proceed; `Some(resp)` is the
 /// refusal to answer with. A beam that can't be trusted (transport failure, bad signature, a
 /// mismatched nonce/`deployment_id`) refuses registration exactly like a decided non-serving
-/// verdict — `docs/webhook-relay.md` §14 Q6's documented choice: fail closed uniformly under
-/// `402 licence_lapsed`, rather than inventing a separate code this spec never named for "the
-/// licence service could not be reached right now".
+/// verdict — a deliberate choice to fail closed uniformly under `402 licence_lapsed`, rather
+/// than inventing a separate code for "the licence service could not be reached right now".
 async fn check_licence(state: &AppState, req: &RegisterRequest, fingerprint: &Fingerprint) -> Option<Response> {
     let Some(code) = req.licence_code.as_deref().filter(|c| !c.is_empty()) else {
         return Some(err(402, "licence_lapsed", "licence_code is required in enterprise mode"));
@@ -336,8 +335,7 @@ pub fn delete(state: &AppState, headers: &HashMap<String, String>, path_and_quer
             body: String::new(),
         },
         // Not `404`: telling the legitimate owner "that's not yours" versus "doesn't exist" is
-        // worth keeping honest (§5.4) — the spec names no string for this code, so "forbidden"
-        // is this implementation's own choice.
+        // worth keeping honest — "forbidden" is this implementation's own choice of code.
         Ok(DeleteOutcome::Forbidden) => err(403, "forbidden", "this endpoint belongs to a different key"),
         Ok(DeleteOutcome::NotFound) => err(404, "not_found", format!("no such endpoint: {id}")),
         Err(e) => err(500, "internal_error", e.to_string()),
@@ -366,8 +364,8 @@ fn pull_response(records: Vec<PulledRecord>) -> serde_json::Value {
 }
 
 /// `GET /v1/pull?batch=<n>` — waits up to `pull_long_poll_secs` for at least one record across
-/// every endpoint the caller's key owns (§5.5), woken early by [`AppState::notify`] whenever
-/// ingress accepts something.
+/// every endpoint the caller's key owns, woken early by [`AppState::notify`] whenever ingress
+/// accepts something.
 pub async fn pull(
     state: &AppState,
     headers: &HashMap<String, String>,
@@ -546,7 +544,7 @@ mod tests {
         assert_eq!(v["error"], "unknown_key");
     }
 
-    /// Self-host's two defence-in-depth layers (§6), both only reached once `authorized_keys`
+    /// Self-host's two defence-in-depth layers, both only reached once `authorized_keys`
     /// already passed — an authorized key from the wrong address, or with no shared secret,
     /// must still be refused.
     #[tokio::test]
@@ -577,7 +575,7 @@ mod tests {
             "sealing_key": base64::engine::general_purpose::STANDARD.encode(sealing_public),
         }))
         .unwrap();
-        // Each call signs its own request — a signature is good for exactly one nonce (§3).
+        // Each call signs its own request — a signature is good for exactly one nonce.
 
         // The right address, but no shared secret header at all.
         let headers = signed_headers(&signing, "POST", "/v1/endpoints", &body);

@@ -1,11 +1,10 @@
-//! Two separate questions for every node→relay request (§3, §6), kept apart the way the spec
-//! keeps them apart: [`authenticate`] answers "did this exact request come from the key it
-//! names" (signature, clock skew, nonce replay — nothing about who that key is allowed to be);
-//! [`AuthorizedKeys`] answers the self-host mode's own extra question, "is that key one an
-//! operator actually listed" — the only mode where authorization is a per-request check rather
-//! than a register-time decision cached as a fact about the endpoint (§6: "nothing gets this far
-//! without first registering" means a key struck from the file is locked out everywhere, not
-//! just from a future register).
+//! Two separate questions for every node→relay request, kept deliberately apart:
+//! [`authenticate`] answers "did this exact request come from the key it names" (signature,
+//! clock skew, nonce replay — nothing about who that key is allowed to be); [`AuthorizedKeys`]
+//! answers the self-host mode's own extra question, "is that key one an operator actually
+//! listed" — the only mode where authorization is a per-request check rather than a register-time
+//! decision cached as a fact about the endpoint: nothing gets this far without first registering,
+//! so a key struck from the file is locked out everywhere, not just from a future register.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -21,16 +20,16 @@ use crate::config::SelfHostConfig;
 use crate::store::Store;
 use crate::{Response, err};
 
-/// §3's clock-skew window.
+/// The request-signing clock-skew window.
 pub const SKEW_WINDOW_SECS: u64 = 300;
 
-/// §6's optional extra header: "never part of the signed canonical string, since it's a static
-/// value a signature can't meaningfully protect any further".
+/// Self-host's optional extra header: never part of the signed canonical string, since it's a
+/// static value a signature can't meaningfully protect any further.
 pub const HEADER_SHARED_SECRET: &str = "x-relay-shared-secret";
 
 /// Read the four `X-Relay-*` headers off a request into a [`SignedRequest`]. `None` if any of
 /// them is missing or the timestamp isn't a plain integer — indistinguishable, on the wire, from
-/// a bad signature (§5's `bad_signature` code covers both).
+/// a bad signature (the `bad_signature` error code covers both).
 #[must_use]
 pub fn extract(headers: &HashMap<String, String>) -> Option<SignedRequest> {
     Some(SignedRequest {
@@ -41,9 +40,9 @@ pub fn extract(headers: &HashMap<String, String>) -> Option<SignedRequest> {
     })
 }
 
-/// The three ways [`authenticate`] can refuse a request, named exactly as §5's error codes —
-/// `Ok` carries the verified key, so a caller that needs the fingerprint doesn't have to
-/// re-derive it from anything.
+/// The three ways [`authenticate`] can refuse a request, named exactly as the wire contract's
+/// error codes — `Ok` carries the verified key, so a caller that needs the fingerprint doesn't
+/// have to re-derive it from anything.
 #[derive(Debug)]
 pub enum AuthOutcome {
     Ok(VerifyingKey),
@@ -65,9 +64,9 @@ impl AuthOutcome {
 }
 
 /// Authenticate one signed request: the headers parse, the timestamp is within [`SKEW_WINDOW_SECS`]
-/// (checked *before* the signature — §3: "cheaper to reject"), the signature verifies over the
-/// exact method/path-and-query/body given, and the nonce hasn't been seen before from this key
-/// inside the window.
+/// (checked *before* the signature, since that's cheaper to reject), the signature verifies over
+/// the exact method/path-and-query/body given, and the nonce hasn't been seen before from this
+/// key inside the window.
 ///
 /// # Errors
 /// Any `rusqlite` error from the nonce-replay check — a store failure, never a refusal; the
@@ -98,7 +97,7 @@ pub fn authenticate(
     Ok(AuthOutcome::Ok(key))
 }
 
-/// Self-host mode's `authorized_keys` file (§6): reloaded by mtime, at most every 5 seconds — the
+/// Self-host mode's `authorized_keys` file: reloaded by mtime, at most every 5 seconds — the
 /// same cadence `adi-mesh`'s own gateway reload uses for `fleet.toml`. A `stat()` is cheap enough
 /// to pay on every request; actually re-reading and re-parsing the file only happens when the
 /// mtime has moved, and even the stat is skipped for 5 seconds after the last one.
@@ -176,8 +175,8 @@ impl AuthorizedKeys {
     }
 }
 
-/// Self-host's optional shared secret (§6: "defence in depth on top of the signature, not
-/// instead of it"). `None` (pass) if the config names no `shared_secret_env`; otherwise the
+/// Self-host's optional shared secret — defence in depth on top of the signature, not instead
+/// of it. `None` (pass) if the config names no `shared_secret_env`; otherwise the
 /// request must carry [`HEADER_SHARED_SECRET`] matching the named env var's *current* value,
 /// compared in constant time. An env var the config names but this process doesn't have set is
 /// the operator's own misconfiguration — fails closed (every request refused) rather than
@@ -200,8 +199,8 @@ pub fn check_shared_secret(self_host: &SelfHostConfig, headers: &HashMap<String,
     }
 }
 
-/// Self-host's optional IP allowlist (§6), the same "defence in depth" stance as the shared
-/// secret above. `None` (pass) if the list is empty (§6: "empty = unrestricted") or `remote_ip`
+/// Self-host's optional IP allowlist, the same "defence in depth" stance as the shared
+/// secret above. `None` (pass) if the list is empty (empty means unrestricted) or `remote_ip`
 /// doesn't even parse — the latter should never happen for a real peer address, and refusing a
 /// request over this crate's own inability to parse the socket's own address would be a strange
 /// kind of defence in depth.

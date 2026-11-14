@@ -1,6 +1,6 @@
-//! The webhook relay binary (`docs/webhook-relay.md`, ADI-MONO-222): read `relay.toml`, open the
-//! store, run the two background sweeps, and accept connections — one request per connection,
-//! `Connection: close`, same as `adi-webapp-api`'s own HTTP layer.
+//! The webhook relay binary (ADI-MONO-222): read `relay.toml`, open the store, run the two
+//! background sweeps, and accept connections — one request per connection, `Connection: close`,
+//! same as `adi-webapp-api`'s own HTTP layer.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -81,7 +81,7 @@ async fn dispatch(state: &AppState, req: &http::Request, remote_ip: String) -> R
             let id = &p["/v1/endpoints/".len()..];
             routes::delete(state, &req.headers, path_and_query, id, &remote_ip)
         }
-        // §5.1: any method is captured, including a provider's GET ping.
+        // Any method is captured, including a provider's GET ping.
         (m, p) if p.starts_with("/h/") && matches!(m, "POST" | "GET" | "PUT" | "PATCH" | "DELETE") => {
             let id = &p["/h/".len()..];
             let query = req.path.split_once('?').map_or("", |(_, q)| q);
