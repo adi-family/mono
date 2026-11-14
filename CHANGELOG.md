@@ -20,6 +20,15 @@ extraction script cares about.
 
 ## Unreleased
 
+### Added
+
+- **A webhook trigger can now route through a relay instead of needing an address of its own that a SaaS provider can reach.** Pick a relay — the hosted public-eu or public-us, a licensed enterprise-eu or enterprise-us, or a self-hosted URL — and the provider's webhook hits that relay's public address instead of this machine; this node polls the relay for new deliveries rather than exposing itself, and a delivery sits on the relay sealed to this node's own key, unreadable by the relay operator, until it is pulled and replayed into the trigger. The trigger editor's relay picker shows the public URL to hand to the provider, a retention field, a licence code field for the enterprise tiers, and a copy button for this node's public key; `adi-mono triggers relay-key` prints the same key from the command line, for a self-host operator's `authorized_keys`.
+- A webhook trigger's code block can now see the request's HTTP headers, written to `ADI_HEADERS_FILE` the same way the body already lands in `ADI_PAYLOAD_FILE` — enough to check a provider's signature header, such as GitHub's `X-Hub-Signature-256` or Stripe's `Stripe-Signature`, before trusting the payload. A trigger fired manually or by a platform event still gets no headers file, since neither has a request to take them from.
+
+### Changed
+
+- The panel's Docs link and its fleet-menu help links now open docs.withadi.dev instead of this repository's own docs folder, which has been removed.
+
 ## 1.39.1 — 2026-11-11
 
 ### Changed
