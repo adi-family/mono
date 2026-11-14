@@ -1,0 +1,7 @@
+# Public mode, docs/webhook-relay.md §6 — any key self-registers. Defaults (Config::defaults_for)
+# cover every limit; nothing here needs to be set explicitly. __HOSTNAME__ is filled in by
+# scripts/deploy-webhook-relay-aws.sh at provision time.
+mode     = "public"
+bind     = "0.0.0.0:8080"
+db_path  = "/data/relay.db"
+hostname = "__HOSTNAME__"

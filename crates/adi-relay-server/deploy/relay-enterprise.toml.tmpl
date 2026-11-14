@@ -1,0 +1,13 @@
+# Enterprise mode, docs/webhook-relay.md §6 — register requires a valid licence_code, beamed
+# against the real adi-licence-service contract (src/licence.rs, §14 Q6). public_key is the
+# service's production ed25519 verify key, confirmed live at
+# https://licence.withadi.dev/v1/health ("public_key") — not a guess. __HOSTNAME__ is filled in
+# by scripts/deploy-webhook-relay-aws.sh at provision time.
+mode     = "enterprise"
+bind     = "0.0.0.0:8080"
+db_path  = "/data/relay.db"
+hostname = "__HOSTNAME__"
+
+[licence]
+service_url = "https://licence.withadi.dev"
+public_key  = "JiT26+wj0nxniW3wH5KvEC1fDwl2clxgAiBkUMxLfhM="
