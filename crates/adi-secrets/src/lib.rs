@@ -54,7 +54,7 @@ const GLOBAL_DIR: &str = "global";
 const PROJECTS_DIR: &str = "projects";
 const USERS_DIR: &str = "users";
 
-/// Where a secret lives (`docs/byo-credentials.md` §4.2) — a **third kind of scope**, not a
+/// Where a secret lives — a **third kind of scope**, not a
 /// reserved project id: `adi-app` keeps node passwords in a pseudo-project called `fleet-nodes`
 /// (`adi-app/src/viewer.rs:27`), which works only because nothing resolves that scope into a run.
 /// A user scope exists *to be* resolved into runs, so `User`'s id must never be mistaken for a
@@ -74,7 +74,7 @@ pub enum Scope<'a> {
     /// `secrets/projects/<id>/<name>.toml` — scoped to an [`adi-projects`](adi_config) id.
     Project(&'a str),
     /// `secrets/users/<u>/<name>.toml` — scoped to one minted user id
-    /// (`docs/byo-credentials.md` §3.2). Wrapped to the user's device from phase 2 on; in phase 1
+    ///. Wrapped to the user's device from phase 2 on; in phase 1
     /// nothing writes one.
     User(&'a str),
 }
@@ -299,8 +299,8 @@ impl Secrets {
     /// sorted by scope then name (global first). This is what a UI lists once and filters by
     /// `project` client-side; a run uses [`resolve`](Self::resolve) instead.
     ///
-    /// **Never walks `users/`.** This backs the admin-facing secrets page (`GET /api/secrets`,
-    /// `docs/byo-credentials.md` §7), and a user scope is write-only: an admin and the user
+    /// **Never walks `users/`.** This backs the admin-facing secrets page (`GET /api/secrets`),
+    /// and a user scope is write-only: an admin and the user
     /// themselves can set, replace and remove a user secret, but no API — this one included —
     /// ever lists or reveals its value.
     ///
@@ -447,7 +447,7 @@ impl Secrets {
     }
 
     /// One user's own secret names, metadata only — never a value, and never which scope at all
-    /// beyond "this user's own" (`docs/byo-credentials.md` §7). `project` on the returned
+    /// beyond "this user's own". `project` on the returned
     /// [`Secret`] is always `None`: a user id must never be mistaken for a project id (§4.2), and
     /// nothing reads this field for a `/mine` listing anyway.
     ///
@@ -484,8 +484,8 @@ impl Secrets {
         Ok(secrets)
     }
 
-    /// Store one of `user`'s own values, already sealed on their device (`docs/byo-credentials.md`
-    /// §8, P2.1) — the only way a [`Scope::User`] secret is ever written. Unlike [`set`](Self::set),
+    /// Store one of `user`'s own values, already sealed on their device (P2.1) — the
+    /// only way a [`Scope::User`] secret is ever written. Unlike [`set`](Self::set),
     /// this never touches the master key and never sees a plaintext value: `nonce`/`ciphertext`
     /// are the value already sealed under a DEK the caller generated, and `wraps` is that DEK
     /// sealed to one or more devices. `created_at` is preserved across an overwrite, exactly like
@@ -530,7 +530,7 @@ impl Secrets {
     }
 
     /// One user's own values, **wrapped** — every field a device needs to unwrap and open them
-    /// itself (`docs/byo-credentials.md` §9 step 2), never a plaintext. This is a different type
+    /// itself, never a plaintext. This is a different type
     /// from [`list_mine`](Self::list_mine)'s [`Secret`] on purpose: `Secret` is the admin-facing
     /// metadata shape used everywhere else in this crate, and must never grow a ciphertext field
     /// that some *other* caller could be tempted to serialize somewhere it shouldn't.
@@ -586,7 +586,7 @@ impl Secrets {
     }
 
     /// Delete everything `user` ever stored here: `secrets/users/<u>/`, whole. The id is never
-    /// reissued (`docs/byo-credentials.md` §3), so this is safe only once nothing paired could
+    /// reissued, so this is safe only once nothing paired could
     /// ever open those wraps again — the caller's job, not this one's, since this crate has no
     /// idea whether a second peer still shares the id (`adi_mesh::fleet::FleetRegistry::has_user`
     /// answers that, in the crate that owns the fleet registry). A no-op, not an error, if the
@@ -704,7 +704,7 @@ impl Secrets {
 
 /// The additional-authenticated-data string binding a ciphertext to its exact location, so a
 /// value copied to a different scope/name won't decrypt. A user secret's AAD is
-/// `user:<u>/<NAME>` (`docs/byo-credentials.md` §4.2) — the `user:` prefix, unlike
+/// `user:<u>/<NAME>` — the `user:` prefix, unlike
 /// `global/`/`projects/`, isn't a path segment, since nothing ever lists `users/` the way it
 /// lists the other two scopes (`list_all`), but the binding works the same way: it can't collide
 /// with `global/<NAME>` or `projects/<id>/<NAME>`, so a ciphertext moved between scopes won't open.

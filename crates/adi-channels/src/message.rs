@@ -1,5 +1,5 @@
 //! `ChannelMessage` — the provider-neutral shape every adapter on the router normalizes *into*
-//! (`docs/channels.md` §3), and the only shape anything past the adapter boundary (this crate,
+//! and the only shape anything past the adapter boundary (this crate,
 //! and whatever a user's own trigger reads off `adi.channels.message`) ever reads.
 //!
 //! Versioned from day one (`v: 1`): the router, this crate, and a trigger a user wrote against
@@ -15,8 +15,8 @@ use serde::{Deserialize, Serialize};
 pub const VERSION: u8 = 1;
 
 /// Who said it, in the provider's own vocabulary — stable across redelivery and across that
-/// sender's other messages, but never anything past an id and a display name (`docs/channels.md`
-/// §8: user PII beyond this never flows through the router at all).
+/// sender's other messages, but never anything past an id and a display name (user
+/// PII beyond this never flows through the router at all).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Sender {
     /// The provider's own user id.
@@ -35,8 +35,8 @@ pub enum AttachmentKind {
 }
 
 /// A file or image riding alongside a message. `url` is a short-lived link the node fetches
-/// itself — never proxied through the router or riding the WebSocket as bytes (`docs/channels.md`
-/// §2: this socket carries control and event traffic only).
+/// itself — never proxied through the router or riding the WebSocket as bytes (this
+/// socket carries control and event traffic only).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Attachment {
     pub kind: AttachmentKind,
@@ -56,7 +56,7 @@ pub struct ChannelMessage {
     pub id: String,
     /// `"telegram"`, `"slack"`, …
     pub provider: String,
-    /// The connection this message belongs to, minted at link time (`docs/channels.md` §5) — which
+    /// The connection this message belongs to, minted at link time — which
     /// agent/trigger/app-route target it dispatches to.
     pub connection: String,
     /// The provider's own thread/chat identity, opaque past the adapter: a Telegram chat id, or a

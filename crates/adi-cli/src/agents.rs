@@ -744,7 +744,7 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
             let overrides = RunOverrides::parse_pairs(&set)?;
 
             // A run started inside a leased run forwards to `adi-app` instead of launching
-            // in-process (`docs/byo-credentials.md` §11, ADI-MONO-182 P3.3): `adi-app` is the
+            // in-process (ADI-MONO-182 P3.3): `adi-app` is the
             // only process that can provision the lease's values, so a child that inherited
             // `$ADI_LEASE` has to ask it, not guess at the server's own values locally.
             if let Ok(capability) = std::env::var(LEASE_CAP_ENV) {
@@ -1564,7 +1564,7 @@ fn follow_the_run(
 }
 
 /// Forward `agents run` to `$ADI_LEASE_URL/api/agents/run` with `X-Adi-Lease: $ADI_LEASE`
-/// (`docs/byo-credentials.md` §11, ADI-MONO-182 P3.3) — the body `run_agent_leased` expects, in
+/// (ADI-MONO-182 P3.3) — the body `run_agent_leased` expects, in
 /// `RunAgent`'s own field names. `adi-app` ignores whatever `launched_by` this sends (it derives
 /// the real caller from the capability itself, P3.2), so nothing here bothers naming one.
 ///

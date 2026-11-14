@@ -1,6 +1,5 @@
 //! The nine kinds a bundle element may be — agents, tools, dashboards, LLM and embedding
-//! backends, hive services, triggers, a project scaffold, a dashboard template
-//! (`docs/marketplace-bundles.md`).
+//! backends, hive services, triggers, a project scaffold, a dashboard template.
 //!
 //! Each kind carries two spellings, and they are deliberately not the same word:
 //!
@@ -87,7 +86,7 @@ impl Kind {
     ///
     /// Not a validation failure to come back `None`: [`crate::BundleEntry::elements`] simply
     /// leaves such an element out of the preview, the same tolerance every other unrecognised
-    /// field in this manifest gets (`docs/marketplace-bundles.md` decision #2).
+    /// field in this manifest gets.
     #[must_use]
     pub fn from_wire(word: &str) -> Option<Kind> {
         Self::ALL.into_iter().find(|k| k.wire() == word)

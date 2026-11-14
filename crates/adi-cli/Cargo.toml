@@ -18,7 +18,7 @@ path = "src/main.rs"
 adi-config = { workspace = true }
 adi-core = { workspace = true }
 
-# The `mesh` command group (docs/fleet.md E3). This is what pulls iroh into `adi-mono`, and it is
+# The `mesh` command group. This is what pulls iroh into `adi-mono`, and it is
 # a deliberate trade: a node is enrolled over ssh or cloud-init, where there is no control panel
 # and often no second binary, so pairing has to be reachable from a shell on the box itself. The
 # escape hatch, if the binary size ever matters more than that, is a Cargo feature — not a second
@@ -26,7 +26,7 @@ adi-core = { workspace = true }
 adi-mesh = { workspace = true }
 
 # `secrets set --user --node` and `mesh unlock` do the device-side sealing themselves
-# (`docs/byo-credentials.md` §8/§9, ADI-MONO-180 P2.1/P2.5) — `adi_secrets::wrap`'s pure crypto
+# (ADI-MONO-180 P2.1/P2.5) — `adi_secrets::wrap`'s pure crypto
 # helpers, reached directly rather than through `adi-core`'s store facade, since there is no
 # store operation here at all until the sealed result is already in hand.
 adi-secrets = { workspace = true }
@@ -62,7 +62,7 @@ adi-facts = { workspace = true }
 # app a reader installs from a manifest is reachable from a shell, wherever that shell is.
 adi-marketplace = { workspace = true }
 
-# The `channels` command group (docs/channels.md §7): connect/list/route/allow/disconnect over
+# The `channels` command group: connect/list/route/allow/disconnect over
 # this node's own `/api/channels/*` (`adi_channels::node_api`) — never the router directly, and
 # never this crate's own HTTP stack either; `adi-marketplace` above already justified blocking
 # reqwest + rustls in this binary, and this reuses it rather than pulling a second copy.

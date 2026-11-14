@@ -353,8 +353,8 @@ fn forward_cell(col: &str, f: &MeshForward) -> AnyView {
 }
 
 /// Run a mesh mutation: set the returned state, or flash the error;
-/// toggles `busy` around the request when a form is driving it. Every `/api/mesh*` endpoint is one
-/// of `docs/fleet.md` §14's L3 exemptions, so [`apply_mutation_local`] — the flash never names the
+/// toggles `busy` around the request when a form is driving it. Every `/api/mesh*` endpoint is
+/// always local, exempt from the picker, so [`apply_mutation_local`] — the flash never names the
 /// panel-wide picker's node, since this never reaches whatever it points at.
 fn apply_mesh<F>(state: State, busy: Option<RwSignal<bool>>, fut: F)
 where

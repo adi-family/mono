@@ -206,7 +206,7 @@ rand = "0.10"
 qrcode = { version = "0.14", default-features = false }
 quircs = "0.10"
 # The device-to-session-key ECDH that seals a device's unwrapped values on the way to
-# `adi-app`'s in-memory lease table (`docs/byo-credentials.md` §8/§9): an ephemeral keypair per
+# `adi-app`'s in-memory lease table: an ephemeral keypair per
 # party, never a password-derived or long-lived key, so `x25519-dalek` rather than hand-rolling
 # scalar clamping over `curve25519-dalek`.
 x25519-dalek = { version = "2", default-features = false, features = ["alloc", "zeroize", "static_secrets"] }

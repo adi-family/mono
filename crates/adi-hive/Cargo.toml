@@ -9,7 +9,7 @@ authors.workspace = true
 repository.workspace = true
 
 # The routing brain is a library so the mesh gateway can reuse the config loader and the route
-# table rather than reimplement them (docs/fleet.md A1); the binary is the daemon around it.
+# table rather than reimplement them; the binary is the daemon around it.
 [lib]
 name = "adi_hive"
 path = "src/lib.rs"

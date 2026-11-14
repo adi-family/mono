@@ -14,8 +14,7 @@ adi-config = { workspace = true }
 # services share, and the hostname it claims are all that crate's rules, not this one's.
 adi-dashboards = { workspace = true }
 # Phase B — a bundle's other eight kinds, each landed through its own store's own write path
-# rather than a hand-rolled file write (`docs/marketplace-bundles.md`, "Installing part of a
-# bundle").
+# rather than a hand-rolled file write.
 adi-agents = { workspace = true }
 adi-embeddings = { workspace = true }
 adi-hive = { workspace = true }

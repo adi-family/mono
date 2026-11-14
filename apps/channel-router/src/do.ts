@@ -1,7 +1,7 @@
 /**
  * `NodeConnection` -- one Durable Object per `(node, provider)` pair (see {@link doId} in
  * `types.ts` for why the key is the pair, not the node id alone). It holds everything
- * docs/channels.md §1 assigns to the owning object: the node's current WebSocket (if any) and
+ * the design assigns to the owning object: the node's current WebSocket (if any) and
  * its outbound frame queue, every connection this `(node, provider)` has, and the one node
  * token minted for it.
  *

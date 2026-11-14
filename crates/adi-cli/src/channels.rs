@@ -1,4 +1,4 @@
-//! The `channels` command group (`docs/channels.md` §7): connect a service to an agent, see what
+//! The `channels` command group: connect a service to an agent, see what
 //! this node holds, change where a connection goes, who may talk to it, and tear it down.
 //!
 //! Every verb here is a thin wrapper over this node's own `/api/channels/*`

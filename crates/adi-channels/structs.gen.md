@@ -2,7 +2,7 @@
 
 # `adi-channels` — types
 
-> The node side of Channels (docs/channels.md): the outbound WebSocket client to the channel-router, the adi.channels.message event, the connection store (provider + routing key -> agent/trigger/app-route target), dispatch to an agent with thread->conversation mapping, and the automatic post-back of a run's answer.
+> The node side of Channels: the outbound WebSocket client to the channel-router, the adi.channels.message event, the connection store (provider + routing key -> agent/trigger/app-route target), dispatch to an agent with thread->conversation mapping, and the automatic post-back of a run's answer.
 
 28 structs · 8 enums · 2 type aliases across 11 files.
 
@@ -88,7 +88,7 @@ pub struct Router<'a> {
 
 ### enum `Target`
 
-What a connection dispatches an inbound message to. An enum now, for one variant built today — see `docs/channels.md` §5/§6: `trigger` and `app_route` are named so a bundle-installed channel never has to widen this type later, only add handling for a variant already on the wire. A connection whose target this node doesn't recognize (an older build, reading a store a newer one wrote) deserializes to `Target::Unknown` rather than failing — the same tolerance `docs/marketplace-bundles.md` already asks of an unrecognized element `kind`.
+What a connection dispatches an inbound message to. An enum now, for one variant built today: `trigger` and `app_route` are named so a bundle-installed channel never has to widen this type later, only add handling for a variant already on the wire. A connection whose target this node doesn't recognize (an older build, reading a store a newer one wrote) deserializes to `Target::Unknown` rather than failing — the same tolerance marketplace bundles already ask of an unrecognized element `kind`.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -111,7 +111,7 @@ pub enum Target {
 
 ### enum `Allowlist`
 
-Who may talk to the target through this connection (`docs/channels.md` §5). Default is the tightest: only whoever completed the link.
+Who may talk to the target through this connection. Default is the tightest: only whoever completed the link.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -239,7 +239,7 @@ pub struct QuestionForwarder {
 
 ### struct `Sender`
 
-Who said it, in the provider's own vocabulary — stable across redelivery and across that sender's other messages, but never anything past an id and a display name (`docs/channels.md` §8: user PII beyond this never flows through the router at all).
+Who said it, in the provider's own vocabulary — stable across redelivery and across that sender's other messages, but never anything past an id and a display name (user PII beyond this never flows through the router at all).
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -264,7 +264,7 @@ pub enum AttachmentKind {
 
 ### struct `Attachment`
 
-A file or image riding alongside a message. `url` is a short-lived link the node fetches itself — never proxied through the router or riding the WebSocket as bytes (`docs/channels.md` §2: this socket carries control and event traffic only).
+A file or image riding alongside a message. `url` is a short-lived link the node fetches itself — never proxied through the router or riding the WebSocket as bytes (this socket carries control and event traffic only).
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -306,7 +306,7 @@ pub struct ChannelMessage {
 
 ### struct `ConnectionView`
 
-One connection, as the node's API answers it (`docs/channels.md` §5), flattened for the wire — mirrors `adi_webapp_api::types::ChannelConnectionDto`, which this crate can't depend on (that crate depends on this one).
+One connection, as the node's API answers it, flattened for the wire — mirrors `adi_webapp_api::types::ChannelConnectionDto`, which this crate can't depend on (that crate depends on this one).
 
 ```rust
 #[derive(Debug, Clone, Deserialize)]

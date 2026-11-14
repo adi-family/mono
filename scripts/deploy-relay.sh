@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Bring up one more `iroh-relay` region for the fleet, on GCE.
 #
-# A relay is the fleet's fallback data path, not a signalling service (`docs/fleet.md` §9): while a
+# A relay is the fleet's fallback data path, not a signalling service: while a
 # direct path exists it carries nothing, and while one does not it carries *everything*. iroh probes
 # every relay in a machine's map and settles that machine on its own **nearest** one, so a second
 # region is not a migration of anything — it is one more entry, and the machines near it move over on
@@ -233,7 +233,7 @@ install -d -o iroh-relay -g iroh-relay -m 0755 /var/lib/iroh-relay /var/lib/iroh
 install -d -m 0755 /etc/iroh-relay
 
 cat >/etc/iroh-relay/relay.toml <<'CONF'
-# iroh-relay for the adi fleet — docs/fleet.md §9, §10.
+# iroh-relay for the adi fleet.
 #
 # Stateless by construction: the server keeps an in-memory map of connected peers and forwards
 # encrypted datagrams between them. No datastore, nothing on disk but the ACME certificate.
@@ -262,7 +262,7 @@ quic_bind_addr = "[::]:7842"
 
 # It is OPEN ON PURPOSE, and metered because of it. There is no access block below, so iroh's
 # default stands and any client may connect. That is the product decision, not an oversight: a
-# fresh install is meant to pair with no configuration at all (docs/fleet.md §9), and an
+# fresh install is meant to pair with no configuration at all, and an
 # allow-list of fleet keys would mean editing this file on every relay before a new machine
 # could join — it would break the product, not just this fleet. What open must not also mean is
 # unmetered, so a stranger who finds the hostname is capped here instead of excluded.
@@ -378,7 +378,6 @@ cat <<EOF
 ==> $FQDN is live at $IP
 
 Next, and only now that it resolves:
-  1. add "https://$FQDN" to DEFAULT_RELAYS in crates/adi-mesh/src/relay.rs
-  2. name the region in docs/fleet.md §9
+  - add "https://$FQDN" to DEFAULT_RELAYS in crates/adi-mesh/src/relay.rs
 Machines pick their own nearest from the map, so nothing has to be re-issued or moved.
 EOF

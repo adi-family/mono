@@ -1,5 +1,5 @@
 //! One request to a paired node's own `app` service, through this machine's **local** mesh
-//! gateway — `docs/fleet.md` §10's dashboard-transfer addressing, byte for byte:
+//! gateway — the dashboard-transfer addressing, byte for byte:
 //! `127.0.0.1:<gateway port>` with `Host: app.<node>.n.adi`, exactly what the front door would
 //! forward for the same path typed into a browser there.
 //!

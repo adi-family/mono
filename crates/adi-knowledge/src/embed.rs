@@ -28,7 +28,7 @@ pub use adi_indexer::embed::{EmbedError, Embedder};
 
 /// The embedder `knowledge` resolves through `adi-embeddings` — the registry that seeds itself
 /// to jina-embeddings-v2-base-code on candle (or [`HashEmbedder`] without the feature),
-/// reproducing exactly what this crate used to build by hand. See `docs/embedding-backends.md`.
+/// reproducing exactly what this crate used to build by hand.
 ///
 /// # Errors
 /// [`Error::Embed`] when the assigned backend (and every one of its fallbacks) cannot be built —
@@ -132,7 +132,7 @@ impl EmbedderSlot {
 ///
 /// Moved down into `adi-embeddings` — the registry that must be able to list every embedding
 /// provider in one place, this one included — and re-exported here so every existing caller in
-/// this crate (and its dependents) keeps working unchanged. See `docs/embedding-backends.md`.
+/// this crate (and its dependents) keeps working unchanged.
 pub use adi_embeddings::HashEmbedder;
 /// The width of a [`HashEmbedder`] vector.
 pub use adi_embeddings::runtimes::hash::HASH_DIMENSIONS;

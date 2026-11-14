@@ -1,5 +1,5 @@
 //! The reply to one dispatched message: watch the turn [`crate::dispatch`] just started or
-//! continued, and post what the agent said once that turn ends (`docs/channels.md` §5).
+//! continued, and post what the agent said once that turn ends.
 //!
 //! **Why not `adi.agents.run.finished`.** That event cannot carry this, for two reasons found live
 //! in ADI-MONO-124. It is published *once per run, ever* — `SessionStore::record_outcome` writes

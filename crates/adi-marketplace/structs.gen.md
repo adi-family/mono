@@ -240,7 +240,7 @@ struct Renames {
 
 ### struct `BundleStatus`
 
-One general bundle's status for a listing, per `docs/marketplace-bundles.md`'s "What 'installed' means for a partially-installed bundle": installed is a fraction of what the manifest's own preview declares, and every field here is computed live off the ledger, the current pin and the current secrets store — never stored and frozen at install time, the same posture `outdated` and `missing_secrets` already take right after an install.
+One general bundle's status for a listing: installed is a fraction of what the manifest's own preview declares, and every field here is computed live off the ledger, the current pin and the current secrets store — never stored and frozen at install time, the same posture `outdated` and `missing_secrets` already take right after an install.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -392,7 +392,7 @@ pub enum Error {
     BadElementName(String, String),
     #[error( "{0:?} does not name one element of a bundle — use <marketplace>/<slug>/<kind>/<name> \ (agents, tools, dashboards, llm, embeddings, services, triggers) or \ <marketplace>/<slug>/project for the scaffold" )]
     BadAddress(String),
-    #[error( "{0} carries {1} at {2} — an item may never carry Rust source or a compiled binary \ (docs/marketplace-bundles.md)" )]
+    #[error( "{0} carries {1} at {2} — an item may never carry Rust source or a compiled binary" )]
     CarriesRust(String, String, String),
     #[error("{0:?} names no element the repository actually carries")]
     UnknownElement(String),

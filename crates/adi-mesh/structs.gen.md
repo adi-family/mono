@@ -93,7 +93,7 @@ pub struct Forward {
 
 ### enum `LeaseLength`
 
-How long a device's lease outlives the connection (`docs/byo-credentials.md` §4.3) — `0` | `"<n>h"` | `"forever"` on the wire, via `FromStr`/`fmt::Display`.
+How long a device's lease outlives the connection — `0` | `"<n>h"` | `"forever"` on the wire, via `FromStr`/`fmt::Display`.
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -108,7 +108,7 @@ pub enum LeaseLength {
 
 ### struct `Connection`
 
-One server connection's BYO-credentials settings (`docs/byo-credentials.md` §4.3).
+One server connection's BYO-credentials settings.
 
 ```rust
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -581,7 +581,7 @@ pub struct Joined {
 
 ### struct `SessionKey`
 
-`adi-app`'s own session half of the ECDH, minted once at boot (`docs/byo-credentials.md` §9). Never serialized, never written to disk — a restart simply mints a new one, which is the whole mechanism behind "a server restart drops every lease".
+`adi-app`'s own session half of the ECDH, minted once at boot. Never serialized, never written to disk — a restart simply mints a new one, which is the whole mechanism behind "a server restart drops every lease".
 
 ```rust
 pub struct SessionKey {

@@ -47,7 +47,7 @@ pub enum Error {
 
 ### enum `Scope`
 
-Where a secret lives (`docs/byo-credentials.md` §4.2) — a **third kind of scope**, not a reserved project id: `adi-app` keeps node passwords in a pseudo-project called `fleet-nodes` (`adi-app/src/viewer.rs:27`), which works only because nothing resolves that scope into a run. A user scope exists *to be* resolved into runs, so `User`'s id must never be mistaken for a `Project` id even though both pass the same filesystem-name check (`validate_project`).
+Where a secret lives — a **third kind of scope**, not a reserved project id: `adi-app` keeps node passwords in a pseudo-project called `fleet-nodes` (`adi-app/src/viewer.rs:27`), which works only because nothing resolves that scope into a run. A user scope exists *to be* resolved into runs, so `User`'s id must never be mistaken for a `Project` id even though both pass the same filesystem-name check (`validate_project`).
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,7 +97,7 @@ pub(crate) struct Manifest {
 
 ### struct `Wrap`
 
-One device's wrapped copy of a user secret's DEK (`docs/byo-credentials.md` §8). Exactly one in v1 ("a user is one peer"), but a `Vec` on `Manifest` so a later person-with-several- devices scheme adds entries rather than changing the format.
+One device's wrapped copy of a user secret's DEK. Exactly one in v1 ("a user is one peer"), but a `Vec` on `Manifest` so a later person-with-several- devices scheme adds entries rather than changing the format.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -149,7 +149,7 @@ pub struct Secret {
 
 ### struct `WrappedSecret`
 
-One of a user's own values, wrapped — `crate::Secrets::list_mine_wrapped`'s own shape, for a device's unlock path (`docs/byo-credentials.md` §9 step 2). Carries exactly what a device needs to unwrap and open the value itself: still **never a plaintext**, since every one of these fields is already-sealed, opaque to anything without the device's own key.
+One of a user's own values, wrapped — `crate::Secrets::list_mine_wrapped`'s own shape, for a device's unlock path. Carries exactly what a device needs to unwrap and open the value itself: still **never a plaintext**, since every one of these fields is already-sealed, opaque to anything without the device's own key.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -202,7 +202,7 @@ pub struct OAuthToken {
 
 ### enum `Missing`
 
-What a turn does when it would use a user's value for a name and no live lease holds one (`docs/byo-credentials.md` §4.1, §10). Declared `Server < Wait < Fail` on purpose: deriving `Ord` off that order is what makes `effective_missing` "the stricter of the two" a one-line `max`, and it is also the order the spec states its reason in — `fail` ranks above `wait` because it is the one that also stops work piling up behind a missing value.
+What a turn does when it would use a user's value for a name and no live lease holds one . Declared `Server < Wait < Fail` on purpose: deriving `Ord` off that order is what makes `effective_missing` "the stricter of the two" a one-line `max`, and it is also the order the spec states its reason in — `fail` ranks above `wait` because it is the one that also stops work piling up behind a missing value.
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]

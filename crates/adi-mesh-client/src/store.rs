@@ -7,7 +7,7 @@
 //! the key and every pairing with it** — the node still holds a record for a key that no longer
 //! exists anywhere, and the fix is to pair again.
 //!
-//! One consequence follows and is `docs/fleet.md` §5's second layer meeting a browser: the node's
+//! One consequence follows and is the node gate's second layer meeting a browser: the node's
 //! password is kept here, so a reader is not asked for it on every request. It is stored beside
 //! the key it authenticates and reachable by anything running on this origin — which is why this
 //! client renders exactly one service, the node's own panel, and not arbitrary dashboards (ADI-13).
@@ -40,12 +40,12 @@ const NODES_KEY: &str = "nodes";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NodeRecord {
     /// What **this browser** calls the node. Local, renameable, and never sent anywhere
-    /// (`docs/fleet.md` §2 rule 5) — it is also the `/n/<petname>/` path its panel is served under.
+    /// — it is also the `/n/<petname>/` path its panel is served under.
     pub petname: String,
     /// The node's `EndpointId`: its true name, and the only thing here that authorises anything.
     pub key: String,
     /// The relay the node calls home. Carried per node rather than assumed, because a node this
-    /// client can reach need not be on the relay this client calls home (`docs/fleet.md` §9).
+    /// client can reach need not be on the relay this client calls home.
     pub relay: String,
     /// The username its Basic gate wants — `adi` from a pairing.
     pub username: String,
@@ -120,7 +120,7 @@ pub async fn save_nodes(nodes: &[NodeRecord]) -> Result<()> {
 /// Add `node`, replacing any record with the same key.
 ///
 /// Keyed on the **key** and not the petname, because re-pairing a node you already have is what an
-/// operator does when the password is lost (`docs/fleet.md` §8) — and it must update that node, not
+/// operator does when the password is lost — and it must update that node, not
 /// add a second row for the same machine under a name the reader has to disambiguate.
 ///
 /// # Errors

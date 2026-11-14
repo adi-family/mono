@@ -5,7 +5,7 @@
 # running it in a browser:
 #
 #   1. the browser-initiated join: the tab spends an `adi-invite:` the *node* minted, and the node
-#      files this tab's key with `http:app` and a password (`docs/fleet.md` §8)
+#      files this tab's key with `http:app` and a password
 #   2. the service worker answering a whole app from a node, by client id
 #   3. the panel shim giving that app back `/` as its own path
 #   4. a root-absolute `/api/*` from inside the panel reaching the same node
@@ -77,7 +77,7 @@ allow = []
 authorized_peers = []
 EOF
 
-# `app` is the service a pairing grants (`docs/fleet.md` §8) and the only one this client opens.
+# `app` is the service a pairing grants and the only one this client opens.
 cat > "$STORE/hive/hive.yaml" <<EOF
 version: "1"
 services:

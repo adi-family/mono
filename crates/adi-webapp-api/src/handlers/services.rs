@@ -298,7 +298,7 @@ pub fn hive(store: &Projects, ports: &adi_ports_manager::Ports, live: &[UsedPort
 
     // The front door this machine actually runs — a hand-managed `hive/hive.yaml` if the operator
     // wrote one, else the generated `dns/hive-frontdoor.yaml` every install has. adi-core's
-    // `front_door_in_use` is the single definition of that preference (docs/comments.md: two
+    // `front_door_in_use` is the single definition of that preference (two
     // copies of a precedence rule is how this bug happens again) — the mesh gateway and the
     // front-door daemon itself both already defer to it.
     let global = adi_core::dns::front_door_in_use(store.config());

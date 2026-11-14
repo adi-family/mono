@@ -1024,7 +1024,7 @@ impl Provenance {
 /// The embedder `facts` resolves through `adi-embeddings` — the registry that seeds itself to
 /// `nomic-embed-text` over the local ollama, reproducing exactly what this crate used to build
 /// by hand from `ADI_FACTS_OLLAMA`/`ADI_FACTS_EMBED`. See [`embed`] for why it is that model and
-/// nothing else, and `docs/embedding-backends.md` for the registry.
+/// nothing else.
 ///
 /// # Errors
 /// [`adi_knowledge::Error::Embed`] when the assigned backend (and every one of its fallbacks)

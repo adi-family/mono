@@ -9,7 +9,7 @@
 //! from the ports manager, keyed `<id>/frontend` and `<id>/backend`. We resolve them from that
 //! same registry, which is also why a dashboard can report ports before it is running.
 //!
-//! **One dashboard is one origin** (`docs/fleet.md` §4). Both services declare the *same*
+//! **One dashboard is one origin**. Both services declare the *same*
 //! `proxy.host`; the frontend owns `/` and the backend claims `/api` through hive path routing.
 //! That is what lets the page use relative URLs only and never learn its own address — the
 //! precondition for the same dashboard working at `<host>.adi`, at `<host>.<node>.n.adi` over
@@ -917,7 +917,7 @@ mod tests {
         (Config::with_root(root), ports)
     }
 
-    /// The rule from `docs/fleet.md` §2: `^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`. Spelled out here
+    /// The DNS-label rule: `^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`. Spelled out here
     /// rather than reused from the implementation, so the tests check the contract, not the code.
     fn is_dns_label(label: &str) -> bool {
         let bytes = label.as_bytes();
@@ -1058,7 +1058,7 @@ mod tests {
     #[test]
     fn the_page_carries_no_address_of_its_own() {
         // The shell is what reaches the browser: an absolute URL or a port in here is the whole
-        // bug (`docs/fleet.md` §4) — over the mesh `127.0.0.1` is the *viewer's* machine.
+        // bug — over the mesh `127.0.0.1` is the *viewer's* machine.
         for needle in ["backendPort", "127.0.0.1", "localhost", "http://"] {
             assert!(
                 !FRONTEND_INDEX_HTML.contains(needle),

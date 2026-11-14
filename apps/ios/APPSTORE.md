@@ -43,7 +43,7 @@ Choosing "a live invite in the review notes" turned out to need a capability the
 so it was built:
 
 - **The phone can now spend an invite**, not only mint one — `adi_mesh_join`, `Viewer::join`, and a
-  second mode in the pairing sheet. `docs/fleet.md` §8 already said the handshake was symmetric and
+  second mode in the pairing sheet. The fleet design already said the handshake was symmetric and
   the direction a deployment choice; only the viewer half of it existed. Without this a reviewer
   could not pair at all, because the old direction ends in "run `adi-mono mesh join` on your Mac".
 - Verified against a live peer, not by inspection:

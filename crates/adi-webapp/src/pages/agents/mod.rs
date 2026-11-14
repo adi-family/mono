@@ -1,4 +1,4 @@
-//! The Agents page: the list of agent definitions (docs/adi-agents.md §5), each row carrying
+//! The Agents page: the list of agent definitions, each row carrying
 //! its launch and edit actions in its ⋯ menu. Run starts either an interactive pty session or a
 //! headless background process; deeper orchestration is future work.
 //!

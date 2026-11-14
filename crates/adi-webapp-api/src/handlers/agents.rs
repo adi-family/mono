@@ -31,13 +31,13 @@ use super::response::{FromBody, Response, clean, error, ok_json, parse_body};
 
 /// The fleet node behind a request, off the headers the mesh gateway attaches when it forwards a
 /// peer's request to this machine's own `/api/*` (`adi_mesh::auth::FLEET_NODE_HEADER`/
-/// `FLEET_USER_HEADER`/`FLEET_PETNAME_HEADER`, `docs/fleet.md` §13). `None` for a request that
+/// `FLEET_USER_HEADER`/`FLEET_PETNAME_HEADER`). `None` for a request that
 /// never left this machine, which is what the control panel's own composer always sends.
 ///
 /// `petname` is this machine's own, pinned registry key for the connection — the one identity
 /// here that cannot be moved by the peer's own say-so, and so the only one ADI-MONO-171 G3's role
 /// check (or any other security-relevant lookup) may trust. `nickname` is the peer's
-/// self-declared, presentation-only name (`docs/fleet.md` §2 rule 3); `user` is the credential it
+/// self-declared, presentation-only name; `user` is the credential it
 /// authenticated as.
 #[derive(Debug, Clone, Copy)]
 pub struct FleetSender<'a> {
@@ -318,8 +318,8 @@ pub fn set_auto_title(store: &Agents, body: &[u8]) -> Response {
 /// just have it act on a placeholder and do nothing, so that is rejected (400) rather than silently
 /// run. Whether later replies continue the thread is a runner capability (`process:codex` and both
 /// harness engines do; `process:claude` does not).
-/// `user` is the launching peer's user scope (`adi_mesh`'s `user_scope`, `docs/byo-credentials.md`
-/// §3.2) — computed by the caller from the mesh registry alone, **never** from `body`. There is no
+/// `user` is the launching peer's user scope (`adi_mesh`'s `user_scope`) —
+/// computed by the caller from the mesh registry alone, **never** from `body`. There is no
 /// `user` or `lease` field on [`RunAgent`] for exactly that reason: a lease names whose credential
 /// a run may spend, and a field the peer controls must never decide that (§5, §15 Q6).
 #[must_use]
@@ -333,7 +333,7 @@ pub fn run_agent(
 }
 
 /// `POST /api/agents/run` forwarded from a child carrying `$ADI_LEASE`
-/// (`docs/byo-credentials.md` §11, ADI-MONO-182 P3.2) — the loopback-only counterpart to
+/// — the loopback-only counterpart to
 /// [`run_agent`]'s mesh/local path. `capability` names the session whose lease a child is asking
 /// to inherit; this function trusts nothing else about the forwarded request to decide who that
 /// child's caller is or whose lease it gets.
@@ -480,8 +480,8 @@ fn run_agent_as(
     }
 }
 
-/// Whose lease a launch of `agent` should record, and which names (`docs/byo-credentials.md` §5,
-/// §11, ADI-MONO-177 P1.7). `None` unless all three hold: `user` is `Some` (the launch carries a
+/// Whose lease a launch of `agent` should record, and which names (ADI-MONO-177
+/// P1.7). `None` unless all three hold: `user` is `Some` (the launch carries a
 /// mesh identity with a user scope), the server's `[user_secrets]` policy is `enabled`, and the
 /// agent attaches at least one name the policy also lists as `overridable`.
 ///
@@ -1381,7 +1381,7 @@ pub fn rename_run(store: &Agents, body: &[u8]) -> Response {
 /// `None` for everyone else — a workbench, Analytics, an older client that sends no such
 /// parameter — which gets the whole history exactly as it always has.
 /// The sessions rail's `?filter=` narrowing — its "Only starred" / "Only started any user" /
-/// "Only started by me" box, moved server-side (`docs/sessions.md`). `All` is the *absence* of the
+/// "Only started by me" box, moved server-side. `All` is the *absence* of the
 /// parameter, so an unnarrowed rail sends the same request it always did; only these three ever
 /// reach [`all_agent_runs`]. The wire strings are the contract with the client's
 /// `SessionFilter::query_value`.
@@ -1392,7 +1392,7 @@ pub enum RunFilter {
     /// Only runs *this* person started — the same runs [`Self::Mine`] keeps, narrowed to the one
     /// whose name (`adi_agents::launcher::human_user`) matches whoever is asking (`asking_user`).
     /// On a machine paired with nobody there is only one person it could ever be, so this and
-    /// [`Self::Mine`] answer the same question until a fleet (`docs/fleet.md` §13) puts somebody
+    /// [`Self::Mine`] answer the same question until a fleet puts somebody
     /// else's launches in the same store.
     Me,
     /// Only runs whose agent is starred on the Agents page.
@@ -1452,7 +1452,7 @@ pub fn all_agent_runs(
             // Who is asking, by the same identity a human launch is named with (`asking_user`) —
             // computed whether or not `filter` narrows by it, because it also rides along in the
             // answer for the client to mirror `?filter=me` over `watch.runs`, which never asks the
-            // server (`docs/sessions.md`).
+            // server.
             let who = asking_user(sender);
             if let Some(filter) = filter {
                 runs = filter_by_run(runs, filter, &starred, who);
@@ -1661,7 +1661,7 @@ fn attribute_human(launched_by: &str, sender: Option<FleetSender<'_>>) -> String
 ///
 /// `only_hidden: false` is the rail's main listing — everything **not** hidden, plus a hidden run
 /// that is asking a question nobody has answered yet, because a question left where nobody looks is
-/// a run stopped for good (`docs/sessions.md`). `only_hidden: true` is the mirror of that for the
+/// a run stopped for good. `only_hidden: true` is the mirror of that for the
 /// Hidden band: hidden runs, minus the ones asking a question, which the main listing above already
 /// carries and must not be drawn twice.
 fn filter_by_hidden(mut agents: Vec<AgentRuns>, only_hidden: bool) -> Vec<AgentRuns> {
@@ -1693,7 +1693,7 @@ fn filter_by_hidden(mut agents: Vec<AgentRuns>, only_hidden: bool) -> Vec<AgentR
 /// The client re-applies its own copy of this filter over the answer, because the rail draws rows
 /// this index does not carry — a pty agent's live terminal, the open conversation's own history from
 /// the unfiltered `POST /api/agents/runs`. Narrowing here only makes the paging and the counts agree
-/// with what the client will draw; it is never the last word on what shows (`docs/sessions.md`).
+/// with what the client will draw; it is never the last word on what shows.
 fn filter_by_run(
     mut agents: Vec<AgentRuns>,
     filter: RunFilter,

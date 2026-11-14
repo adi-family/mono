@@ -137,7 +137,7 @@ const LAUNCH_LOST: &str = "launch_lost";
 const LAUNCHING_GRACE_MS: u64 = 60_000;
 
 /// The `terminal_reason` of a turn refused because its lease had no live value and the effective
-/// `missing` is `"fail"` (`docs/byo-credentials.md` §10, ADI-MONO-181 P2.7,
+/// `missing` is `"fail"` (ADI-MONO-181 P2.7,
 /// [`fail_turn_for_missing_lease`](Agents::fail_turn_for_missing_lease)) — its own word, distinct
 /// from [`LAUNCH_FAILED`], because a reader who sees it should learn "the key wasn't there", not
 /// "something tried to run and couldn't".
@@ -200,7 +200,7 @@ fn turn_gate(config: &Config) -> Result<TurnGuard> {
 #[derive(Clone)]
 pub struct Agents {
     config: Config,
-    /// Where a leased turn's live value comes from (`docs/byo-credentials.md` §5, §9, P1.8) —
+    /// Where a leased turn's live value comes from (P1.8) —
     /// `None` for every `Agents` nothing has called [`Agents::with_lease_values`] on, which today
     /// is all of them: the real source is `adi-app`'s own in-memory `Lease` table, and that table
     /// doesn't exist until phase 2 (P2.3). See [`LeaseValues`] for why a test installs one here
@@ -212,7 +212,7 @@ pub struct Agents {
     /// and the P3.4 gate in `deliver_with`/`advance_queue`.
     lease_values: Option<std::sync::Arc<dyn LeaseValues>>,
     /// Where a child forwards `adi-mono agents run` to reach this lease
-    /// (`docs/byo-credentials.md` §11's "The capability", ADI-MONO-182 P3.1) —
+    /// (ADI-MONO-182 P3.1) —
     /// `http://127.0.0.1:<adi-app's own port>`, pushed into a leased run's environment as
     /// [`lease::CAP_URL_ENV`] beside its capability. `None` everywhere `lease_values` is `None`,
     /// for the same reason: there is nowhere on loopback for a forwarded request to land.
@@ -447,7 +447,7 @@ impl Agents {
         }
     }
 
-    /// Install the live source a leased turn's layer (`docs/byo-credentials.md` §5, P1.8) and the
+    /// Install the live source a leased turn's layer (P1.8) and the
     /// Test button (§5, P1.10) ask for a user's value — a builder, not a setter, since nothing
     /// outside a test has a real one to give before phase 2.
     #[must_use]
@@ -466,7 +466,7 @@ impl Agents {
     }
 
     /// Install the loopback address a leased run's children forward `adi-mono agents run` to
-    /// (`docs/byo-credentials.md` §11, ADI-MONO-182 P3.1) — `adi-app` calls this with its own
+    /// (ADI-MONO-182 P3.1) — `adi-app` calls this with its own
     /// listener's address; nothing else has anywhere for a forwarded launch to land.
     #[must_use]
     pub fn with_lease_url(mut self, url: String) -> Self {
@@ -1515,7 +1515,7 @@ impl Agents {
             backends::codex_home::prepare(&self.config, &row.backend, &mut spec.env)?;
         }
         // The unlock check, same as `runner.check` below: fail before anything is written down
-        // (`docs/byo-credentials.md` §10, ADI-MONO-181 P2.7). `missing = "wait"` is different —
+        // (ADI-MONO-181 P2.7). `missing = "wait"` is different —
         // the body's own answer is to create the session and queue the opening message rather
         // than refuse it outright (§10, §15 Q2) — so that case is read again, once the session
         // exists, just below.
@@ -1570,7 +1570,7 @@ impl Agents {
         // Written for the same reason, at the same moment: whose lease this conversation's turns
         // look for is decided at launch, from the mesh identity that opened it, and must not
         // change because a later turn is read under different server policy or caller identity.
-        // See `docs/byo-credentials.md` §11 and `LaunchOptions::lease`.
+        // See `LaunchOptions::lease`.
         if let Some(lease) = lease {
             store.set_lease(&agent.name, &record.id, lease)?;
         }
@@ -1587,7 +1587,7 @@ impl Agents {
         name_conversation(&mut spec, &record.id);
         self.apply_lease_capability(&mut spec, &store, &agent.name, &record.id);
         let session = store.session(&agent.name, &record.id);
-        // A fresh launch can wait too (`docs/byo-credentials.md` §10, §15 Q2): under
+        // A fresh launch can wait too: under
         // `missing = "wait"`, with no live value for a name this launch needs, the session is
         // created above exactly as any other launch's is — but its opening message is queued
         // rather than sent, so it starts for real on the next `advance_queue` that finds the
@@ -2049,7 +2049,7 @@ impl Agents {
             return Ok(Sent::Queued { place });
         }
         // The unlock check runs ahead of the start/queue decision below
-        // (`docs/byo-credentials.md` §10, ADI-MONO-181 P2.7): a session waiting on unlock answers
+        // (ADI-MONO-181 P2.7): a session waiting on unlock answers
         // "not startable", exactly like one that is still busy. `wait` and `fail` are not told
         // apart here — both queue this message rather than start it — because [`advance_queue`]
         // re-asks the same question on its own *dequeue*, in the order messages were actually
@@ -2059,7 +2059,7 @@ impl Agents {
         //
         // Stronger than that check, and asked first: a leased session never starts outside
         // `adi-app`'s own `Agents` at all, whatever `missing` would otherwise say
-        // (`docs/byo-credentials.md` §11, ADI-MONO-182 P3.4) — `lease_values().is_none()` here
+        // (ADI-MONO-182 P3.4) — `lease_values().is_none()` here
         // does not mean "server values are fine", it means "this process is not the one allowed
         // to decide that".
         if (record.lease.is_some() && self.lease_values().is_none())
@@ -2219,8 +2219,8 @@ impl Agents {
     /// can answer — the app's root agent, a reviewer an operator picked, or the same agent looking
     /// at itself are all reasonable, and each caller knows which it means.
     ///
-    /// The dossier lands in the session's own `<id>.review.md`, the sidecar namespace beside the log
-    /// (`docs/sessions.md`), so it is deleted with the session it describes and never outlives it.
+    /// The dossier lands in the session's own `<id>.review.md`, the sidecar namespace beside the log,
+    /// so it is deleted with the session it describes and never outlives it.
     ///
     /// # Errors
     /// [`Error::NotFound`] for an unknown conversation, [`Error::Unsupported`] for one that has not
@@ -2370,14 +2370,14 @@ impl Agents {
             return false;
         }
         // Stronger than the unlock check just below, and asked first: a leased session never
-        // starts outside `adi-app`'s own `Agents` (`docs/byo-credentials.md` §11, ADI-MONO-182
+        // starts outside `adi-app`'s own `Agents` (ADI-MONO-182
         // P3.4) — see `deliver_with`'s own copy of this comment for why `lease_values().is_none()`
         // is not read as "server values are fine" here.
         if record.lease.is_some() && self.lease_values().is_none() {
             return false;
         }
-        // The unlock check runs ahead of the dequeue below (`docs/byo-credentials.md` §10,
-        // ADI-MONO-181 P2.7): a parked turn must not be one of the ones a failed launch already
+        // The unlock check runs ahead of the dequeue below
+        // (ADI-MONO-181 P2.7): a parked turn must not be one of the ones a failed launch already
         // drops from the queue, so a session waiting on unlock is read here, before anything is
         // popped. `missing = "fail"` dequeues on purpose — the queued message *has* had its turn,
         // the same as any other failed launch, and the refusal is written where the failure
@@ -2572,7 +2572,7 @@ impl Agents {
     }
 
     /// Announce once that a turn has parked waiting on a lease's unlock
-    /// (`docs/byo-credentials.md` §10, ADI-MONO-181 P2.8) — `adi.agents.run.waiting_on_unlock`,
+    /// (ADI-MONO-181 P2.8) — `adi.agents.run.waiting_on_unlock`,
     /// gated through [`SessionStore::note_lease_wait`] the same way [`note_idle_runs`] gates
     /// `adi.agents.run.idle`, so a session left parked for an hour is announced once, not every
     /// poll. The message itself is never touched here: leaving it in the queue (rather than
@@ -2601,7 +2601,7 @@ impl Agents {
     }
 
     /// Refuse a turn whose lease has no live value for a name it needs, under `missing = "fail"`
-    /// (`docs/byo-credentials.md` §10, ADI-MONO-181 P2.7) — written into the transcript the way
+    /// (ADI-MONO-181 P2.7) — written into the transcript the way
     /// [`send_or_note_failure`](Self::send_or_note_failure) writes a real launch failure, since
     /// nothing here ever reaches a runner to fail on its own: the user's own message is recorded
     /// first (nothing else ever will, since this never reaches `start_turn`), then the refusal as
@@ -2764,7 +2764,7 @@ impl Agents {
     }
 
     /// `Some(lease.user)` when `name` — the one env var that decides a backend's `credential()`
-    /// — is itself live-supplied by `lease` right now (`docs/byo-credentials.md` §6, P1.9);
+    /// — is itself live-supplied by `lease` right now (P1.9);
     /// `None` otherwise, which is every call until phase 2 gives [`Self::lease_values`] something
     /// real to answer with. Thin wrapper over [`lease::qualifier_for`] so [`Self::spec_in`] and
     /// [`Self::fail_over`] ask the same question the same way.
@@ -2778,8 +2778,7 @@ impl Agents {
     }
 
     /// Push this session's `ADI_LEASE`/`ADI_LEASE_URL` onto `spec`, after `name_conversation` and
-    /// with the same precedence (`docs/byo-credentials.md` §11's "The capability", ADI-MONO-182
-    /// P3.1). A no-op for a session with no lease — [`store::SessionStore::lease_capability`]
+    /// with the same precedence (ADI-MONO-182 P3.1). A no-op for a session with no lease — [`store::SessionStore::lease_capability`]
     /// answers `None` — and for every `Agents` nothing has called [`Self::with_lease_url`] on,
     /// which today is every process but `adi-app`: there is nowhere on loopback for a forwarded
     /// launch to land, so pushing a capability nobody can redeem would be worse than pushing
@@ -2800,7 +2799,7 @@ impl Agents {
     }
 
     /// What a presented `X-Adi-Lease` capability resolves to: the session that minted it, and the
-    /// user whose lease it names (`docs/byo-credentials.md` §11, ADI-MONO-182 P3.2). `None` for an
+    /// user whose lease it names (ADI-MONO-182 P3.2). `None` for an
     /// unknown capability, or one a revoke has since voided — `store::SessionStore::find_by_lease_cap`
     /// answers nothing for either, since both read the same way from outside: the caller must
     /// answer `403`, never fall back to the server's own values, because a capability is either
@@ -2857,7 +2856,7 @@ impl Agents {
         // Allowlist only — nothing pulled in from a scope just for existing. Resolved against this
         // store's Config (test stores stay isolated). Best-effort: a missing/undecryptable secret is skipped.
         let mut env = attached_secret_env(&self.config, &agent.manifest.secrets);
-        // The user layer (`docs/byo-credentials.md` §5, P1.8): a live value replaces an attached
+        // The user layer (P1.8): a live value replaces an attached
         // secret of the same name, in its own slot in the ordering, ahead of everything below.
         // A no-op for every launch and turn until phase 2 gives `lease_values()` something real.
         lease::apply(
@@ -3217,8 +3216,8 @@ impl Agents {
         let Some(current) = chain.current().cloned() else {
             return;
         };
-        // Whose value this row's credential ran on for *this* turn (`docs/byo-credentials.md` §6,
-        // P1.9) — `None` on every server until phase 2, and `None` outright for a settings-file
+        // Whose value this row's credential ran on for *this* turn
+        // (P1.9) — `None` on every server until phase 2, and `None` outright for a settings-file
         // backend, which has no env var to ask about.
         let qualifier = current
             .credential_env_name()
@@ -3439,7 +3438,7 @@ impl Agents {
     }
 
     /// Stop every live session on `user`'s lease, subagents included, and clear their queues
-    /// (`docs/byo-credentials.md` §10.1 steps 2-4, ADI-MONO-181 P2.6) — through the same runner
+    /// (ADI-MONO-181 P2.6) — through the same runner
     /// stop [`Self::stop_run`] uses, but without that function's "the agent still exists" gate: a
     /// session on a deleted agent's lease is exactly the one nobody else would ever stop. Also
     /// voids every one of those sessions' `lease_cap` (step 2) — a no-op today since nothing
@@ -6432,8 +6431,7 @@ mod tests {
     /// same string `launcher::by_caller()` would hand a real child, reused here as `agent:<name>`
     /// without any of the machinery that would actually make it true — and a plain, in-process
     /// `launch` (what the CLI does whenever `$ADI_LEASE` is unset) never computes a `LeaseRef` at
-    /// all: only `run_agent`/`run_agent_leased`'s own HTTP paths do (`docs/byo-credentials.md`
-    /// §11: "`ADI_AGENT` and `ADI_RUN_ID` are plain environment variables. Any process can set
+    /// all: only `run_agent`/`run_agent_leased`'s own HTTP paths do ("`ADI_AGENT` and `ADI_RUN_ID` are plain environment variables. Any process can set
     /// them... Caller identity for a leased launch therefore can't come from them.").
     #[test]
     #[cfg(unix)]
@@ -6470,7 +6468,7 @@ mod tests {
     /// `missing = "wait"` — a parent and a child alike, with no tree to walk because each is its
     /// own session on the same `lease.user` by construction — and a later renew resumes all of
     /// them on the very next `advance_queue` poll, the same `runs()` call an await wake, a goal
-    /// nudge or a failover re-ask would also land through (`docs/byo-credentials.md` §11: "A
+    /// nudge or a failover re-ask would also land through ("A
     /// child launched after the lease expired... meets `missing` like any other").
     #[test]
     fn expiry_parks_every_session_in_a_leased_tree_and_a_live_source_resumes_all_of_them() {
@@ -6621,8 +6619,8 @@ mod tests {
     }
 
     /// `missing = "fail"`: a fresh launch is refused outright, before anything is written down —
-    /// the same contract a mistyped argument already gets (`docs/byo-credentials.md` §10, §15
-    /// Q2, settled here as a refusal rather than an orphaned "created, waiting" session nothing
+    /// the same contract a mistyped argument already gets
+    /// (settled here as a refusal rather than an orphaned "created, waiting" session nothing
     /// could resume).
     #[test]
     fn a_fresh_launch_under_missing_fail_is_refused_and_creates_nothing() {
@@ -6710,7 +6708,7 @@ mod tests {
     /// 2. A revoke (`Agents::stop_runs_for_lease_user`, the server-side half of `mesh lock`) kills
     ///    a *different*, still-running child on the same lease — subagents included, in spirit:
     ///    this is the one runner-stop path every session on a lease goes through, parent or
-    ///    child alike (`docs/byo-credentials.md` §10.1).
+    ///    child alike.
     /// 3. A launch after the revoke, with the lease no longer live: `missing = "server"` falls
     ///    back to the server's own value; `missing = "wait"` parks instead, and resumes — a real
     ///    `advance_queue` poll, not a re-check of the same fixture — the moment the lease is live
@@ -6882,8 +6880,8 @@ mod tests {
         }
     }
 
-    /// Phase 3's own extension of the end-to-end test just above (`docs/byo-credentials.md` §11,
-    /// ADI-MONO-182 P3.1/P3.2/P3.6): a **grandchild** of a leased run gets the user's value too,
+    /// Phase 3's own extension of the end-to-end test just above
+    /// (ADI-MONO-182 P3.1/P3.2/P3.6): a **grandchild** of a leased run gets the user's value too,
     /// resolved at each hop by the exact mechanism `run_agent_leased` uses —
     /// [`Agents::lease_capability_session`] — from nothing but the parent's own minted capability,
     /// never anything a forged `ADI_RUN_ID` or a forwarded request's body could claim. A revoke
@@ -6996,7 +6994,7 @@ mod tests {
 
         // A revoke stops every running turn on the lease, the whole tree at once: parent, child and
         // grandchild are each their own session with `lease.user = "u-igor"` by construction, so
-        // there is no tree to walk (`docs/byo-credentials.md` §10.1 step 3).
+        // there is no tree to walk.
         let mut stopped = store.stop_runs_for_lease_user("u-igor");
         stopped.sort();
         let mut expected = vec![parent_id.clone(), child_id.clone(), grandchild_id.clone()];

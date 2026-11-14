@@ -1,5 +1,5 @@
 //! `adi-app`'s in-memory lease table and the `/api/leases/*` routes
-//! (`docs/byo-credentials.md` §7, §9, ADI-MONO-180 P2.3).
+//! (ADI-MONO-180 P2.3).
 //!
 //! Leases live here, not in `adi-secrets` or `adi-agents`: "`adi-app` starts the runs" (§9), and
 //! nothing else on the box can read one except through [`adi_agents::LeaseValues`], which
@@ -26,8 +26,8 @@ use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
-/// `adi.secrets.lease.granted` — a device's unlock installed a live lease (`docs/byo-credentials.md`
-/// §10, ADI-MONO-181 P2.8). Nothing in this process subscribes to it: a session parked on this
+/// `adi.secrets.lease.granted` — a device's unlock installed a live lease (ADI-MONO-181
+/// P2.8). Nothing in this process subscribes to it: a session parked on this
 /// user's lease resumes on the next `advance_queue` poll regardless, the same lazy clock every
 /// queued message already waits on — this is purely for the rail and anyone else watching.
 #[derive(Debug, Serialize)]
@@ -41,7 +41,7 @@ impl Event for LeaseGranted<'_> {
 }
 
 /// `adi.secrets.lease.revoked` — `mesh lock` or unpairing a user's last peer
-/// (`docs/byo-credentials.md` §10.1, ADI-MONO-181 P2.6).
+/// (ADI-MONO-181 P2.6).
 #[derive(Debug, Serialize)]
 struct LeaseRevoked<'a> {
     user: &'a str,
@@ -90,7 +90,7 @@ fn ttl(length: LeaseLength) -> Option<Duration> {
     }
 }
 
-/// `adi-app`'s whole lease table: one [`Lease`] per user id (`docs/byo-credentials.md` §9 — "a
+/// `adi-app`'s whole lease table: one [`Lease`] per user id ("a
 /// user is one peer, so a second unlock from the same peer replaces the lease in place").
 #[derive(Default)]
 pub struct LeaseTable(Mutex<HashMap<String, Lease>>);
@@ -194,7 +194,7 @@ struct LeaseSummary {
 
 /// `GET /api/leases/session` (§9 step 1): this boot's session public key and epoch, plus the
 /// id the caller's own lease (if they unlock one) will be filed under — so a device building its
-/// unlock's AAD (`docs/byo-credentials.md` §9 step 3) never has to already know its own minted
+/// unlock's AAD never has to already know its own minted
 /// id out of band; the server, which just resolved it from the caller's own authenticated
 /// identity, hands it over right here.
 #[derive(Serialize)]
@@ -325,7 +325,7 @@ pub fn renew(table: &LeaseTable, session: &SessionKey, user: Option<&str>, body:
 }
 
 /// The full §10.1 sequence, shared by `POST /api/leases/revoke` below and by unpairing a user's
-/// last peer (`docs/byo-credentials.md` §3.2, ADI-MONO-181 P2.6's own "also on unpair"
+/// last peer (ADI-MONO-181 P2.6's own "also on unpair"
 /// requirement): drop the lease (step 1), then — through `Agents::stop_runs_for_lease_user`, which
 /// voids every one of the user's `lease_cap`s and finds every session across every agent — stop
 /// each one still alive (steps 2-4), and publish `adi.secrets.lease.revoked` (step 5). Runs in full
@@ -653,7 +653,7 @@ mod tests {
     // creates a lease, and the exact function `Agents::with_lease_values` wires a launched run's
     // environment through (`adi_agents::LeaseValues::value`) returns it — then `mesh lock` drops
     // it and the same call answers `None`, which is what sends the next launch back to the
-    // server's own value (`docs/byo-credentials.md` §5, §10.1; already exhaustively proven at the
+    // server's own value (§10.1; already exhaustively proven at the
     // `adi_agents::lease::apply` layer by ADI-MONO-178's own tests — this test proves everything
     // *beneath* that layer is wired to it for real, not against a fake).
     #[test]

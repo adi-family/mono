@@ -15,8 +15,7 @@
 //!
 //! `kind` is part of the address, not just of the layout, because the same published name can
 //! appear under two kinds (`agents/reviewer` and `tools/reviewer` are not the same element) and
-//! the address has to disambiguate that without reading the repository first
-//! (`docs/marketplace-bundles.md`).
+//! the address has to disambiguate that without reading the repository first.
 
 use std::fmt;
 

@@ -1,10 +1,10 @@
-//! The Channels page: a card per service (`docs/channels.md` §7) — Telegram and, since
+//! The Channels page: a card per service — Telegram and, since
 //! ADI-MONO-123, Slack — each showing its connections, a router-connection status pill, and the
 //! Connect dialog that registers a fresh one.
 //!
 //! Page-local, like [`super::embedding_backends_view`] beside it: nothing here rides the shell's
 //! 4s poll (there is no live-channel subscription for `/api/channels*` — see this crate's own
-//! note on `docs/fleet.md` §14's L3, which this page's every fetch follows), so the connection
+//! note on always-local reads, which this page's every fetch follows), so the connection
 //! list, the status pill and the agent picker's options are all fetched once when the page opens.
 
 use adi_ui::{Icon, Lucide};
@@ -322,7 +322,7 @@ fn agent_picker(value: RwSignal<String>, agents: &[AgentDto]) -> AnyView {
 // ------------------------------------------------------------------- connect dialog
 
 /// The Connect dialog: an agent picker and who-may-talk, then — once `connect` has registered
-/// the connection — the install/link URL and a wait on `linked` (`docs/channels.md` §7).
+/// the connection — the install/link URL and a wait on `linked`.
 ///
 /// One per provider card, each with its own `open` signal kept in step with
 /// [`ChannelsConsole::connect_provider`] — the same two-`Effect` pattern
@@ -488,7 +488,7 @@ async fn refresh(console: ChannelsConsole) {
 
 /// Submit the Connect form: register the connection, then (if "anyone in this chat" was picked)
 /// widen the allowlist in a second call — `POST /api/channels/connect` always starts owner-only
-/// (`docs/channels.md` §7: who-may-talk is a separate step).
+/// (who-may-talk is a separate step).
 fn submit_connect(state: State, console: ChannelsConsole, provider: &'static str) {
     let agent = console.connect_agent.get().trim().to_string();
     if agent.is_empty() {

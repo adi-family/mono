@@ -1,6 +1,6 @@
 //! The router client: holds the outbound WebSocket for one `(node, provider)` pair, reconnecting
 //! with backoff, acking and deduplicating `event` frames, and handing each decoded
-//! [`ChannelMessage`] off to the bus and to [`dispatch`] (`docs/channels.md` §1/§2).
+//! [`ChannelMessage`] off to the bus and to [`dispatch`].
 //!
 //! **One socket per provider**, per the spec: a node talking to both Telegram and Slack holds two
 //! [`RouterClient`]s, so losing one never touches the other.

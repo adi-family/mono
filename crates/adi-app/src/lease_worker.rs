@@ -1,4 +1,4 @@
-//! The `auto_unlock` background renew worker (`docs/byo-credentials.md` §9, ADI-MONO-180 P2.4's
+//! The `auto_unlock` background renew worker (ADI-MONO-180 P2.4's
 //! own gap, closed here by ADI-MONO-181): for every server connection in this device's own
 //! `connections.toml` that has `auto_unlock` and a non-empty `share`, unlock on the first tick
 //! and renew on an interval while the server is reachable — the device-side half of §9 steps 1-5,
@@ -13,7 +13,7 @@
 //!
 //! **The credential problem §9's own note names.** An unattended loop needs this device's
 //! Basic-auth password for each server without a human retyping it every tick, which collides
-//! with `docs/fleet.md` §3.1's "neither side stores it" — unless the operator has already handed
+//! with the fleet rule that "neither side stores it" — unless the operator has already handed
 //! it to *this* `adi-app`, which is exactly what [`crate::viewer::HeldCredentials`] already holds,
 //! at the user's own request, for dashboard transfer's outbound calls
 //! (`adi-app/src/viewer.rs`'s `unlock`). Reusing that store here, rather than inventing a second
@@ -108,7 +108,7 @@ async fn ensure_unlocked(
     Ok(())
 }
 
-/// This device's own half of `docs/byo-credentials.md` §9 steps 1-4, the unattended twin of
+/// This device's own half of the unlock sequence, the unattended twin of
 /// `adi-mono mesh unlock` (`adi-cli/src/mesh.rs`) — the same sequence, `auth` supplied by
 /// [`ensure_unlocked`] instead of a password prompt. Returns the epoch unlocked against, for
 /// [`ensure_unlocked`]'s own renew cache.

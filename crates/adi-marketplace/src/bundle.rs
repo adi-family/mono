@@ -1,6 +1,6 @@
-//! Installing, updating, uninstalling and starting a bundle's elements — phase B of
-//! `docs/marketplace-bundles.md` ("Installing part of a bundle" through "Provenance, without one
-//! directory per element") and phase C ("Update" through "Uninstall").
+//! Installing, updating, uninstalling and starting a bundle's elements — phase B (installing
+//! part of a bundle, and provenance without one directory per element) and phase C (update
+//! through uninstall) of the v2 marketplace.
 //!
 //! [`update`], [`uninstall_element`] and [`start_service`] are [`install`]'s own counterparts, one
 //! ledger entry at a time: an update re-lands every already-installed element from the clone's
@@ -26,7 +26,7 @@
 //! save` — never a hand-rolled file write, so what lands can never drift from the store's own
 //! invariants (`created_at`/`updated_at` stamped fresh, names validated, and so on).
 //!
-//! **The two collision regimes** (`docs/marketplace-bundles.md` decision #3) come down to one
+//! **The two collision regimes** come down to one
 //! question per kind: does landing under a fresh id ever leave a sibling's *structured* reference
 //! — `bin_tools`, `backends[].backend`, `project` — silently pointing at a stranger's pre-existing
 //! entry?
@@ -43,7 +43,7 @@
 //! reference is ever rewritten**: an agent's `bin_tools = ["csv-import"]` is passed through
 //! byte-for-byte, and it resolves correctly whenever the sibling tool landed at all. The one
 //! rewrite this module does perform is `project`, which every kind's own manifest carries and
-//! which a publisher cannot fill in honestly (`docs/marketplace-bundles.md` decision #4): it is
+//! which a publisher cannot fill in honestly: it is
 //! always struck from what the repository shipped and replaced with this bundle's own landed
 //! project id, or `None` when this bundle carries no project scaffold at all.
 
@@ -115,7 +115,7 @@ pub struct BundleInstalled {
     pub elements: Vec<ElementOutcome>,
     /// Every declared secret name (an agent's `secrets`, a backend's `api_key_env`) that this
     /// machine does not have set, global or project scope both. Not a gate — every element lands
-    /// regardless (`docs/marketplace-bundles.md`, "Secrets").
+    /// regardless.
     pub missing_secrets: Vec<String>,
     /// One sentence per name in [`missing_secrets`](Self::missing_secrets), phrased for the
     /// operator, the same role v1's `Installed.notes` plays for a repository-versioned stamp.
@@ -267,8 +267,7 @@ pub struct ServiceStarted {
     pub name: String,
     pub id: String,
     /// The project whose `.adi/hive.yaml` the service's block now lives in, or `None` for the
-    /// global `hive.yaml` — the bundle's own project, when it carries one (`docs/marketplace-bundles.md`
-    /// decision #4).
+    /// global `hive.yaml` — the bundle's own project, when it carries one.
     pub project: Option<String>,
 }
 
@@ -285,8 +284,7 @@ enum Landed {
     Blocked(String),
     /// Anything else that stopped this one element — a parse failure, a store's own validation
     /// refusal, an I/O error. Never the whole install's problem: the loop moves on to the next
-    /// element, per "a failure partway leaves what landed landed" (`docs/marketplace-bundles.md`,
-    /// "What is deliberately not here").
+    /// element, per "a failure partway leaves what landed landed".
     Failed(String),
 }
 
@@ -537,8 +535,7 @@ fn file_dashboard_under(dir: &Path, project: &str) -> Result<()> {
 
 /// What one install landed each of its elements as, keyed by what the publisher called it.
 ///
-/// This is the whole of the cross-element wiring problem (`docs/marketplace-bundles.md`,
-/// "Cross-element dependencies"). v2 solved it by never renaming the kinds whose ids get read back
+/// This is the whole of the cross-element wiring problem. v2 solved it by never renaming the kinds whose ids get read back
 /// out of a sibling's structured field: a tool, an LLM or embedding backend, or the project landed
 /// verbatim or not at all, so `bin_tools = ["csv-import"]` was passed through byte for byte and
 /// resolved by construction.
@@ -577,7 +574,7 @@ impl Renames {
     }
 
     /// The id a published name landed under, or the name itself when this install never landed it
-    /// — an unresolved reference is ordinary (`docs/marketplace-bundles.md`: an agent whose tool
+    /// — an unresolved reference is ordinary (an agent whose tool
     /// was left out simply has an empty bin), and a name nobody rewrote is the honest thing to
     /// leave in the file.
     fn resolve(&self, kind: Kind, name: &str) -> String {
@@ -601,7 +598,7 @@ impl Renames {
 
 /// Update `<marketplace>/<slug>`: fast-forward the bundle's own internal clone onto its manifest's
 /// current pin, then re-apply every ledgered element from that clone into its live location — per
-/// element, not all-or-nothing (`docs/marketplace-bundles.md`, "Update").
+/// element, not all-or-nothing.
 ///
 /// A flat-file or script element whose live fingerprint still matches what was last written is
 /// fast-forwarded; one that has drifted (the operator edited it) is left alone and reported, unless
@@ -717,8 +714,8 @@ pub fn update(
     })
 }
 
-/// Uninstall one element of `<marketplace>/<slug>/<kind>/<name>` by its own kind's ordinary path
-/// (`docs/marketplace-bundles.md`, "Uninstall"), drop it from the ledger, and leave every sibling
+/// Uninstall one element of `<marketplace>/<slug>/<kind>/<name>` by its own kind's ordinary path,
+/// drop it from the ledger, and leave every sibling
 /// untouched. The ledger entry and the permanent clone go only once nothing from the bundle remains
 /// installed anywhere.
 ///
@@ -820,8 +817,7 @@ pub fn uninstall_element(
 /// Start a parked hive service: copy its `ServiceSpec` block out of `marketplace/services/…` into
 /// the target `hive.yaml` — the bundle's own project, when it carries one, else the global hive —
 /// under its landed key, and drop the parked file. From here the supervisor's own periodic re-read
-/// picks it up and its `start:` policy governs it like any hand-written service
-/// (`docs/marketplace-bundles.md`, "Inert on arrival, per kind").
+/// picks it up and its `start:` policy governs it like any hand-written service.
 ///
 /// Idempotent: starting a service that is already started (its parked file is already gone, and its
 /// block is already in the target hive.yaml) answers the same outcome rather than erroring.
@@ -886,8 +882,7 @@ pub fn start_service(market: &Marketplace, spec: &str, scope: &Scope) -> Result<
     })
 }
 
-/// One general bundle's status for a listing, per `docs/marketplace-bundles.md`'s "What
-/// 'installed' means for a partially-installed bundle": installed is a fraction of what the
+/// One general bundle's status for a listing: installed is a fraction of what the
 /// manifest's own preview declares, and every field here is computed live off the ledger, the
 /// current pin and the current secrets store — never stored and frozen at install time, the same
 /// posture `outdated` and `missing_secrets` already take right after an install.
@@ -1187,8 +1182,8 @@ impl Stores {
             // No public store API rewrites a project's name or description in place outside
             // creation (`adi_projects::Projects` has `archive`/`unarchive`/`rename`/`remove` and
             // nothing else) — reported rather than silently skipped, and never relanded, forced
-            // or not (`docs/marketplace-bundles.md`'s own "Update" section names this a flat-file
-            // fast-forward like any other; the real store gives it no such path).
+            // or not (the v2 design names this a flat-file fast-forward like any other; the real
+            // store gives it no such path).
             Kind::Project => Relanded::Skipped(
                 "a project scaffold's name and description cannot be changed after install — \
                  there is no in-place update for it in adi_projects — left as it stands"
@@ -1653,7 +1648,7 @@ fn drop_service_block(path: &Path, key: &str) -> Result<Option<String>> {
 /// Where a bundle's hive service lands once started, and where its update or its uninstall looks
 /// for it having been: the bundle's own project's `.adi/hive.yaml` when it carries one, else the
 /// global `hive.yaml` — the same project-scoped escape hatch every other kind's naming collision
-/// gets (`docs/marketplace-bundles.md` decision #4).
+/// gets.
 fn target_hive_path(
     market: &Marketplace,
     projects: &adi_projects::Projects,
@@ -1667,7 +1662,7 @@ fn target_hive_path(
 
 /// Whether a service block names a `runner.docker` container — the note [`uninstall_service`]
 /// attaches, because dropping the key stops the supervisor's own `docker wait` loop but never the
-/// container itself (`docs/marketplace-bundles.md`, "Inert on arrival, per kind").
+/// container itself.
 fn docker_note(block_yaml: &str) -> Option<String> {
     let spec: adi_hive::config::ServiceSpec = serde_yaml_ng::from_str(block_yaml).ok()?;
     spec.runner
@@ -1949,7 +1944,7 @@ fn land_trigger(
     manifest.project = project.map(str::to_string);
     // The sharp case the operator's brief calls out by name: forced regardless of what the
     // repository ships, because a background or event trigger launches on its own the moment it
-    // is enabled (`docs/marketplace-bundles.md`, "Inert on arrival, per kind").
+    // is enabled.
     if manifest.enabled {
         let forced = "triggers/{name}.toml asked to arrive enabled — forced to disabled; \
                       enabling it is the deliberate act that lets it run"
@@ -2267,8 +2262,7 @@ fn land_service(services_dir: &Path, root: &Path, el: &LayoutElement) -> Landed 
 }
 
 /// `update`'s own fast-forward of an already-landed hive service — the parked fragment file if it
-/// was never started, or the block inside `target_hive` if it was (`docs/marketplace-bundles.md`,
-/// "Update"): a started service's entry is a plain YAML block an operator could just as well have
+/// was never started, or the block inside `target_hive` if it was: a started service's entry is a plain YAML block an operator could just as well have
 /// hand-edited, so it gets the same drift check either way.
 fn reland_service(
     parked_dir: &Path,

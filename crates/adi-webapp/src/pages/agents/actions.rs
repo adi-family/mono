@@ -261,7 +261,7 @@ where
 
 /// Launch an interactive (pty) agent straight away — no initial task, since the session is typed
 /// into after it starts. `force` is the human's "run it anyway" past a full concurrency limit.
-/// Always this machine — the Agents page has no node concept (`docs/fleet.md` §13).
+/// Always this machine — the Agents page has no node concept.
 pub(crate) fn run_now(state: State, name: String, force: bool) {
     run_now_with(state, None, name, force, None, None, None);
 }
@@ -272,7 +272,7 @@ pub(crate) fn run_now(state: State, name: String, force: bool) {
 /// a row, which is rarely the agent the composer is pointed at.
 ///
 /// `node` is which source the picker above the "Start session" button is pointed at
-/// (`docs/fleet.md` §13) — `None` for this machine, which is every call site except the chat home's
+/// — `None` for this machine, which is every call site except the chat home's
 /// own pty affordance, since a pty agent only ever runs on the machine that defines it.
 fn run_now_with(
     state: State,
@@ -316,7 +316,7 @@ fn run_now_with(
 /// the composer sends it once the cap is reached, where the button already reads "Run anyway".
 ///
 /// Launches on `watch.node` — whichever source the composer's picker is pointed at
-/// (`docs/fleet.md` §13) — and re-asserts it on the watch once the launch lands, rather than
+/// — and re-asserts it on the watch once the launch lands, rather than
 /// trusting it is still what it was when the request went out: the picker (and so `watch.node`)
 /// can move while the request is in flight, and the conversation that just started belongs to the
 /// source it was actually sent to, not wherever the picker has since drifted to.
@@ -414,7 +414,7 @@ fn stop_one_run(state: State, watch: AgentsWatch, run_id: String) {
 
 /// Refresh one source's own agent list after a mutation settles its running flag — this machine's
 /// [`State::agents`] for `None`, or one node's slice of [`State::rail_node_agents`]
-/// (`docs/fleet.md` §13). Fire-and-forget: a stale running flag for a second or two is not worth a
+///. Fire-and-forget: a stale running flag for a second or two is not worth a
 /// caller waiting on.
 fn refresh_source_agents(state: State, node: Option<&str>) {
     match node {
@@ -429,7 +429,7 @@ fn refresh_source_agents(state: State, node: Option<&str>) {
 
 /// Fold one source's freshly answered `AgentsState` in directly, rather than asking again — this
 /// machine's [`State::agents`] for `None`, or one node's slice of [`State::rail_node_agents`]
-/// (`docs/fleet.md` §13). What a launch on that source hands back already *is* its post-launch agent
+///. What a launch on that source hands back already *is* its post-launch agent
 /// list, so [`refresh_source_agents`]'s round trip would only repeat the answer just received.
 fn set_source_agents(state: State, node: Option<&str>, agents: AgentsState) {
     match node {
@@ -449,7 +449,7 @@ fn set_source_agents(state: State, node: Option<&str>, agents: AgentsState) {
 ///
 /// `agent` is named rather than taken from the watch, because the sessions rail lists every agent's
 /// chats at once: the row's own agent is the one to delete from, not whichever one is on screen.
-/// `node` is the row's own source (`docs/fleet.md` §13) — `None` for this machine.
+/// `node` is the row's own source — `None` for this machine.
 fn delete_one_run(
     state: State,
     watch: AgentsWatch,
@@ -467,7 +467,7 @@ fn delete_one_run(
         format!("“{}”", title.trim())
     };
     // `confirm_local`, not `confirm`: this row already names its own explicit source (§13's K6),
-    // which the panel-wide picker's node (`docs/fleet.md` §14) may not even agree with — a mixed
+    // which the panel-wide picker's node may not even agree with — a mixed
     // rail can delete a row from a different machine than the one the titlebar points at.
     if !crate::ui::confirm_local(&format!(
         "Permanently delete {what}? Its whole transcript goes with it, and this cannot be undone."
@@ -505,7 +505,7 @@ fn delete_one_run(
 /// snapshot — the 1s poll takes over from there. The view moves; nothing on the page scrolls, which
 /// is what the chat home wants when its picker switches agents mid-screen.
 ///
-/// `node` is which source this agent is being watched *on* (`docs/fleet.md` §13) — `None` for this
+/// `node` is which source this agent is being watched *on* — `None` for this
 /// machine, which is every call site except the sessions rail's own rows and hotkeys. Set on
 /// [`AgentsWatch::node`] before anything is polled, so the very first request the new view makes
 /// already goes to the right place.
@@ -673,7 +673,7 @@ pub(crate) fn poll_watch(watch: AgentsWatch) {
             if let Ok(peek) = fetch::peek_agent(for_peek.as_deref(), name).await
                 && watch.name.get_untracked().as_deref() == Some(peek.name.as_str())
                 // Checked on the source too, not only the name — two sources can each run an
-                // agent of the same name (`docs/fleet.md` §13).
+                // agent of the same name.
                 && watch.node.get_untracked() == for_peek
             {
                 crate::notify::on_peek(watch, &peek);
@@ -1228,7 +1228,7 @@ fn run_detail_row(
 /// Messages still waiting in the queue trail the transcript, so in a newest-first feed they sit at
 /// the very top: what you have already said is nearest the box you said it in.
 /// Which machine the open conversation is on, as its messages and its composer name it — a node's
-/// petname, or "this machine" (`docs/fleet.md` §13).
+/// petname, or "this machine".
 ///
 /// `None` means there is nothing worth saying, and the rule is not the rail's. A rail row prints its
 /// source only once more than one is ticked, because the head button above it names the source when
@@ -2887,7 +2887,7 @@ fn run_bar(state: State, watch: AgentsWatch) -> impl IntoView {
     // A launch typed here is a human asking, so a full cap is an override to offer rather than a
     // refusal to hand back. The send button is the reply box's arrow now and cannot say "anyway",
     // so the line under the composer is what says it — before Enter is ever pressed. Read against
-    // whichever source the picker above this box is pointed at (`docs/fleet.md` §13) — the same
+    // whichever source the picker above this box is pointed at — the same
     // source `start` below launches on.
     let at_limit = move || {
         let Some(name) = watch.name.get() else {
@@ -2945,7 +2945,7 @@ fn run_bar(state: State, watch: AgentsWatch) -> impl IntoView {
     });
     let attach = crate::attach::attaching(
         state,
-        // Whichever source the picker above this box launches on (`docs/fleet.md` §13) — uploads
+        // Whichever source the picker above this box launches on — uploads
         // there too, `fetch::upload_attachment` routing to that node's own forwarder rather than
         // this machine's.
         watch.node.get_untracked(),
@@ -4591,7 +4591,7 @@ fn toggle_drawer(state: State, which: ChatDrawer) {
 }
 
 /// One option [`chat_agent_picker`] offers: an agent, and which of the rail's currently-selected
-/// sources it came from (`docs/fleet.md` §13, multi-select) — `None` for this machine.
+/// sources it came from (multi-select) — `None` for this machine.
 struct PickerOption {
     node: Option<String>,
     name: String,
@@ -4757,13 +4757,13 @@ fn chat_agent_picker(state: State, watch: AgentsWatch) -> AnyView {
 /// One `<option>` of [`chat_agent_picker`]: an agent's name.
 ///
 /// `i` is the option's index in the picker's own list rather than the agent's name, because a name is
-/// only unique on the machine that defines it (`docs/fleet.md` §13): two selected sources may star
+/// only unique on the machine that defines it: two selected sources may star
 /// the same name, and a `<select>` needs one value per option to tell them apart.
 fn picker_option(i: usize, o: &PickerOption, selected: bool) -> AnyView {
     view! { <option value=i.to_string() selected=selected>{o.name.clone()}</option> }.into_any()
 }
 
-/// Switch the chat home to another agent, on `node` (`docs/fleet.md` §13) — `None` for this machine,
+/// Switch the chat home to another agent, on `node` — `None` for this machine,
 /// otherwise one of the picker's currently-selected sources. Everything on this screen reads `watch`,
 /// so pointing it at `node`/`name` moves the rail, the centre pane and "+ New" together. Whether the
 /// agent is interactive comes from that source's own loaded list; a name that isn't in it is left
@@ -4800,8 +4800,7 @@ pub(crate) fn land_last_agent(state: State, watch: AgentsWatch) -> bool {
 
 /// Whether `name` is a pty (interactive) agent on `node`, or `None` when that source's loaded agents
 /// list holds no such agent — the caller's cue not to point the view at it. This machine's own
-/// [`State::agents`] for `None`, or one node's slice of [`State::rail_node_agents`]
-/// (`docs/fleet.md` §13).
+/// [`State::agents`] for `None`, or one node's slice of [`State::rail_node_agents`].
 fn agent_interactive(state: State, node: Option<&str>, name: &str) -> Option<bool> {
     let list = match node {
         None => state.agents.get_untracked()?,
@@ -4853,7 +4852,7 @@ fn launched_by_me(r: &AgentRunInfo, asking_user: Option<&str>) -> bool {
 /// session. Its own source's `Load more` widens both, because it widens that same source's limit.
 ///
 /// Nothing is re-sorted: the endpoint answers newest first, so position is age. `node` is the
-/// watched agent's own source (`docs/fleet.md` §13) — `None` for this machine.
+/// watched agent's own source — `None` for this machine.
 fn paged(runs: Vec<AgentRunInfo>, state: State, node: Option<&str>) -> Vec<AgentRunInfo> {
     // This agent's own source's page — the same cut its index arrived under, which is the whole
     // point of doing it twice.
@@ -5003,7 +5002,7 @@ fn chat_filter_menu(state: State) -> Option<AnyView> {
     )
 }
 
-/// The rail's node button: **whose** sessions are merged below (`docs/fleet.md` §13, multi-select).
+/// The rail's node button: **whose** sessions are merged below (multi-select).
 ///
 /// Always in the head, including on a machine paired with nobody — where the rail comes from is
 /// part of reading the rail, and a control that appears only once a fleet exists is one the
@@ -5085,7 +5084,7 @@ fn open_node_menu(state: State, ev: &web_sys::MouseEvent) {
 }
 
 /// The node menu: a checklist, this machine then every paired node — any subset may be ticked at
-/// once (`docs/fleet.md` §13, multi-select). Left open after a tick so several sources can be picked
+/// once (multi-select). Left open after a tick so several sources can be picked
 /// in one visit; the scrim (or the button itself) is what closes it.
 ///
 /// A locked node is **listed and disabled**, not dropped. Dropping it would say the node is gone
@@ -5193,7 +5192,7 @@ fn chat_node_menu(state: State, watch: AgentsWatch) -> Option<AnyView> {
 /// decides what the rail shows.
 ///
 /// A session the user has hidden ([`set_session_hidden`]) is left out of the list server-side and
-/// rides only in the band beneath it (`docs/sessions.md`). That narrowing stops at the rail: the
+/// rides only in the band beneath it. That narrowing stops at the rail: the
 /// Agents page's history tables still list everything, which is what a workbench is for.
 ///
 /// Built once, not inside a `move ||`: the session list keeps its own reactive parts inside it
@@ -5285,7 +5284,7 @@ fn chat_load_more(state: State) -> Option<AnyView> {
 
 /// One row of the rail. The list spans every agent *and every selected source*, so a row has to
 /// carry both which agent it belongs to and which machine that agent is on — there is no group
-/// heading above it to say either (`docs/fleet.md` §13, multi-select).
+/// heading above it to say either (multi-select).
 ///
 /// `Clone` because the rail lists rows through a keyed `For`, which owns its items; `PartialEq` so
 /// the rail's rows can sit behind a `Memo` ([`chat_all_sessions`]).
@@ -5352,7 +5351,7 @@ fn hotkey_glyph() -> &'static str {
 ///
 /// One selected source's own rows, before the merge across sources, the "Mine" filter, the sort and
 /// the bands. This is the per-agent loop [`chat_all_sessions`] used to run once, over one machine's
-/// agents; multi-select (`docs/fleet.md` §13) runs it once per selected source instead of copying it
+/// agents; multi-select runs it once per selected source instead of copying it
 /// per source, and [`session_rows`] concatenates the answers before doing anything else.
 ///
 /// `all`/`agents` are that source's own `/api/agents/runs/all` and `/api/agents` — this machine's
@@ -5451,7 +5450,7 @@ fn source_rows(
             ar.runs.clone()
         };
         // A pending question outranks both the ★ filter and `hidden`. The `hidden` half of this is
-        // the server's decision now (`docs/sessions.md`) and a no-op for `ar.runs`, which already
+        // the server's decision now and a no-op for `ar.runs`, which already
         // arrived as the `?hidden=false` answer — it stays load-bearing only for `own`/`paged`
         // above, sourced from `POST /api/agents/runs`, which is deliberately never filtered (the
         // watched agent's own history has to stay whole for its own "Runs" table). ★ is a client
@@ -5502,7 +5501,7 @@ fn session_rows(state: State, watch: AgentsWatch) -> (Vec<SessionRow>, SessionFi
 
     // Every selected source's own rows, merged the same way `chat_all_sessions` already merged
     // across agents on one machine — [`source_rows`] is that same per-agent loop, run once per
-    // source instead of duplicated per source (`docs/fleet.md` §13, multi-select).
+    // source instead of duplicated per source (multi-select).
     let mut rows: Vec<SessionRow> = Vec::new();
     let mut listed_watched = false;
     if state.session_local.get() {
@@ -5672,7 +5671,7 @@ fn activity_bands(rows: Vec<SessionRow>) -> [Vec<SessionRow>; 5] {
 #[derive(Clone, PartialEq, Eq)]
 struct RailBand {
     label: String,
-    /// This band's own source (`docs/fleet.md` §13) — `None` for this machine. Meaningless when
+    /// This band's own source — `None` for this machine. Meaningless when
     /// the rail draws a single list (one selected source, or [`SessionGroup::Flat`]): that layout
     /// has one combined Load more for every selected source, not a per-band one, so nothing reads
     /// this field then.
@@ -6102,8 +6101,7 @@ fn rail_layout(state: State, bands: &[RailBand], filter: SessionFilter) -> RailL
 
 /// The rail's session list: the bands the grouping produced, or the one line that says why there
 /// are none. One band draws a single list; more than one draws a column of equal-height,
-/// independently-scrolling, foldable blocks ([`chat_machine_block`]) — see `docs/sessions.md`'s
-/// Layer 6 for the two-layout split this dispatches on.
+/// independently-scrolling, foldable blocks ([`chat_machine_block`]).
 ///
 /// **A poll must not rebuild the list.** The bands are read through a `Memo`, the layout through a
 /// second one, and only the layout is in the closure that draws the markup; the rows reach their
@@ -6275,7 +6273,7 @@ impl RowFace {
         let awaits = run.as_ref().map(|r| r.awaits.len()).unwrap_or(0);
         // The row's own source, appended to its meta line whenever more than one is on screen at
         // once — always, not only for a remote row, so "local" reads as a fact about the row rather
-        // than the absence of one (`docs/fleet.md` §13, multi-select). Not under a heading that
+        // than the absence of one (multi-select). Not under a heading that
         // already says it, though: a machine named once over six rows and again on all six is the
         // repetition §7.5 sends into the heading, and it is spent out of the 264px the task itself
         // has to fit in.
@@ -6709,7 +6707,7 @@ fn chat_session_row(
 /// without threading four fields (and four clones) through each `on:contextmenu` closure.
 #[derive(Clone)]
 struct SessionRef {
-    /// The row's own source (`docs/fleet.md` §13) — `None` for this machine.
+    /// The row's own source — `None` for this machine.
     node: Option<String>,
     agent: String,
     /// Empty for an interactive agent's live pty session — it is not a run, keeps no per-run record,
@@ -6912,7 +6910,7 @@ fn start_rename_session(
 /// once instead of at the socket's next tick — and the mutated row's own source's cross-agent index
 /// (the Starred, Recent and main-listing data) is re-fetched for the same reason: this machine's
 /// [`State::all_chats`] for `node: None`, or one node's slice of [`State::rail_node_chats`]
-/// (`docs/fleet.md` §13). Refetching it **at the rail's current page**, not without a limit — an
+///. Refetching it **at the rail's current page**, not without a limit — an
 /// unlimited answer would widen the rail to the whole index until the socket's next answer narrowed
 /// it back.
 ///
@@ -7324,7 +7322,7 @@ fn toggle_open_session_hidden(
                 && row.run.as_ref().is_some_and(|r| r.run_id == run_id)
         }
     };
-    // Read off `watch.runs` — the open conversation's own agent, whole (`docs/sessions.md`) —
+    // Read off `watch.runs` — the open conversation's own agent, whole —
     // rather than off `rail_bands`: since a hidden run leaves the main listing server-side (unless
     // it is asking a question), a conversation opened hidden from the Hidden band has no row there
     // at all, and looking it up there would silently read "not hidden" every time, which is exactly
@@ -7421,7 +7419,7 @@ fn open_rail_row(state: State, watch: AgentsWatch, row: SessionRow) {
 /// Open one session from anywhere in the rail: repoint the whole screen when it belongs to another
 /// agent (or the same-named agent on a different source), or only select the conversation when it is
 /// already the picked one — so a click on a chat of the agent already on screen doesn't tear the
-/// centre pane down and rebuild it. `node` is the row's own source (`docs/fleet.md` §13).
+/// centre pane down and rebuild it. `node` is the row's own source.
 fn open_session(
     watch: AgentsWatch,
     node: Option<String>,
@@ -7450,7 +7448,7 @@ fn open_session(
 /// something to read: a click opens the chat as any other row does, and its right-click menu offers
 /// Unhide — as does the ↩ that rides the row's right edge.
 ///
-/// **Its own data, fetched only while it is open** (`docs/sessions.md`): [`State::hidden_chats`] /
+/// **Its own data, fetched only while it is open**: [`State::hidden_chats`] /
 /// [`State::rail_node_hidden_chats`] hold nothing until [`crate::state::refresh_hidden_chats`] asks
 /// for them, which the toggle below does on the way open. So — unlike every other band, which knows
 /// its count whether or not anyone has looked — the control here reads plain **"Hidden"** until
@@ -7460,7 +7458,7 @@ fn open_session(
 fn chat_hidden_sessions(state: State, watch: AgentsWatch) -> AnyView {
     // One selected source's own hidden rows, tagged with where they came from — the same per-source
     // merge `session_rows` runs above, kept separate because this band reads `hidden_chats` /
-    // `rail_node_hidden_chats` directly rather than through `source_rows` (`docs/fleet.md` §13).
+    // `rail_node_hidden_chats` directly rather than through `source_rows`.
     // Each already carries exactly this band's population (`?hidden=true`: hidden, minus one
     // already asking a question in the main list), so nothing is filtered again here beyond ★.
     let starred_only = state.session_filter.get() == SessionFilter::Starred;
@@ -7961,7 +7959,7 @@ fn chat_local_groups(state: State) -> Vec<AnyView> {
 /// over.
 ///
 /// **A stopped dashboard is not necessarily a dead one.** Dashboards are on-demand by default
-/// (`docs/fleet.md`, [`wake_url`](crate::pages::dashboards::wake_url)), so a quiet one is
+/// ([`wake_url`](crate::pages::dashboards::wake_url)), so a quiet one is
 /// idle-stopped and the front door already knows how to answer a request to it with a
 /// self-refreshing holding page while it starts. Hiding that behind a row with nothing to click
 /// only meant nobody ever asked. So a stopped dashboard with a routable host is still a link —
@@ -8016,7 +8014,7 @@ fn chat_dash_item(d: &Dashboard) -> AnyView {
 // has something to open (the bands under the Apps rail).
 //
 // What the *other* machines run is asked of each node's own control panel over the mesh
-// (`docs/fleet.md` §5, and `adi-app/src/viewer.rs` for why it is the panel that is asked). Three
+// (and `adi-app/src/viewer.rs` for why it is the panel that is asked). Three
 // things can be true of a node and each wants something different from the reader: it is locked
 // (this machine has no password for it), it refused (a sentence saying why), or it answered.
 
@@ -8039,7 +8037,7 @@ fn chat_dash_item(d: &Dashboard) -> AnyView {
 /// [`toggle_session_source`]): the pile is who *else* is around.
 ///
 /// Any peer may be in it, not just the ones that serve something: a phone or a browser tab is a
-/// peer in this registry exactly as a node is (`docs/fleet.md` §12). `active` and `last_seen` are
+/// peer in this registry exactly as a node is. `active` and `last_seen` are
 /// read straight off the wire rather than computed here, so this and the Fleet page's own table
 /// can never come to answer the question differently.
 ///
@@ -8303,7 +8301,7 @@ fn submit_unlock(state: State) {
 /// a name from *this* machine's registry, so from over the mesh it points at a third machine and
 /// there is nothing to click.
 ///
-/// **Down is not always dead**, either — a dashboard is on-demand by default (`docs/fleet.md`),
+/// **Down is not always dead**, either — a dashboard is on-demand by default,
 /// so a node's stopped dashboard is idle-stopped exactly as a local one is
 /// ([`chat_dash_item`]). When this machine already holds the grant and the node gave it a
 /// routable address for the dashboard (`d.allowed` and a mapped `d.url`, the same pair the

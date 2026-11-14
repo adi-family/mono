@@ -1,4 +1,4 @@
-//! Pairing, from the side that dials — `adi/mesh/join/1` (`docs/fleet.md` §8).
+//! Pairing, from the side that dials — `adi/mesh/join/1`.
 //!
 //! # Why this direction, and not the one the contract first described
 //!
@@ -315,7 +315,7 @@ pub fn addr_from(node: &str, relay: &str) -> Result<EndpointAddr> {
 }
 
 /// A short, human-legible name for the machine an invite names — the short form of its key, the
-/// same rendering a peer known only by key gets elsewhere (`docs/fleet.md` §2).
+/// same rendering a peer known only by key gets elsewhere.
 ///
 /// There is no node *name* in an invite, only its address: this is the best a reader can be shown
 /// before they have paired with it, which is what the deep-link confirm needs

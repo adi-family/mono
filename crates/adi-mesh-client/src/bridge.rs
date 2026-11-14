@@ -28,7 +28,7 @@ use crate::ws::{self, Opcode};
 
 /// The service a bare petname means: the node's own control panel.
 ///
-/// `docs/fleet.md` §8 makes `http:app` the default grant — the one thing pairing hands out, and
+/// Pairing makes `http:app` the default grant — the one thing pairing hands out, and
 /// therefore the one thing a node is certain to open. Everything else a node runs is reached by
 /// naming it ([`split_target`]), and only ever with a grant its operator's own panel gave.
 pub const PANEL_SERVICE: &str = "app";
@@ -36,7 +36,7 @@ pub const PANEL_SERVICE: &str = "app";
 /// Which node, and which of its services, a `/n/<target>/` path names.
 ///
 /// The token is a node's mesh hostname with the fleet zone taken off — `<service>.<petname>`, the
-/// same shape `docs/fleet.md` §1 addresses as `nosh.laptop-b.n.adi` — and a bare `<petname>` is
+/// same shape the fleet addresses as `nosh.laptop-b.n.adi` — and a bare `<petname>` is
 /// the node's own panel, [`PANEL_SERVICE`]. The **last** label is the node and everything before
 /// it is the service, because a service name is not always one label: a project at `app.nosh.adi`
 /// sits beside the `nosh.adi` it belongs to, and reading the first label instead would name a

@@ -1,4 +1,4 @@
-//! adi-channels — the node side of Channels (`docs/channels.md`): the outbound WebSocket to the
+//! adi-channels — the node side of Channels: the outbound WebSocket to the
 //! channel-router, the `adi.channels.message` event, the connection store, dispatch to an agent
 //! with thread->conversation mapping, the automatic post-back of a run's answer, and the
 //! `channel-reply` tool.

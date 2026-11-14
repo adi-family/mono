@@ -1,5 +1,5 @@
 /**
- * The Telegram adapter -- docs/channels.md §4, "Telegram, worked through it".
+ * The Telegram adapter.
  *
  * - `verify`: Telegram has no HMAC; it has a secret path segment instead, echoed back as
  *   `X-Telegram-Bot-Api-Secret-Token`.

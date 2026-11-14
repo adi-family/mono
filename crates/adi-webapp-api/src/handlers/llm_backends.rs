@@ -265,7 +265,7 @@ pub fn release_llm_hold(store: &Agents, body: &[u8]) -> Response {
 /// Always a `200` with the verdict inside — a failed test is a successful answer to "does this
 /// work", not a broken request.
 ///
-/// `user` is the asker's mesh user scope (`docs/byo-credentials.md` §5, P1.10) — `None` for a
+/// `user` is the asker's mesh user scope (P1.10) — `None` for a
 /// local caller or a peer with none, in which case this is exactly the test it always was. A
 /// `Some` asker's live value, when their lease has one, answers the test instead of the server's
 /// own credential — `store.lease_values()` is `None` on every `Agents` before phase 2, so in

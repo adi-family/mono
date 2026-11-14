@@ -1,6 +1,5 @@
 //! **The browser mesh client** — a tab that is its own iroh peer, pairs with adi nodes, and opens
-//! each node's control panel and the dashboards it runs from its own origin (`docs/fleet.md` §12,
-//! ADI-13).
+//! each node's control panel and the dashboards it runs from its own origin (ADI-13).
 //!
 //! There is no server here. The page is static files; everything it shows it fetched itself over
 //! QUIC, from a machine that is listening on nothing. What that costs and what it buys:
@@ -8,7 +7,7 @@
 //! * **It dials and never accepts** ([`mesh`]). No ALPN is registered on the endpoint, so nothing
 //!   can open a stream to this tab — which also means nothing can *dial* it, and that is what
 //!   decides the pairing direction: the tab spends an invite the node minted, rather than the node
-//!   dialling a viewer as `docs/fleet.md` §8 first described. See [`invite`].
+//!   dialling a viewer as the pairing design first described. See [`invite`].
 //! * **The identity is browser storage** ([`store`]). The secret key and every node's password
 //!   live in `IndexedDB` on this origin and leave it never. Clearing site data destroys the pairing;
 //!   there is no Keychain here.

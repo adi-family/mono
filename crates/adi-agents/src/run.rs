@@ -69,7 +69,7 @@ pub struct LaunchOptions<'a> {
     /// Extra system-prompt instructions spliced in behind the agent's own, for this launch and
     /// every later turn of the conversation it opens — the standing per-node addition a fleet node
     /// carries in this machine's `fleet.toml` when *it* is the one opening the conversation
-    /// (`docs/fleet.md` §13). Read once, here, and never again: a later edit to that node's
+    /// Read once, here, and never again: a later edit to that node's
     /// instructions must not reach back into a conversation already running under the old ones.
     /// `None` is the ordinary launch — every one not driven by another node over the mesh.
     pub owner_instructions: Option<&'a str>,
@@ -92,8 +92,8 @@ pub struct LaunchOptions<'a> {
     /// [`start_at`](Self::start_at). For asking a specific model a specific question, and for the
     /// prober, which is testing one backend and must not be silently answered by another.
     pub only: Option<&'a str>,
-    /// Whose lease this session's turns look for, and which names — `docs/byo-credentials.md`
-    /// §11. `None` is every launch today: an automation, a local caller, or a mesh peer with no
+    /// Whose lease this session's turns look for, and which names.
+    /// `None` is every launch today: an automation, a local caller, or a mesh peer with no
     /// user scope.
     ///
     /// **No HTTP handler ever fills this from the request body.** It is computed once, by

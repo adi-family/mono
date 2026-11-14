@@ -1,4 +1,4 @@
-//! The four runtimes behind [`adi_indexer::embed::Embedder`] — see `docs/embedding-backends.md`.
+//! The four runtimes behind [`adi_indexer::embed::Embedder`].
 //!
 //! `candle` has no module of its own here: it is `adi_indexer::embed::CandleEmbedder`, built
 //! directly by `crate::backend::EmbeddingBackends::build` behind the `candle` feature. The other

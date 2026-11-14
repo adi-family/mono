@@ -174,7 +174,7 @@ pub struct AgentManifest<Args> {
     /// **Row 1 is what a new conversation starts on**, and the rest are where it goes when a
     /// backend runs out; there is no `default_backend` field because the default is first in the
     /// list. Each row names a backend and may override its model and dials, never its runtime or
-    /// its credential. See [`AgentBackendEntry`] and `docs/llm-backends.md`.
+    /// its credential. See [`AgentBackendEntry`].
     ///
     /// Empty means this agent has not been migrated yet and still answers on
     /// [`backend`](Self::backend) plus whatever its [`arguments`](Self::arguments) say — the state

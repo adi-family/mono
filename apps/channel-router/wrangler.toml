@@ -1,7 +1,6 @@
 # Cloudflare **Worker** config for the channel router (a Worker, not Pages, because a Durable
 # Object -- the held-open per-node WebSocket and its offline queue -- is the one piece of state
-# this design cannot do without, and Pages Functions cannot hold one; see docs/channels.md
-# "Decisions taken" #1).
+# this design cannot do without, and Pages Functions cannot hold one).
 #
 # Non-secret settings live under [vars]; secrets are set out-of-band and never committed:
 #   bun x wrangler secret put ROUTER_SECRET

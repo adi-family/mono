@@ -1,17 +1,16 @@
 //! The device→session-key seal a BYO-credentials unlock uses to carry an unwrapped value from a
-//! device to `adi-app`'s in-memory lease table (`docs/byo-credentials.md` §8, §9,
-//! ADI-MONO-180 P2.3).
+//! device to `adi-app`'s in-memory lease table (ADI-MONO-180 P2.3).
 //!
 //! QUIC already encrypts the mesh hop end to end, and the local gateway forward is plain HTTP
-//! inside that tunnel (`docs/fleet.md` §9) — but a value's nonce/ciphertext still sits in a
+//! inside that tunnel — but a value's nonce/ciphertext still sits in a
 //! request body that *could* be logged by something on the way, and a symmetric key fetched over
 //! the open `GET /api/leases/session` call would be exactly as exposed as the value it's meant
 //! to protect. So this is a fresh ECDH per unlock: the device never learns `adi-app`'s long-term
 //! anything (there is no long-term key — see below), and `adi-app` never learns anything it could
 //! use to open a *future* unlock it wasn't given the device's half of.
 //!
-//! * **The session key is ephemeral per process boot, not per call** (`docs/byo-credentials.md`
-//!   §9 Q9, settled by this implementation): `adi-app` mints one [`SessionKey`] at startup and
+//! * **The session key is ephemeral per process boot, not per call** (settled by
+//!   this implementation): `adi-app` mints one [`SessionKey`] at startup and
 //!   never writes it down, so a restart makes every earlier unlock's binding void — which is
 //!   exactly the "a server restart drops every lease" rule §9 already states, extended to the
 //!   wire-crypto key that feeds it. [`SessionKey::epoch`] is what lets a device's renew loop tell
@@ -23,8 +22,8 @@
 //!   what this ciphertext may be opened as; mismatching any one component — the wrong user
 //!   claiming someone else's lease, a stale epoch from before a restart, or a device the AAD
 //!   wasn't built for — fails to decrypt rather than silently opening as the wrong thing. This
-//!   module takes the finished AAD string as a parameter; building it (`docs/byo-credentials.md`
-//!   §9 step 4: "checks AAD user == header user") is the caller's job, because only the caller
+//!   module takes the finished AAD string as a parameter; building it ("checks AAD
+//!   user == header user") is the caller's job, because only the caller
 //!   knows which header to trust.
 
 use base64::Engine as _;
@@ -39,7 +38,7 @@ use zeroize::Zeroizing;
 /// nowhere else in this codebase, could never collide with a different protocol's key.
 const INFO: &[u8] = b"adi-byo-credentials-lease-seal-v1";
 
-/// `adi-app`'s own session half of the ECDH, minted once at boot (`docs/byo-credentials.md` §9).
+/// `adi-app`'s own session half of the ECDH, minted once at boot.
 /// Never serialized, never written to disk — a restart simply mints a new one, which is the
 /// whole mechanism behind "a server restart drops every lease".
 pub struct SessionKey {

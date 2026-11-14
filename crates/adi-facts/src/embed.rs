@@ -32,7 +32,7 @@
 //!
 //! [`OllamaEmbedder`] here is a thin wrapper around `adi_embeddings::OllamaEmbedder`, which moved
 //! down into the embedding backend registry — a registry that lists every embedding provider must
-//! be able to list this one too (`docs/embedding-backends.md`). That inner type is deliberately
+//! be able to list this one too. That inner type is deliberately
 //! **env-agnostic**: it takes a host and a model as plain arguments. Reading `ADI_FACTS_OLLAMA`
 //! and `ADI_FACTS_EMBED` stays here, so `OllamaEmbedder::new()`/`::at()` keep working exactly as
 //! every existing caller and test expects.

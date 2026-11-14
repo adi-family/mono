@@ -5,7 +5,7 @@
 //! accounts — the same shape plugins ship in, which is evidence the shape is sufficient rather
 //! than merely cheap. The full reasoning is the operator's decision of 2026-08-31
 //! (`business/decisions/2026-08-31-marketplaces-are-a-manifest-in-a-git-repo.md`); the schema and
-//! every deliberate limit is written out in `docs/marketplace.md`.
+//! every deliberate limit are below.
 //!
 //! **An app is a git repository at a pinned commit, and installing one is cloning it.** Three
 //! properties follow from that, and all three are the point:
@@ -40,7 +40,7 @@
 //! with a warning recorded beside it, because a marketplace that is unreachable is a listing
 //! problem, not a data-loss problem.
 //!
-//! **v2 (`docs/marketplace-bundles.md`) generalizes what an item is** without breaking anything
+//! **v2 generalizes what an item is** without breaking anything
 //! above: every marketplace item is a bundle, a named collection of platform elements, and an app
 //! is the special case of a bundle whose only element is a dashboard — exactly what this crate
 //! already ships. [`Kind`] is the eight kinds an element may be; [`Address`] is the third

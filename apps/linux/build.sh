@@ -10,7 +10,7 @@
 # There is no launcher here, unlike the Windows package. There is no GUI to open either — the
 # entry point is install.sh, and it prints the control panel's address when it's done. It lands
 # the binaries, brings the services up under `systemd --user`, and enables lingering so they
-# survive logout; pairing into a fleet (docs/fleet.md §6) is optional, with `--pair <token>`.
+# survive logout; pairing into a fleet is optional, with `--pair <token>`.
 #
 # Output:  apps/linux/build/adi-linux-x64/         (the unpacked package)
 #          apps/linux/build/adi-linux-x64.tar.gz   (the shippable archive)
@@ -55,7 +55,7 @@ PKG_NAME="adi-linux-x64"
 BUILD="$SCRIPT_DIR/build"
 PKG="$BUILD/$PKG_NAME"
 
-# docs/fleet.md §6: a node runs the CLI, the resolver, the front door, the control panel and the
+# A node runs the CLI, the resolver, the front door, the control panel and the
 # mesh. The mesh *daemon* runs in-process inside adi-app (that is what its "Start mesh" button
 # starts), so `adi-mesh` ships for the standalone and debugging cases — `adi-mesh id`, `ticket`,
 # `forward` — rather than because a node cannot come up without it.

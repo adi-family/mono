@@ -1298,7 +1298,7 @@ pub struct AgentRunIdle {
 
 ### struct `AgentRunWaitingOnUnlock`
 
-`adi.agents.run.waiting_on_unlock` — a turn didn't start because its session's lease has no live value for a name it needs and the effective `missing` is `"wait"` (`docs/byo-credentials.md` §10, ADI-MONO-181 P2.7/P2.8). The message stays in the queue (so the run already reads `RunLifecycle::Waiting`, through the same pending-queue set `AgentRunIdle` uses); this is the specific reason, for the rail to show instead of a spinner. Published once per turn it stays parked — the same `SessionStore::note_lease_wait`-gated shape `idle` uses, in its own column so the two never suppress each other.
+`adi.agents.run.waiting_on_unlock` — a turn didn't start because its session's lease has no live value for a name it needs and the effective `missing` is `"wait"` (ADI-MONO-181 P2.7/P2.8). The message stays in the queue (so the run already reads `RunLifecycle::Waiting`, through the same pending-queue set `AgentRunIdle` uses); this is the specific reason, for the rail to show instead of a spinner. Published once per turn it stays parked — the same `SessionStore::note_lease_wait`-gated shape `idle` uses, in its own column so the two never suppress each other.
 
 ```rust
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -1497,7 +1497,7 @@ pub struct LeaseRef {
 
 ### struct `LeaseCapability`
 
-What a presented `ADI_LEASE` capability resolves to: the session that minted it, and the user whose lease it names (`docs/byo-credentials.md` §11, ADI-MONO-182 P3.2) — everything `run_agent` needs to launch a child on the same lease without trusting anything a forwarded request's body says. See `crate::Agents::lease_capability_session`.
+What a presented `ADI_LEASE` capability resolves to: the session that minted it, and the user whose lease it names (ADI-MONO-182 P3.2) — everything `run_agent` needs to launch a child on the same lease without trusting anything a forwarded request's body says. See `crate::Agents::lease_capability_session`.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1510,7 +1510,7 @@ pub struct LeaseCapability {
 
 ### enum `Readiness`
 
-Whether a turn may start at all, for a session whose lease is `lease` (`docs/byo-credentials.md` §10, ADI-MONO-181 P2.7) — asked *before* a turn starts, never while building its environment. `Ready` covers every session with no lease, every lease whose narrowed names (the same four-way check `apply` makes, minus the agent's current `[env]`, which has no bearing on whether a *secret* slot is filled) already have a live value, and a missing value under `missing = "server"` — in that last case the turn starts exactly as `apply` already leaves it, on the server's own value, with nothing to gate.
+Whether a turn may start at all, for a session whose lease is `lease` (ADI-MONO-181 P2.7) — asked *before* a turn starts, never while building its environment. `Ready` covers every session with no lease, every lease whose narrowed names (the same four-way check `apply` makes, minus the agent's current `[env]`, which has no bearing on whether a *secret* slot is filled) already have a live value, and a missing value under `missing = "server"` — in that last case the turn starts exactly as `apply` already leaves it, on the server's own value, with nothing to gate.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2058,7 +2058,7 @@ pub enum TestVerdict {
 
 ### struct `Asker`
 
-Who is asking, for the Test button's own user-value check (`docs/byo-credentials.md` §5, P1.10) — `None` for every caller that isn't asking as a particular user: the CLI's `llm test`, and a Test pressed by a local operator or by a mesh peer with no user scope.
+Who is asking, for the Test button's own user-value check (P1.10) — `None` for every caller that isn't asking as a particular user: the CLI's `llm test`, and a Test pressed by a local operator or by a mesh peer with no user scope.
 
 ```rust
 #[derive(Clone, Copy)]

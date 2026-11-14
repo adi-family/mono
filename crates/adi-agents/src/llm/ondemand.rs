@@ -108,8 +108,8 @@ impl TestVerdict {
     }
 }
 
-/// Who is asking, for the Test button's own user-value check (`docs/byo-credentials.md` §5,
-/// P1.10) — `None` for every caller that isn't asking as a particular user: the CLI's `llm test`,
+/// Who is asking, for the Test button's own user-value check
+/// (P1.10) — `None` for every caller that isn't asking as a particular user: the CLI's `llm test`,
 /// and a Test pressed by a local operator or by a mesh peer with no user scope.
 #[derive(Clone, Copy)]
 pub struct Asker<'a> {
@@ -395,7 +395,7 @@ fn resolve_credential(
 }
 
 /// The asker's own live value for `name`, if their lease has one and the server's policy still
-/// allows it (`docs/byo-credentials.md` §5, P1.10) — `None` for every call with no `asker`, which
+/// allows it (P1.10) — `None` for every call with no `asker`, which
 /// is every call before phase 2 gives a real [`crate::LeaseValues`] to ask.
 fn asker_credential(config: &Config, asker: Option<Asker<'_>>, name: &str) -> Option<Credential> {
     let asker = asker?;

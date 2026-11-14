@@ -35,7 +35,7 @@ server = [
     "dep:adi-tasks",
     "dep:adi-tools",
     "dep:adi-agents",
-    # The node side of Channels (docs/channels.md): the connection store, dispatch, and the
+    # The node side of Channels: the connection store, dispatch, and the
     # router client the /api/channels/* handlers operate on.
     "dep:adi-channels",
     # The knowledge base. Native-only (it compiles SQLite in and, with its default features, the

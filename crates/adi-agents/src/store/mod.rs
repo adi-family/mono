@@ -1,8 +1,7 @@
 //! The session store: everything durable about a session that is *not* the process running it.
 //!
 //! A runner is a process manager, so it keeps nothing. The record, the queue, the hidden flag, the
-//! log, and the runner's own opaque state slot all live here — see `docs/agent-runner.md` for the
-//! layering this is one third of.
+//! log, and the runner's own opaque state slot all live here.
 //!
 //! # A database, and one file per session
 //!
@@ -338,7 +337,7 @@ impl SessionStore {
             runner_state: None,
             outcome: None,
             // Set by `set_lease` immediately after, by the one caller that has computed one
-            // (`run_agent`, over `user_scope` — see `docs/byo-credentials.md` §11). Every other
+            // (`run_agent`, over `user_scope`). Every other
             // caller — every automation, every launch with no mesh identity attached — leaves
             // this `None`, which reads as "server values only".
             lease: None,
@@ -512,8 +511,8 @@ impl SessionStore {
         Ok(changed > 0)
     }
 
-    /// Record whose lease a session's turns look for, and which names (`docs/byo-credentials.md`
-    /// §11, [`SessionRecord::lease`]).
+    /// Record whose lease a session's turns look for, and which names
+    /// ([`SessionRecord::lease`]).
     ///
     /// Written once, right after the session is opened — the same contract
     /// [`set_overrides`](Self::set_overrides) keeps, and for the same reason: which user's
@@ -560,8 +559,8 @@ impl SessionStore {
         Ok(changed > 0)
     }
 
-    /// This session's `ADI_LEASE` capability (`docs/byo-credentials.md` §11's "The capability",
-    /// ADI-MONO-182 P3.1) — minted the first time this is called for a leased session, and the
+    /// This session's `ADI_LEASE` capability
+    /// (ADI-MONO-182 P3.1) — minted the first time this is called for a leased session, and the
     /// same plaintext handed back on every call after, including one in a fresh process after an
     /// `adi-app` restart: it is read straight off the row, never regenerated, which is what keeps
     /// [`crate::runner::detached::hash_child_environment`]'s fingerprint — and so a Codex thread —
@@ -629,7 +628,7 @@ impl SessionStore {
     }
 
     /// The session a presented `ADI_LEASE` capability names, by its hash alone
-    /// (`docs/byo-credentials.md` §11, ADI-MONO-182 P3.2: "hashes the capability and looks up the
+    /// (ADI-MONO-182 P3.2: "hashes the capability and looks up the
     /// session it names"). `None` for a hash no row currently carries — an unknown capability, or
     /// one a revoke has since voided, since `void_lease_cap_for_user` clears exactly this column.
     #[must_use]
@@ -644,7 +643,7 @@ impl SessionStore {
     }
 
     /// Every session whose lease belongs to `user` — a revoke's own query
-    /// (`docs/byo-credentials.md` §10.1 step 3, ADI-MONO-181 P2.6), across every agent in one walk.
+    /// (ADI-MONO-181 P2.6), across every agent in one walk.
     /// The same shape as [`agents`](Self::agents): it includes sessions of an agent whose
     /// definition has since been deleted, and children are in it by construction, since each
     /// child is its own session with `lease.user = <u>` (§11) — there is no tree to walk.
@@ -1836,7 +1835,7 @@ mod tests {
     }
 
     /// `find_by_lease_cap` is the reverse lookup `Agents::lease_capability_session` uses
-    /// (`docs/byo-credentials.md` §11, P3.2): given the hash of a presented capability, the
+    /// (P3.2): given the hash of a presented capability, the
     /// session that minted it — and nothing for a hash no row carries.
     #[test]
     fn find_by_lease_cap_resolves_the_hash_back_to_its_session() {
@@ -1857,7 +1856,7 @@ mod tests {
 
     /// A revoke (`void_lease_cap_for_user`) clears the plaintext along with the hash, so the next
     /// mint is genuinely fresh — different bytes, a different hash — rather than handing the same,
-    /// supposedly-voided capability back out (`docs/byo-credentials.md` §10.1, §15 Q5).
+    /// supposedly-voided capability back out.
     #[test]
     fn lease_capability_is_reminted_with_a_different_value_after_a_revoke() {
         let store = scratch("lease-capability-remint");

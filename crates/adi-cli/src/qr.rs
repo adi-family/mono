@@ -1,6 +1,6 @@
 //! Drawing a QR code with terminal characters, so a phone can be pointed at a laptop.
 //!
-//! There is exactly one caller — `mesh invite` (`docs/fleet.md` §8) — and one shape of payload: a
+//! There is exactly one caller — `mesh invite` — and one shape of payload: a
 //! pairing token of a few hundred characters that somebody would otherwise have to retype onto a
 //! phone. The whole module is the answer to "how does that string cross the last thirty
 //! centimetres".

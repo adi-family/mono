@@ -11,30 +11,9 @@
 //! to this origin), a service identifier that happens to look like a URL (an OAuth *scope*), or
 //! anything under `/extended` (a route).
 
-/// A deep link into one section of one docs page.
-///
-/// GitHub renders a heading's anchor by lowercasing it, dropping punctuation and turning runs of
-/// spaces into single hyphens — so `## 13. Driving a node's sessions from here` is reached at
-/// `#13-driving-a-nodes-sessions-from-here`. Getting that wrong silently lands the reader at the
-/// top of a thousand-line page, which for a `?` on a menu is barely better than no link at all,
-/// so check a new one against the rendered page before shipping it.
-///
-/// A macro rather than a function so the result is still a `&'static str` and the repository
-/// address is written once.
-macro_rules! doc_section {
-    ($page:literal, $anchor:literal) => {
-        concat!(
-            "https://github.com/adi-family/mono/blob/main/docs/",
-            $page,
-            "#",
-            $anchor
-        )
-    };
-}
-
-/// The docs, as a directory — the "Docs" link in the chat's foot, where somebody is browsing
+/// The docs site, as a whole — the "Docs" link in the chat's foot, where somebody is browsing
 /// rather than asking one question.
-pub(crate) const DOCS: &str = "https://github.com/adi-family/mono/tree/main/docs";
+pub(crate) const DOCS: &str = "https://docs.withadi.dev";
 
 /// Where donating goes. adi runs on the operator's own machine and asks for nothing to do it, so
 /// this is the one place it asks at all.
@@ -45,14 +24,12 @@ pub(crate) const DONATE: &str = "https://withadi.dev/mono-donate";
 pub(crate) const OAUTH_ROUTER: &str = "https://oauth-router.withadi.dev";
 
 /// What a *source* is on the sessions rail, and what merging one in does — the `?` on the source
-/// menu's head (`docs/fleet.md` §13).
-pub(crate) const FLEET_SESSIONS: &str =
-    doc_section!("fleet.md", "13-driving-a-nodes-sessions-from-here");
+/// menu's head.
+pub(crate) const FLEET_SESSIONS: &str = "https://docs.withadi.dev/sessions/#more-than-one-machine";
 
-/// What pointing the panel-wide source picker at a node does, what never follows it, and why — the
-/// `?` on the picker menu's head (`docs/fleet.md` §14).
-pub(crate) const FLEET_PANEL_SOURCE: &str =
-    doc_section!("fleet.md", "14-pointing-the-whole-panel-at-a-node");
+/// What pointing the panel-wide source picker at another machine does — the `?` on the picker
+/// menu's head.
+pub(crate) const FLEET_PANEL_SOURCE: &str = "https://docs.withadi.dev/fleet/";
 
 /// The onboarding welcome screen's "Getting started" link (ADI-MONO-157): opens in the browser,
 /// which — unlike this panel — may already have accepted the site's cookie banner, so the site

@@ -61,7 +61,7 @@ pub use module::Module;
 pub const MANIFEST_EXT: &str = "toml";
 
 /// Where the mesh gateway listens, and therefore where the front door sends the whole `n.adi`
-/// zone (see `docs/fleet.md` §3).
+/// zone.
 ///
 /// It lives here because **two crates that cannot see each other have to agree on it**:
 /// `adi-core` writes the front door's `proxy.mesh_gateway` into the generated hive config, and

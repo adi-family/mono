@@ -1,4 +1,4 @@
-//! The connection model (`docs/channels.md` §5): one `(provider, routing key)` bound to a
+//! The connection model: one `(provider, routing key)` bound to a
 //! [`Target`] and an [`Allowlist`], mirrored on the node so it can route an inbound message without
 //! a round trip to the router for every one. Each connection is one `<id>.toml` under
 //! `~/.adi/mono/channels/`.
@@ -15,12 +15,12 @@ use crate::error::{Error, Result};
 
 const CHANNELS_MODULE: &str = "channels";
 
-/// What a connection dispatches an inbound message to. An enum now, for one variant built today —
-/// see `docs/channels.md` §5/§6: `trigger` and `app_route` are named so a bundle-installed channel
+/// What a connection dispatches an inbound message to. An enum now, for one variant built today:
+/// `trigger` and `app_route` are named so a bundle-installed channel
 /// never has to widen this type later, only add handling for a variant already on the wire. A
 /// connection whose target this node doesn't recognize (an older build, reading a store a newer one
 /// wrote) deserializes to [`Target::Unknown`] rather than failing — the same tolerance
-/// `docs/marketplace-bundles.md` already asks of an unrecognized element `kind`.
+/// marketplace bundles already ask of an unrecognized element `kind`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Target {
@@ -33,7 +33,7 @@ pub enum Target {
     Unknown,
 }
 
-/// Who may talk to the target through this connection (`docs/channels.md` §5). Default is the
+/// Who may talk to the target through this connection. Default is the
 /// tightest: only whoever completed the link.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -62,7 +62,7 @@ impl Allowlist {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConnectionManifest {
     pub provider: String,
-    /// Chat id, team id, … — empty until the install/link flow binds it (`docs/channels.md` §1).
+    /// Chat id, team id, … — empty until the install/link flow binds it.
     #[serde(default)]
     pub routing_key: String,
     pub target: Target,
@@ -72,8 +72,7 @@ pub struct ConnectionManifest {
     /// [`Allowlist::OwnerOnly`] means. Empty until linked.
     #[serde(default)]
     pub owner_sender_id: String,
-    /// Provider thread/chat id -> ADI run id, the one state a connection keeps past the link
-    /// (`docs/channels.md` §5).
+    /// Provider thread/chat id -> ADI run id, the one state a connection keeps past the link.
     #[serde(default)]
     pub threads: BTreeMap<String, String>,
     /// Stop delivering to the target without tearing down the link (§7: "Pause" is a flag here,
@@ -351,8 +350,7 @@ impl Connections {
     }
 
     /// Record that `thread` now maps to `run_id` — called once, the first time a thread is seen
-    /// (`docs/channels.md` §5: "the provider's thread id *is* the connection's only state past the
-    /// first message").
+    /// (the provider's thread id *is* the connection's only state past the first message).
     ///
     /// # Errors
     /// As [`require`](Self::require), plus a write failure.
@@ -366,8 +364,8 @@ impl Connections {
     }
 
     /// The connection whose thread map names `run_id`, if any, paired with the provider thread key
-    /// itself — what the auto-post-back (`docs/channels.md` §5, "the run's final answer posts back
-    /// automatically") and the `channel-reply` tool both resolve a run id through, since neither is
+    /// itself — what the auto-post-back (the run's final answer posts back
+    /// automatically) and the `channel-reply` tool both resolve a run id through, since neither is
     /// handed a connection id (or a thread key) directly. The thread key matters past the
     /// connection id alone: it's what `RouterApi::send`/`set_thinking` need to tell Slack which
     /// channel in a workspace-wide routing key a reply or a "thinking…" status belongs to.

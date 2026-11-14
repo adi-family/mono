@@ -7,7 +7,7 @@
 //! * **It dials and never accepts.** No `alpns()` is set on the endpoint, so nothing can open a
 //!   stream to this tab. Every ALPN we speak is one we opened.
 //! * **Everything is relayed, for the whole session.** A browser has no UDP socket, so there is no
-//!   direct path to hole-punch and no fallback if the relay is unreachable (`docs/fleet.md` §9).
+//!   direct path to hole-punch and no fallback if the relay is unreachable.
 //!   That makes the relay a hard precondition rather than a latency question, which is why
 //!   [`Mesh::bind`] pins one instead of taking iroh's preset.
 //!
@@ -159,7 +159,7 @@ impl Mesh {
         .await?
         .map_err(|e| format!("reading the mesh status failed: {e}"))?;
         if status != HttpStatus::Ok {
-            // The node's own words. These are the three refusals `docs/fleet.md` §7 defines, and
+            // The node's own words. These are the three refusals the gateway protocol defines, and
             // the caller renders them as a local page rather than guessing from a status line it
             // never received.
             return Err(status.reason().to_string());

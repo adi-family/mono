@@ -4,7 +4,7 @@
 //! The mirror of `join_over_live_endpoint.rs`. That one proves a viewer can dial out over the
 //! endpoint it already holds; this one proves the panel does the same thing, over the endpoint its
 //! in-process daemon holds, and answers with the credential the handshake minted. It is the half
-//! of `docs/fleet.md` §8 that used to need a terminal, so the thing worth proving is that it needs
+//! of pairing that used to need a terminal, so the thing worth proving is that it needs
 //! one no longer.
 //!
 //! The minter here is a [`Viewer`] with a temp `$HOME` — a second machine on this box, with its own

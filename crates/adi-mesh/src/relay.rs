@@ -9,7 +9,7 @@
 //! ## Why the relay is worth configuring at all
 //!
 //! Off the local network a peer is reachable **only** through a relay until a direct path is
-//! hole-punched, and between two consumer NATs that often never happens (`docs/fleet.md` §9). So
+//! hole-punched, and between two consumer NATs that often never happens. So
 //! the relay is not a discovery service you can treat as best-effort — it is the fallback data
 //! path, and its stability is the fleet's stability. Ours, near us, beats a shared one across the
 //! continent.

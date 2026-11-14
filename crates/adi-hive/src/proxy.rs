@@ -1063,7 +1063,7 @@ mod tests {
 
     /// The other half of the mesh rule: with a gateway configured the head is handed over **byte
     /// for byte** — no rewritten `Host`, no stripped path — because the far node's absolute
-    /// redirects are built from what it reads here (docs/fleet.md §3).
+    /// redirects are built from what it reads here.
     #[tokio::test]
     async fn a_mesh_host_reaches_the_gateway_with_its_head_untouched() {
         const REQUEST: &[u8] =

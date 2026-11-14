@@ -1,5 +1,5 @@
 //! A blocking HTTP client over *this node's own* `/api/channels/*` endpoints
-//! (`docs/channels.md` §7) — never the router directly (that is [`crate::router_api::RouterApi`]).
+//! — never the router directly (that is [`crate::router_api::RouterApi`]).
 //! `adi-mono channels` is the only consumer: the panel calls the same endpoints straight from the
 //! browser, so it has no need of a Rust client at all.
 //!
@@ -32,7 +32,7 @@ fn client() -> Result<reqwest::blocking::Client, String> {
         .map_err(|e| e.to_string())
 }
 
-/// One connection, as the node's API answers it (`docs/channels.md` §5), flattened for the wire —
+/// One connection, as the node's API answers it, flattened for the wire —
 /// mirrors `adi_webapp_api::types::ChannelConnectionDto`, which this crate can't depend on (that
 /// crate depends on this one).
 #[derive(Debug, Clone, Deserialize)]

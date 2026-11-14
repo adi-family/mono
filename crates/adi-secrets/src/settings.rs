@@ -1,4 +1,4 @@
-//! The "bring your own credentials" policy layer (`docs/byo-credentials.md` §4): the server's
+//! The "bring your own credentials" policy layer: the server's
 //! `secrets/settings.toml` and each user's own `secrets/users/<u>/.settings.toml`. Nothing here
 //! lets a user *store* a value (that is [`crate::Scope::User`] plus phase 2's device wraps) — this
 //! is only the two policy files that decide whether a stored value is ever read.
@@ -36,7 +36,7 @@ const POLICY_FILE: &str = "settings.toml";
 const USER_SETTINGS_FILE: &str = ".settings.toml";
 
 /// What a turn does when it would use a user's value for a name and no live lease holds one
-/// (`docs/byo-credentials.md` §4.1, §10). Declared `Server < Wait < Fail` on purpose: deriving
+///. Declared `Server < Wait < Fail` on purpose: deriving
 /// [`Ord`] off that order is what makes [`effective_missing`] "the stricter of the two" a one-line
 /// `max`, and it is also the order the spec states its reason in — `fail` ranks above `wait`
 /// because it is the one that also stops work piling up behind a missing value.
@@ -52,8 +52,8 @@ pub enum Missing {
     Fail,
 }
 
-/// The stricter of the server's `missing` and a user's own override (`docs/byo-credentials.md`
-/// §4.2). `None` — the user has set no preference — reads as "use the server's outright". A user
+/// The stricter of the server's `missing` and a user's own override.
+/// `None` — the user has set no preference — reads as "use the server's outright". A user
 /// can tighten (`wait`/`fail` under a server `server`) but never loosen a server that already
 /// says `wait` or `fail`, because `max` can only move *up* [`Missing`]'s order.
 #[must_use]

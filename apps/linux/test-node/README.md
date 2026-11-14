@@ -1,7 +1,7 @@
 Test node — a Linux node in a container
 =======================================
 
-A throwaway Linux machine that runs the real node stack (`docs/fleet.md` §6) with **real
+A throwaway Linux machine that runs the real node stack with **real
 systemd**, so the parts that cannot be unit-tested from macOS get exercised: the `systemd --user`
 units, lingering, `setcap` on the front door, the `systemd-resolved` drop-in, and a full pairing
 over the mesh.

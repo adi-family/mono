@@ -3,7 +3,7 @@
 //! app's menu-bar window (`apps/macos/Sources/AppModel.swift`, `Maintenance.swift`).
 //!
 //! **Always about this machine.** `/api/system/*` never follows the panel-wide source picker
-//! (`docs/fleet.md` §14's L3, alongside `/api/health` and `/api/update`) — "restart this
+//! (alongside `/api/health` and `/api/update`) — "restart this
 //! machine's own process" can only ever mean the box actually serving this page, whatever the
 //! picker is pointed at. [`elsewhere_note`] is the page's own honesty about that, since a bare
 //! `crate::ui::confirm` would otherwise (wrongly) name the picker's node in the confirm text.

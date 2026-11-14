@@ -45,8 +45,7 @@ mod projects;
 mod qr;
 mod response;
 mod secrets;
-/// A user's own BYO-credentials scope, and the server's `[user_secrets]` policy
-/// (`docs/byo-credentials.md` §4, §7, ADI-MONO-178).
+/// A user's own BYO-credentials scope, and the server's `[user_secrets]` policy.
 mod secrets_mine;
 mod services;
 mod shared_assets;

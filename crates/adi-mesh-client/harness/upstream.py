@@ -15,7 +15,7 @@ calls its own `/api/*` with a **root-absolute** URL and opens a websocket at ano
 is what proves the service worker really is routing a whole app to one node rather than one page.
 
 Three more paths stand in for the part of a *real* panel the client asks about a machine
-(`docs/fleet.md` §11), and they are the reason this fixture knows where the node's registry is:
+, and they are the reason this fixture knows where the node's registry is:
 
     GET  /api/dashboards      what this machine runs — one entry, `probe.adi`, which the
                               harness's hive.yaml serves from this same port
@@ -62,7 +62,7 @@ PAGE = b"""<!doctype html>
 <p id="live">live: pending</p>
 <p id="where">path: <span id="path"></span></p>
 <script>
-// Root-absolute, exactly as a real panel's frontend does it (`docs/fleet.md` 4): the page must
+// Root-absolute, exactly as a real panel's frontend does it: the page must
 // never learn its own address, so what routes this to the right machine is the service worker.
 document.getElementById("path").textContent = location.pathname;
 fetch("/api/health")

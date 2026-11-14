@@ -9,7 +9,7 @@
 //!
 //! So the list comes from somewhere that already knows who is asking: the node's own control
 //! panel. `app` is a service like any other — it is what the default grant names
-//! (`docs/fleet.md` §8), it sits behind the node's Basic-auth gate (§5), and it already publishes
+//!, it sits behind the node's Basic-auth gate (§5), and it already publishes
 //! `GET /api/dashboards`. A phone holding that node's password is entitled to the answer, and
 //! asking for it needs no new wire format, no new grant kind and no version bump: it is an
 //! ordinary authenticated request that happens to travel over the mesh.
@@ -41,7 +41,7 @@ use tracing::{debug, info};
 
 use super::{STEP_TIMEOUT, Shared};
 
-/// The service label a node's control panel answers to, on every node (`docs/fleet.md` §1).
+/// The service label a node's control panel answers to, on every node.
 const PANEL: &str = "app";
 
 /// The most of a panel reply we will read. Generous for a JSON listing and small enough that a

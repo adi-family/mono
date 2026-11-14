@@ -27,8 +27,7 @@ use crate::reader::reader_for;
 /// deliberate and it is the order a caller needs things in: what to write, how the session ends,
 /// which verdict fits, and the one rule that prevents damage.
 ///
-/// It is instructions, not rationale. **Why** the design is like this belongs in `docs/facts.md`
-/// and in the code; an agent that has read a paragraph of justification has spent context and
+/// It is instructions, not rationale. **Why** the design is like this belongs in the code; an agent that has read a paragraph of justification has spent context and
 /// learned nothing it can act on. The examples do the teaching — a bad example teaches faster
 /// than a rule, which is why two of them are here and the corresponding rules are not.
 const LLM_HELP: &str = r"adi-facts — record what somebody said as plain sentences, and keep what you

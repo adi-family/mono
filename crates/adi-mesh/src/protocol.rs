@@ -10,7 +10,7 @@
 //! verbatim. Everything is length-fixed, so a read is a single `read_exact` — no framing
 //! ambiguity. This is the path ssh, databases and anything not HTTP keep using.
 //!
-//! **[`HTTP_ALPN`] — `adi/mesh/http/1`, the fleet HTTP gateway** (`docs/fleet.md` §7). One
+//! **[`HTTP_ALPN`] — `adi/mesh/http/1`, the fleet HTTP gateway**. One
 //! bi-stream is one HTTP connection. The caller sends a
 //! [variable-length header](write_http_request) naming a **service** — one or more DNS labels,
 //! see [`is_service_name`] — the node answers with one [`HttpStatus`] byte, and on
@@ -143,7 +143,7 @@ pub async fn read_status<R: AsyncRead + Unpin>(r: &mut R) -> std::io::Result<Sta
 }
 
 // ---------------------------------------------------------------------------------------
-// adi/mesh/http/1 — the fleet HTTP gateway (docs/fleet.md §7)
+// adi/mesh/http/1 — the fleet HTTP gateway
 // ---------------------------------------------------------------------------------------
 
 /// The ALPN identifying the HTTP gateway protocol during the iroh/QUIC handshake. The
@@ -165,7 +165,7 @@ pub const MAX_LABEL_LEN: usize = 63;
 pub const MAX_SERVICE_LEN: usize = 253;
 
 /// The reserved suffix that marks a hostname as addressing a *remote* node rather than a
-/// local service (`docs/fleet.md` §1). Local services keep `<service>.adi`, so the two
+/// local service. Local services keep `<service>.adi`, so the two
 /// namespaces can never collide.
 pub const FLEET_SUFFIX: &str = "n.adi";
 
@@ -182,14 +182,14 @@ wire_status! {
         Ok = 0 => "ok",
         /// No service by that label exists on this node.
         ServiceUnknown = 1 => "no such service on that node",
-        /// The peer holds no grant for this service (`docs/fleet.md` §5, default-deny).
+        /// The peer holds no grant for this service (default-deny).
         NotAuthorized = 2 => "this machine holds no grant for that service",
         /// The service is known but nothing is listening on its local port.
         UpstreamUnavailable = 3 => "the node's local service is not listening",
     }
 }
 
-/// Is this one DNS label as `docs/fleet.md` §2 defines it —
+/// Is this one DNS label as the fleet defines it —
 /// `^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`?
 ///
 /// Lowercase only: the wire form is already normalised, so a comparison is a byte compare and
@@ -210,7 +210,7 @@ pub fn is_dns_label(label: &str) -> bool {
 ///
 /// A service name is a node's own hostname with its local zone taken off, and those are not
 /// always one label: a project may sit at `app.nosh.adi` beside the `nosh.adi` it belongs to
-/// (`docs/fleet.md` §1). The name that reaches such a service over the mesh is therefore
+///. The name that reaches such a service over the mesh is therefore
 /// `app.nosh.<node>.n.adi`, and the label the node resolves is the whole `app.nosh` — which is
 /// why this, not [`is_dns_label`], is what the wire accepts.
 ///

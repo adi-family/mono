@@ -33,7 +33,7 @@ pub(crate) struct Manifest {
     /// refresh it. A plain text secret leaves this `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oauth: Option<OAuthMeta>,
-    /// Non-empty only for a [`crate::Scope::User`] secret (`docs/byo-credentials.md` §8): the
+    /// Non-empty only for a [`crate::Scope::User`] secret: the
     /// per-secret DEK, sealed to each device that may unwrap it. `ciphertext`/`nonce` above are
     /// the *value* sealed under that DEK, not under this crate's master key — a user secret's
     /// plaintext never reaches this struct's writer, let alone the master key. Empty for every
@@ -42,7 +42,7 @@ pub(crate) struct Manifest {
     pub wraps: Vec<Wrap>,
 }
 
-/// One device's wrapped copy of a user secret's DEK (`docs/byo-credentials.md` §8). Exactly one
+/// One device's wrapped copy of a user secret's DEK. Exactly one
 /// in v1 ("a user is one peer"), but a `Vec` on [`Manifest`] so a later person-with-several-
 /// devices scheme adds entries rather than changing the format.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -115,7 +115,7 @@ pub struct Secret {
 }
 
 /// One of a user's own values, wrapped — [`crate::Secrets::list_mine_wrapped`]'s own shape, for
-/// a device's unlock path (`docs/byo-credentials.md` §9 step 2). Carries exactly what a device
+/// a device's unlock path. Carries exactly what a device
 /// needs to unwrap and open the value itself: still **never a plaintext**, since every one of
 /// these fields is already-sealed, opaque to anything without the device's own key.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

@@ -1,5 +1,5 @@
 /**
- * The Slack adapter -- docs/channels.md §4, "Slack, worked through it", plus the
+ * The Slack adapter, built from the
  * `slack-agentexchange-listing-2026` research report's §3 (the Agents & AI Apps surface's exact
  * scopes/events) and §4 (zero-copy, no Socket Mode in the public Marketplace).
  *
@@ -285,7 +285,7 @@ function splitThread(thread: string): [string, string | undefined] {
 }
 
 /** "Add to Slack" -- the OAuth v2 authorize URL, state carrying the signed link code exactly the
- * way `oauth-router`'s own `state` param does (docs/channels.md §4, "install/link"). `null`
+ * way `oauth-router`'s own `state` param does. `null`
  * without `SLACK_CLIENT_ID` configured, the same convention `telegramInstallUrl` uses. */
 export function slackInstallUrl(requestUrl: string, env: Env, code: string): string | null {
   if (!env.SLACK_CLIENT_ID) return null;
@@ -308,7 +308,7 @@ export type SlackExchangeResult =
   | { ok: false; error: string };
 
 /** Exchange the OAuth authorization code for this workspace's bot token, server-to-server --
- * the callback leg of "Add to Slack" (docs/channels.md §4). */
+ * the callback leg of "Add to Slack". */
 export async function slackExchangeCode(
   env: Env,
   code: string,

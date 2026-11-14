@@ -14,8 +14,7 @@
 //! fallbacks = ["ollama-hosted"]
 //! ```
 //!
-//! See `docs/embedding-backends.md` for the full design and why failover here is deliberately
-//! narrower than the LLM design's.
+//! Failover here is deliberately narrower than the LLM design's.
 
 use std::sync::Arc;
 
@@ -91,7 +90,7 @@ impl Runtime {
 
     /// The model and width this runtime always produces, when that is knowable without a network
     /// call or a model actually loaded — `Some` for `candle` and `hash`, neither of which ever
-    /// takes either from configuration (see "the principle" in `docs/embedding-backends.md`);
+    /// takes either from configuration;
     /// `None` for `ollama`/`openai`, which take both from the manifest because neither runtime has
     /// one fixed answer.
     ///
@@ -121,8 +120,8 @@ pub struct EmbeddingBackendManifest {
     pub label: String,
     /// Which of the four runtimes builds this backend.
     pub runtime: Runtime,
-    /// The model this backend embeds with. Every stored vector is recorded against this name —
-    /// see "the principle" in `docs/embedding-backends.md` — so it is required, not inferred.
+    /// The model this backend embeds with. Every stored vector is recorded against this name,
+    /// so it is required, not inferred.
     pub model: String,
     /// The width of the vectors this backend produces. Required for the same reason `model` is:
     /// the same-model failover check compares both, and neither is worth trusting a network call
@@ -271,8 +270,8 @@ impl EmbeddingBackends {
 
     /// Reject a definition that cannot mean what it says: an empty model or width, a fallback
     /// naming itself, a fallback naming no backend at all, or a fallback whose model or
-    /// dimensions disagree with this one's. The last of these is the whole point of the store —
-    /// see "the same-model failover rule" in `docs/embedding-backends.md`.
+    /// dimensions disagree with this one's. The last of these is the whole point of the store:
+    /// failover never crosses models.
     ///
     /// # Errors
     /// [`Error::Arguments`] on any of the above.
@@ -596,8 +595,7 @@ mod tests {
     }
 
     /// The refuse case: a fallback naming a different model, or the same model at a different
-    /// width, must not be nameable — see "the same-model failover rule" in
-    /// `docs/embedding-backends.md`.
+    /// width, must not be nameable: failover never crosses models.
     #[test]
     fn a_different_model_fallback_is_refused() {
         let store = scratch("failover-refuse-model");

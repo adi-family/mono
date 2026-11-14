@@ -110,8 +110,8 @@ pub struct SessionRecord {
     /// rather than re-read from the log, because "did it work?" is the question every listing is
     /// really asking and the log is a megabyte of somebody else's wire format.
     pub outcome: Option<RunOutcome>,
-    /// Whose lease this session's turns look for, and which names (`docs/byo-credentials.md`
-    /// §11). `None` means "server values only" — every session opened before this column existed,
+    /// Whose lease this session's turns look for, and which names.
+    /// `None` means "server values only" — every session opened before this column existed,
     /// every automation launch, and every launch not made by a person whose mesh identity carries
     /// a user scope (§3.2). Written once, at
     /// [`create_as`](super::SessionStore::create_as), the same reason

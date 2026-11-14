@@ -3,7 +3,7 @@ import Foundation
 /// Where a node's password lives.
 ///
 /// The mesh grant is machine-scoped and the password is what makes it human-scoped
-/// (`docs/fleet.md` §5) — so on a phone, which is a machine one person holds, the password is the
+/// — so on a phone, which is a machine one person holds, the password is the
 /// whole of the second layer. It goes in the Keychain and nowhere else: not in `UserDefaults`, not
 /// beside the fleet registry, and never on disk in plaintext, which is the property §8 asks both
 /// sides to keep.

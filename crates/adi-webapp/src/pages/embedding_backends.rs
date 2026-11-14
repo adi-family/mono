@@ -6,7 +6,7 @@
 //! once here and named by exactly one consumer's assignment, never built on another backend. There
 //! is no hold, no prober, and no context-window shape to show: nothing here is rate-limited the way
 //! a chat subscription is, so the one thing worth keeping from the LLM design is its flat,
-//! whole-object editor. See `docs/embedding-backends.md`.
+//! whole-object editor..
 //!
 //! Page-local, like the Knowledge page: nothing here is watched over the live channel (see
 //! `adi-app/src/live.rs`'s own note on this route — no prober, no hold, nothing outside the panel

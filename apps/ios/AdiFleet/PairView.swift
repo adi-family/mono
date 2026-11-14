@@ -4,8 +4,8 @@ import UIKit
 /// Pairing, from the viewer's side.
 ///
 /// A node is enrolled one way: the machine mints a token — `adi-mono mesh invite`, or its Fleet
-/// page — and this device spends it by dialling out. The handshake is symmetric (`docs/fleet.md`
-/// §8), but the person holding a phone is never the side that should be pasting a `adi-mono mesh
+/// page — and this device spends it by dialling out. The handshake is symmetric,
+/// but the person holding a phone is never the side that should be pasting a `adi-mono mesh
 /// join` command into a terminal, so this screen offers only the spending half: scan the code the
 /// machine draws, or paste the token. (The other direction — this device minting and a machine
 /// spending it from a terminal — was dropped on purpose; a headless box is enrolled from its own

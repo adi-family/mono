@@ -123,10 +123,10 @@ you then continue past.
 
 ## Finding duplicated code: `adi-mono indexer clones`
 
-This repo carries its own code index (`crates/adi-indexer`, full docs in `docs/indexer.md`).
-Besides symbol/full-text/semantic search it fingerprints the **shape** of every symbol — the
-parse tree with identifiers and literal values stripped out — so copy-paste is findable however
-thoroughly it was renamed, and across languages.
+This repo carries its own code index (`crates/adi-indexer`). Besides symbol/full-text/semantic
+search it fingerprints the **shape** of every symbol — the parse tree with identifiers and literal
+values stripped out — so copy-paste is findable however thoroughly it was renamed, and across
+languages.
 
 **Reach for this before hand-rolling a duplication hunt with grep.** Index once, then queries are
 instant.
@@ -170,8 +170,8 @@ count, not just the group.
 
 ### The Rust-only counterpart: `adi-clone-lint`
 
-`lints/adi-clone-lint` (full docs in `docs/clone-lint.md`) asks the same question as a **rustc
-lint**, over HIR instead of tree-sitter. Warn-only, never denies.
+`lints/adi-clone-lint` asks the same question as a **rustc lint**, over HIR instead of
+tree-sitter. Warn-only, never denies.
 
 ```bash
 cargo dylint --lib adi_clone_lint --workspace
@@ -200,14 +200,12 @@ If you change *what* gets indexed or *how* the embedded text is built, bump
 content, so a change to the crate is invisible to them: skip the bump and a full reindex returns
 in seconds with the old data and no error at all.
 
-## Comments: `docs/comments.md`
+## Comments
 
-The standard every comment in this tree is held to — nine rules, worked through on
-`crates/adi-agents`, which was audited against all of them.
-
-The one-line version: **a comment earns its place by saying what the code cannot.** Not what
-the line does (the line says that, and never goes stale) — the reason, the alternative that
-was tried, the constraint somebody else's API imposes, the bug the line exists to prevent.
+The standard every comment in this tree is held to: **a comment earns its place by saying what
+the code cannot.** Not what the line does (the line says that, and never goes stale) — the
+reason, the alternative that was tried, the constraint somebody else's API imposes, the bug the
+line exists to prevent.
 
 For inline `//` comments the bar is higher still: keep one only where a reader would
 otherwise get the line **wrong** — another system's behaviour, a past bug, an ordering or
@@ -224,7 +222,7 @@ cargo doc -p <crate> --no-deps      # unresolved intra-doc links = dead referenc
 
 and a grep for backticked identifiers in comments that match no definition in the tree.
 
-## Building an app (dashboard): `docs/apps.md`
+## Building an app (dashboard)
 
 The recommended shape of every app under `~/.adi/mono/dashboards/<id>/`. The short version:
 
@@ -251,4 +249,3 @@ only for machine strings, no cards around tables, no shadows, Lucide only).
   `adi_ui::Icon` (stroke 1.5, sizes 14/16/20/24). No inline SVG paths, no Unicode glyph icons.
 - **Fonts**: `scripts/fonts.sh` refreshes the self-hosted Geist / Geist Mono / Bricolage subsets
   in `crates/adi-ui/fonts/`.
-- `docs/design.md` maps where each surface implements the system.

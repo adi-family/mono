@@ -1,4 +1,4 @@
-//! The wire protocol on the node<->router WebSocket (`docs/channels.md` §2). Every frame is a
+//! The wire protocol on the node<->router WebSocket. Every frame is a
 //! flat JSON object with a `type` tag, kept small on purpose: this socket carries control and
 //! event traffic only, never attachment bytes.
 

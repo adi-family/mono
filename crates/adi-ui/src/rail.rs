@@ -162,7 +162,7 @@ pub fn RailGroup(
 /// column empty, the same background either side; content taller than it overflows visibly and
 /// the scroll port around it still catches the whole of it, exactly as before this wrapper
 /// existed. What it buys a caller that needs it: a child marked `flex-1 min-h-0 overflow-y-auto`
-/// (the sessions rail's per-machine blocks, `docs/sessions.md`) gets a real share of the port's
+/// (the sessions rail's per-machine blocks) gets a real share of the port's
 /// height to divide and scroll on its own, rather than the auto height a plain block would have
 /// nothing to compute a share *of*.
 ///

@@ -1,5 +1,5 @@
 # Paste this at https://api.slack.com/apps -> "Create New App" -> "From a manifest" to create
-# the ADI Slack app in one step -- ADI-MONO-123 (docs/channels.md §4). Not run from here: Igor's
+# the ADI Slack app in one step -- ADI-MONO-123. Not run from here: Igor's
 # call (ADI-MONO-124), same as every other real-bot/app registration this repo touches.
 #
 # After creating the app from this manifest:
@@ -43,7 +43,7 @@ oauth_config:
       # The Agents & AI Apps surface (assistant_thread_started/_context_changed,
       # assistant.threads.setStatus) -- slack-agentexchange-listing-2026 §3.
       - assistant:write
-      # chat.postMessage -- the only path a reply takes (docs/channels.md §1/§4).
+      # chat.postMessage -- the only path a reply takes.
       - chat:write
       # message.im -- a direct message to the bot.
       - im:history

@@ -109,7 +109,7 @@ pub struct Flavor {
     /// one port means the second never starts.
     pub supervisor_port: u16,
     /// The loopback port this install's mesh gateway binds, and therefore the address its front
-    /// door hands the whole `n.adi` zone to (`docs/fleet.md` §3).
+    /// door hands the whole `n.adi` zone to.
     ///
     /// Per-flavour because the two ends never handshake: each front door writes the number into
     /// its own generated config and each gateway binds it at start-up, so two installs sharing

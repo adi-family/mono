@@ -1,8 +1,8 @@
 //! The on-demand test — a human presses "Test" and finds out, right now, whether a backend embeds.
 //!
 //! There is no prober here to be distinct from: an embedding backend never holds, never fails over
-//! silently and is never asked on a timer (see "the same-model failover rule" in
-//! `docs/embedding-backends.md` for why the LLM design's background sweep has no counterpart here).
+//! silently and is never asked on a timer, which is why the LLM design's background sweep has no
+//! counterpart here.
 //! This is the first thing that asks one at all, other than a real caller storing real vectors.
 //!
 //! Embedding one short string and reporting success is not the whole test. **The width is the

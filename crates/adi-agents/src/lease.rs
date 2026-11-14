@@ -1,4 +1,4 @@
-//! The lease reference a session carries — `docs/byo-credentials.md` §11.
+//! The lease reference a session carries.
 //!
 //! Phase 1 ships this and nothing that acts on it: the reference is computed, written once, and
 //! read back, but no turn is actually provisioned with a user's value yet (that is phase 1's own
@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
 /// The env var a child reads to forward a launch onto its parent's lease
-/// (`docs/byo-credentials.md` §11's "The capability", ADI-MONO-182 P3.1) — the one thing
+/// (ADI-MONO-182 P3.1) — the one thing
 /// [`crate::backends::detached::scrub_ambient`] already strips unconditionally, with every other
 /// `ADI_*` run-identity variable, so an unleased child never inherits it by accident.
 pub const CAP_ENV: &str = "ADI_LEASE";
@@ -18,8 +18,8 @@ pub const CAP_ENV: &str = "ADI_LEASE";
 /// a mesh address: the capability is honoured only from loopback (§11, P3.2).
 pub const CAP_URL_ENV: &str = "ADI_LEASE_URL";
 
-/// A fresh, unguessable `ADI_LEASE` capability: 32 random bytes, base64url-encoded with no padding
-/// (`docs/byo-credentials.md` §11). Built from two v4 UUIDs rather than a dedicated RNG crate —
+/// A fresh, unguessable `ADI_LEASE` capability: 32 random bytes, base64url-encoded with no padding.
+/// Built from two v4 UUIDs rather than a dedicated RNG crate —
 /// this crate already mints one per harness turn ([`crate::backends::harness`]), and 32 bytes of
 /// UUID randomness is exactly 256 bits, the same size [`capability_hash`] produces.
 pub(crate) fn new_capability() -> String {
@@ -30,7 +30,7 @@ pub(crate) fn new_capability() -> String {
 }
 
 /// What `sessions.lease_cap` stores for a capability: its SHA-256, hex-encoded
-/// (`docs/byo-credentials.md` §11) — a presented `X-Adi-Lease` header is looked up by this hash
+/// — a presented `X-Adi-Lease` header is looked up by this hash
 /// ([`crate::store::SessionStore::find_by_lease_cap`]) rather than by a plaintext scan, and the
 /// one-way function means a dump of `sessions.db` alone cannot be replayed as a capability.
 pub(crate) fn capability_hash(capability: &str) -> String {
@@ -52,7 +52,7 @@ pub(crate) fn capability_hash(capability: &str) -> String {
 /// whatever *started* it, not by whatever the agent or the server policy says today.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LeaseRef {
-    /// The minted user id whose lease this is (`docs/byo-credentials.md` §3.2).
+    /// The minted user id whose lease this is.
     pub user: String,
     /// `attached ∩ overridable` at creation — the agent's `[[secrets]]` names that were also on
     /// the server's `overridable` list the moment this session opened. A later turn narrows this
@@ -63,7 +63,7 @@ pub struct LeaseRef {
 }
 
 /// What a presented `ADI_LEASE` capability resolves to: the session that minted it, and the user
-/// whose lease it names (`docs/byo-credentials.md` §11, ADI-MONO-182 P3.2) — everything
+/// whose lease it names (ADI-MONO-182 P3.2) — everything
 /// `run_agent` needs to launch a child on the same lease without trusting anything a forwarded
 /// request's body says. See [`crate::Agents::lease_capability_session`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,7 +77,7 @@ pub struct LeaseCapability {
     pub user: String,
 }
 
-/// Where a session's lease asks for a user's **live** value (`docs/byo-credentials.md` §5, §9) —
+/// Where a session's lease asks for a user's **live** value —
 /// `adi-app`'s own in-memory `Lease` table, once phase 2 (P2.3) builds one. Object-safe on purpose:
 /// nothing in this crate may depend on `adi-app`, so the only way the layer below
 /// ([`apply`]) and the Test button ([`crate::llm::ondemand::resolve_credential`]) can be exercised
@@ -91,7 +91,7 @@ pub trait LeaseValues: Send + Sync {
 }
 
 /// Whether `name` is live-supplied by `lease`'s user right now: the intersection
-/// `docs/byo-credentials.md` §5 states for the environment layer — `lease.names`, the agent's
+/// the environment layer uses — `lease.names`, the agent's
 /// *current* attachments, the server's *current* `overridable`, and a value the live source
 /// actually holds. Each can only narrow, never widen.
 fn live_for(
@@ -112,7 +112,7 @@ fn live_for(
 }
 
 /// Overlay a session's lease onto an agent's attached-secret environment
-/// (`docs/byo-credentials.md` §5, P1.8): a user value replaces the attached secret of the same
+/// (P1.8): a user value replaces the attached secret of the same
 /// name, in the same slot the ordering gives a secret — before the database pointer, the
 /// workspace vars, and the agent's own `[env]`, every one of which still wins over it exactly as
 /// each already wins over a secret. Never adds a name the agent doesn't already attach: `name`
@@ -151,7 +151,7 @@ pub(crate) fn apply(
     }
 }
 
-/// The user qualifier `docs/byo-credentials.md` §6 means by "a user value supplied this turn's
+/// The user qualifier that marks "a user value supplied this turn's
 /// credential": `Some(lease.user)` when `name` — the one env var that decides a backend's
 /// `credential()` — is itself live-supplied right now, under the same four-way check [`apply`]
 /// makes per name. `None` whenever there is no lease, no live source, or `name` fails any part of
@@ -173,7 +173,7 @@ pub(crate) fn qualifier_for(
 }
 
 /// Whether a turn may start at all, for a session whose lease is `lease`
-/// (`docs/byo-credentials.md` §10, ADI-MONO-181 P2.7) — asked *before* a turn starts, never while
+/// (ADI-MONO-181 P2.7) — asked *before* a turn starts, never while
 /// building its environment. `Ready` covers every session with no lease, every lease whose
 /// narrowed names (the same four-way check [`apply`] makes, minus the agent's current
 /// `[env]`, which has no bearing on whether a *secret* slot is filled) already have a live value,
@@ -227,7 +227,7 @@ pub(crate) fn readiness(
 }
 
 /// Whether `user`'s lease currently holds a value for `name` the server's policy still allows —
-/// the Test button's own check (`docs/byo-credentials.md` §5, P1.10), which has no agent and so no
+/// the Test button's own check (P1.10), which has no agent and so no
 /// attachment allowlist to intersect against the way [`apply`]'s per-name check does.
 pub(crate) fn live_value_for_asker(
     config: &adi_config::Config,
@@ -276,7 +276,7 @@ mod tests {
 
     /// An in-memory stand-in for `adi-app`'s own `Lease` table (phase 2) — a fixed map of
     /// `user -> name -> value`, which is all [`apply`]/[`qualifier_for`] need to be exercised
-    /// ahead of phase 2 (`docs/byo-credentials.md` §5, P1.8).
+    /// ahead of phase 2 (P1.8).
     #[derive(Debug, Default)]
     struct FakeLease(std::collections::BTreeMap<(String, String), String>);
 

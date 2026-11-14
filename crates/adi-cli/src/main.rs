@@ -233,7 +233,7 @@ enum Command {
         command: MarketplaceCommand,
     },
     /// Channels commands: connect Telegram/Slack to an agent, list connections, change where one
-    /// goes and who may talk to it, disconnect (`docs/channels.md` §7). Needs `adi-app` running
+    /// goes and who may talk to it, disconnect. Needs `adi-app` running
     /// on this machine — every verb here calls its `/api/channels/*`, the same endpoints the
     /// `/settings/channels` panel calls.
     Channels {

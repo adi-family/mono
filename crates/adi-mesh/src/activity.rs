@@ -2,7 +2,7 @@
 //!
 //! Kept in the platform's shared global database (`guides/db.md`) rather than anywhere private to
 //! this process, because presence is a question more than this process ever has to answer — the
-//! control panel's `/api/*` handlers want it too (`docs/fleet.md`'s presence work), and a second,
+//! control panel's `/api/*` handlers want it too, and a second,
 //! in-process copy of "who was last seen when" is a second answer that can disagree with this one.
 //! `fleet_activity` is a small, self-contained table: one row per node nickname, so any reader of
 //! `db/global.db` sees exactly what [`record_seen`] last wrote, with no channel of its own to keep

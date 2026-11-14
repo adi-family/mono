@@ -37,7 +37,7 @@ type Posted = (String, String);
 
 ### struct `LeaseGranted`
 
-`adi.secrets.lease.granted` — a device's unlock installed a live lease (`docs/byo-credentials.md` §10, ADI-MONO-181 P2.8). Nothing in this process subscribes to it: a session parked on this user's lease resumes on the next `advance_queue` poll regardless, the same lazy clock every queued message already waits on — this is purely for the rail and anyone else watching.
+`adi.secrets.lease.granted` — a device's unlock installed a live lease (ADI-MONO-181 P2.8). Nothing in this process subscribes to it: a session parked on this user's lease resumes on the next `advance_queue` poll regardless, the same lazy clock every queued message already waits on — this is purely for the rail and anyone else watching.
 
 ```rust
 #[derive(Debug, Serialize)]
@@ -49,7 +49,7 @@ struct LeaseGranted<'a> {
 
 ### struct `LeaseRevoked`
 
-`adi.secrets.lease.revoked` — `mesh lock` or unpairing a user's last peer (`docs/byo-credentials.md` §10.1, ADI-MONO-181 P2.6).
+`adi.secrets.lease.revoked` — `mesh lock` or unpairing a user's last peer (ADI-MONO-181 P2.6).
 
 ```rust
 #[derive(Debug, Serialize)]
@@ -74,7 +74,7 @@ struct Lease {
 
 ### struct `LeaseTable`
 
-`adi-app`'s whole lease table: one `Lease` per user id (`docs/byo-credentials.md` §9 — "a user is one peer, so a second unlock from the same peer replaces the lease in place").
+`adi-app`'s whole lease table: one `Lease` per user id ("a user is one peer, so a second unlock from the same peer replaces the lease in place").
 
 ```rust
 #[derive(Default)]
@@ -96,7 +96,7 @@ struct LeaseSummary {
 
 ### struct `SessionInfo`
 
-`GET /api/leases/session` (§9 step 1): this boot's session public key and epoch, plus the id the caller's own lease (if they unlock one) will be filed under — so a device building its unlock's AAD (`docs/byo-credentials.md` §9 step 3) never has to already know its own minted id out of band; the server, which just resolved it from the caller's own authenticated identity, hands it over right here.
+`GET /api/leases/session` (§9 step 1): this boot's session public key and epoch, plus the id the caller's own lease (if they unlock one) will be filed under — so a device building its unlock's AAD never has to already know its own minted id out of band; the server, which just resolved it from the caller's own authenticated identity, hands it over right here.
 
 ```rust
 #[derive(Serialize)]

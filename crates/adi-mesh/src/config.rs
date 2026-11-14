@@ -34,7 +34,7 @@ pub struct MeshConfig {
     pub host: HostConfig,
     /// Local ports this machine forwards to a peer's port.
     pub forwards: Vec<Forward>,
-    /// The relay servers this machine may call home (`docs/fleet.md` §9). **Empty means the adi
+    /// The relay servers this machine may call home. **Empty means the adi
     /// relays** ([`crate::relay::DEFAULT_RELAYS`]) — changed 2026-08-24, because n0's public relay
     /// refuses a browser websocket outright and a machine on it is unreachable from the browser
     /// client entirely. It used to mean n0's, which is what every machine used before this field

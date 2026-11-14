@@ -136,7 +136,7 @@ pub(crate) struct State {
     /// The paired remote nodes (`/api/fleet`), shown on the Fleet page and, in its presence half
     /// alone, as the chat home's presence strip (`active`/`last_seen`, ADI-MONO-11).
     pub(crate) fleet: RwSignal<Option<FleetState>>,
-    /// The panel-wide source picker (`docs/fleet.md` §14): a paired node's petname, or `None` for
+    /// The panel-wide source picker: a paired node's petname, or `None` for
     /// this machine. One pointer for the *whole* workbench — where an ordinary bare read or write
     /// lands when it names no source of its own — which is a different question from the chat
     /// rail's own multi-select ([`Self::session_local`]/[`Self::session_nodes`]) and never touches
@@ -178,7 +178,7 @@ pub(crate) struct State {
     /// Every agent's run history (`/api/agents/runs/all`) — the data behind the cross-agent
     /// "All chats" index shown above the Agents list and the single-agent live view, and (on the
     /// chat home) the sessions rail's own page, narrowed server-side to what the main list may
-    /// draw (`?hidden=false`, `docs/sessions.md`).
+    /// draw (`?hidden=false`).
     pub(crate) all_chats: RwSignal<Option<AllAgentRuns>>,
     /// This machine's own `?hidden=true` answer — the rail's **Hidden** band. `None` until the
     /// band is opened: unlike [`Self::all_chats`] it is never on the ordinary poll, since a band
@@ -293,7 +293,7 @@ pub(crate) struct State {
     /// and grouped the rail by them would otherwise rebuild half of that arrangement on every
     /// reload, with the half that survived making the half that didn't look broken.
     pub(crate) session_group: RwSignal<SessionGroup>,
-    /// **Which sources** the rail is merging (`docs/fleet.md` §13, multi-select): this machine, when
+    /// **Which sources** the rail is merging (multi-select): this machine, when
     /// true, plus every node named in [`Self::session_nodes`]. Together they replace the single
     /// "pointed node" of the first cut of this feature — a row's own actions now resolve their own
     /// source ([`AgentsWatch::node`], or the row's own tag in the rail), so nothing here has to be
@@ -325,7 +325,7 @@ pub(crate) struct State {
     /// fact.
     pub(crate) rail_node_agents: RwSignal<BTreeMap<String, AgentsState>>,
     /// One selected node's own `/api/agents/runs/all?hidden=false` — the sessions rail's
-    /// per-source merge (`docs/fleet.md` §13). See [`Self::rail_node_agents`] for why this
+    /// per-source merge. See [`Self::rail_node_agents`] for why this
     /// machine is never a key.
     pub(crate) rail_node_chats: RwSignal<BTreeMap<String, AllAgentRuns>>,
     /// One selected node's own `?hidden=true` answer — [`Self::hidden_chats`] for a paired node,
@@ -589,7 +589,7 @@ impl State {
 /// are different questions: *which agents matter* (the shortlist starred on the Agents page, which
 /// is also what the agent picker draws from), *which conversations are anybody's* (the ones a
 /// person started, as against the ones agents spawned for themselves), and, of those, *which are
-/// yours* — a question [`Self::AnyUser`] cannot answer once a fleet (`docs/fleet.md` §13) can put
+/// yours* — a question [`Self::AnyUser`] cannot answer once a fleet can put
 /// somebody else's launches in the same merged rail, because every human launch used to read the
 /// same regardless of whose credential made it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -671,7 +671,7 @@ pub(crate) enum SessionGroup {
     /// rather than on the default — it is the option that kept that one's flat reading order.
     #[serde(alias = "activity")]
     Flat,
-    /// One band per source (`docs/fleet.md` §13): this machine, then each ticked node. Within a band
+    /// One band per source: this machine, then each ticked node. Within a band
     /// the rows keep the activity order, so what needs you is still at the top of each machine. For
     /// the operator who merges several machines and then has to *find* one of them again in a list
     /// that interleaves all of them by recency.
@@ -804,7 +804,7 @@ pub(crate) struct RowMenu {
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct SessionMenu {
     /// The row's own source — a paired node's petname, or `None` for this machine
-    /// (`docs/fleet.md` §13, multi-select) — so Hide/Star from this menu lands on the machine that
+    /// (multi-select) — so Hide/Star from this menu lands on the machine that
     /// actually owns the row, not on whichever source happens to be watched.
     pub(crate) node: Option<String>,
     pub(crate) agent: String,
@@ -929,8 +929,8 @@ pub(crate) struct ProjectsForm {
 }
 
 /// The Tasks page's local signals: the create-form inputs (title, optional project/parent/tag,
-/// optional details) and a busy flag. A tag matching an agent name is the future dispatch hook
-/// (see docs/adi-agents.md). `Copy` so it threads into the page view and handlers.
+/// optional details) and a busy flag. A tag matching an agent name is the future dispatch hook.
+/// `Copy` so it threads into the page view and handlers.
 #[derive(Clone, Copy)]
 pub(crate) struct TasksForm {
     pub(crate) title: RwSignal<String>,
@@ -956,7 +956,7 @@ pub(crate) struct TasksForm {
 /// open. Archived dashboards are hidden by default; expanding is the only way to see and restore
 /// them.
 ///
-/// The `transfer_*` half is the "run this on a node" panel (`docs/fleet.md` §10). It is a *page*
+/// The `transfer_*` half is the "run this on a node" panel. It is a *page*
 /// form rather than per-row state because only one transfer is ever being set up at a time:
 /// `transfer_id` naming the dashboard is what opens the panel, and clearing it is what closes it.
 #[derive(Clone, Copy)]
@@ -979,7 +979,7 @@ pub(crate) struct DashboardsForm {
     /// the only one in existence.
     pub(crate) transfer_delete: RwSignal<bool>,
     /// The node's own Basic-auth password, typed per transfer. Never persisted — not here, and not
-    /// on the server (`docs/fleet.md` §8).
+    /// on the server.
     pub(crate) transfer_password: RwSignal<String>,
     /// Set while the upload is in flight; a transfer crosses a relay and carries files, so it is
     /// the one action on this page that is visibly slow.
@@ -1002,8 +1002,7 @@ pub(crate) struct MarketplaceForm {
     /// Which element the open dialog is about — `<kind>/<name>`, or empty for the whole bundle.
     pub(crate) element: RwSignal<String>,
     /// Where the open dialog would install: a project it registers, one that already exists, or
-    /// the machine's global scope. A new project is the default because it is what we recommend
-    /// (`docs/marketplace-bundles.md` decision #7).
+    /// the machine's global scope. A new project is the default because it is what we recommend.
     pub(crate) dest: RwSignal<Destination>,
     /// The project id chosen under [`Destination::Existing`].
     pub(crate) project: RwSignal<String>,
@@ -1668,7 +1667,7 @@ pub(crate) struct AgentsWatch {
     /// The watched agent's name, or `None` while the live view is closed.
     pub(crate) name: RwSignal<Option<String>>,
     /// Which source the open conversation lives on — a paired node's petname, or `None` for this
-    /// machine (`docs/fleet.md` §13). Set whenever `name`/`run_id` are, by whichever rail row (or
+    /// machine. Set whenever `name`/`run_id` are, by whichever rail row (or
     /// picker) opened them, and read by every fetch this view makes from here on: a poll, a reply, a
     /// stop, a delete. Never guessed from `state.session_nodes` — the rail may have several sources
     /// selected at once, and only the row that was actually clicked knows which one this
@@ -1943,8 +1942,8 @@ pub(crate) struct FleetForm {
     /// Whether an invite is being minted, kept apart from [`busy`](Self::busy) so the grant form
     /// is not disabled by a click on the pairing button.
     pub(crate) minting: RwSignal<bool>,
-    /// An invite minted *elsewhere*, pasted here to be spent — the other direction of `docs/fleet.md`
-    /// §8. Cleared the moment it is accepted: a token that has been spent is a token no screen
+    /// An invite minted *elsewhere*, pasted here to be spent — the other direction of
+    /// pairing. Cleared the moment it is accepted: a token that has been spent is a token no screen
     /// should still be holding.
     pub(crate) join_token: RwSignal<String>,
     /// Whether that invite is being spent. Its own flag, like [`minting`](Self::minting), because
@@ -2352,8 +2351,8 @@ impl EmbeddingsConsole {
 }
 
 /// Everything the Channels page holds that isn't on the server: the connection list, the
-/// router-connection status pill's own data, and the Connect dialog's form (`docs/channels.md`
-/// §7). Page-local, like [`EmbeddingsConsole`] beside it and for the same reason — nothing here
+/// router-connection status pill's own data, and the Connect dialog's form.
+/// Page-local, like [`EmbeddingsConsole`] beside it and for the same reason — nothing here
 /// rides the shell's 4s poll, so it is fetched once when the page opens.
 ///
 /// `Copy`, like every other per-page console in this module.
@@ -2682,7 +2681,7 @@ pub(crate) fn note_read(s: State, path: &str, why: Option<String>) {
 /// Why the read of `path` last failed, if it did — what a table shows in place of "Loading…".
 ///
 /// Looked up under the same key the read itself is filed by. A bare page's read follows the
-/// panel-wide picker (`docs/fleet.md` §14) exactly as `fetch::get`/`Sub::get_on` do, so while it is
+/// panel-wide picker exactly as `fetch::get`/`Sub::get_on` do, so while it is
 /// pointed at a node the failure this table wants is filed under `/api/node/<node>/api/…` — looking
 /// it up under the bare path here would leave the table on "Loading…" forever instead of showing
 /// the node's own refusal (a lock, a timeout, an unreachable gateway), which is exactly the
@@ -2694,7 +2693,7 @@ pub(crate) fn read_error(s: State, path: &str) -> Option<String> {
 }
 
 /// [`read_error`], but never following the picker — for `/api/fleet`/`/api/mesh`, whose reads are
-/// always local (`docs/fleet.md` §14's L3) and so are never filed under a node's own key.
+/// always local and so are never filed under a node's own key.
 pub(crate) fn read_error_local(s: State, path: &str) -> Option<String> {
     s.read_errors.with(|errors| errors.get(path).cloned())
 }
@@ -2709,7 +2708,7 @@ pub(crate) fn read_error_local(s: State, path: &str) -> Option<String> {
 ///
 /// Filed under the *routed* key — `fetch::routed_for(panel_source, path)`, the same one
 /// [`crate::live::Sub`] files a subscription's failure under — because the fetch this wraps already
-/// followed the picker (`docs/fleet.md` §14) to get its answer: filing the failure under the bare
+/// followed the picker to get its answer: filing the failure under the bare
 /// `path` instead would leave [`read_error`] unable to find it the moment the picker points
 /// anywhere but this machine. [`took_local`] is the plain version, for `load`'s three reads that
 /// never follow the picker at all.
@@ -2723,7 +2722,7 @@ fn took<T: PartialEq + Send + Sync + 'static>(
 }
 
 /// [`took`], but never following the picker — for `load`'s `/api/fleet`, `/api/fleet/nodes` and
-/// `/api/mesh` reads, one of `docs/fleet.md` §14's L3 exemptions each.
+/// `/api/mesh` reads, each exempt from the picker.
 fn took_local<T: PartialEq + Send + Sync + 'static>(
     s: State,
     path: &str,
@@ -2758,7 +2757,7 @@ fn took_impl<T: PartialEq + Send + Sync + 'static>(
 ///
 /// **Deliberately not a subscription.** Every other list on the page is local state a poll can read
 /// for free; this one is an authenticated HTTP call to each node over the mesh, which is a third of
-/// a second before any payload (`docs/fleet.md` §9) and wakes a relay to get there. So it is asked
+/// a second before any payload and wakes a relay to get there. So it is asked
 /// when the page loads and when a person asks again — never on a four-second timer.
 ///
 /// A refusal is a flash and nothing else: the rail keeps whatever it last knew, because a fleet
@@ -2777,8 +2776,8 @@ pub(crate) fn refresh_fleet_dashboards(s: State) {
     });
 }
 
-/// The `localStorage` key the panel-wide source picker's pointer is kept under (`docs/fleet.md`
-/// §14) — see [`State::panel_source`] for why it is persisted.
+/// The `localStorage` key the panel-wide source picker's pointer is kept under —
+/// see [`State::panel_source`] for why it is persisted.
 const PANEL_SOURCE_KEY: &str = "adi-panel-source";
 
 /// The saved pointer, or this machine on a first run, in private mode, or if the stored value is
@@ -2806,7 +2805,7 @@ fn save_panel_source(node: Option<&str>) {
 }
 
 /// Point the whole panel at a paired node (`Some(petname)`), or back at this machine (`None`), and
-/// remember the choice for the next reload (`docs/fleet.md` §14).
+/// remember the choice for the next reload.
 ///
 /// This only ever moves [`State::panel_source`] — it is `App`'s own effect over that signal, not
 /// this function, that mirrors the change into `fetch::set_panel_source` and into
@@ -2818,12 +2817,12 @@ pub(crate) fn set_panel_source(s: State, node: Option<String>) {
 }
 
 /// The `localStorage` key the chat home's agent picker remembers its last pick under — distinct
-/// from [`PANEL_SOURCE_KEY`], which points the whole panel at a node (`docs/fleet.md` §14) rather
+/// from [`PANEL_SOURCE_KEY`], which points the whole panel at a node rather
 /// than one agent on one of the rail's selected sources (§13).
 const LAST_AGENT_KEY: &str = "adi-last-agent";
 
 /// What the picker round-trips through `localStorage`: the agent's own name, and which source it
-/// was on (`docs/fleet.md` §13) — `None` for this machine.
+/// was on — `None` for this machine.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct LastAgent {
     node: Option<String>,
@@ -2866,9 +2865,9 @@ pub(crate) fn last_agent_pending(s: State) -> bool {
         && !s.rail_node_agents.get_untracked().contains_key(&node)
 }
 
-/// The `localStorage` key the sessions rail's selected sources are kept under (`docs/fleet.md` §13,
-/// multi-select) — see [`Self::session_local`] on [`State`] for why this one, unlike the single-node
-/// pick it replaces, is worth persisting.
+/// The `localStorage` key the sessions rail's selected sources are kept under
+/// (multi-select) — see [`Self::session_local`] on [`State`] for why this one, unlike the
+/// single-node pick it replaces, is worth persisting.
 const SESSION_SOURCES_KEY: &str = "adi-session-sources";
 
 /// The selection as it round-trips through `localStorage`: this machine, and which paired nodes.
@@ -2947,7 +2946,7 @@ pub(crate) fn set_session_group(s: State, group: SessionGroup) {
     }
 }
 
-/// Add or drop one source from the sessions rail's merge (`docs/fleet.md` §13): this machine
+/// Add or drop one source from the sessions rail's merge: this machine
 /// (`node: None`), or a paired node by petname. Persists the resulting selection and asks the newly
 /// added source for its rail data at once, so ticking a node fills its rows immediately rather than
 /// waiting for the next poll.
@@ -3102,7 +3101,7 @@ pub(crate) fn subscriptions(
     hook_log: HookLogView,
     term: TermWatch,
 ) -> Vec<Sub> {
-    // Which source every *ordinary* watch below follows (`docs/fleet.md` §14) — read tracked, so
+    // Which source every *ordinary* watch below follows — read tracked, so
     // pointing the picker elsewhere re-subscribes this whole list at the new address rather than
     // leaving it watching the machine that was pointed at when the effect last ran. The handful of
     // subs still pushed as plain `Sub::get` below are the exceptions §14 lists — always this
@@ -3404,7 +3403,7 @@ pub(crate) fn chat_subscriptions(watch: AgentsWatch) -> Vec<Sub> {
     };
     // Tracked: which source this conversation is on decides where every sub below is addressed, and
     // opening a different row's conversation must re-subscribe at the new source rather than go on
-    // watching the old one under the new title (`docs/fleet.md` §13).
+    // watching the old one under the new title.
     let node = watch.node.get();
     // An interactive (pty) agent keeps no run history — the pane is the whole of it.
     if watch.interactive.get() {
@@ -3501,7 +3500,7 @@ pub(crate) async fn load(s: State) {
     // Every read below goes through `took`, which files a failure against its endpoint instead of
     // dropping it — see [`State::read_errors`] for why an `if let Ok(…)` here was invisible.
     took(s, "/api/projects", s.projects, fetch::projects().await);
-    // The panel-wide source picker's own list (`docs/fleet.md` §14) — always local, like the
+    // The panel-wide source picker's own list — always local, like the
     // matching subscription in [`subscriptions`], and on every route for the same reason the
     // titlebar that draws it is.
     took_local(

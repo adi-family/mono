@@ -1,6 +1,6 @@
 [package]
 name = "adi-channels"
-description = "The node side of Channels (docs/channels.md): the outbound WebSocket client to the channel-router, the adi.channels.message event, the connection store (provider + routing key -> agent/trigger/app-route target), dispatch to an agent with thread->conversation mapping, and the automatic post-back of a run's answer."
+description = "The node side of Channels: the outbound WebSocket client to the channel-router, the adi.channels.message event, the connection store (provider + routing key -> agent/trigger/app-route target), dispatch to an agent with thread->conversation mapping, and the automatic post-back of a run's answer."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,7 +13,7 @@ adi-config = { workspace = true }
 adi-events = { workspace = true }
 adi-agents = { workspace = true }
 adi-tools = { workspace = true }
-# A node token (docs/channels.md §1) is stored in the reserved scope the fleet's own node
+# A node token is stored in the reserved scope the fleet's own node
 # passwords use — never injected into an agent run's environment, see src/token.rs.
 adi-secrets = { workspace = true }
 

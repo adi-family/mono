@@ -756,8 +756,7 @@ mod tests {
     }
 
     /// A model swap must not leave an untouched file's vectors from the *old* model sitting in
-    /// the index forever, silently mixed in with whatever a later run does re-embed —
-    /// `docs/embedding-backends-survey.md`'s Surprise #1.
+    /// the index forever, silently mixed in with whatever a later run does re-embed.
     #[test]
     fn a_model_swap_reembeds_a_file_even_when_nothing_else_about_it_changed() {
         #[derive(Debug)]

@@ -187,7 +187,7 @@ pub fn sync_marketplace(cfg: &Config) -> Response {
 /// `POST /api/marketplace/install` — install the whole bundle, or one `<kind>/<name>` element of
 /// it. A legacy single-dashboard bundle installs exactly as v1 always has — a dashboard called
 /// whatever the operator typed, started only if they asked; a general bundle lands every selected
-/// element under its own published name (`docs/marketplace-bundles.md`).
+/// element under its own published name.
 ///
 /// Nothing about a legacy install can collide: the id is minted from the name the way every store
 /// id is, so a second copy of one app is `crm-2` rather than a refusal. A general bundle's own
@@ -540,7 +540,7 @@ pub fn update_marketplace_bundle(cfg: &Config, body: &[u8]) -> Response {
 /// `<kind>/<name>` onto the pair [`adi_marketplace::bundle::update`] takes — silently dropped
 /// when it does not parse, so a stray `--force` value forces nothing rather than refusing the
 /// whole update. Never meaningful for the project scaffold: nothing relands it in place regardless
-/// of `force` (`docs/marketplace-bundles.md`'s "Update" section), so there is no pair to name it
+/// of `force`, so there is no pair to name it
 /// with.
 fn force_pair(raw: &str) -> Option<(Kind, &str)> {
     let (kind, name) = raw.split_once('/')?;

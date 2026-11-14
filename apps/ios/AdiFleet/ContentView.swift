@@ -193,7 +193,7 @@ struct ContentView: View {
     @ViewBuilder
     private func footer(for node: Node) -> some View {
         if node.renamedItself, let pending = node.pending_nickname {
-            // §2 rule 4 of docs/fleet.md: a node that renames itself files a notice; it never
+            // A node that renames itself files a notice; it never
             // takes over the links this device already has.
             Note(icon: .info, text: "This node now calls itself “\(pending)”. Your name for it is unchanged.")
                 .adiRow()
@@ -296,7 +296,7 @@ private struct DashboardRow: View {
             }
         } else {
             // Nothing to route to: a dashboard with no `<label>.adi` host of its own is reachable
-            // on the node and nowhere else (`docs/fleet.md` §4).
+            // on the node and nowhere else.
             ServiceLabel(icon: .layoutDashboard, title: dashboard.name, ink: ADI.ink3)
         }
     }

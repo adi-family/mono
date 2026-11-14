@@ -4,7 +4,7 @@
 //! Everything here is read from endpoints the panel already serves — `/api/health`,
 //! `/api/system`, `/api/fleet` — once, as the window opens; `update` is the one exception,
 //! since its "Updates" row has to stay live and clickable while the window sits open
-//! (`docs/adi-update.md` §5). A read that fails leaves its lines out rather than drawing them
+//!. A read that fails leaves its lines out rather than drawing them
 //! empty.
 
 use adi_ui::Mark;

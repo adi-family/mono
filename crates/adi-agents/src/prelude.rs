@@ -25,7 +25,7 @@
 //!
 //! The agent layer, not the runner. Every engine gets the same block appended to its opening
 //! message, so this needs no per-engine support and a new backend inherits it. The runner still
-//! knows nothing but "here is the message to send" — see `docs/agent-runner.md`.
+//! knows nothing but "here is the message to send".
 
 use std::fmt::Write as _;
 use std::path::Path;

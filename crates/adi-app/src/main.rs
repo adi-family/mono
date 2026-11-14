@@ -54,8 +54,8 @@ struct App {
     tasks: Tasks,
     tools: Tools,
     agents: Agents,
-    /// The BYO-credentials lease table and this boot's session key (`docs/byo-credentials.md`
-    /// §9, ADI-MONO-180 P2.3) — the same `Arc` `agents` was opened with via
+    /// The BYO-credentials lease table and this boot's session key (ADI-MONO-180
+    /// P2.3) — the same `Arc` `agents` was opened with via
     /// `Agents::with_lease_values`, kept here too because the `/api/leases/*` routes act on it
     /// directly and `Agents` exposes no mutator for it.
     leases: Arc<leases::LeaseTable>,
@@ -235,12 +235,12 @@ async fn main() -> anyhow::Result<()> {
     if let Err(e) = db.bootstrap() {
         warn!(error = %e, "bootstrapping the shared database failed");
     }
-    // The BYO-credentials lease table (`docs/byo-credentials.md` §9, ADI-MONO-180 P2.3) — built
+    // The BYO-credentials lease table (ADI-MONO-180 P2.3) — built
     // before `Agents::open` so the same `Arc` goes into both `App` and `Agents::with_lease_values`.
     let leases = Arc::new(leases::LeaseTable::default());
     let lease_session = adi_mesh::lease_seal::SessionKey::generate();
     // Where a leased run's children forward `adi-mono agents run` to reach this very lease
-    // (`docs/byo-credentials.md` §11, ADI-MONO-182 P3.1) — always loopback, never the address a
+    // (ADI-MONO-182 P3.1) — always loopback, never the address a
     // peer would dial this node at, because the capability is honoured only from loopback (P3.2).
     let agents = Agents::open()
         .with_lease_values(Arc::clone(&leases) as Arc<dyn adi_agents::LeaseValues>)
@@ -299,8 +299,8 @@ async fn main() -> anyhow::Result<()> {
     );
     event_log::start(tasks.clone(), events.clone());
     prober::start(agents.clone());
-    // The device side of auto-unlocking a server connection (`docs/byo-credentials.md` §9,
-    // ADI-MONO-180 P2.4's own gap, closed by ADI-MONO-181) — this machine acting as a paired
+    // The device side of auto-unlocking a server connection
+    // (ADI-MONO-180 P2.4's own gap, closed by ADI-MONO-181) — this machine acting as a paired
     // peer dialling *out*, independent of whether this machine's own `[user_secrets]` is enabled.
     lease_worker::start(secrets.clone());
     let dist = webapp_dist_override();
@@ -627,7 +627,7 @@ fn shared_read_key(req: &http::Request) -> Option<String> {
 /// Keyed on `X-Adi-Fleet-Petname`, not `X-Adi-Fleet-Node`: the petname is this machine's own,
 /// pinned registry key for the connection (`adi_mesh::auth::FLEET_PETNAME_HEADER`), while the
 /// node header carries the peer's self-declared nickname — a presentation-only value a name
-/// clash can resolve differently next time (`docs/fleet.md` §2 rule 3). ADI-MONO-171 G3's role
+/// clash can resolve differently next time. ADI-MONO-171 G3's role
 /// check has to name the peer by something that cannot move out from under it, so it reads the
 /// petname; `nickname` stays around for the conversation marker, which only ever wanted a label.
 fn fleet_sender(req: &http::Request) -> Option<handlers::FleetSender<'_>> {
@@ -654,7 +654,7 @@ fn peer_role(projects: &Projects, sender: Option<handlers::FleetSender<'_>>) -> 
         .unwrap_or(adi_mesh::fleet::Role::Member)
 }
 
-/// This peer's user scope (`docs/byo-credentials.md` §3): `Some(<id>)` — the **id**, never the
+/// This peer's user scope: `Some(<id>)` — the **id**, never the
 /// username — only for a peer whose registry record carries a [`user`](adi_mesh::fleet::NodeRecord::user),
 /// minted or resolved for it by [`adi_mesh::join::decide`], never one copied in by
 /// [`adi_mesh::join::record_viewer`] — and whose `auth.user` still matches the header's user.
@@ -671,7 +671,7 @@ fn user_scope(projects: &Projects, sender: Option<handlers::FleetSender<'_>>) ->
 }
 
 /// A presented `X-Adi-Lease` capability, but only when `sender` is `None`
-/// (`docs/byo-credentials.md` §11, ADI-MONO-182 P3.2): a capability that leaked into a transcript
+/// (ADI-MONO-182 P3.2): a capability that leaked into a transcript
 /// must never be replayable by a mesh peer, so a request the gateway attached identity headers to
 /// never reads this header at all, whatever it also carries. `sender` is read off the same request
 /// rather than re-derived, so this agrees with whichever branch [`fleet_sender`] already took.
@@ -683,7 +683,7 @@ fn lease_capability_header<'a>(
 }
 
 /// The caller's own `EndpointId`, from this machine's own pairing record of them — part of a
-/// BYO-credentials unlock's AAD (`docs/byo-credentials.md` §9, `adi_mesh::lease_seal`), never
+/// BYO-credentials unlock's AAD (`adi_mesh::lease_seal`), never
 /// taken from anything the request itself claims. `None` under exactly the same conditions
 /// [`user_scope`] answers `None` for.
 fn sender_device_key(projects: &Projects, sender: Option<handlers::FleetSender<'_>>) -> Option<String> {
@@ -708,7 +708,7 @@ fn member_refusal(projects: &Projects, req: &http::Request) -> Option<Response> 
 /// `/api/mesh*`; every `/api/fleet/*` write except adding an `http:<label>` grant to its own
 /// record; every secrets action that can read, write or refresh a secret (there is only one
 /// scope today, global, but the gate is written to cover every scope there ever is), plus the
-/// server's own `[user_secrets]` policy (`docs/byo-credentials.md` §4.1, ADI-MONO-178) — the
+/// server's own `[user_secrets]` policy (ADI-MONO-178) — the
 /// `/api/secrets/mine/*` routes are a member's own scope and are deliberately not named here
 /// (§7: they are separate paths, not a carved-out exception); the run-limit setting; and creating
 /// a hive service. Everything else (including every `GET`) is unrestricted.
@@ -1148,7 +1148,7 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
             let live = scan::listening_ports();
             handlers::delete_dashboard(projects.config(), ports, &live, &req.body)
         }
-        // Mesh imports have already passed the node password gate (`docs/fleet.md` §5).
+        // Mesh imports have already passed the node password gate.
         ("POST", "/api/dashboards/import") => {
             let live = scan::listening_ports();
             handlers::import_dashboard(projects, ports, &live, &req.body)
@@ -1221,7 +1221,7 @@ fn persist_mesh_enabled(enabled: bool) -> anyhow::Result<()> {
 }
 
 /// Join a fleet and return the minted credential once. Joining persists `enabled=true`
-/// and starts the mesh immediately (`docs/fleet.md` §8).
+/// and starts the mesh immediately.
 async fn fleet_join(app: &App, body: &[u8]) -> Response {
     let (token, grant_back) = match handlers::fleet_join_token(body, now_secs()) {
         Ok(parsed) => parsed,
@@ -2036,7 +2036,7 @@ mod tests {
             "a local request carries no fleet identity"
         );
         // The petname is what identity hinges on now, never the dialler-chosen nickname —
-        // ADI-MONO-171 G1 (`docs/fleet.md` §2 rule 3: a nickname is only ever a suggestion).
+        // ADI-MONO-171 G1 (a nickname is only ever a suggestion).
         let mut no_petname = request("POST", "/api/agents/run", "{}");
         no_petname
             .headers

@@ -10,7 +10,7 @@
 #
 # What comes out is the release notes, used three times over: the `notes` field of the
 # published manifest.json, the body of the GitHub release, and the "What's new" the control
-# panel shows before it installs anything (docs/adi-update.md §5).
+# panel shows before it installs anything.
 #
 # **A missing section is an error, not an empty string.** The release workflow runs this
 # before it builds anything, so forgetting to write the entry — or forgetting to rename

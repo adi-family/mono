@@ -1,6 +1,6 @@
 //! The Fleet page: the remote adi nodes this machine is paired with.
 //!
-//! Its whole job is to make two rules of `docs/fleet.md` legible.
+//! Its whole job is to make two fleet rules legible.
 //!
 //! **§2 — three names, never conflated.** Every row says all three: the **petname** this machine
 //! calls the node by (and routes `<service>.<petname>.n.adi` to), the **nickname** it calls
@@ -819,7 +819,7 @@ fn join(state: State, form: FleetForm) {
 /// Run a fleet mutation: set the returned state, or flash the error; toggles
 /// `busy` around the request when a form is driving it. A thin typed wrapper over
 /// [`apply_mutation_local`], as `apply_mesh` is for the mesh endpoints — every `/api/fleet/*`
-/// endpoint is one of `docs/fleet.md` §14's L3 exemptions, so the flash never names the
+/// endpoint is always local, exempt from the picker, so the flash never names the
 /// panel-wide picker's node: it never reaches whatever that is pointed at.
 fn apply_fleet<F>(state: State, busy: Option<RwSignal<bool>>, fut: F)
 where

@@ -2,9 +2,9 @@
 //! a per-project scope. Values are stored encrypted; only `get --reveal` ever prints one.
 //!
 //! `policy`, `leases`, and `--user --node` on `rm`/`set`, are the BYO-credentials verbs
-//! (`docs/byo-credentials.md` §4.4, ADI-MONO-178 P1.12 / ADI-MONO-180 P2.5): a user's own scope
-//! on a paired server, reached through this machine's local mesh gateway the way `docs/fleet.md`
-//! §10's dashboard transfer addresses one — `127.0.0.1:<gateway port>` with
+//! (ADI-MONO-178 P1.12 / ADI-MONO-180 P2.5): a user's own scope
+//! on a paired server, reached through this machine's local mesh gateway the way the
+//! dashboard transfer addresses one — `127.0.0.1:<gateway port>` with
 //! `Host: app.<node>.n.adi`. `set --user` seals the value on this device before it ever leaves
 //! (§8, P2.1/P2.2) — the server stores exactly what it is handed and never decrypts it. There is
 //! no `--reveal` or `read` for `--user`: a user scope is write-only everywhere (§7).
@@ -48,7 +48,7 @@ pub(crate) enum SecretsCommand {
         #[arg(long)]
         project: Option<String>,
         /// Set this value in *your own* scope on `--node`, not this machine's — sealed on this
-        /// device before it leaves (`docs/byo-credentials.md` §7, §8).
+        /// device before it leaves.
         #[arg(long)]
         user: bool,
         /// The paired server to reach, over this machine's local mesh gateway. Required with
@@ -97,7 +97,7 @@ pub(crate) enum SecretsCommand {
         node: Option<String>,
     },
     /// Show or edit the server's own `[user_secrets]` policy
-    /// (`docs/byo-credentials.md` §4.1) — or, with `--user --node`, one paired server's own
+    /// — or, with `--user --node`, one paired server's own
     /// `.settings.toml` for *you* (§4.2).
     Policy {
         /// Edit your own policy on `--node` instead of this server's.
@@ -124,7 +124,7 @@ pub(crate) enum SecretsCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Live leases (`docs/byo-credentials.md` §7, §9, ADI-MONO-180 P2.5): on a paired server
+    /// Live leases (ADI-MONO-180 P2.5): on a paired server
     /// (`--node`), the caller's own; this device's own admin listing of every live lease on its
     /// own server isn't wired up yet (`--node` is required here for now).
     Leases {
@@ -345,7 +345,7 @@ fn run_leases(node: Option<String>, json: bool) -> Result<(), String> {
 /// the front door's own proxy rule — so this never hard-codes a default that an installed service
 /// could already disagree with (the gap P2.5 flagged rather than guessed at). A request with no
 /// mesh identity headers reads, on the other end, as the machine's own operator
-/// (`docs/byo-credentials.md` §3.2) — an admin, so this sees every lease, not just one user's.
+/// — an admin, so this sees every lease, not just one user's.
 fn local_leases() -> Result<serde_json::Value, String> {
     local_leases_at(adi_core::app::port())
 }
@@ -370,7 +370,7 @@ fn local_leases_at(port: u16) -> Result<serde_json::Value, String> {
 }
 
 /// `--node` needs `--user` to make sense of, and the reverse too: there is no user scope on
-/// your own machine to reach with it (`docs/byo-credentials.md` §4.4). Reused by `mesh
+/// your own machine to reach with it. Reused by `mesh
 /// share`/`unlock`/`lock` (ADI-MONO-180 P2.5), which need exactly the same node for exactly the
 /// same reason, even though none of them takes a `--user` flag of their own.
 pub(crate) fn require_node(node: Option<&str>) -> Result<String, String> {
@@ -488,8 +488,8 @@ fn print_policy_answer(node: &str, answer: &serde_json::Value, json: bool) {
 
 /// This device's own username for `node` — the credential's non-secret half
 /// (`adi_mesh::auth::Credential::user`, "stored in the clear"). The password is never kept
-/// anywhere after pairing (`docs/fleet.md` §3.1: "neither side stores it; both store its
-/// verifier"), so [`read_password`] asks for it fresh every time.
+/// anywhere after pairing (neither side stores it; both store its
+/// verifier), so [`read_password`] asks for it fresh every time.
 pub(crate) fn node_username(node: &str) -> Result<String, String> {
     adi_mesh::node_api::node_username(node)
         .map_err(|e| e.to_string())?
@@ -515,7 +515,7 @@ pub(crate) fn read_password(node: &str) -> Result<String, String> {
 }
 
 /// One request to `node`'s own `app` service, through this machine's local mesh gateway —
-/// `docs/fleet.md` §10's addressing (`adi_mesh::node_api`, lifted out of this module when the
+/// the dashboard-transfer addressing (`adi_mesh::node_api`, lifted out of this module when the
 /// BYO-credentials `mesh` verbs needed the same capability, ADI-MONO-180 P2.5).
 pub(crate) fn node_request(
     node: &str,
@@ -530,8 +530,8 @@ pub(crate) fn node_request(
         .map_err(|e| e.to_string())
 }
 
-/// Seal `value` on this device and upload it to `node`'s own scope (`docs/byo-credentials.md`
-/// §8, ADI-MONO-180 P2.1/P2.2): a fresh DEK seals the value, this device's own key-wrapping key
+/// Seal `value` on this device and upload it to `node`'s own scope
+/// (ADI-MONO-180 P2.1/P2.2): a fresh DEK seals the value, this device's own key-wrapping key
 /// (`adi_mesh::devicekey`) wraps the DEK, and only the sealed result crosses the wire. `name` is
 /// the AAD label — stable for as long as this device calls `node` by this petname, and never
 /// checked by the server, which never opens either seal (§8's whole point).

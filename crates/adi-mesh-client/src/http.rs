@@ -50,7 +50,7 @@ impl Request {
         self
     }
 
-    /// Attach the node's Basic credential (`docs/fleet.md` §5, the HTTP layer).
+    /// Attach the node's Basic credential (the HTTP layer).
     #[must_use]
     pub fn with_basic_auth(self, username: &str, password: &str) -> Self {
         let credential = B64.encode(format!("{username}:{password}"));
@@ -61,7 +61,7 @@ impl Request {
     ///
     /// `Host: 127.0.0.1` unless the caller set one, for the reason the iOS viewer uses it
     /// (`adi-mesh-ffi/src/viewer/catalog.rs`): the node routes on the service name in the gateway
-    /// frame and never on `Host`, and `docs/fleet.md` §3 forbids rewriting it — so what goes here
+    /// frame and never on `Host`, and the gateway must never rewrite it — so what goes here
     /// has to be something that cannot accidentally mean anything to the far side.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {

@@ -49,7 +49,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 /// This machine's own health and the status LED — never the panel-wide source picker's target
-/// (`docs/fleet.md` §14): the socket the LED reports on is this machine's, whatever the panel is
+///: the socket the LED reports on is this machine's, whatever the panel is
 /// pointed at.
 pub async fn health() -> Result<Health, String> {
     get_local("/api/health").await
@@ -79,10 +79,10 @@ pub async fn meta() -> Result<MetaState, String> {
     get("/api/meta").await
 }
 
-// Auto-update (`docs/adi-update.md`). All three answer the same shape, so the top bar's
+// Auto-update. All three answer the same shape, so the top bar's
 // pill re-renders from whichever call it last made.
 //
-// Always local, never the panel-wide source picker's target (`docs/fleet.md` §14): the version
+// Always local, never the panel-wide source picker's target: the version
 // pill names what *this* machine's binary is on, and installing a release runs against this
 // machine's own updater whatever the picker is pointed at.
 
@@ -124,7 +124,7 @@ pub async fn forget_usage_events() -> Result<UsageEventsState, String> {
     post_local("/api/usage-events/forget", &()).await
 }
 
-// The System page (`docs/fleet.md` §14's L3): the same exemption as `/api/update/*` above, for
+// The System page: the same exemption as `/api/update/*` above, for
 // the same reason — "restart this machine's own process" and "this machine's own services" can
 // only ever mean the box actually serving the page, whatever the panel-wide picker is pointed at.
 
@@ -232,8 +232,8 @@ pub async fn test_embedding_backend(draft: SaveEmbeddingBackend) -> Result<TestR
     .await
 }
 
-// Channels (`docs/channels.md` §7): always local, never the panel-wide source picker's target
-// (`docs/fleet.md` §14's L3) — a connection belongs to whichever machine's node holds the live
+// Channels: always local, never the panel-wide source picker's target
+// — a connection belongs to whichever machine's node holds the live
 // socket to the router, which is always this one, however the picker is pointed.
 
 pub async fn channels() -> Result<ChannelsState, String> {
@@ -277,7 +277,7 @@ pub async fn disconnect_channel(id: String) -> Result<ChannelsState, String> {
 
 // Mesh: every endpoint returns the fresh MeshState so the page updates in one round-trip.
 //
-// Always local, never the panel-wide source picker's target (`docs/fleet.md` §14): the mesh daemon
+// Always local, never the panel-wide source picker's target: the mesh daemon
 // a picked node runs is *its own*, reached only by pairing with it in the first place — there is no
 // sense in which "point the panel at laptop-b" means "configure laptop-b's mesh from here".
 
@@ -320,7 +320,7 @@ pub async fn mesh_remove_forward(listen: u16) -> Result<MeshState, String> {
 // Fleet: the paired remote nodes. As with mesh, every endpoint answers with the fresh
 // FleetState, so an edit and the view of it are one round-trip.
 //
-// Always local, never the panel-wide source picker's target (`docs/fleet.md` §14): the registry a
+// Always local, never the panel-wide source picker's target: the registry a
 // picked node's own panel would show is *its* fleet, not this machine's, and the whole point of
 // pairing, granting and renaming here is to shape what *this* machine can reach.
 
@@ -400,7 +400,7 @@ pub async fn fleet_dashboards() -> Result<FleetDashboards, String> {
 }
 
 /// Which paired nodes this machine holds a password for — the cheap read behind the sessions
-/// rail's node menu (`docs/fleet.md` §13) and the panel-wide source picker's own list (§14). Local:
+/// rail's node menu and the panel-wide source picker's own list (§14). Local:
 /// unlike the listing above it asks no node anything, so it is polled with the rest of the page
 /// rather than on a click — and, per §14, it is what the picker offers, so it would be circular for
 /// it to follow the picker's own pointer.
@@ -656,7 +656,7 @@ pub async fn agents() -> Result<AgentsState, String> {
 }
 
 /// A paired node's own `/api/agents` — one entry in the sessions rail's per-source merge
-/// (`docs/fleet.md` §13, multi-select). Local is never asked through here: [`agents`] above is kept
+/// (multi-select). Local is never asked through here: [`agents`] above is kept
 /// fresh already, on the schedule every other page that reads it relies on, and a second fetch of the
 /// same answer under a different name would be two clocks for one fact.
 pub async fn agents_on(node: &str) -> Result<AgentsState, String> {
@@ -680,7 +680,7 @@ pub async fn delete_agent(name: String) -> Result<AgentsState, String> {
 /// the first one the agent lists. It rotates the agent's list rather than cutting it, so a run begun
 /// on a second choice still has the rest behind it.
 ///
-/// `node` is which source the composer is pointed at (`docs/fleet.md` §13) — `None` for this
+/// `node` is which source the composer is pointed at — `None` for this
 /// machine, routed the same way every other agent-scoped call in this file is.
 pub async fn run_agent(
     node: Option<&str>,
@@ -760,7 +760,7 @@ pub async fn stop_agent(name: String) -> Result<AgentsState, String> {
 }
 
 /// A headless agent's run history, newest first — the *open conversation's* own source
-/// (`docs/fleet.md` §13), not necessarily this machine's.
+///, not necessarily this machine's.
 pub async fn agent_runs(node: Option<&str>, name: String) -> Result<AgentRuns, String> {
     post_on(node, "/api/agents/runs", &AgentRef { name }).await
 }
@@ -787,7 +787,7 @@ pub fn all_runs_path(limit: Option<usize>) -> String {
 
 /// The sessions rail's own page: [`all_agent_runs`], narrowed server-side to what the main list may
 /// draw — a hidden run stays out unless it is asking a question nobody has answered
-/// (`docs/sessions.md`), and, when the box is set, narrowed to the chosen [`SessionFilter`] too, so
+///, and, when the box is set, narrowed to the chosen [`SessionFilter`] too, so
 /// the `limit` page is a page of the rows the rail will actually draw rather than of the whole store.
 pub async fn all_agent_runs_visible(
     limit: Option<usize>,
@@ -798,7 +798,7 @@ pub async fn all_agent_runs_visible(
 }
 
 /// [`all_agent_runs_visible`], for one paired node's own sessions — the sessions rail's per-source
-/// merge (`docs/fleet.md` §13, multi-select).
+/// merge (multi-select).
 pub async fn all_agent_runs_visible_on(
     node: &str,
     limit: Option<usize>,
@@ -850,7 +850,7 @@ pub fn all_visible_runs_path(
 
 /// The rail's **Hidden** band, unpaged — every run put away with Hide, minus one already shown
 /// live with a question on it. Fetched only while the band is open, never on the rail's ordinary
-/// poll (`docs/sessions.md`).
+/// poll.
 pub async fn hidden_runs() -> Result<AllAgentRuns, String> {
     get(hidden_runs_path()).await
 }
@@ -868,7 +868,7 @@ pub fn hidden_runs_path() -> &'static str {
 }
 
 /// A snapshot of one specific run's log (plus the conversation transcript, for harness runs), from
-/// the source that run actually lives on (`docs/fleet.md` §13) — `None` for this machine.
+/// the source that run actually lives on — `None` for this machine.
 ///
 /// `view` is how much of the transcript to bring back ([`TranscriptView`]): the chat asks for its
 /// page, folded, and everything else asks for the whole thing exactly as it always did.
@@ -1163,7 +1163,7 @@ pub async fn unqueue_from_run(
 }
 
 /// Stop one specific run, returning the fresh run history — from `node`, the row's own origin
-/// (`docs/fleet.md` §13), not necessarily this machine.
+///, not necessarily this machine.
 pub async fn stop_run(
     node: Option<&str>,
     name: String,
@@ -1352,7 +1352,7 @@ pub async fn dashboards() -> Result<DashboardsState, String> {
     get("/api/dashboards").await
 }
 
-// The apps marketplace (docs/marketplace.md). The listing reads the store; sync is the only
+// The apps marketplace. The listing reads the store; sync is the only
 // call that leaves the machine, which is why it is a button and not a poll.
 
 /// Sources and cached entries, with where each app stands on this machine.
@@ -1500,7 +1500,7 @@ pub async fn delete_dashboard(id: String) -> Result<DashboardsState, String> {
 }
 
 /// Send a dashboard to a paired node and run it there — a copy, or a move that archives the local
-/// one (`docs/fleet.md` §10). The password is the node's own; it is used for this one request and
+/// one. The password is the node's own; it is used for this one request and
 /// stored nowhere, here or on the server.
 ///
 /// Slower than every other call on this page: it uploads the dashboard's files over the mesh, so
@@ -1657,7 +1657,7 @@ pub async fn kill_workspace_terminal(id: String, name: String) -> Result<Workspa
     .await
 }
 
-// The knowledge base: scoped collections of text notes, searched by meaning (docs/knowledge.md).
+// The knowledge base: scoped collections of text notes, searched by meaning.
 
 pub async fn knowledge() -> Result<KnowledgeState, String> {
     get("/api/knowledge").await
@@ -1764,7 +1764,7 @@ pub async fn realtime_session(
 /// upload that happens while the message is still being typed, so it has to be as cheap as the
 /// picture itself and not a third larger.
 ///
-/// Routed exactly like every other agent call (`docs/fleet.md` §13): `routed_for` prefixes the
+/// Routed exactly like every other agent call: `routed_for` prefixes the
 /// request with `/api/node/<node>` for a session on another machine, and that forwarder now
 /// carries this one write with its own type and filename rather than wrapping it in JSON — so the
 /// bytes land on the machine the run is actually on, which is what attaching a file is for.
@@ -1804,7 +1804,7 @@ fn encode_header(name: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------------------
-// Which machine's agents these calls are about (`docs/fleet.md` §13)
+// Which machine's agents these calls are about
 // ---------------------------------------------------------------------------------------
 
 /// Where a call to a specific source's agent API goes: that node's forwarding prefix, or the path
@@ -1815,7 +1815,7 @@ fn encode_header(name: &str) -> String {
 /// the fleet page that named the node in the first place — is about *this* machine and its files.
 ///
 /// A pure function rather than a thread-local flipped before a request and read inside it: the
-/// sessions rail now asks several sources **concurrently** (`docs/fleet.md` §13, multi-select), and
+/// sessions rail now asks several sources **concurrently** (multi-select), and
 /// a shared "current node" set by one in-flight call would be read by another's request the moment
 /// an `.await` interleaved them. Every caller that needs a node now says so at the call, in
 /// [`get_on`]/[`post_on`] — and in [`crate::live::Sub::get_on`]/[`Sub::post_on`] for the reads the
@@ -1828,7 +1828,7 @@ pub(crate) fn routed_for(node: Option<&str>, path: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------------------
-// The panel-wide source picker (`docs/fleet.md` §14)
+// The panel-wide source picker
 // ---------------------------------------------------------------------------------------
 
 thread_local! {
@@ -1850,15 +1850,15 @@ thread_local! {
 /// this only by moving that signal, never by calling this directly, which is what keeps "where is
 /// the panel pointed" one fact rather than two that could disagree. [`get_on`]/[`post_on`] and
 /// [`routed_for`] never consult this at all: an explicit source still means exactly what it names,
-/// whatever the picker is doing (`docs/fleet.md` §14's bare-vs-explicit rule, which is §13's K3
-/// invariant kept rather than layered under a second routing rule).
+/// whatever the picker is doing (the bare-vs-explicit rule: the `routed_for` invariant
+/// kept rather than layered under a second routing rule).
 pub(crate) fn set_panel_source(node: Option<String>) {
     PANEL_SOURCE.with(|slot| *slot.borrow_mut() = node);
 }
 
 /// The picker's current target, for a caller outside this file that needs to *name* it rather than
 /// route through it — a destructive confirmation and the flash that follows a write both read this
-/// (`crate::ui::confirm`/`apply_mutation`, `docs/fleet.md` §14/ADI-MONO-89), so an operator sees
+/// (`crate::ui::confirm`/`apply_mutation`), so an operator sees
 /// which node a bare mutation is about to reach before and after it happens, not only in the
 /// titlebar. Everything inside this file keeps calling the private [`get`]/[`post`], which reach the
 /// same thread-local through [`routed_for`] rather than through this accessor.
@@ -1867,7 +1867,7 @@ pub(crate) fn panel_source() -> Option<String> {
 }
 
 /// The ordinary bare `GET` a page makes when it isn't naming a source of its own — follows the
-/// picker (`docs/fleet.md` §14). [`get_local`] is the same call without that, for the handful of
+/// picker. [`get_local`] is the same call without that, for the handful of
 /// endpoints §14 lists as always local.
 async fn get<T: DeserializeOwned>(url: &str) -> Result<T, String> {
     get_at(&routed_for(panel_source().as_deref(), url)).await
@@ -1875,7 +1875,7 @@ async fn get<T: DeserializeOwned>(url: &str) -> Result<T, String> {
 
 /// [`get`], but never following the picker: `/api/health` and the status LED, `/api/fleet` and
 /// `/api/fleet/*` (including the picker's own list), `/api/mesh*`, and the update/version pill
-/// (`docs/fleet.md` §14) all call this instead.
+/// all call this instead.
 async fn get_local<T: DeserializeOwned>(url: &str) -> Result<T, String> {
     get_at(url).await
 }

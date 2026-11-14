@@ -1,4 +1,4 @@
-//! Basic authentication — the node-side HTTP gate (`docs/fleet.md` §5, checklist C3).
+//! Basic authentication — the node-side HTTP gate.
 //!
 //! The mesh grant is **machine**-scoped: once your laptop is paired, every process on it can
 //! reach the node through your front door, and so can anyone else sitting at that laptop. The
@@ -100,8 +100,8 @@ const CHALLENGE_BODY: &str = "401 Unauthorized: this adi node requires a usernam
 
 /// One stored username/password pair for a node, as it sits in a config file.
 ///
-/// Serde-serializable so another module can embed it (`docs/fleet.md` B2 stores these per
-/// registry entry). `salt` and `digest` are base64 so the whole thing survives a TOML round
+/// Serde-serializable so another module can embed it (the fleet registry
+/// stores these per entry). `salt` and `digest` are base64 so the whole thing survives a TOML round
 /// trip as plain strings:
 ///
 /// ```toml
@@ -129,7 +129,7 @@ impl Credential {
     /// Never in practice: it panics only if the OS random source is unavailable, which is not
     /// a condition a node can meaningfully continue past.
     ///
-    /// Note on the primitive: this is a salted SHA-256, as `docs/fleet.md` §5 specifies. It
+    /// Note on the primitive: this is a salted SHA-256, as specified for the node gate. It
     /// defends the *stored* form against rainbow tables and cross-node reuse; it is fast by
     /// design and therefore does not stretch a weak password against an offline cracker who
     /// has stolen the config. Argon2/scrypt is the upgrade path if that threat is ever in

@@ -1,5 +1,4 @@
-//! A user's own BYO-credentials scope, and the server's policy over the whole feature
-//! (`docs/byo-credentials.md` §4, §7, ADI-MONO-178 P1.11).
+//! A user's own BYO-credentials scope, and the server's policy over the whole feature.
 //!
 //! ```text
 //! GET  /api/secrets/mine            → { names, missing }         — never a value
@@ -9,8 +8,8 @@
 //! POST /api/secrets/policy          → the server's `[user_secrets]` — admin-only
 //! ```
 //!
-//! `user` throughout is the caller's mesh user scope (`adi_mesh`'s `user_scope`,
-//! `docs/byo-credentials.md` §3.2) — computed by the router from the gateway's identity headers
+//! `user` throughout is the caller's mesh user scope (`adi_mesh`'s `user_scope`)
+//! — computed by the router from the gateway's identity headers
 //! alone, never from a request body. There is no `user` field on any request type here for
 //! exactly that reason.
 
@@ -83,7 +82,7 @@ pub fn secrets_mine(store: &Secrets, user: Option<&str>) -> Response {
 }
 
 /// `POST /api/secrets/mine/set` — store a value already sealed on the caller's own device
-/// (`docs/byo-credentials.md` §7, §8, ADI-MONO-180 P2.1). The checks run in the order the spec
+///. The checks run in the order the spec
 /// states them, so the *reason* for a refusal is always the first one that actually applies: a
 /// caller with no user scope, a disabled policy, a name outside `overridable`, and finally a
 /// request with no wrap at all (`wraps` must carry exactly the one device wrap v1 supports,
@@ -171,7 +170,7 @@ pub fn secrets_policy(store: &Secrets) -> Response {
 }
 
 /// `POST /api/secrets/policy` — replace the server's `[user_secrets]`. Admin-only (the member
-/// gate's list, `docs/byo-credentials.md` §4.1).
+/// gate's list).
 #[must_use]
 pub fn set_secrets_policy(store: &Secrets, body: &[u8]) -> Response {
     let req = require!(body, SetSecretsPolicy);
@@ -439,7 +438,7 @@ mod tests {
     }
 
     /// Writes a manifest file directly where `list_mine`/`remove_mine` expect to find one, in the
-    /// on-disk shape `docs/byo-credentials.md` §8 documents — `Secrets` has no public way to
+    /// on-disk shape the store uses — `Secrets` has no public way to
     /// *write* a value into a user's scope yet (§7: phase 1 refuses `set --user` everywhere), and
     /// `list_mine` never decrypts, so a placeholder `nonce`/`ciphertext` is enough to prove
     /// listing and removal act on what is actually on disk.

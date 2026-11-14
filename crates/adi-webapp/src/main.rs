@@ -255,7 +255,7 @@ fn Home() -> impl IntoView {
             }
             // Every agent's sessions in one round-trip — what the rail lists under "Other agents"
             // — cut to this machine's own page, and to what the main list may draw (a hidden run
-            // stays out server-side, `docs/sessions.md`). Read untracked because this runs inside a
+            // stays out server-side). Read untracked because this runs inside a
             // task rather than an effect: what re-reads it when Load more moves is the subscription
             // below, which is what asks in the ordinary case anyway.
             let limit = Some(state::source_limit_untracked(state, None));
@@ -315,7 +315,7 @@ fn Home() -> impl IntoView {
     // What the chat home watches: the open conversation, plus the rails around it. The same lists
     // `refresh` fetches, arriving only when they change instead of every four seconds.
     Effect::new(move |_| {
-        // Which sources the rail is merging, read *tracked* (`docs/fleet.md` §13, multi-select):
+        // Which sources the rail is merging, read *tracked* (multi-select):
         // ticking a node on or off has to add or drop its own subscriptions below, and
         // `chat_subscriptions` reads `watch.node` tracked for the same reason on the open
         // conversation's own watches.
@@ -382,7 +382,7 @@ fn Home() -> impl IntoView {
         // rail, which groups by project and so needs the project names.
         //
         // Only this machine's own page, and only what the main list may draw — a hidden run stays
-        // out server-side (`docs/sessions.md`).
+        // out server-side.
         subs.push(live::Sub::get(
             fetch::all_visible_runs_path(local_limit, filter, &group),
             move |c: adi_webapp_api::types::AllAgentRuns| {
@@ -406,7 +406,7 @@ fn Home() -> impl IntoView {
         }));
         // One pair of subs per selected node — its own `/api/agents` (pty liveness, the ★ filter)
         // and its own `/api/agents/runs/all` (the rows themselves) — so the rail's per-source merge
-        // (`docs/fleet.md` §13, multi-select) updates live rather than only on the 4s fallback poll.
+        // (multi-select) updates live rather than only on the 4s fallback poll.
         // Floored to `SLOW` on the server regardless (`adi-app`'s `live::watchable`), same as every
         // other forwarded read.
         for node in &nodes {
@@ -958,7 +958,7 @@ fn App() -> impl IntoView {
         mesh,
         fleet,
         // Seeded from storage, unlike the sessions rail's fields below: this is the one shell that
-        // has a picker at all, so this is the one place `docs/fleet.md` §14's persisted pointer is
+        // has a picker at all, so this is the one place the picker's persisted pointer is
         // read back into a signal (`state::load_panel_source`).
         panel_source: RwSignal::new(state::load_panel_source()),
         panel_source_menu: RwSignal::new(None),
@@ -1150,7 +1150,7 @@ fn App() -> impl IntoView {
     // nothing on it rides the shell's 4s poll.
     let embeddings_console = EmbeddingsConsole::new();
 
-    // The Channels page's own console — page-local for the same reason (`docs/channels.md` §7):
+    // The Channels page's own console — page-local for the same reason:
     // no live-channel subscription for `/api/channels*`.
     let channels_console = ChannelsConsole::new();
 
@@ -1255,7 +1255,7 @@ fn App() -> impl IntoView {
     // every table renders as "Loading…" for as long as the tab is open.
     live::on_read_result(move |path, why| state::note_read(state, path, why));
 
-    // Mirror the panel-wide source picker into `fetch`'s own pointer (`docs/fleet.md` §14) — the
+    // Mirror the panel-wide source picker into `fetch`'s own pointer — the
     // one place `State::panel_source` is read back, per that field's own doc comment. Every bare
     // `fetch::get`/`fetch::post` a page makes from here on reads this thread-local rather than the
     // signal directly, which is what lets an ordinary mutation deep in a page module follow the
@@ -1447,7 +1447,7 @@ fn App() -> impl IntoView {
     });
 
     view! {
-        // `--remote` while the panel-wide source picker (`docs/fleet.md` §14) points at a paired
+        // `--remote` while the panel-wide source picker points at a paired
         // node — the frame's own hairlines say so (amber, never the update pill's accent orange)
         // so a reader who never looks at the picker's own button still reads it off the chrome
         // (ADI-MONO-90).
@@ -1464,7 +1464,7 @@ fn App() -> impl IntoView {
             {move || crumbs(route.get(), state.current_project.get())}
             <span class="adi-spacer"></span>
             // Which machine every ordinary read and write on this panel is pointed at
-            // (`docs/fleet.md` §14) — ahead of the way out and the version pill, since it governs
+            // — ahead of the way out and the version pill, since it governs
             // what every page beyond this bar is actually showing.
             {panel_source_picker(state)}
             // The way back out of the control panel. A plain link, since `/` is a different
@@ -1592,7 +1592,7 @@ fn App() -> impl IntoView {
                     <span class="adi-status__uptime">{fmt_uptime(h.uptime_secs)}</span>
                 })}
             </span>
-            // Which machine every ordinary read and write is pointed at (`docs/fleet.md` §14) —
+            // Which machine every ordinary read and write is pointed at —
             // carried here the way a forwarded rail row carries its own source (§13's K6), so it
             // reaches a reader's eye without having to check the titlebar first (ADI-MONO-90).
             {move || state.panel_source.get().map(|node| {
@@ -1629,7 +1629,7 @@ fn App() -> impl IntoView {
     }
 }
 
-/// The panel-wide source picker (`docs/fleet.md` §14): which paired node, or this machine, every
+/// The panel-wide source picker: which paired node, or this machine, every
 /// ordinary read and write on the workbench is pointed at. One radio rather than the sessions
 /// rail's checklist (§13, `chat_session_node`) — the workbench keeps exactly one address in mind,
 /// never a merge — and [`state::set_panel_source`] is the only thing that moves it.
@@ -1681,7 +1681,7 @@ fn open_panel_source_menu(state: State, ev: &web_sys::MouseEvent) {
     state.panel_source_menu.set(Some(at));
 }
 
-/// The picker's menu: this machine, then every paired node, one radio (`docs/fleet.md` §14) —
+/// The picker's menu: this machine, then every paired node, one radio —
 /// unlike the sessions rail's checklist (`pages/agents/actions.rs`, `chat_node_menu`), which merges
 /// several sources at once, this points at exactly one, so choosing a node un-chooses whatever was
 /// chosen before.

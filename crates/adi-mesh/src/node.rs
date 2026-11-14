@@ -1,4 +1,4 @@
-//! What this machine knows about **itself** as a node (`docs/fleet.md` §2).
+//! What this machine knows about **itself** as a node.
 //!
 //! The [fleet registry](crate::fleet) is the other half of §2: it holds what this machine knows
 //! about *everyone else*. The one thing missing from it is the one thing a registry cannot hold —
@@ -9,7 +9,7 @@
 //! Two callers need it, and they must never disagree:
 //!
 //! * the [join handshake](crate::join) sends it as the name being offered, and
-//! * the gateway challenges with it as the Basic-auth realm (`docs/fleet.md` §5) — the string a
+//! * the gateway challenges with it as the Basic-auth realm — the string a
 //!   human reads in the browser's password prompt.
 //!
 //! Before this file existed the second one had no name to use and fell back to `adi node <short

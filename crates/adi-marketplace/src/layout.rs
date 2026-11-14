@@ -1,6 +1,6 @@
 //! Reading a bundle repository's tree: what is really there, at the pinned commit, regardless of
-//! what the manifest's advisory `elements[]` preview claims (`docs/marketplace-bundles.md`
-//! decision #2). This is what a bundle installer dispatches on — nothing here lands a file, it
+//! what the manifest's advisory `elements[]` preview claims.
+//! This is what a bundle installer dispatches on — nothing here lands a file, it
 //! only looks.
 //!
 //! A repository is laid out by kind, one top-level directory per kind that applies, all optional:
@@ -28,7 +28,7 @@
 //! a compiled binary's magic number anywhere under a kind directory refuses the whole bundle. It
 //! belongs beside `install::stage`'s existing `NotAnApp` check, in whatever pipeline a bundle
 //! installer builds alongside it — the same place in spirit, new code because `stage` itself does
-//! not generalize (`docs/marketplace-bundles.md`, "What v1's code assumes this design changes").
+//! not generalize.
 
 use std::fs;
 use std::io::Read as _;
@@ -200,7 +200,7 @@ fn magic_name(head: &[u8]) -> Option<&'static str> {
 
 /// Refuse `root` if it carries Rust — source or a compiled binary — anywhere under one of the
 /// eight kind directories: a `Cargo.toml`, a `.rs` file, or a file opening with an ELF, Mach-O or
-/// PE magic number ("No Rust in an item", `docs/marketplace-bundles.md`).
+/// PE magic number ("No Rust in an item").
 ///
 /// A publishing-time content rule, not a sandbox: it catches what is checked in, not what a
 /// tool's script or a hive service's `runner.docker` image might do at runtime — see the design
