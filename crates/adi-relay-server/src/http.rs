@@ -46,11 +46,16 @@ impl Request {
 }
 
 /// Read one request, enforcing `max_body_bytes` on the body (the mode's own limit, §6/§9 — not
-/// a fixed constant, since public and enterprise instances disagree on it). `Ok(None)` means the
-/// peer closed while idle.
+/// a fixed constant, since public and enterprise instances disagree on it). `Ok(None)` means
+/// either the peer closed while idle, or (§5.1's own `413 payload_too_large`) the body declared
+/// by `Content-Length` was over the limit — answered inline here, before the body is even read,
+/// rather than left to the caller: the alternative (bailing with an `Err` and leaving the
+/// connection to just close) is indistinguishable from a crash to the client, and over a reverse
+/// proxy (Caddy in front of this in every deployment, §9) surfaces as a bare `502`, never the
+/// `413` the wire contract promises.
 ///
 /// # Errors
-/// I/O, timeout, an oversized head, a body over `max_body_bytes`, or a connection closed mid-head.
+/// I/O, a timeout, an oversized head, or a connection closed mid-head.
 pub async fn read_request(stream: &mut TcpStream, max_body_bytes: u64) -> anyhow::Result<Option<Request>> {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 2048];
@@ -75,10 +80,10 @@ pub async fn read_request(stream: &mut TcpStream, max_body_bytes: u64) -> anyhow
         .get("content-length")
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(0);
-    anyhow::ensure!(
-        content_length <= max_body_bytes,
-        "request body of {content_length} bytes is over the {max_body_bytes}-byte limit"
-    );
+    if content_length > max_body_bytes {
+        write_json(stream, 413, r#"{"error":"payload_too_large","message":"request is over this relay's body limit"}"#).await?;
+        return Ok(None);
+    }
     #[allow(clippy::cast_possible_truncation)]
     let content_length = content_length as usize;
     let body_start = head_end + 4; // past the "\r\n\r\n"
@@ -186,6 +191,38 @@ fn reason_phrase(status: u16) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::net::TcpListener;
+
+    /// The bug this guards against: before this, an over-limit `Content-Length` made
+    /// `read_request` `bail!`, which `main.rs::handle` propagated as a plain connection close —
+    /// no response at all, which a reverse proxy in front (Caddy, in every real deployment)
+    /// turns into a bare `502`, not the `413 payload_too_large` §5.1 promises. Found deploying
+    /// ADI-MONO-224's live instances and reproduced here against a real socket, the same way the
+    /// relay actually receives a request.
+    #[tokio::test]
+    async fn an_over_limit_content_length_answers_413_over_the_wire_instead_of_just_closing() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            read_request(&mut stream, 10).await
+        });
+
+        let mut client = TcpStream::connect(addr).await.expect("connect");
+        client
+            .write_all(b"POST /h/wh_x HTTP/1.1\r\nContent-Length: 11\r\n\r\nhello world")
+            .await
+            .expect("write");
+
+        let mut response = Vec::new();
+        client.read_to_end(&mut response).await.expect("read");
+        let text = String::from_utf8_lossy(&response);
+        assert!(text.starts_with("HTTP/1.1 413 Payload Too Large"), "got: {text}");
+        assert!(text.contains("payload_too_large"), "got: {text}");
+
+        // The server side sees this as "nothing more to do" (it already answered), not an error.
+        assert!(matches!(server.await.expect("task"), Ok(None)));
+    }
 
     #[test]
     fn parses_method_path_and_headers() {
