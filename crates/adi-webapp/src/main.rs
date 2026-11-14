@@ -1453,7 +1453,7 @@ fn App() -> impl IntoView {
         // (ADI-MONO-90).
         <div class="adi-workbench" class:adi-workbench--remote=move || state.panel_source.get().is_some()>
         // The frame's lid: identity on the left, where you are next to it, and the ways out
-        // on the right (design/examples/setup-agents-fleet.html, `.bar`).
+        // on the right.
         <header class="adi-titlebar">
             // The mark is the way home: `/` is the chat, and the control panel is the room
             // you stepped into from it.

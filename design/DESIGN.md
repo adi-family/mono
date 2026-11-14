@@ -1,17 +1,12 @@
 # ADI design system
 
-This document is complete on its own. If you are an agent asked to build or change any ADI UI — app screen, landing section, docs page — read this file fully before writing a line, then read `tokens.css` and open one of the `examples/`. Do not "improve" the system; apply it. When something here conflicts with your instinct, this file wins.
+This document is complete on its own. If you are an agent asked to build or change any ADI UI — app screen, landing section, docs page — read this file fully before writing a line, then read `tokens.css`. Do not "improve" the system; apply it. When something here conflicts with your instinct, this file wins.
 
 Files in this folder:
 
 - `DESIGN.md` — this file: logic, rules, how to make decisions.
 - `tokens.css` — every color, font, radius, spacing value as CSS variables. Import it. Never hardcode a hex.
 - `elements/` — this document as custom elements: `<adi-button>`, `<adi-table>`, `<adi-status>`. TypeScript, no runtime framework — each `.ts` file is stripped to one `.js` file by `scripts/elements.sh`. Its gallery is a page of the control panel, `/extended/ui`.
-- `reference/design-system.html` — the visual brandbook: tokens, type scale, components rendered live.
-- `examples/chat.html` — the main session screen (3 panels, transcript). The canonical example.
-- `examples/setup-agents-fleet.html` — a form, a table page, a settings page. Three pages, one switcher at top (switcher is for review only).
-- `examples/landing-hero-concepts.html` — five landing hero layouts. Light mode.
-- `examples/landing.html` — the full withadi.dev landing in the system.
 
 ---
 
@@ -119,7 +114,7 @@ Spacing scale: 4, 8, 12, 16, 24, 32, 48, 64, 96. Nothing else.
 
 Radius: `--r-sm` 4 (inline code, seg-control items) · `--r` 6 (buttons, inputs, list items — default) · `--r-lg` 10 (cards, code blocks) · pill (tags, chips, status). Panels: none.
 
-App shell (`examples/chat.html`, `examples/setup-agents-fleet.html`):
+App shell:
 ```
 grid-template-rows:    48px (top bar) · 1fr · 28px (status bar)
 grid-template-columns: 248–272px (left) · 1fr · 316px (right, if present)
@@ -132,7 +127,7 @@ Landing: one container of 1200px. Nav, hero, and every section share the same le
 
 ## 6. Components
 
-Copy the CSS from the examples; the specs are here so you can build one from scratch and get the same result.
+The specs are here so you can build one from scratch and get the same result; `elements/` already implements most of them.
 
 **Button** — `padding 7px 14px; radius 6; font 13.5px/500`.
 - `.primary`: `--accent` fill, white text. One per screen.
@@ -261,7 +256,7 @@ Landing: 20px, `--ink-2`, stroke 1.5, in feature block headings and the store gr
 
 ## 10. The mark
 
-Three hexagons, one in front (`reference/design-system.html` has the SVG). Monochrome by default: `currentColor` with the back shapes at 52% and 74% opacity. Colored version (grey / orange / ink) only for the app icon and the landing. Minimum 16px. In the top bar: 18px, next to the wordmark `adi` in 15px/600. No glow, no shadow, no gradient, no animation. It is not a mascot.
+Three hexagons, one in front (`crates/adi-webapp/assets/mark.svg` is the colored build). Monochrome by default: `currentColor` with the back shapes at 52% and 74% opacity. Colored version (grey / orange / ink) only for the app icon and the landing. Minimum 16px. In the top bar: 18px, next to the wordmark `adi` in 15px/600. No glow, no shadow, no gradient, no animation. It is not a mascot.
 
 ---
 

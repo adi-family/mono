@@ -49,7 +49,7 @@ export default defineConfig({
 				MobileTableOfContents: './src/components/toc/MobileTableOfContents.astro',
 			},
 			head: [
-				// Geist / Geist Mono, loaded the same way design/examples/landing.html does.
+				// Geist / Geist Mono from Google Fonts.
 				{ tag: 'link', attrs: { rel: 'preconnect', href: 'https://fonts.googleapis.com' } },
 				{
 					tag: 'link',

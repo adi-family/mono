@@ -1,7 +1,7 @@
 /* ADI design system, applied to Starlight's own theming hooks — see design/DESIGN.md and
    design/tokens.css at the repo root. This app has no build-time access to that shared
-   stylesheet, so the dark-mode values below are copied from it the same way
-   design/examples/landing.html does; change tokens.css and mirror the change here.
+   stylesheet, so the dark-mode values below are copied from it; change tokens.css
+   and mirror the change here.
 
    Docs are dark, matching the app (DESIGN.md §3: light mode is for the landing only) — the
    toggle is removed via the ThemeSelect/ThemeProvider component overrides, and the values here

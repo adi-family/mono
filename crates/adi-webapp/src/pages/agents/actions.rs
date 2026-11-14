@@ -3804,7 +3804,7 @@ fn right_rail_title(watch: AgentsWatch) -> &'static str {
 }
 
 /// The right column while a conversation is open: what it is, what it has come to, and the two
-/// things that can be asked of it — three sections under hairlines (design/examples/chat.html).
+/// things that can be asked of it — three sections under hairlines.
 fn chat_conversation_panel(state: State, watch: AgentsWatch) -> AnyView {
     view! {
         <div class="adi-chat__panel">

@@ -6,8 +6,6 @@
 | --- | --- |
 | The rules — principles, colour, type, space, components, icons, the mark, the checklist | [`design/DESIGN.md`](../design/DESIGN.md) |
 | The values — every colour, face, radius and spacing, as CSS custom properties | [`design/tokens.css`](../design/tokens.css) |
-| The brandbook, rendered live | [`design/reference/design-system.html`](../design/reference/design-system.html) |
-| Worked examples: the chat screen, a form, a table page, a settings page, the landing | [`design/examples/`](../design/examples) |
 | The system as custom elements — `<adi-button>`, `<adi-table>`, the rest | [`design/elements/`](../design/elements) |
 
 Read `DESIGN.md` fully before building or changing any adi UI, then apply it. It carries a prompt
