@@ -2,14 +2,15 @@
 
 # `adi-relay` — types
 
-> Client half of the webhook relay (ADI-MONO-220/222): a node's own ed25519 signing key and X25519 sealing key, request signing against the relay's wire contract, sealed-box open/seal, and OpenSSH rendering/parsing of the public signing key. Used by adi-app (the poller) and adi-cli (the node side, ADI-MONO-223) as well as by adi-relay-server (verification and sealing, never a node's own keys).
+> Client half of the webhook relay (ADI-MONO-220/222/227): a node's own ed25519 signing key and X25519 sealing key, request signing against the relay's wire contract, sealed-box open/seal, OpenSSH rendering/parsing of the public signing key, and the register/deregister HTTP calls a trigger save or delete makes (register module). Used by adi-app (the poller, the panel's save) and adi-cli (the node side, ADI-MONO-223, and `triggers save`'s own save) as well as by adi-relay-server (verification and sealing, never a node's own keys or the register module's HTTP calls).
 
-5 structs · 2 enums across 4 files.
+6 structs · 4 enums across 5 files.
 
 ## Index
 
 - [`src/keys.rs`](#srckeysrs) — `RelayIdentity`
 - [`src/openssh.rs`](#srcopensshrs) — `ParseError`, `Fingerprint`
+- [`src/register.rs`](#srcregisterrs) — `Registered`, `Cleanup`, `Plan`
 - [`src/seal.rs`](#srcsealrs) — `Sealed`, `OpenError`
 - [`src/sign.rs`](#srcsignrs) — `SignedRequest`, `VerifyError`
 
@@ -55,6 +56,51 @@ A stable identifier for a public key, independent of how many times it's transmi
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Fingerprint(String);
+```
+
+---
+
+## `src/register.rs`
+
+### struct `Registered`
+
+What `register` persists into the trigger's own `extra`. `url` (`register`'s own echo of the public sender-facing URL) isn't kept here — see `public_url`, which reconstructs it the same way the relay built it, from `relay` + `relay_endpoint`, so there's no fourth `extra` key for it — only `relay`, `relay_retention`, and `relay_endpoint`.
+
+```rust
+#[derive(Debug, Clone)]
+pub struct Registered {
+    pub endpoint_id: String,
+}
+```
+
+### enum `Cleanup`
+
+How `register_on_save` should run a best-effort relay delete — the two shapes its two real callers need, and the reason there are two: a bare `tokio::spawn` of an async block that is never awaited is **not** reliably seen through by a `tokio::Runtime` dropped right after, as the obvious fix once looked like it should be — confirmed by hand (a task spawned just before `block_on` returns, sleeping 200ms, left no trace of having run at all once the temporary `Runtime` `Builder::new_multi_thread()...build()` produces was dropped). A `Runtime::drop` only waits out tasks already making progress on a worker, not one that never got polled.
+
+```rust
+#[derive(Debug, Clone, Copy)]
+pub enum Cleanup {
+    Spawn,
+    Await,
+}
+```
+
+### enum `Plan`
+
+Whether, and how, a save needs to touch the relay before anything is persisted. Operates on the manifest's `extra` map directly (not `adi_triggers::Trigger`/`TriggerManifest`) so this crate never has to depend on the trigger-store crate for it.
+
+```rust
+#[derive(Debug)]
+pub enum Plan {
+    Unchanged,
+    Register {
+        url: String,
+    },
+    Deregister {
+        url: String,
+        endpoint_id: String,
+    },
+}
 ```
 
 ---

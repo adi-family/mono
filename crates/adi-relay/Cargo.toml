@@ -1,6 +1,6 @@
 [package]
 name = "adi-relay"
-description = "Client half of the webhook relay (ADI-MONO-220/222): a node's own ed25519 signing key and X25519 sealing key, request signing against the relay's wire contract, sealed-box open/seal, and OpenSSH rendering/parsing of the public signing key. Used by adi-app (the poller) and adi-cli (the node side, ADI-MONO-223) as well as by adi-relay-server (verification and sealing, never a node's own keys)."
+description = "Client half of the webhook relay (ADI-MONO-220/222/227): a node's own ed25519 signing key and X25519 sealing key, request signing against the relay's wire contract, sealed-box open/seal, OpenSSH rendering/parsing of the public signing key, and the register/deregister HTTP calls a trigger save or delete makes (register module). Used by adi-app (the poller, the panel's save) and adi-cli (the node side, ADI-MONO-223, and `triggers save`'s own save) as well as by adi-relay-server (verification and sealing, never a node's own keys or the register module's HTTP calls)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -26,6 +26,18 @@ base64 = { workspace = true }
 rand = { workspace = true }
 anyhow = { workspace = true }
 hex = { workspace = true }
+
+# The register module's own HTTP calls against a relay — reqwest is built workspace-wide with
+# `rustls-no-provider`, so `register::http_client` installs the provider itself (idempotent); see
+# its own doc comment.
+reqwest = { workspace = true }
+rustls = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["rt"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "macros", "io-util"] }
 
 [lints]
 workspace = true

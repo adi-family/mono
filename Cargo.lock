@@ -544,7 +544,12 @@ dependencies = [
  "hex",
  "hkdf",
  "rand 0.10.2",
+ "reqwest",
+ "rustls",
+ "serde_json",
  "sha2 0.11.0",
+ "tokio",
+ "tracing",
  "x25519-dalek",
  "zeroize",
 ]

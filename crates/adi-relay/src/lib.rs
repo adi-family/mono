@@ -16,9 +16,15 @@
 //!   it: `sign` (the node) and `verify` (the relay).
 //! * [`seal`] — the sealed-box envelope at rest: `seal` (the relay, to a node's long-lived
 //!   public key) and `open` (the node, with its own secret).
+//! * [`register`] — the node side's own HTTP calls against a relay (`register`,
+//!   `spawn_delete_best_effort`) and the `relay`/`relay_endpoint` bookkeeping
+//!   ([`register::plan`], [`register::register_on_save`]) a trigger save or delete makes against
+//!   them, shared by `adi-app`'s `/api/triggers/save` handler and `adi-mono triggers save`
+//!   (ADI-MONO-227) — one implementation, not a copy.
 
 pub mod keys;
 pub mod openssh;
+pub mod register;
 pub mod seal;
 pub mod sign;
 

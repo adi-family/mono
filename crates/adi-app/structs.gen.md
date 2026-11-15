@@ -4,7 +4,7 @@
 
 > The adi app: a Rust HTTP backend serving a control-panel SPA at / and a JSON API at /api, fronted by adi-hive at app.adi.
 
-30 structs · 2 enums · 2 type aliases across 11 files.
+29 structs · 1 enum · 2 type aliases across 11 files.
 
 ## Index
 
@@ -14,7 +14,7 @@
 - [`src/main.rs`](#srcmainrs) — `App`, `MeshCtl`, `Reads`, `EmbeddedHit`
 - [`src/node.rs`](#srcnoders) — `CallError`, `Payload`
 - [`src/primary_ui.rs`](#srcprimary_uirs) — `PrimaryUi`, `Asset`
-- [`src/relay.rs`](#srcrelayrs) — `Registered`, `PulledRecord`, `SenderRequest`, `Plan`
+- [`src/relay.rs`](#srcrelayrs) — `PulledRecord`, `SenderRequest`
 - [`src/scan.rs`](#srcscanrs) — `Proc`, `ProcessTable`
 - [`src/shared_assets.rs`](#srcshared_assetsrs) — `SharedAssets`
 - [`src/viewer.rs`](#srcviewerrs) — `Credential`, `Credentials`, `HeldCredentials`
@@ -311,17 +311,6 @@ pub(crate) struct Asset {
 
 ## `src/relay.rs`
 
-### struct `Registered`
-
-What `register` persists into the trigger's own `extra`. `url` (`register`'s own echo of the public sender-facing URL) isn't kept here — the panel/CLI reconstruct it the same way the relay built it, `{relay_url}/h/{endpoint_id}`, from `relay` + `relay_endpoint`, so there's no fourth `extra` key for it — only `relay`, `relay_retention`, and `relay_endpoint`.
-
-```rust
-#[derive(Debug, Clone)]
-pub struct Registered {
-    pub endpoint_id: String,
-}
-```
-
 ### struct `PulledRecord`
 
 One record off `GET /v1/pull`, decoded from the wire.
@@ -346,23 +335,6 @@ struct SenderRequest {
     headers: HashMap<String, String>,
     query: String,
     body_b64: String,
-}
-```
-
-### enum `Plan`
-
-Whether, and how, a save needs to touch the relay before anything is persisted.
-
-```rust
-enum Plan {
-    Unchanged,
-    Register {
-        url: String,
-    },
-    Deregister {
-        url: String,
-        endpoint_id: String,
-    },
 }
 ```
 

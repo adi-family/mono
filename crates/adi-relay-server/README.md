@@ -66,6 +66,14 @@ The public signing key renders as a one-line OpenSSH public key, `ssh-ed25519 AA
 a self-host operator already knows from `~/.ssh/authorized_keys`. `adi-mono triggers relay-key`
 prints it.
 
+Naming a relay on a webhook trigger's `relay` setting — `adi-mono triggers save <name> --kind
+webhook --extra relay=public-eu` (`public-eu` | `public-us` | `enterprise-eu` | `enterprise-us` |
+`custom:<url>`), or the panel's own trigger editor — registers `POST /v1/endpoints` for it before
+the save lands: a failed registration fails the save with the relay's own reason, never leaving a
+trigger half-configured with a `relay` nobody answered for. Both callers share one
+implementation, `adi_relay::register` (ADI-MONO-227); the CLI prints the resulting `/h/<id>` URL.
+Changing or clearing `relay` on a later save best-effort deletes the endpoint it replaced.
+
 **No key rotation in v1.** The public key *is* the identity; there is no account to rotate a key
 within. Rotating means a fresh pair and fresh endpoints — every sender has to be given a new URL.
 
