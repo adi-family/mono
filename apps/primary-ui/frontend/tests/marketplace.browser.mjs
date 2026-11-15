@@ -154,7 +154,7 @@ try {
     assert.match(color, /^oklch\(/);
   }
   async function settingsLink() {
-    assert.equal(await evaluate(`${q('[data-slot="global-navigation"] a[aria-label="Settings"]')}?.href`), `${origin}/extended/settings`);
+    assert.equal(await evaluate(`${q('[data-slot="global-navigation"] a[aria-label="Settings"]')}?.href`), `${origin}/settings`);
   }
 
   await Promise.all([send("Runtime.enable"), send("Page.enable"), send("Log.enable"), send("Network.enable")]);

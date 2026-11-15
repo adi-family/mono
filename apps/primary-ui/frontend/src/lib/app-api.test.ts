@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { APP_API_BASE, IS_PRIMARY_APP, appApiBase, appHref } from "./app-api";
 import { appConversationHref, conversationHref } from "./app-chat-transcript";
 import { attachmentUrl, getAgents, getFleetNodes, getVoice, transcribeAudio, uploadImage } from "./app-chat";
-import { getFleetMachines, getLocalApps, lockMachine, unlockMachine } from "./home-apps";
+import { getFleetMachines, getLocalApps } from "./home-apps";
 
 // Run once without overrides and once with VITE_APP_API_BASE=/api to exercise both hosts.
 const expectedBase = process.env.VITE_APP_API_BASE?.replace(/\/+$/, "") || "/api/app";
@@ -29,7 +29,7 @@ test("settings and conversation links stay on the primary panel's origin", () =>
     : "http://app.adi/chat/@laptop-b/reviewer%20%26%20writer/run%2Fone%3Fx%3Dy");
 });
 
-test("catalog, access, chat, image, and voice entry points share the configured API", async (context) => {
+test("catalog, chat, image, and voice entry points share the configured API", async (context) => {
   const originalFetch = globalThis.fetch;
   context.after(() => { globalThis.fetch = originalFetch; });
   const calls: string[] = [];
@@ -43,15 +43,13 @@ test("catalog, access, chat, image, and voice entry points share the configured 
   await getFleetNodes();
   await getLocalApps();
   await getFleetMachines();
-  await unlockMachine("laptop-b", "adi", "fixture-password");
-  await lockMachine("laptop-b");
   await getVoice();
   await transcribeAudio(new Blob(["fixture"], { type: "audio/webm" }), "openai");
   await uploadImage(new File(["fixture"], "image.png", { type: "image/png" }), "laptop-b");
 
   assert.deepEqual(calls, [
     "/agents", "/node/laptop-b/api/agents", "/fleet/nodes", "/dashboards", "/fleet/dashboards",
-    "/fleet/dashboards/unlock", "/fleet/dashboards/forget", "/voice", "/voice/transcribe?engine=openai",
+    "/voice", "/voice/transcribe?engine=openai",
     "/node/laptop-b/api/agents/attachment",
   ].map((path) => `${expectedBase}${path}`));
   assert.equal(attachmentUrl("image/one", "laptop-b"), `${expectedBase}/node/laptop-b/api/agents/attachment/image%2Fone`);

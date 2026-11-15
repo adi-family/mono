@@ -18,6 +18,8 @@ const Marketplace = lazy(() => import("./pages/Marketplace").then((module) => ({
 
 const MarketplacePackage = lazy(() => import("./pages/MarketplacePackage").then((module) => ({ default: module.MarketplacePackage })));
 
+const Settings = lazy(() => import("./pages/Settings").then((module) => ({ default: module.Settings })));
+
 function HomeEntry() {
   const { key } = useLocation();
   // A fresh mobile visit starts with the inbox; Home remains reachable from the tabs.
@@ -48,6 +50,8 @@ export default function App() {
             <Route path="/" element={<HomeEntry />} />
             <Route path="/marketplace" element={<Marketplace />} />
             <Route path="/marketplace/:marketplace/:slug" element={<MarketplacePackage />} />
+            <Route path="/settings" element={<Settings />} />
+            <Route path="/settings/:section" element={<Settings />} />
             <Route path="/library" element={<Components />} />
             <Route path="/library/agents/layout-reviewer" element={<AgentChat />} />
             <Route path="/interface" element={<Interface />} />

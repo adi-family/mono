@@ -25,6 +25,16 @@ const groups: readonly ScrollSidebarGroup[] = [
     ],
   },
   {
+    label: "Forms & settings",
+    links: [
+      { id: "badge-example", label: "Badge" },
+      { id: "field-example", label: "Field, Input & Textarea" },
+      { id: "code-editor-example", label: "Code editor" },
+      { id: "switch-example", label: "Switch" },
+      { id: "settings-layout-example", label: "Settings layout" },
+    ],
+  },
+  {
     label: "Other components",
     links: [
       { id: "app-layout-example", label: "App layout" },

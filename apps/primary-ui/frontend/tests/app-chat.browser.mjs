@@ -1368,7 +1368,7 @@ try {
     await click('[data-slot="global-navigation"] a[href="/interface"]');
     await until(() => evaluate(`location.pathname === '/interface' && location.search === '' && !!document.querySelector('[data-mobile-screen="chats"] [data-slot="app-chat-sidebar"]')`), "Chats tab opens inbox");
     assert.equal(await evaluate(`document.querySelector('main[aria-label="Marketplace"]') === null`), true, "the previous page is gone once the tab route changes");
-    assert.ok(await evaluate(`${q('[data-slot="global-navigation"] a[aria-label="Settings"]')}.href.includes('/extended/settings')`));
+    assert.ok(await evaluate(`${q('[data-slot="global-navigation"] a[aria-label="Settings"]')}.getAttribute('href') === '/settings'`));
     if (process.env.BROWSER_SCREENSHOTS_DIR) {
       await mkdir(process.env.BROWSER_SCREENSHOTS_DIR, {recursive:true});
       const shot = await send("Page.captureScreenshot", {format:"png",captureBeyondViewport:false});

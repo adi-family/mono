@@ -1,7 +1,7 @@
 /// <reference types="node" />
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fleetMachines, localApps, lockMachine, unlockMachine } from "./home-apps";
+import { fleetMachines, localApps } from "./home-apps";
 
 test("local catalog excludes archived and invalid records while keeping live app details", () => {
   const apps = localApps({ dashboards: [
@@ -161,96 +161,4 @@ test("machines with rejected stored credentials stay locked and retain the serve
   assert.equal(machines[0]?.issue, "studio refused the password");
   assert.equal(machines[1]?.locked, false);
   assert.equal(machines[1]?.issue, "server did not answer in time");
-});
-
-test("unlock posts credentials with an exact password and returns the refreshed machine apps", async () => {
-  const originalFetch = globalThis.fetch;
-  const calls: { input: RequestInfo | URL; init?: RequestInit }[] = [];
-  const listing = { nodes: [{ node: "studio", locked: false, dashboards: [
-    { id: "editor", name: "Editor", url: "http://editor.studio.n.adi/", allowed: true },
-  ] }] };
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    calls.push({ input, init });
-    return Response.json(listing);
-  }) as typeof fetch;
-  try {
-    const signal = new AbortController().signal;
-    for (const [username, expectedUsername] of [["  u-workstation  ", "u-workstation"], [" \t ", "adi"]]) {
-      const machines = await unlockMachine("studio", username, "  password with spaces \t", signal);
-      const call = calls.at(-1);
-      assert.equal(call?.input, "/api/app/fleet/dashboards/unlock");
-      assert.equal(call?.init?.method, "POST");
-      assert.deepEqual(call?.init?.headers, { "Content-Type": "application/json" });
-      assert.equal(call?.init?.signal, signal);
-      assert.deepEqual(JSON.parse(String(call?.init?.body)), {
-        node: "studio", username: expectedUsername, password: "  password with spaces \t",
-      });
-      assert.deepEqual(machines, fleetMachines(listing));
-      assert.equal(machines[0]?.locked, false);
-      assert.equal(machines[0]?.apps[0]?.href, "http://editor.studio.n.adi/");
-    }
-    assert.equal(calls.length, 2);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-test("lock forgets only the named machine and parses the refreshed locked listing", async () => {
-  const originalFetch = globalThis.fetch;
-  const signal = new AbortController().signal;
-  let calls = 0;
-  const listing = { nodes: [
-    { node: "studio", locked: true, dashboards: [] },
-    { node: "server", locked: false, dashboards: [{ id: "editor", url: "http://editor.server.n.adi/", allowed: true }] },
-  ] };
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    calls += 1;
-    assert.equal(input, "/api/app/fleet/dashboards/forget");
-    assert.equal(init?.method, "POST");
-    assert.deepEqual(init?.headers, { "Content-Type": "application/json" });
-    assert.equal(init?.signal, signal);
-    assert.deepEqual(JSON.parse(String(init?.body)), { petname: "studio" });
-    return Response.json(listing);
-  }) as typeof fetch;
-  try {
-    const machines = await lockMachine("studio", signal);
-    assert.equal(calls, 1);
-    assert.deepEqual(machines, fleetMachines(listing));
-    assert.deepEqual(machines.map((machine) => machine.locked), [true, false]);
-    assert.equal(machines[1]?.apps[0]?.href, "http://editor.server.n.adi/");
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-test("lock and unlock surface rejected credentials and successful HTTP responses containing API errors", async () => {
-  const originalFetch = globalThis.fetch;
-  try {
-    for (const status of [401, 200]) {
-      globalThis.fetch = (async () => Response.json({ ok: false, error: "studio refused the password" }, { status })) as typeof fetch;
-      await assert.rejects(unlockMachine("studio", "adi", "wrong password"), /studio refused the password/);
-      await assert.rejects(lockMachine("studio"), /studio refused the password/);
-    }
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-test("invalid machine names and an empty password fail before making any network request", async () => {
-  const originalFetch = globalThis.fetch;
-  let calls = 0;
-  globalThis.fetch = (async () => {
-    calls += 1;
-    throw new Error("Unexpected network request");
-  }) as typeof fetch;
-  try {
-    for (const node of ["", " studio ", "Studio", "studio.other", "../studio", "-studio", "studio-", "a".repeat(64)]) {
-      await assert.rejects(unlockMachine(node, "adi", "password"), /valid paired machine/);
-      await assert.rejects(lockMachine(node), /valid paired machine/);
-    }
-    await assert.rejects(unlockMachine("studio", "adi", ""), /Enter the machine password/);
-    assert.equal(calls, 0);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
 });

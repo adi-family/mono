@@ -5,7 +5,6 @@ import { cn } from "@design-system/ui";
 
 import { AdiLogo } from "./AdiLogo";
 import { EventLogButton } from "./EventLog";
-import { appHref } from "../lib/app-api";
 
 const pages = [
   { to: "/interface", label: "Chats", icon: MessageSquare },
@@ -50,10 +49,15 @@ export function ShowcaseNavigation() {
       {/* Background failures land in the event log, above Settings, rather than in the page. */}
       <div className="contents md:mt-auto md:flex md:shrink-0 md:flex-col md:items-center md:gap-1">
         <EventLogButton tabClass={tabClass} />
-        <a href={appHref("/extended/settings")} aria-label="Settings" title="Settings" className={tabClass(false)}>
-          <TabIcon icon={Settings} active={false} />
-          <span className="md:sr-only">Settings</span>
-        </a>
+        {/* The new settings; its own page links on to the old ones for everything not moved yet. */}
+        <NavLink to="/settings" aria-label="Settings" title="Settings" className={({ isActive }) => tabClass(isActive)}>
+          {({ isActive }) => (
+            <>
+              <TabIcon icon={Settings} active={isActive} />
+              <span className="md:sr-only">Settings</span>
+            </>
+          )}
+        </NavLink>
       </div>
     </nav>
   );

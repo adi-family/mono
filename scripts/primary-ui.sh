@@ -11,4 +11,5 @@ bun run typecheck
 bun run test:primary
 bun run test:home
 bun run test:chat
+bun run test:settings
 bun run build:primary

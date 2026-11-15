@@ -16,12 +16,15 @@ export function ShowcaseLayout() {
   const { theme, setTheme } = useTheme();
   const isHome = pathname === "/";
   const isMarketplace = (pathname === "/marketplace" || pathname.startsWith("/marketplace/"));
+  const isSettings = pathname === "/settings" || pathname.startsWith("/settings/");
   const isInterface = pathname === "/interface";
   const chatDetail = isInterface && (new URLSearchParams(search).has("agent") || new URLSearchParams(search).has("run"));
   const title = isHome
     ? "Home"
     : isMarketplace
       ? "Marketplace"
+    : isSettings
+      ? "Settings"
     : pathname === "/library/agents/layout-reviewer"
       ? "Layout reviewer"
       : pathname === "/library"
@@ -64,11 +67,11 @@ export function ShowcaseLayout() {
       )}
       secondaryNavigation={isInterface ? <AppChatSidebar /> : <ComponentSidebar />}
       secondaryNavigationProps={isInterface ? { className: "bg-muted/50 dark:bg-background" } : undefined}
-      hideSecondaryNavigation={isHome || isMarketplace}
+      hideSecondaryNavigation={isHome || isMarketplace || isSettings}
       topbar={(
         <>
           <div className="flex min-w-0 items-center gap-2">
-            <span className="text-muted-foreground hidden text-sm sm:inline">{isHome || isInterface || isMarketplace ? "ADI" : "Design System"}</span>
+            <span className="text-muted-foreground hidden text-sm sm:inline">{isHome || isInterface || isMarketplace || isSettings ? "ADI" : "Design System"}</span>
             <ChevronRight aria-hidden="true" className="text-muted-foreground hidden size-3.5 sm:block" />
             <h1 className="truncate text-sm font-medium">{title}</h1>
           </div>

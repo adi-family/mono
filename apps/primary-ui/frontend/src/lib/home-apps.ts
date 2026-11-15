@@ -102,11 +102,8 @@ export function fleetMachines(payload: unknown): HomeMachine[] {
   });
 }
 
-async function request(path: string, signal?: AbortSignal, body?: JsonObject): Promise<unknown> {
-  const response = await fetch(`${appApiBase()}${path}`, {
-    signal,
-    ...(body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {}),
-  });
+async function request(path: string, signal?: AbortSignal): Promise<unknown> {
+  const response = await fetch(`${appApiBase()}${path}`, { signal });
   let payload: unknown;
   try { payload = await response.json(); }
   catch { throw new Error("ADI returned an unreadable response. Try again."); }
@@ -118,18 +115,3 @@ async function request(path: string, signal?: AbortSignal, body?: JsonObject): P
 
 export async function getLocalApps(signal?: AbortSignal) { return localApps(await request("/dashboards", signal)); }
 export async function getFleetMachines(signal?: AbortSignal) { return fleetMachines(await request("/fleet/dashboards", signal)); }
-
-function requireNode(node: string) {
-  if (!dnsLabel.test(node)) throw new Error("Choose a valid paired machine.");
-}
-
-export async function unlockMachine(node: string, username: string, password: string, signal?: AbortSignal) {
-  requireNode(node);
-  if (!password.length) throw new Error("Enter the machine password.");
-  return fleetMachines(await request("/fleet/dashboards/unlock", signal, { node, username: username.trim() || "adi", password }));
-}
-
-export async function lockMachine(node: string, signal?: AbortSignal) {
-  requireNode(node);
-  return fleetMachines(await request("/fleet/dashboards/forget", signal, { petname: node }));
-}
