@@ -50,6 +50,27 @@ nothing runs on ADI's own MCP tools alone — `Bash`, `Await`, `Ask`.
 Widening this list is how an agent gets to read and edit files. Nothing you do not tick can be
 called, so an agent that suddenly cannot read a file is telling you its grant is too narrow.
 
+## MCP servers
+An agent may also be given one or more **MCP server** definitions — a second door, beside ADI's
+own `Bash`/`Await`/`Ask`, onto whatever tools that server advertises (an n8n instance, a SaaS
+product's own MCP server, …). Registering a server does not hand it to anybody either, the same
+rule tools follow: create it with `{{cli}} mcp save`, then attach it to the agents that need it.
+
+- Define: `{{cli}} mcp save <id> --url <url> --header "Authorization=secret:TOKEN_NAME"` (http),
+  or `--command <cmd> --arg <a> --env KEY=secret:TOKEN_NAME` (stdio). `secret:NAME` names a secret
+  to resolve at launch instead of writing a literal value — the definition never stores one.
+  `{{cli}} mcp show <id>` says which secrets it still needs and whether each is set.
+- Attach: `{{cli}} agents save <name> --backend <b> --mcp <id>` (repeatable; `--no-mcp` detaches
+  all). API: `POST /api/agents/save` with `"mcp": [...]` — a top-level field, omit-to-keep like
+  `bin_tools`. Panel: `/agents` → the agent → **MCP servers**.
+- A secret a server's header/env names resolves only against *that agent's own* attached secrets
+  (the same allowlist `env`/secrets already follow). A server naming one the agent never attached,
+  or that has no value anywhere on this machine, is dropped **whole** at launch — never started
+  half-authenticated — so a server you attached but see no tools from is usually a missing secret.
+- Not every backend can reach one: `harness:claude-sdk`, `pty:claude`, `process:claude`, and
+  `process:codex` can; `harness:adi` and `pty:codex` refuse to launch an agent that lists any,
+  rather than silently dropping them.
+
 ## The run environment (`path` / `env`)
 A run is started by the daemon, so it inherits launchd's minimal environment — a bare `PATH` like
 `/usr/bin:/bin`. ADI rebuilds that `PATH` at launch (the agent's `.bin`, then the standard user and
