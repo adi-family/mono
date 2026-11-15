@@ -20,6 +20,11 @@ extraction script cares about.
 
 ## Unreleased
 
+### Added
+
+- **ADI agents can now be given MCP servers** — an external integration (n8n's own MCP server, a SaaS product's, …) reached over the Model Context Protocol, beside ADI's own per-conversation server. Register one with `adi-mono mcp save` (an `http` URL with headers, or a `stdio` command) — a definition names any secret it needs by name and never stores its value — then attach it to an agent with `agents save --mcp <id>` or the agent editor's new MCP servers field. `harness:claude-sdk`, `pty:claude`, `process:claude`, and `process:codex` can all reach one; a backend that can't (`harness:adi`, `pty:codex`) refuses to launch an agent that lists any rather than silently dropping them.
+- **A 10th marketplace element kind, `mcp`.** A bundle can now carry an MCP server definition (`mcp/<name>.toml`) alongside an agent element that attaches it (`mcp = ["name"]`), so a bundle can ship "an agent plus the external tool it needs" as one install. Installing, updating, and uninstalling an `mcp` element follow the same rules a tool or an LLM backend already does.
+
 ## 1.40.0 — 2026-11-14
 
 ### Added
