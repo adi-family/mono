@@ -1646,7 +1646,14 @@ mod tests {
                 "missing {name}"
             );
         }
-        for path in ["/", "/interface/", "/library/", "/chat/old-bookmark"] {
+        for path in [
+            "/",
+            "/interface/",
+            "/library/",
+            "/chat/old-bookmark",
+            "/settings",
+            "/settings/secrets/",
+        ] {
             assert_eq!(primary_ui::relative_path(path), Some("index.html"));
         }
         for path in [

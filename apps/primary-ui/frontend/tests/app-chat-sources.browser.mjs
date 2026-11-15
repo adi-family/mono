@@ -441,7 +441,8 @@ try {
 
   if (apiBase === "/api") await check("primary Settings and Fleet anchors remain on the current panel origin", async () => {
     const settings = await evaluate(`({raw:${q('[aria-label="Settings"]')}.getAttribute('href'),href:${q('[aria-label="Settings"]')}.href})`);
-    assert.equal(settings.raw, "/extended/settings");
+    // Settings is a page of this app now; its own header links on to the old settings.
+    assert.equal(settings.raw, "/settings");
     assert.equal(new URL(settings.href).origin, origin);
     await click('[aria-label="Conversation sources"]');
     const fleet = await evaluate("(() => {const node=[...document.querySelectorAll('[role=menuitem]')].find(node=>node.textContent.trim()==='Manage sources in Fleet');return {raw:node.getAttribute('href'),href:node.href}})()");

@@ -16,7 +16,9 @@
     "preview": "vite preview",
     "test:chat:sources": "bun tests/app-chat-sources.browser.mjs",
     "test:marketplace": "bun test src/lib/marketplace.test.ts",
-    "test:marketplace:browser": "bun tests/marketplace.browser.mjs"
+    "test:marketplace:browser": "bun tests/marketplace.browser.mjs",
+    "test:settings": "bun test src/lib/triggers.test.ts src/lib/secrets.test.ts",
+    "test:settings:browser": "bun tests/settings.browser.mjs"
   },
   "dependencies": {
     "react": "19.3.1",

@@ -20,6 +20,7 @@ import {
 import type { useTheme } from "../lib/theme";
 import { AppLayoutExample } from "../components/AppLayoutExample";
 import { ChoiceExamples } from "../components/ChoiceExamples";
+import { FormExamples } from "../components/FormExamples";
 import { ChatExamples } from "../components/ChatExamples";
 import { CodeExample } from "../components/CodeExample";
 import { ScrollSidebarExample } from "../components/ScrollSidebarExample";
@@ -102,6 +103,8 @@ export function Components() {
       <ChatExamples />
 
       <ChoiceExamples />
+
+      <FormExamples />
 
       <AppLayoutExample />
 

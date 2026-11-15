@@ -3,8 +3,8 @@
  * Run: bun frontend/tests/primary-app.browser.mjs
  * Optional: SHOWCASE_URL (default http://app.adi), CHROME_BIN, BROWSER_SCREENSHOTS_DIR,
  * MARKETPLACE_ONLY=1 to check just the catalog (also works against the dashboard).
- * API GETs and the two existing read-only transcript POSTs reach the real backend;
- * every other API write is blocked before it leaves Chrome and fails this check.
+ * API GETs and the read-only POSTs (two transcript reads, a trigger's log tail) reach the real
+ * backend; every other API write is blocked before it leaves Chrome and fails this check.
  */
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -20,7 +20,7 @@ const chrome = Bun.spawn([
   "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "about:blank",
 ], { stdout: "ignore", stderr: "ignore" });
 
-const readPosts = new Set(["/api/agents/run/peek", "/api/agents/run/steps"]);
+const readPosts = new Set(["/api/agents/run/peek", "/api/agents/run/steps", "/api/triggers/log"]);
 // The native Settings page refreshes the updater's record with `POST /api/update/check` whenever
 // that record has gone stale (about half a day). That request leaves the machine and rewrites
 // ~/.adi/mono/update/state.json, which a read-only smoke must not do — and which could flip the
@@ -150,7 +150,7 @@ try {
     assert.match(color, /^oklch\(/);
   }
   async function settingsLink() {
-    assert.equal(await evaluate(`${q('[data-slot="global-navigation"] a[aria-label="Settings"]')}?.href`), `${origin}/extended/settings`);
+    assert.equal(await evaluate(`${q('[data-slot="global-navigation"] a[aria-label="Settings"]')}?.href`), `${origin}/settings`);
   }
 
   await Promise.all([send("Runtime.enable"), send("Page.enable"), send("Log.enable"), send("Network.enable")]);
@@ -259,6 +259,71 @@ try {
       await send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
       await send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
       await screenshot("new-chat");
+    });
+
+    await check("Settings lists this machine's triggers and survives a direct reload", async () => {
+      const section = '[data-slot="settings-triggers"]';
+      const settled = `${section} [data-slot="trigger-row"], ${section} [data-slot="triggers-empty"]`;
+      await navigate("/", grid);
+      // Triggers are operator data: the page is compared with what the machine reports, and nothing is written.
+      const live = await evaluate(`fetch('/api/triggers').then(response=>response.json()).then(data=>data.triggers.map(trigger=>trigger.name))`);
+      await click('[data-slot="global-navigation"] a[aria-label="Settings"]');
+      await until(() => evaluate(`location.pathname==='/settings/triggers' && !!${q(settled)}`), "the rail opens Settings on its Triggers section");
+      assert.equal(await evaluate("document.title"), "Triggers — Settings — ADI");
+      assert.equal(await evaluate(`${q('[data-slot="app-topbar"] h1')}.textContent`), "Settings");
+      assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('[data-slot="trigger-row"]'),row=>row.dataset.trigger)`), live, "every trigger this machine defines is listed, in the machine's order");
+      assert.equal(await evaluate(`${q('[data-slot="settings-old-ui"]')}.href`), `${origin}/extended/settings`, "the old settings are one click away, on this panel");
+      assert.match(await evaluate(`${q('button[aria-label="Settings machine"]')}?.textContent ?? ''`), /This machine/);
+      assert.equal(await evaluate(`document.querySelectorAll('main[aria-label="Settings"] [role="alert"]').length`), 0, "no request errors");
+      await tokenColor('[data-slot="trigger-new"]');
+      // The native app has to hand these addresses to the React shell, or a reload lands in the old panel.
+      for (const path of ["/settings", "/settings/", "/settings/triggers/"]) {
+        // The page already on screen matches the same selectors, so wait for the new document.
+        await evaluate("window.previousDocument=true");
+        await send("Page.navigate", { url: `${origin}${path}` });
+        await until(() => evaluate(`window.previousDocument===undefined && location.pathname==='/settings/triggers' && !!${q(settled)}`), `a direct load of ${path} renders the React Settings page at its canonical address`);
+        assert(await evaluate(`!!${q('[data-slot="global-navigation"]')}`), `${path} keeps the React application shell`);
+      }
+      await screenshot("settings");
+      if (live.length) {
+        const name = live[0];
+        await navigate(`/settings/triggers?${new URLSearchParams({ trigger: name })}`, '[data-slot="trigger-form"] [name="code"]');
+        assert.equal(await evaluate(`${q('[data-slot="trigger-form"] [name="name"]')}.value`), name);
+        assert.equal(await evaluate(`${q('[data-slot="trigger-save"]')}.disabled`), true, "an untouched definition has nothing to save");
+        await click('nav[aria-label="Trigger views"] a:last-child');
+        await until(() => evaluate(`!!${q('[data-slot="trigger-log"] pre')} || !!${q('[data-slot="trigger-log-empty"]')}`), "the trigger's log tail is read");
+        assert(requests.some((request) => request.stage === stage && request.method === "POST" && request.path === "/api/triggers/log"), "the log is read from the native API");
+        await screenshot("settings-log");
+      }
+      await navigate("/settings/triggers?new=1", '[data-slot="trigger-form"] [name="name"]');
+      assert.equal(await evaluate(`${q('[data-slot="trigger-form"] [name="name"]')}.value`), "");
+      assert(await evaluate(`document.querySelectorAll('[data-slot="trigger-form"] [data-preset]').length > 0`), "the machine's presets are offered");
+    });
+
+    await check("Secrets lists this machine's secrets by name and asks for no value", async () => {
+      // Secrets are operator data: only how many there are is compared, nothing is revealed, and
+      // no screenshot is kept — a picture of this page would carry every secret's name.
+      const section = '[data-slot="settings-secrets"]';
+      const settled = `${section} [data-slot="secret-row"], ${section} [data-slot="secrets-empty"]`;
+      // A direct load: the native app hands this address to the React shell.
+      await navigate("/settings/secrets", settled);
+      assert.equal(await evaluate("document.title"), "Secrets — Settings — ADI");
+      assert(await evaluate(`!!${q('[data-slot="global-navigation"]')}`), "Secrets keeps the React application shell");
+      assert.equal(await evaluate(`${q('[data-slot="settings-nav-item"][aria-current="page"]')}.textContent.trim()`), "Secrets");
+      const live = await evaluate(`fetch('/api/secrets').then(response=>response.json()).then(data=>({total:data.secrets.length,global:data.secrets.filter(secret=>!secret.project).length,leaked:data.secrets.some(secret=>'value' in secret)}))`);
+      assert.equal(live.leaked, false, "the list API carries no value");
+      assert.equal(await evaluate(`document.querySelectorAll('[data-slot="secret-row"]').length`), live.total, "every secret this machine holds is listed");
+      if (live.total) {
+        assert.match(await evaluate(`${q('select[aria-label="Scope"]')}.options[0].textContent`), new RegExp(`^All scopes \\(${live.total}\\)$`));
+        assert.equal(await evaluate(`document.querySelectorAll('[data-slot="secret-row"][data-scope=""]').length`), live.global, "global secrets are told from project ones");
+        assert.equal(await evaluate(`document.querySelectorAll('[data-slot="secret-reveal"]').length`), live.total, "each value can be revealed, one at a time");
+      }
+      assert.equal(await evaluate(`document.querySelectorAll('[data-slot="secret-value"]').length`), 0, "no value is shown");
+      assert.equal(await evaluate(`document.querySelectorAll('main[aria-label="Settings"] [role="alert"]').length`), 0, "no request errors");
+      await tokenColor('[data-slot="secret-new"]');
+      await navigate("/settings/secrets?new=1", '[data-slot="secret-form"] [name="value"]');
+      assert.equal(await evaluate(`${q('[data-slot="secret-form"] [name="value"]')}.dataset.masked`), "true", "a value being typed is masked");
+      assert.deepEqual(requests.filter((request) => request.stage === stage && request.method === "POST"), [], "listing secrets and opening the form sent nothing and asked for no value");
     });
 
     await check("native Settings still loads the original control panel", async () => {

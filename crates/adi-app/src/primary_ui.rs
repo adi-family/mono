@@ -70,6 +70,21 @@ pub(crate) fn relative_path(path: &str) -> Option<&str> {
                     })
             })
     });
+    // Settings is a section tree: `/settings`, a section, and at most two levels below it (one
+    // item of a section, one view of that item). Accepting the shape rather than a list of
+    // sections lets the React app add a section without a native release.
+    let settings = document == "/settings"
+        || document.strip_prefix("/settings/").is_some_and(|rest| {
+            let parts: Vec<_> = rest.split('/').collect();
+            parts.len() <= 3
+                && parts.iter().all(|part| {
+                    !part.is_empty()
+                        && !part.starts_with('.')
+                        && part.bytes().all(|byte| {
+                            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_')
+                        })
+                })
+        });
     if path == "/"
         || matches!(
             document,
@@ -81,6 +96,7 @@ pub(crate) fn relative_path(path: &str) -> Option<&str> {
                 | "/chat"
         )
         || marketplace_package
+        || settings
         || path.starts_with("/chat/")
     {
         return Some("index.html");
@@ -168,6 +184,12 @@ mod tests {
             "/chat/",
             "/chat/designer/run-one",
             "/chat/@studio/designer/run-two",
+            "/settings",
+            "/settings/",
+            "/settings/triggers",
+            "/settings/triggers/",
+            "/settings/triggers/deploy-hook",
+            "/settings/triggers/deploy_hook.v2/log",
         ] {
             let asset = ui.read(path).unwrap_or_else(|| panic!("missing {path}"));
             assert_eq!(asset.relative, "index.html", "{path}");
@@ -192,6 +214,10 @@ mod tests {
             "/interface/unknown",
             "/library/unknown",
             "/chatty",
+            "/settingsx",
+            "/settings/triggers/a/b/c",
+            "/settings/with space",
+            "/settings/%2e%2e",
         ] {
             assert!(ui.read(path).is_none(), "must preserve fallback for {path}");
         }
@@ -212,6 +238,7 @@ mod tests {
         for path in [
             "/extended",
             "/extended/settings",
+            "/extended/settings/fleet",
             "/extended/agents",
             "/marketplace/vendor/app/extra",
             "/marketplace/../app",
@@ -236,6 +263,10 @@ mod tests {
             "/assets//primary.js",
             "/interface//",
             "/library//",
+            "/settings//",
+            "/settings/../index.html",
+            "/settings/.hidden",
+            "/settings/triggers//log",
             "/assets\\..\\index.html",
             "/.secret",
             "/assets/\0primary.js",

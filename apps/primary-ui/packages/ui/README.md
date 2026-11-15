@@ -65,9 +65,9 @@ continues to use its existing `/api/app/*` relay and source hot reload. Do not p
 at the dashboard backend: its relay forwards back to `app.adi`.
 
 The native `adi-app` server supports `ADI_PRIMARY_UI_DIST=/path/to/dist-primary`. It serves
-the React Home, Chats, gallery, and old `/chat/...` bookmarks from that build, while keeping
-the original `/extended/*` and `/embed/*` pages and their assets. Settings
-and Fleet links stay on the primary panel's own origin. `ADI_WEBAPP_DIST` remains a separate
+the React Home, Chats, Marketplace, Settings (`/settings` and its sections), gallery, and old
+`/chat/...` bookmarks from that build, while keeping the original `/extended/*` and `/embed/*`
+pages and their assets. The old settings and Fleet links stay on the primary panel's own origin. `ADI_WEBAPP_DIST` remains a separate
 override for the original interface; setting it to the React build would replace Settings too.
 
 On this machine, the control-panel LaunchAgent selects a versioned native binary and UI build
@@ -757,6 +757,64 @@ the full ID, and a checkmark confirms copying. HTTP hosts use a clipboard fallba
 Use the pencil beside an open chat’s title to rename it. Enter saves, Escape cancels, and
 an empty name restores the generated title. Changes use the existing run rename endpoint on
 the conversation’s owning machine and update both the header and sidebar.
+
+## Forms and settings
+
+`Field` labels a control and wires its help and error text to it; pass a function to receive
+the control's `id` and ARIA attributes. `Input` and `Textarea` share Select's box, and take
+`mono` for machine strings. `Switch` is a controlled on/off button (`role="switch"`). `Badge`
+labels a kind or a state: the state variants lead with a dot and keep a neutral surface, so the
+word carries the meaning.
+
+```tsx
+<Field label="Name" hint="Also the webhook URL segment." error={problem}>
+  {(control) => <Input {...control} mono value={name} onChange={(event) => setName(event.target.value)} />}
+</Field>
+<Switch aria-label="Trigger enabled" checked={enabled} onCheckedChange={setEnabled} />
+<Badge variant="success">Running</Badge>
+```
+
+`CodeEditor` is a highlighted view of the text with a real textarea on top of it, so typing,
+undo, paste and the input method stay the browser's own. It numbers its lines, shows the caret
+position, never wraps a line, and can be dragged taller. Tab indents (a caret, or every line of a
+selection), Shift+Tab outdents, Enter keeps the indentation, and Escape then Tab leaves the
+editor, so the keyboard is never trapped. `language` is `"sh"`, `"ts"`, `"json"` or `"plain"` and
+may change while the editor stays mounted. The highlighter (`highlightCode`) is a small
+hand-written scanner per language: total on any input, and its runs always reproduce the source,
+which is what keeps the paint under the caret.
+
+```tsx
+<Field label="Code block" hint="Run as sh -c.">
+  {(control) => <CodeEditor {...control} language="sh" rows={18} value={code} onValueChange={setCode} />}
+</Field>
+```
+
+`SettingsLayout` is a settings page: a title row with page actions, the list of sections
+(`SettingsNavItem`, a link — use `asChild` for a router link, which marks itself with
+`aria-current="page"`), and the open `SettingsSection`. The list is a column beside the content
+on wide screens and a scrolling strip above it on phones.
+
+The dashboard's `/settings` page uses them. Its sections so far are Triggers — the code blocks
+a machine launches on a webhook call, on a platform event, or keeps running — and Secrets, with
+a button to the old settings for everything else.
+
+A webhook trigger's relay — hosted, enterprise or self-hosted — has a group of its own in the
+editor: the settings it owns never appear as free-form settings, and the endpoint the machine
+writes back when it registers the trigger is only ever shown, as the public URL to give the
+sender. A machine whose app predates relays is offered none.
+
+Secrets lists every secret on the machine by name, scope (global or a project) and sign-in, with
+a scope filter and a search; the list API never carries a value. A value is revealed one secret
+at a time, put away again after a minute or on leaving the section, and can be copied without
+being shown. A new secret is typed (masked, in a textarea so a multi-line key arrives whole) or
+obtained through an OAuth sign-in that opens in a new tab and returns to `/settings/secrets`
+with the token in the address fragment, which is taken out of the address before it is stored.
+Revealing, copying and signing in exist only in the ADI app: the showcase's relay carries names
+out and new values in, never a stored value. A trigger's views keep its name in the query
+(`/settings/triggers?trigger=<name>&view=log`), so any valid name survives a reload. Settings
+are one machine's at a time: the topbar machine picker chooses whose, and a paired machine is
+read and saved through the node relay. `bun frontend/tests/settings.browser.mjs` drives the page
+against an in-memory machine, so no real trigger or secret is read, saved, fired or deleted.
 
 ## State helpers
 
