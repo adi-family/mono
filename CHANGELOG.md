@@ -20,6 +20,8 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.41.0 — 2026-11-15
+
 ### Added
 
 - **An MCP server's secret header/env value may now carry a `prefix`** — `Authorization = { secret = "TOKEN_NAME", prefix = "Bearer " }`, or the `adi-mono mcp save --header Authorization=bearer:TOKEN_NAME` shorthand, glue `Bearer ` onto the secret's resolved value at launch instead of requiring the word baked into the stored secret itself. Fixes n8n's MCP server (which needs `Authorization: Bearer <token>` but hands out a raw token) and `process:codex`'s `bearer_token_env_var` (which wants the raw token and never `Bearer <token>`) at once — both now work from the same plainly-stored secret. Backward compatible: a definition with no `prefix` resolves exactly as before.
