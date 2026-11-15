@@ -401,6 +401,7 @@ fn preview_kind_dir(wire: &str) -> String {
         "service" => "services",
         "trigger" => "triggers",
         "template" => "templates",
+        "mcp" => "mcp",
         other => other,
     }
     .to_string()
@@ -755,13 +756,13 @@ fn assurances() -> AnyView {
     .into_any()
 }
 
-/// The nine kind directories, in the fixed order the Rust side already sorts by
+/// The ten kind directories, in the fixed order the Rust side already sorts by
 /// (`adi_marketplace::Kind::ALL`) — repeated here rather than derived, since the wire type carries
 /// the spelling but not the enum. One order for every bundle is the whole point: the eye learns it
 /// once, and never has to re-learn it item to item.
-const KIND_ORDER: [&str; 9] = [
+const KIND_ORDER: [&str; 10] = [
     "agents", "tools", "dashboards", "llm", "embeddings", "services", "triggers", "project",
-    "templates",
+    "templates", "mcp",
 ];
 
 /// What one element of this kind is called, in the singular — the word on its row.
@@ -776,6 +777,7 @@ fn kind_label(kind: &str) -> &str {
         "triggers" => "trigger",
         "project" => "project",
         "templates" => "dashboard template",
+        "mcp" => "MCP server",
         // A kind this build does not know: the manifest is ahead of this binary. Drawn as
         // published rather than hidden, the same tolerance the rest of the page gives it.
         other => other,
@@ -788,6 +790,7 @@ fn kind_plural(kind: &str) -> String {
         "llm" => "LLM backends".to_string(),
         "embeddings" => "embedding backends".to_string(),
         "services" => "hive services".to_string(),
+        "mcp" => "MCP servers".to_string(),
         other => format!("{}s", kind_label(other)),
     }
 }
@@ -806,6 +809,7 @@ fn kind_icon(kind: &str) -> Lucide {
         "triggers" => Lucide::Zap,
         "project" => Lucide::Folder,
         "templates" => Lucide::FileCode,
+        "mcp" => Lucide::Plug,
         _ => Lucide::Package,
     }
 }

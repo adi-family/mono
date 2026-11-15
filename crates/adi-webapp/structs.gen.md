@@ -2248,6 +2248,8 @@ pub(crate) struct AgentsForm {
     pub(crate) dispatch: RwSignal<bool>,
     pub(crate) can_spawn: RwSignal<Vec<String>>,
     pub(crate) can_spawn_draft: RwSignal<String>,
+    pub(crate) mcp: RwSignal<Vec<String>>,
+    pub(crate) mcp_draft: RwSignal<String>,
     pub(crate) spawn_grant_draft: RwSignal<String>,
     pub(crate) knowledge_bases: RwSignal<Option<Vec<KnowledgeBaseDto>>>,
     pub(crate) prelude: RwSignal<String>,

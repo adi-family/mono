@@ -24,6 +24,7 @@ adi-secrets = { workspace = true }
 # only to confirm the bundle shipped something `adi_templates` can actually parse.
 adi-templates = { workspace = true }
 adi-tools = { workspace = true }
+adi-mcp = { workspace = true }
 adi-triggers = { workspace = true }
 
 hex = { workspace = true }

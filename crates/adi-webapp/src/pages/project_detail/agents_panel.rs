@@ -87,6 +87,7 @@ pub(crate) fn agents_panel(
                     starred: None,
                     project: Some(id),
                     bin_tools: None,
+                    mcp: None,
                     prelude: None,
                     secrets: None,
                     // This panel only creates; renaming lives on the Agents page.

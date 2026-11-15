@@ -413,6 +413,7 @@ dependencies = [
  "adi-dashboards",
  "adi-embeddings",
  "adi-hive",
+ "adi-mcp",
  "adi-projects",
  "adi-secrets",
  "adi-templates",

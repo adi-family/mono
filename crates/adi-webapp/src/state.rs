@@ -1398,6 +1398,15 @@ pub(crate) struct AgentsForm {
     /// fresh in the render closure (as the backend-chain picker does) because it is free text: a
     /// picker reset by the next 4s poll loses nothing typed, a text box reset mid-type does.
     pub(crate) can_spawn_draft: RwSignal<String>,
+    /// The `adi-mcp` server ids given to this agent's runs, beside ADI's own per-conversation MCP
+    /// server (`agents save --mcp`'s CLI mirror). Chips rather than a checkbox picker like
+    /// `knowledge`, for the same reason `can_spawn` is: this page doesn't otherwise fetch the mcp
+    /// registry, and typing an id this agent's own definitions already use is no heavier than a
+    /// picker would be for a list this short.
+    pub(crate) mcp: RwSignal<Vec<String>>,
+    /// The "add a server" box under the `mcp` chips — held on the form for the same reason
+    /// `can_spawn_draft` is.
+    pub(crate) mcp_draft: RwSignal<String>,
     /// The "grant" box under the read-only-turned-editable "Can be launched by" view: the agent
     /// name being added to *its* `can_spawn` (not this one's) via `POST /api/agents/spawn-rule`.
     /// Held on the form for the same reason `can_spawn_draft` is.
@@ -1459,6 +1468,8 @@ impl AgentsForm {
             dispatch: RwSignal::new(false),
             can_spawn: RwSignal::new(Vec::new()),
             can_spawn_draft: RwSignal::new(String::new()),
+            mcp: RwSignal::new(Vec::new()),
+            mcp_draft: RwSignal::new(String::new()),
             spawn_grant_draft: RwSignal::new(String::new()),
             knowledge_bases: RwSignal::new(None),
             secrets: RwSignal::new(BTreeSet::new()),

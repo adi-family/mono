@@ -43,7 +43,7 @@
 //! **v2 generalizes what an item is** without breaking anything
 //! above: every marketplace item is a bundle, a named collection of platform elements, and an app
 //! is the special case of a bundle whose only element is a dashboard — exactly what this crate
-//! already ships. [`Kind`] is the eight kinds an element may be; [`Address`] is the third
+//! already ships. [`Kind`] is the ten kinds an element may be; [`Address`] is the third
 //! coordinate that addresses one of them; [`read_layout`] and [`scan_for_rust`] read and refuse a
 //! repository's tree at install time; [`bundle::install`] lands a selection of them — new code
 //! beside `install`'s own pipeline, not a change to it, except for the one shape decision #6 keeps

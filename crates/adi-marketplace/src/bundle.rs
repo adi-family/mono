@@ -23,21 +23,22 @@
 //! **Every kind lands through its own store's own write path** — `adi_agents::Agents::save`,
 //! `adi_tools::Tools::create_file`, `adi_triggers::Triggers::save`, `adi_projects::Projects::
 //! create_with_id`, `adi_agents::llm::LlmBackends::save`, `adi_embeddings::EmbeddingBackends::
-//! save` — never a hand-rolled file write, so what lands can never drift from the store's own
-//! invariants (`created_at`/`updated_at` stamped fresh, names validated, and so on).
+//! save`, `adi_mcp::McpServers::save` — never a hand-rolled file write, so what lands can never
+//! drift from the store's own invariants (`created_at`/`updated_at` stamped fresh, names
+//! validated, and so on).
 //!
 //! **The two collision regimes** come down to one
 //! question per kind: does landing under a fresh id ever leave a sibling's *structured* reference
-//! — `bin_tools`, `backends[].backend`, `project` — silently pointing at a stranger's pre-existing
-//! entry?
+//! — `bin_tools`, `mcp`, `backends[].backend`, `project` — silently pointing at a stranger's
+//! pre-existing entry?
 //!
 //! * Agents, dashboards, triggers, and hive services: no. Nothing reads their id back out of a
 //!   sibling's structured field, so `land_agent`/`land_dashboard`/`land_trigger`/`land_service`
 //!   mint past a collision exactly like v1's dashboards.
-//! * Tools, LLM backends, embedding backends, and the project scaffold: yes.
-//!   `land_tool`/`land_llm`/`land_embedding`/`land_project` refuse a collision outright — the id
-//!   an installed sibling's `bin_tools`/`backends`/`project` names is either exactly what the
-//!   repository published, or that element simply did not land.
+//! * Tools, MCP servers, LLM backends, embedding backends, and the project scaffold: yes.
+//!   `land_tool`/`land_mcp`/`land_llm`/`land_embedding`/`land_project` refuse a collision
+//!   outright — the id an installed sibling's `bin_tools`/`mcp`/`backends`/`project` names is
+//!   either exactly what the repository published, or that element simply did not land.
 //!
 //! Because a refuse-kind element only ever lands under its published name, **no cross-element
 //! reference is ever rewritten**: an agent's `bin_tools = ["csv-import"]` is passed through
@@ -81,7 +82,7 @@ const SERVICES_DIR: &str = "services";
 /// One element as an install call answers for it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ElementOutcome {
-    /// Which of the eight kinds this is.
+    /// Which of the ten kinds this is.
     pub kind: Kind,
     /// The published name — the file or directory stem the repository carried it under.
     pub name: String,
@@ -517,7 +518,7 @@ pub fn install(
 fn landing_rank(kind: Kind) -> u8 {
     match kind {
         Kind::Project => 0,
-        Kind::Tool => 1,
+        Kind::Tool | Kind::Mcp => 1,
         Kind::Llm => 2,
         Kind::Embedding => 3,
         _ => 4,
@@ -589,6 +590,9 @@ impl Renames {
     fn apply_to_agent(&self, manifest: &mut adi_agents::StoredAgentManifest) {
         for tool in &mut manifest.bin_tools {
             *tool = self.resolve(Kind::Tool, tool);
+        }
+        for server in &mut manifest.mcp {
+            *server = self.resolve(Kind::Mcp, server);
         }
         for entry in &mut manifest.backends {
             entry.backend = self.resolve(Kind::Llm, &entry.backend);
@@ -784,6 +788,12 @@ pub fn uninstall_element(
         Kind::Service => uninstall_service(market, &addr.marketplace, &addr.slug, scope, &ledger, &element)?,
         Kind::Template => {
             uninstall_template(&market.templates_dir(), &element.id)?;
+            None
+        }
+        Kind::Mcp => {
+            adi_mcp::McpServers::with_config(config.clone())
+                .delete(&element.id)
+                .map_err(store_err)?;
             None
         }
     };
@@ -1079,6 +1089,15 @@ fn live_missing_secrets(config: &adi_config::Config, ledger: &Ledger) -> Vec<Str
                     missing.insert(name.to_string());
                 }
             }
+            Kind::Mcp => {
+                if let Ok(Some(server)) = adi_mcp::McpServers::with_config(config.clone()).get(&el.id) {
+                    for name in server.manifest.transport.required_secrets() {
+                        if !secret_set(&secrets, server.manifest.project.as_deref(), &name) {
+                            missing.insert(name);
+                        }
+                    }
+                }
+            }
             Kind::Tool | Kind::Dashboard | Kind::Service | Kind::Trigger | Kind::Project
             | Kind::Template => {}
         }
@@ -1096,6 +1115,7 @@ struct Stores {
     projects: adi_projects::Projects,
     llm_backends: adi_agents::llm::LlmBackends,
     embedding_backends: adi_embeddings::EmbeddingBackends,
+    mcp_servers: adi_mcp::McpServers,
     secrets: adi_secrets::Secrets,
     dashboards_dir: PathBuf,
     parked_services_dir: PathBuf,
@@ -1117,6 +1137,7 @@ impl Stores {
             projects: adi_projects::Projects::with_config(config.clone()),
             llm_backends: adi_agents::llm::LlmBackends::with_config(config.clone()),
             embedding_backends: adi_embeddings::EmbeddingBackends::with_config(config.clone()),
+            mcp_servers: adi_mcp::McpServers::with_config(config.clone()),
             secrets: adi_secrets::Secrets::with_config(config.clone()),
             dashboards_dir: market.dashboards_dir(),
             parked_services_dir: services_dir(market, marketplace, slug, scope),
@@ -1154,6 +1175,7 @@ impl Stores {
             Kind::Trigger => land_trigger(&self.triggers, root, el, project),
             Kind::Project => land_project(&self.projects, root, el, bundle_slug),
             Kind::Template => land_template(&self.templates_dir, root, el),
+            Kind::Mcp => land_mcp(&self.mcp_servers, root, el, project, &self.secrets, missing_secrets, may_mint),
         }
     }
 
@@ -1190,6 +1212,7 @@ impl Stores {
                     .to_string(),
             ),
             Kind::Template => reland_template(&self.templates_dir, root, layout_el, ledger_el, forced),
+            Kind::Mcp => reland_mcp(&self.mcp_servers, root, layout_el, ledger_el, forced),
         }
     }
 }
@@ -1803,6 +1826,10 @@ fn refuse_reason(kind: Kind, name: &str) -> String {
         Kind::Tool => {
             "a sibling agent's bin_tools may name this id verbatim, and a numbered suffix would \
              silently point it at whatever already has this name"
+        }
+        Kind::Mcp => {
+            "a sibling agent's mcp list may name this id verbatim, and a numbered suffix would \
+             silently attach it to a stranger's server instead"
         }
         Kind::Llm | Kind::Embedding => {
             "an agent's backends (or an embedding assignment) may name this id verbatim, and a \
@@ -2470,6 +2497,105 @@ fn reland_llm(
     }
 }
 
+/// `mcp/<name>.toml` lands exactly like an LLM backend (same collision regime — an agent's own
+/// `mcp` list may name this id verbatim, so a suffixed id would silently point it at a stranger's
+/// server — same mint-or-refuse logic, same stamp-stripping), with two differences: it may be
+/// filed under a project (an MCP server is as much "this project's integration" as a tool is), and
+/// its missing-secrets set is collected from every header/env value the transport declares, not
+/// one `api_key_env` field.
+fn land_mcp(
+    servers: &adi_mcp::McpServers,
+    root: &Path,
+    el: &LayoutElement,
+    project: Option<&str>,
+    secrets: &adi_secrets::Secrets,
+    missing: &mut BTreeSet<String>,
+    may_mint: bool,
+) -> Landed {
+    let name = el.name.clone().unwrap_or_default();
+    let taken = |candidate: &str| matches!(servers.get(candidate), Ok(Some(_)));
+    let id = if taken(&name) {
+        if !may_mint {
+            return Landed::Blocked(refuse_reason(Kind::Mcp, &name));
+        }
+        adi_config::mint(&name, "mcp", |candidate| taken(candidate))
+    } else {
+        name.clone()
+    };
+    let text = match std::fs::read_to_string(root.join(&el.path)) {
+        Ok(t) => t,
+        Err(e) => return Landed::Failed(e.to_string()),
+    };
+    let mut manifest: adi_mcp::Manifest = match toml::from_str(&text) {
+        Ok(m) => m,
+        Err(e) => return Landed::Failed(format!("mcp/{name}.toml: {e}")),
+    };
+    let note = strip_stamps_note(
+        &format!("mcp/{name}.toml"),
+        manifest.created_at != 0 || manifest.updated_at != 0,
+    );
+    manifest.created_at = 0;
+    manifest.updated_at = 0;
+    manifest.project = project.map(str::to_string);
+    for secret_name in manifest.transport.required_secrets() {
+        if !secret_set(secrets, project, &secret_name) {
+            missing.insert(secret_name);
+        }
+    }
+    let note = note.or_else(|| (id != name).then(|| minted_note(Kind::Mcp, &name, &id)));
+    match servers.save(&id, manifest) {
+        Ok(_) => Landed::Ok {
+            fingerprint: fingerprint_file(&servers.dir().join(format!("{id}.toml"))),
+            renamed: id != name,
+            id,
+            note,
+        },
+        Err(e) => Landed::Failed(e.to_string()),
+    }
+}
+
+/// `update`'s own fast-forward of an already-landed server — same reasoning as [`reland_llm`],
+/// except a reland never rewrites [`adi_mcp::Manifest::project`]: it is this machine's own
+/// decision made once at install, not something a later pin can honestly carry an opinion about.
+fn reland_mcp(
+    servers: &adi_mcp::McpServers,
+    root: &Path,
+    layout_el: &LayoutElement,
+    ledger_el: &LedgerElement,
+    forced: bool,
+) -> Relanded {
+    let path = servers.dir().join(format!("{}.toml", ledger_el.id));
+    let live_fp = fingerprint_file(&path);
+    if live_fp != ledger_el.fingerprint && !forced {
+        return Relanded::Skipped(drift_note());
+    }
+    let text = match std::fs::read_to_string(root.join(&layout_el.path)) {
+        Ok(t) => t,
+        Err(e) => return Relanded::Failed(e.to_string()),
+    };
+    let mut manifest: adi_mcp::Manifest = match toml::from_str(&text) {
+        Ok(m) => m,
+        Err(e) => return Relanded::Failed(format!("mcp/{}.toml: {e}", ledger_el.name)),
+    };
+    // Carried over from the live definition rather than re-read from the repository: the
+    // repository's own copy never had an operator's project assignment to begin with.
+    manifest.project = match servers.get(&ledger_el.id) {
+        Ok(Some(live)) => live.manifest.project,
+        _ => None,
+    };
+    match servers.save(&ledger_el.id, manifest) {
+        Ok(_) => {
+            let fingerprint = fingerprint_file(&path);
+            Relanded::Ok {
+                changed: fingerprint != ledger_el.fingerprint,
+                note: forced_note(live_fp != ledger_el.fingerprint),
+                fingerprint,
+            }
+        }
+        Err(e) => Relanded::Failed(e.to_string()),
+    }
+}
+
 fn land_embedding(
     backends: &adi_embeddings::EmbeddingBackends,
     root: &Path,
@@ -2652,6 +2778,17 @@ mod tests {
         .expect("embedding");
     }
 
+    /// An MCP server definition, `mcp/<name>.toml`, naming one secret it needs by `secret = {...}`
+    /// — the collision/missing-secrets fixture both share.
+    fn write_mcp(root: &Path, name: &str) {
+        std::fs::create_dir_all(root.join("mcp")).expect("dir");
+        std::fs::write(
+            root.join("mcp").join(format!("{name}.toml")),
+            "[transport]\nkind = \"http\"\nurl = \"http://n8n.adi/mcp/\"\n[transport.headers]\nAuthorization = { secret = \"N8N_TOKEN\" }\n",
+        )
+        .expect("mcp");
+    }
+
     fn write_service(root: &Path, name: &str) {
         std::fs::create_dir_all(root.join("services")).expect("dir");
         std::fs::write(
@@ -2773,8 +2910,13 @@ mod tests {
     fn a_full_bundle_lands_every_kind_through_its_own_store() {
         let (market, _repo, commit) = fixture("full", "crm-suite", |root| {
             write_project(root, "CRM Suite");
-            write_agent(root, "sales-bot", "bin_tools = [\"csv-import\"]\n");
+            write_agent(
+                root,
+                "sales-bot",
+                "bin_tools = [\"csv-import\"]\nmcp = [\"n8n\"]\n",
+            );
             write_tool(root, "csv-import");
+            write_mcp(root, "n8n");
             write_dashboard(root, "crm");
             write_llm(root, "gpt5");
             write_embedding(root, "e5");
@@ -2785,8 +2927,13 @@ mod tests {
         let installed = unwrap_bundle(install(&market, "adi/crm-suite", "", false, &Scope::Global).expect("install"));
         assert_eq!(installed.marketplace, "adi");
         assert_eq!(installed.slug, "crm-suite");
-        assert_eq!(installed.elements.len(), 8, "{:?}", installed.elements);
+        assert_eq!(installed.elements.len(), 9, "{:?}", installed.elements);
         assert!(installed.elements.iter().all(|e| e.id.is_some()), "{:?}", installed.elements);
+        assert_eq!(
+            installed.missing_secrets,
+            vec!["N8N_TOKEN".to_string()],
+            "the mcp element's own header names a secret nobody has set"
+        );
 
         // The project landed under the bundle's own slug, and every sibling was filed under it.
         assert_eq!(installed.project.as_deref(), Some("crm-suite"));
@@ -2798,12 +2945,25 @@ mod tests {
         assert_eq!(agent.manifest.project.as_deref(), Some("crm-suite"));
         // The tool landed verbatim, so the untouched `bin_tools` reference already resolves.
         assert_eq!(agent.manifest.bin_tools, vec!["csv-import".to_string()]);
+        assert_eq!(agent.manifest.mcp, vec!["n8n".to_string()]);
 
         let tool = adi_tools::Tools::with_config(market.config().clone())
             .get("csv-import")
             .expect("get")
             .expect("present");
         assert_eq!(tool.id, "csv-import", "a refuse-kind lands under its exact published name");
+
+        let mcp_id = outcome_of(&installed, Kind::Mcp, "n8n").id.clone().expect("id");
+        assert_eq!(mcp_id, "n8n", "a refuse-kind lands under its exact published name");
+        let server = adi_mcp::McpServers::with_config(market.config().clone())
+            .get("n8n")
+            .expect("get")
+            .expect("present");
+        assert_eq!(server.manifest.project.as_deref(), Some("crm-suite"), "filed like a tool");
+        assert_eq!(
+            server.manifest.transport.required_secrets(),
+            std::collections::BTreeSet::from(["N8N_TOKEN".to_string()])
+        );
 
         let dashboard_id = outcome_of(&installed, Kind::Dashboard, "crm").id.clone().expect("id");
         assert!(market.dashboards_dir().join(&dashboard_id).join("frontend").join("index.ts").is_file());
@@ -2848,7 +3008,7 @@ mod tests {
         assert!(clone_dir.join(".git").is_dir());
         assert_eq!(git::head(&clone_dir).as_deref(), Some(commit.as_str()));
         let ledger = read_ledger(&market, "adi", "crm-suite", &Scope::Global).expect("ledger");
-        assert_eq!(ledger.elements.len(), 8);
+        assert_eq!(ledger.elements.len(), 9);
         assert!(ledger.elements.iter().all(|e| !e.fingerprint.is_empty()));
         assert_eq!(ledger.commit, commit);
 
@@ -2993,6 +3153,53 @@ mod tests {
 
         // The stranger's script is untouched — a refuse-kind collision never overwrites.
         assert_eq!(tools.read_script("csv-import").expect("read"), "#!/bin/sh\necho stranger\n");
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    #[test]
+    fn an_mcp_server_collision_is_refused_not_overwritten_but_mints_in_a_project() {
+        let (market, ..) = fixture("mcp-collide", "mcp-bundle", |root| {
+            write_mcp(root, "n8n");
+        });
+        let servers = adi_mcp::McpServers::with_config(market.config().clone());
+        servers
+            .save(
+                "n8n",
+                adi_mcp::Manifest::new(
+                    "the stranger's",
+                    adi_mcp::Transport::Stdio {
+                        command: "echo".into(),
+                        args: vec![],
+                        env: std::collections::BTreeMap::new(),
+                    },
+                ),
+            )
+            .expect("seed a stranger server at the same id");
+
+        let installed =
+            unwrap_bundle(install(&market, "adi/mcp-bundle", "", false, &Scope::Global).expect("install"));
+        let outcome = outcome_of(&installed, Kind::Mcp, "n8n");
+        assert!(outcome.id.is_none(), "{outcome:?}");
+        assert!(outcome.note.as_deref().is_some_and(|n| n.contains("already exists")), "{outcome:?}");
+
+        // The stranger's definition is untouched — a refuse-kind collision never overwrites.
+        let stranger = servers.get("n8n").expect("get").expect("present");
+        assert_eq!(stranger.manifest.name, "the stranger's");
+
+        // A project-scoped install of the same bundle mints past the collision instead, and lands
+        // beside the global copy under an id of its own.
+        adi_projects::Projects::with_config(market.config().clone())
+            .create_with_id("acme", Some("Acme".to_string()), None, None)
+            .expect("project");
+        let installed = unwrap_bundle(
+            install(&market, "adi/mcp-bundle", "", false, &Scope::Project("acme".to_string()))
+                .expect("install"),
+        );
+        let outcome = outcome_of(&installed, Kind::Mcp, "n8n");
+        let minted_id = outcome.id.clone().expect("minted id");
+        assert_ne!(minted_id, "n8n");
+        assert!(outcome.renamed);
+
         let _ = std::fs::remove_dir_all(market.config().root());
     }
 

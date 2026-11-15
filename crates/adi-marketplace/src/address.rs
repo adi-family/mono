@@ -36,7 +36,7 @@ pub struct Address {
 /// The third coordinate: which element, of which kind.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ElementAddress {
-    /// Which of the eight kind directories it lives under.
+    /// Which of the ten kind directories it lives under.
     pub kind: Kind,
     /// The published name — absent only for [`Kind::Project`], the one singleton kind.
     pub name: Option<String>,

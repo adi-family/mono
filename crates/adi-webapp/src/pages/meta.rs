@@ -232,6 +232,7 @@ fn submit_setup(state: State, form: MetaForm) {
         starred: None,
         project: None,
         bin_tools,
+        mcp: None,
         // As `path` and `env` below: this form doesn't edit the pre-run commands, so `None`
         // leaves whatever the agent already has.
         prelude: None,

@@ -293,6 +293,7 @@ struct Stores {
     projects: adi_projects::Projects,
     llm_backends: adi_agents::llm::LlmBackends,
     embedding_backends: adi_embeddings::EmbeddingBackends,
+    mcp_servers: adi_mcp::McpServers,
     secrets: adi_secrets::Secrets,
     dashboards_dir: PathBuf,
     parked_services_dir: PathBuf,
@@ -565,7 +566,7 @@ pub struct Updated {
 
 ### enum `Kind`
 
-One of the nine platform surfaces a bundle may carry an element for.
+One of the ten platform surfaces a bundle may carry an element for.
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -579,6 +580,7 @@ pub enum Kind {
     Trigger,
     Project,
     Template,
+    Mcp,
 }
 ```
 

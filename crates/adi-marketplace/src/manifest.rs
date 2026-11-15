@@ -140,7 +140,8 @@ pub struct BundleEntry {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Element {
     /// One of `agent` | `tool` | `dashboard` | `llm` | `embedding` | `service` | `trigger` |
-    /// `project` — the manifest's own, singular spelling (`crate::kind::Kind::wire`). A word this
+    /// `project` | `template` | `mcp` — the manifest's own, singular spelling
+    /// (`crate::kind::Kind::wire`). A word this
     /// build does not recognise is not a validation failure: [`Element::kind`] reads back `None`,
     /// and [`BundleEntry::elements`] leaves it out of the preview.
     pub kind: String,
@@ -153,7 +154,7 @@ pub struct Element {
 }
 
 impl Element {
-    /// The kind this build understands `kind` as, or `None` for a word not among the eight.
+    /// The kind this build understands `kind` as, or `None` for a word not among the ten.
     #[must_use]
     pub fn kind(&self) -> Option<Kind> {
         Kind::from_wire(self.kind.trim())
