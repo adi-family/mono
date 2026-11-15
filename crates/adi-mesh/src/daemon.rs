@@ -4,7 +4,7 @@
 //! either way the tasks live only as long as the handle, so nothing survives the owner.
 //!
 //! The endpoint carries **three ALPNs**: the raw TCP forward that ssh and databases use, the
-//! fleet's HTTP gateway (`docs/fleet.md` §7), and the [join](crate::join) handshake a node dials
+//! fleet's HTTP gateway, and the [join](crate::join) handshake a node dials
 //! out with to be paired (E3). They are dispatched by `conn.alpn()` inside the
 //! one accept loop [`host::serve`] already owns, rather than by iroh's
 //! [`protocol::Router`](iroh::protocol::Router) — see [`crate::gateway`] for why that choice went
@@ -63,7 +63,7 @@ impl Daemon {
         let mut builder = Endpoint::builder(presets::N0)
             .secret_key(secret)
             // Every ALPN on one endpoint, so a machine keeps one identity and one relay session
-            // whether a peer wants a raw port, a service (`docs/fleet.md` §7), or to be paired.
+            // whether a peer wants a raw port, a service, or to be paired.
             // The join ALPN belongs here and not on a listener of its own: a viewer that had to
             // open something extra to accept a pairing is a viewer that can forget to close it.
             .alpns(vec![
@@ -168,7 +168,7 @@ impl Daemon {
     }
 
     /// Spend an invite over **this** daemon's endpoint: the dialling half of the pairing in
-    /// `docs/fleet.md` §8, run by a machine whose mesh is already up.
+    /// Pairing, run by a machine whose mesh is already up.
     ///
     /// It exists so that machine never reaches for [`join::join`], which binds an endpoint of its
     /// own. Two endpoints on one secret key race for the same relay session — the loser's peers

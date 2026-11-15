@@ -99,7 +99,7 @@ final class FleetModel {
     /// Ask one node what dashboards it has.
     ///
     /// A node this phone has no password for is not asked at all. That is not a failure to report
-    /// as one: the panel's own gate is what the password answers (`docs/fleet.md` §5), and opening
+    /// as one: the panel's own gate is what the password answers, and opening
     /// the node's control panel once is what fills the Keychain — so the sentence says that.
     ///
     /// `attempts` exists for the one moment the first answer is expected to be wrong. A node whose

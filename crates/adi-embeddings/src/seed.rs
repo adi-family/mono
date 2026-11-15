@@ -2,7 +2,7 @@
 //! that adopting this registry changes nothing until an operator asks it to.
 //!
 //! Runs once. `embeddings/settings.toml`'s *presence* is the marker — the same shape a
-//! migration's version stamp is (`docs/llm-backends.md`'s "The version stamp") — not "the store
+//! migration's version stamp is — not "the store
 //! currently has zero backends," so a store an operator has since emptied on purpose is never
 //! re-seeded.
 
@@ -19,7 +19,7 @@ const CANDLE_ID: &str = "candle";
 const OLLAMA_ID: &str = "ollama";
 
 /// The environment variable `adi_facts::embed::OllamaEmbedder` reads its host from, honoured
-/// here **only at seed time** — see `docs/embedding-backends.md`'s "Seeding".
+/// here **only at seed time**.
 const ADI_FACTS_OLLAMA: &str = "ADI_FACTS_OLLAMA";
 /// The environment variable `adi_facts::embed::OllamaEmbedder` reads its model from, honoured
 /// here only at seed time.
@@ -48,7 +48,7 @@ pub(crate) fn seed_if_needed(backends: &EmbeddingBackends) -> Result<EmbeddingSe
     // `CANDLE_FIXED_MODEL`, not `adi_indexer::embed::CANDLE_MODEL_ID`/`CANDLE_DIMENSIONS`: seeding
     // must write the same manifest whether or not this binary was built with the `candle`
     // feature, so the backend is there — reported unavailable, not missing — the day the feature
-    // is turned back on. See `docs/embedding-backends.md`'s "Seeding".
+    // is turned back on.
     let (candle_model, candle_dimensions) = crate::backend::CANDLE_FIXED_MODEL;
     backends.save(
         CANDLE_ID,

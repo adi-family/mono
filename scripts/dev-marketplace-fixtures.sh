@@ -2,10 +2,10 @@
 # Build the local marketplace the dev panel browses: five bundle repositories, one manifest
 # listing them, and the source entry that points the dev store at it.
 #
-# It exists because the v2 marketplace (docs/marketplace-bundles.md) cannot be looked at without
+# It exists because the v2 marketplace cannot be looked at without
 # bundles to look at, and nothing is published yet — every real manifest out there still lists a
 # v1 app. The `file://` carve-out both `sources.toml` and `bundles[].repo` already grant for
-# exactly this case (docs/marketplace.md, "Sources") is what makes it work with no host involved.
+# exactly this case is what makes it work with no host involved.
 #
 # The five cover the shapes a reviewer needs to compare side by side:
 #
@@ -38,8 +38,7 @@ fixtures="${ADI_FIXTURES:-$ADI_DIR/fixtures}"
 repos="$fixtures/repos"
 manifest="$fixtures/marketplace.json"
 source_name="${ADI_FIXTURE_SOURCE:-bundles}"
-# The new `marketplace` verbs are not in the released binary yet (docs/marketplace-bundles.md
-# says so out loud), so the debug build is the one that can add a file:// source at all.
+# The new `marketplace` verbs are not in the released binary yet, so the debug build is the one that can add a file:// source at all.
 cli="${ADI_MONO:-$repo_root/target/debug/adi-mono}"
 
 [ -x "$cli" ] || { echo "error: no adi-mono at $cli — cargo build -p adi-cli" >&2; exit 1; }
@@ -159,7 +158,7 @@ commit_repo "$repos/reviewer"
 mkdir -p "$repos/crm-suite/agents" "$repos/crm-suite/tools" "$repos/crm-suite/llm"
 # bin_tools and backends name this bundle's own siblings by their published ids, which is the
 # only wiring a publisher can honestly write: those two kinds land verbatim or not at all
-# (docs/marketplace-bundles.md decision #3), so the reference resolves or the element is simply
+# (the kinds that are never renamed), so the reference resolves or the element is simply
 # absent — it never quietly points at a stranger's tool of the same name.
 cat > "$repos/crm-suite/agents/sales-bot.toml" <<'TOML'
 tags = ["sales", "follow-up"]
@@ -256,9 +255,8 @@ python3 - "$repos" "$manifest" <<'PY'
 """Write the manifest the five repositories are published in.
 
 Icons and gallery stills are `data:` URIs rather than links: the manifest has already been
-fetched, so an icon carried inside it costs no further request and works with the network gone
-(docs/marketplace.md). It is also the only honest way to publish an image from a repository that
-has no host — the same reason the manifest itself is a file:// source here.
+fetched, so an icon carried inside it costs no further request and works with the network gone.
+It is also the only honest way to publish an image from a repository that has no host — the same reason the manifest itself is a file:// source here.
 """
 
 import base64, json, os, shutil, subprocess, sys

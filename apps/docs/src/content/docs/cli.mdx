@@ -35,8 +35,8 @@ always the same one.
 | `secrets` | Encrypted key-values injected into agent runs | [[Secrets]] |
 | `db` | Run SQL against the shared SQLite store | [[Database]] |
 | `agents` | Agent definitions, runs, questions, goals-per-run limits | [[Agents]] |
-| `llm` | LLM backend registry: credentials, holds, probing | [[Models and backends]] |
-| `embeddings` | Embedding backend registry for indexer/knowledge/facts | [[Models and backends]] |
+| `llm` | LLM backend registry: credentials, holds, probing | [Models and backends](/models/) |
+| `embeddings` | Embedding backend registry for indexer/knowledge/facts | [Models and backends](/models/) |
 | `goals` | Set and close the goal a conversation is working toward | — |
 | `triggers` | Background code blocks fired by webhooks, events, or a schedule | [[Triggers]] |
 | `knowledge` | Scoped, embedded notes searched by meaning | [[Knowledge]] |
@@ -89,7 +89,7 @@ services down stops things you didn't mean to touch. The binary this page docume
 **Secrets: three verbs, two return different things.** `adi-mono secrets read NAME` prints the
 raw decrypted value and nothing else — the one to pipe into a script (`TOKEN=$(adi-mono secrets
 read GITHUB_TOKEN)`). `secrets get NAME` prints metadata by default, and only prints the value if
-you pass `--reveal`. `secrets list` never shows a value, under any flag — see [[Secrets]] for why.
+you pass `--reveal`. `secrets list` never shows a value, under any flag — see [[secrets|Secrets]] for why.
 Reach for `read` when you want the value; `get --reveal` is for a human checking one by eye.
 
 **`secrets set` help mismatch.** Its own `--help` description says the value "comes from

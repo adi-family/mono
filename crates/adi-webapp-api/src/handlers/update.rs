@@ -197,7 +197,7 @@ fn snapshot() -> UpdateState {
     }
 }
 
-/// The licence-service's own host (`docs/enterprise-update-channel.md` §3, §9): once a box's
+/// The licence-service's own host: once a box's
 /// `manifest_url` points here, a 401/402/403/404/409 is one of *this* host's licence states, not
 /// a plain GitHub repository's bare "no credentials" 404 — see [`classify_error`].
 const LICENCE_SERVICE_HOST: &str = "licence.withadi.dev";
@@ -220,9 +220,9 @@ fn is_licence_service(manifest_url: &str) -> bool {
 /// different wording:
 ///
 /// - `curl -fsSL` reports any HTTP failure response as `(22)` with the status code quoted in
-///   the text (`docs/adi-update.md` §8's manifest-fetch path), and that status digit is the
+///   the text, and that status digit is the
 ///   only signal that survives `-f`'s discarded body — which is exactly why the licence-service
-///   (`docs/enterprise-update-channel.md` §5) assigns one status per licence state instead of
+///   assigns one status per licence state instead of
 ///   distinguishing them in a body nobody downstream ever reads.
 /// - Pointed at the licence-service host, those codes are licence states: `401` no/garbage
 ///   credentials, `402` expired, `403` revoked, `404` a licence code the service has never
@@ -336,8 +336,8 @@ mod tests {
     /// The real string this records on an Enterprise box with the manifest private and no
     /// `auth_header` set yet — the exact shape of ADI-34's known-good failure (see
     /// `~/.adi/mono/update/config.toml`'s own comment on that box). Not a licence-service host,
-    /// so this must stay `private-channel` exactly as before (`docs/enterprise-update-channel.md`
-    /// §5: "`private-channel` itself is not retired").
+    /// so this must stay `private-channel` exactly as before: `private-channel`
+    /// itself is not retired.
     #[test]
     fn a_404_with_no_auth_header_is_a_private_channel() {
         let err = "could not fetch the release manifest: curl: (22) The requested URL returned \

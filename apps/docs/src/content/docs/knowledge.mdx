@@ -45,7 +45,7 @@ of them. Name `--base` (repeatable) to narrow it to one or a few.
 
 A base id is `<scope>/<name>`; a bare scope means that scope's `default` base. Notes are stored
 locally, in a file under `~/.adi/mono/knowledge/`; the default
-[[Models and backends|embedding backend]] runs locally too, after its one-time download. The
+[[models|embedding backend]] runs locally too, after its one-time download. The
 scopes are the same [[Projects|project]] and [[Agents|agent]] identities everything else in ADI
 uses:
 
@@ -80,7 +80,7 @@ adi-knowledge-root add agent:solver/memory --create \
 
 ## Staying searchable <Flags>Expert area</Flags>
 
-Semantic search needs an [[Models and backends|embedding backend]] behind every note, and a note
+Semantic search needs an [[models|embedding backend]] behind every note, and a note
 written while that backend was unavailable is stored and full-text searchable but not yet found
 by meaning — `list` marks it with a `*`, and `base status` counts it:
 
@@ -105,11 +105,11 @@ global/runbooks: embedded 412 of 412 note(s) into 1174 chunk(s); 0 already curre
 records which model made it, so switching backends invalidates the old ones rather than silently
 mixing two. [[Facts]] uses a different embedding backend by default, for reasons specific to that
 design; vectors from the two are never compared against each other. See
-[[Models and backends#Local versus hosted]] for where embedding backends run.
+[[models#Local versus hosted|local versus hosted]] for where embedding backends run.
 
 ## See also
 
-[[Models and backends]] for what embeds a note and what changing that costs you. [[Facts]] for a
+[[models|Models and backends]] for what embeds a note and what changing that costs you. [[Facts]] for a
 record of what was actually said, rather than a note to yourself. [[Agents]] for `memory` and the
 `knowledge` grant list on a definition. [[Projects]] for the scope a `project:<id>/<name>` base
 lives under. [[Database]] for the other place state outlives a run.

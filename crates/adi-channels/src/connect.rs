@@ -1,4 +1,4 @@
-//! The synchronous half of `docs/channels.md` §7's "Connect": call the router's `POST /register`
+//! The synchronous half of "Connect": call the router's `POST /register`
 //! (which mints this `(node, provider)`'s token — once — and a fresh connection in the same
 //! call), record the token, and mirror that connection locally under the id the router minted
 //! for it.
@@ -8,7 +8,7 @@
 //! runtime. This module handles registration synchronously from its API's blocking pool.
 //!
 //! [`disconnect`] tells the router first (`POST /disconnect`, added by ADI-MONO-122 once
-//! ADI-MONO-120/121 both flagged the gap — see `docs/channels.md` §1 step 4) and only then drops
+//! ADI-MONO-120/121 both flagged the gap) and only then drops
 //! this node's own state (the connection row, and the provider's node token once nothing else
 //! needs it) — the router's own entry and the D1 routing row are the authoritative record of
 //! whether a chat/workspace still reaches this node, so they go first.
@@ -43,7 +43,7 @@ pub struct Router<'a> {
 }
 
 /// `adi-mono channels connect <svc> --agent <a>` / `POST /api/channels/connect`
-/// (`docs/channels.md` §7): register this node for `provider` (minting or reusing its node
+/// — register this node for `provider` (minting or reusing its node
 /// token) and mirror the fresh, unlinked connection the router created in the same call. The
 /// local mirror's allowlist is set from `allowlist` when given, else left at
 /// [`Allowlist::default`] (owner-only) regardless of what the router itself was told — the

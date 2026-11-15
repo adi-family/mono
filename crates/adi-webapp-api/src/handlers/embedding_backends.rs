@@ -5,8 +5,7 @@
 //! runs with, and the fallbacks it may fail over to — set up once here, mirroring
 //! `/api/llm/backends`'s flat shape (never built on another backend). It is narrower on purpose:
 //! there is no hold, no prober, and no context-window shape to carry, because there is no chat
-//! conversation to fail over *within* — see `docs/embedding-backends.md`'s "why this is narrower
-//! than the LLM design."
+//! conversation to fail over *within*.
 //!
 //! Two things only this registry needs of its own, and both are computed rather than stored: **is
 //! it here**, and **whether this binary can actually build it** (false only for `candle` without

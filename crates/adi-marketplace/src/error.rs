@@ -113,17 +113,15 @@ pub enum Error {
     BadAddress(String),
     /// A bundle repository carries Rust — source or a compiled binary — under one of its kind
     /// directories. Refused per "No Rust in an item": the store has never grown the capability to
-    /// compile or run anything untrusted, and a bundle is not where that starts
-    /// (`docs/marketplace-bundles.md`).
+    /// compile or run anything untrusted, and a bundle is not where that starts.
     #[error(
-        "{0} carries {1} at {2} — an item may never carry Rust source or a compiled binary \
-         (docs/marketplace-bundles.md)"
+        "{0} carries {1} at {2} — an item may never carry Rust source or a compiled binary"
     )]
     CarriesRust(String, String, String),
     /// An address named one element of a bundle, but the tree at the pinned commit does not carry
     /// it — the manifest's preview promised something the repository does not, or the operator
-    /// simply mistyped the coordinate (`docs/marketplace-bundles.md` decision #2: the preview is
-    /// advisory, checked against the real tree only here).
+    /// simply mistyped the coordinate (the preview is advisory, checked against the real tree
+    /// only here).
     #[error("{0:?} names no element the repository actually carries")]
     UnknownElement(String),
     /// A bundle whose tree, once read, carries nothing installable: no kind directory, and not

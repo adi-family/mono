@@ -106,6 +106,18 @@ pub struct AgentManifest<Args> {
     /// `--allowed-tools` (which lives in `arguments.tools`); these are ADI CLIs the agent can run.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bin_tools: Vec<String>,
+    /// The ids of the `adi-mcp` **MCP server** definitions this agent's runs are given, beside
+    /// ADI's own per-conversation server (`adi_agents::backends::mcp`). Each is passed to a
+    /// backend that knows how to speak MCP in its own `--mcp-config` (still `--strict-mcp-config`,
+    /// so a run gets exactly its own server plus exactly what it names here — never whatever is
+    /// installed on the machine). A backend that cannot do this at all refuses to launch rather
+    /// than silently dropping the servers a non-empty list here names; see
+    /// `adi_agents::backends::mcp` for which ones can.
+    ///
+    /// A server naming a secret this agent never attached (see [`secrets`](Self::secrets)) is
+    /// dropped whole at launch, the same tolerance a dangling `bin_tools` id already gets.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp: Vec<String>,
     /// Shell commands run *before* this agent's first message reaches the model, in order — the
     /// tool calls the agent would otherwise have to spend its opening turn making.
     ///
@@ -174,7 +186,7 @@ pub struct AgentManifest<Args> {
     /// **Row 1 is what a new conversation starts on**, and the rest are where it goes when a
     /// backend runs out; there is no `default_backend` field because the default is first in the
     /// list. Each row names a backend and may override its model and dials, never its runtime or
-    /// its credential. See [`AgentBackendEntry`] and `docs/llm-backends.md`.
+    /// its credential. See [`AgentBackendEntry`].
     ///
     /// Empty means this agent has not been migrated yet and still answers on
     /// [`backend`](Self::backend) plus whatever its [`arguments`](Self::arguments) say — the state
@@ -276,6 +288,7 @@ impl<Args> AgentManifest<Args> {
             starred: self.starred,
             project: self.project.clone(),
             bin_tools: self.bin_tools.clone(),
+            mcp: self.mcp.clone(),
             prelude: self.prelude.clone(),
             knowledge: self.knowledge.clone(),
             memory: self.memory,

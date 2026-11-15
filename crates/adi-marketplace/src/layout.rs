@@ -1,6 +1,6 @@
 //! Reading a bundle repository's tree: what is really there, at the pinned commit, regardless of
-//! what the manifest's advisory `elements[]` preview claims (`docs/marketplace-bundles.md`
-//! decision #2). This is what a bundle installer dispatches on — nothing here lands a file, it
+//! what the manifest's advisory `elements[]` preview claims.
+//! This is what a bundle installer dispatches on — nothing here lands a file, it
 //! only looks.
 //!
 //! A repository is laid out by kind, one top-level directory per kind that applies, all optional:
@@ -14,6 +14,7 @@
 //! services/<name>.yaml      # one hive service
 //! triggers/<name>.toml      # a trigger definition
 //! project/config.toml       # the bundle's own project scaffold — at most one per bundle
+//! mcp/<name>.toml           # an MCP server definition
 //! ```
 //!
 //! **A legacy v1 app repository — `frontend/index.ts` and `backend/index.ts` at the root, no
@@ -28,7 +29,7 @@
 //! a compiled binary's magic number anywhere under a kind directory refuses the whole bundle. It
 //! belongs beside `install::stage`'s existing `NotAnApp` check, in whatever pipeline a bundle
 //! installer builds alongside it — the same place in spirit, new code because `stage` itself does
-//! not generalize (`docs/marketplace-bundles.md`, "What v1's code assumes this design changes").
+//! not generalize.
 
 use std::fs;
 use std::io::Read as _;
@@ -55,7 +56,7 @@ pub struct Layout {
 /// One element as the tree actually carries it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LayoutElement {
-    /// Which of the eight kinds this is.
+    /// Which of the ten kinds this is.
     pub kind: Kind,
     /// The published name — the file or directory stem. Absent only for the `project` singleton.
     pub name: Option<String>,
@@ -143,7 +144,7 @@ fn element_name(kind: Kind, entry: &fs::DirEntry) -> Option<String> {
     let file_name = entry.file_name();
     let file_name = file_name.to_str()?;
     match kind {
-        Kind::Agent | Kind::Llm | Kind::Embedding | Kind::Trigger => {
+        Kind::Agent | Kind::Llm | Kind::Embedding | Kind::Trigger | Kind::Mcp => {
             file_name.strip_suffix(".toml").map(str::to_string)
         }
         Kind::Tool => file_name
@@ -199,8 +200,8 @@ fn magic_name(head: &[u8]) -> Option<&'static str> {
 }
 
 /// Refuse `root` if it carries Rust — source or a compiled binary — anywhere under one of the
-/// eight kind directories: a `Cargo.toml`, a `.rs` file, or a file opening with an ELF, Mach-O or
-/// PE magic number ("No Rust in an item", `docs/marketplace-bundles.md`).
+/// ten kind directories: a `Cargo.toml`, a `.rs` file, or a file opening with an ELF, Mach-O or
+/// PE magic number ("No Rust in an item").
 ///
 /// A publishing-time content rule, not a sandbox: it catches what is checked in, not what a
 /// tool's script or a hive service's `runner.docker` image might do at runtime — see the design
@@ -342,6 +343,8 @@ mod tests {
         std::fs::write(root.join("triggers").join("nightly.toml"), "").expect("f");
         std::fs::create_dir_all(root.join("project")).expect("d");
         std::fs::write(root.join("project").join("config.toml"), "").expect("f");
+        std::fs::create_dir_all(root.join("mcp")).expect("d");
+        std::fs::write(root.join("mcp").join("n8n.toml"), "").expect("f");
         // Unrelated files beside the real entries are not elements.
         std::fs::write(root.join("agents").join("README.md"), "").expect("f");
 
@@ -362,12 +365,13 @@ mod tests {
         assert_eq!(named(Kind::Embedding), vec!["e5"]);
         assert_eq!(named(Kind::Service), vec!["redis"]);
         assert_eq!(named(Kind::Trigger), vec!["nightly"]);
+        assert_eq!(named(Kind::Mcp), vec!["n8n"]);
         assert_eq!(
             layout.elements.iter().find(|e| e.kind == Kind::Project).map(|e| &e.name),
             Some(&None),
             "the singleton carries no name"
         );
-        assert_eq!(layout.elements.len(), 8, "the readme did not become a ninth");
+        assert_eq!(layout.elements.len(), 9, "the readme did not become a tenth");
         let _ = std::fs::remove_dir_all(&root);
     }
 

@@ -113,12 +113,12 @@ pub(crate) enum Route {
     Mesh,
     /// The paired remote adi nodes — `<service>.<node>.n.adi` (`/settings/fleet`).
     Fleet,
-    /// One ADI agent, reachable from Telegram/Slack (`docs/channels.md`) — a card per service,
+    /// One ADI agent, reachable from Telegram/Slack — a card per service,
     /// connect/pause/who-may-talk/disconnect (`/settings/channels`).
     Channels,
     /// Service status, the platform power switch, a restart, updates and a diagnostic report —
     /// the web twin of the mac app's menu-bar window (`/settings/system`). Always about *this*
-    /// machine, never the panel-wide source picker's target (`docs/fleet.md` §14's L3).
+    /// machine, never the panel-wide source picker's target.
     System,
     /// Whether the webapp bundle is served from the shared-assets CDN instead of this instance's
     /// own `dist/` (`/settings/shared-assets`).

@@ -36,6 +36,7 @@ mod llm;
 /// The registry of LLM backends an agent may answer on, and the shared record of which are spent.
 mod llm_backends;
 mod marketplace;
+mod mcp;
 mod mesh;
 mod meta;
 mod ports;
@@ -45,8 +46,7 @@ mod projects;
 mod qr;
 mod response;
 mod secrets;
-/// A user's own BYO-credentials scope, and the server's `[user_secrets]` policy
-/// (`docs/byo-credentials.md` §4, §7, ADI-MONO-178).
+/// A user's own BYO-credentials scope, and the server's `[user_secrets]` policy.
 mod secrets_mine;
 mod services;
 mod shared_assets;
@@ -76,6 +76,7 @@ pub use knowledge::*;
 pub use llm::*;
 pub use llm_backends::*;
 pub use marketplace::*;
+pub use mcp::*;
 pub use mesh::*;
 pub use meta::*;
 pub use ports::*;
@@ -110,6 +111,8 @@ use std::time::Instant;
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use adi_agents::Backend;
     use adi_agents::runner::Session;
     use adi_agents::store::SessionStore;
@@ -117,6 +120,11 @@ mod tests {
     use serde_json::Value;
 
     use super::*;
+
+    /// No headers — what every direct call site except a real HTTP request passes.
+    fn no_headers() -> HashMap<String, String> {
+        HashMap::new()
+    }
 
     fn temp_manager() -> Ports {
         // Isolated registry per test so we never touch the real one.
@@ -1416,21 +1424,66 @@ mod tests {
         );
 
         // Unknown, unsafe, and background names all answer the same 404.
-        assert_eq!(hook_trigger(&store, "ghost", "", b"").status, 404);
-        assert_eq!(hook_trigger(&store, "../etc", "", b"").status, 404);
-        assert_eq!(hook_trigger(&store, "background-only", "", b"").status, 404);
-        assert_eq!(hook_trigger(&store, "paused", "", b"").status, 403);
-        assert_eq!(hook_trigger(&store, "locked", "", b"").status, 403);
         assert_eq!(
-            hook_trigger(&store, "locked", "secret=wrong", b"").status,
+            hook_trigger(&store, "ghost", "", &no_headers(), b"").status,
+            404
+        );
+        assert_eq!(
+            hook_trigger(&store, "../etc", "", &no_headers(), b"").status,
+            404
+        );
+        assert_eq!(
+            hook_trigger(&store, "background-only", "", &no_headers(), b"").status,
+            404
+        );
+        assert_eq!(
+            hook_trigger(&store, "paused", "", &no_headers(), b"").status,
             403
         );
-        let Response { status, body } =
-            hook_trigger(&store, "locked", "x=1&secret=s3", b"{\"ref\":\"main\"}");
+        assert_eq!(
+            hook_trigger(&store, "locked", "", &no_headers(), b"").status,
+            403
+        );
+        assert_eq!(
+            hook_trigger(&store, "locked", "secret=wrong", &no_headers(), b"").status,
+            403
+        );
+        let Response { status, body } = hook_trigger(
+            &store,
+            "locked",
+            "x=1&secret=s3",
+            &no_headers(),
+            b"{\"ref\":\"main\"}",
+        );
         assert_eq!(status, 200, "{body}");
         let v: Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["ok"], true);
         assert_eq!(v["trigger"], "locked");
+    }
+
+    /// A hook's request headers reach its code block via `ADI_HEADERS_FILE`, so a trigger can
+    /// verify a provider's HMAC signature header — the whole point of ADI-MONO-221.
+    #[test]
+    fn hook_headers_reach_the_code_block() {
+        let store = temp_triggers();
+        let _ = save_trigger(
+            &store,
+            &inert_supervisor(&store),
+            br#"{"name":"signed","kind":"webhook","code":"cat \"$ADI_HEADERS_FILE\""}"#,
+        );
+        let mut headers = HashMap::new();
+        headers.insert(
+            "x-hub-signature-256".to_string(),
+            "sha256=deadbeef".to_string(),
+        );
+        let Response { status, .. } = hook_trigger(&store, "signed", "", &headers, b"{}");
+        assert_eq!(status, 200);
+        assert!(wait_until(|| store
+            .read_log("signed")
+            .is_some_and(|s| !s.is_empty())));
+        let text = store.read_log("signed").unwrap();
+        let got: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(got["x-hub-signature-256"], "sha256=deadbeef");
     }
 
     /// A webhook with a `trigger_on` allowlist only fires for a request body naming an allowed
@@ -1445,14 +1498,17 @@ mod tests {
         );
 
         // No project, and the wrong project, are both refused.
-        assert_eq!(hook_trigger(&store, "scoped", "", b"{}").status, 403);
         assert_eq!(
-            hook_trigger(&store, "scoped", "", br#"{"project":"beta"}"#).status,
+            hook_trigger(&store, "scoped", "", &no_headers(), b"{}").status,
+            403
+        );
+        assert_eq!(
+            hook_trigger(&store, "scoped", "", &no_headers(), br#"{"project":"beta"}"#).status,
             403
         );
         // The allowed project fires it.
         let Response { status, body } =
-            hook_trigger(&store, "scoped", "", br#"{"project":"alpha"}"#);
+            hook_trigger(&store, "scoped", "", &no_headers(), br#"{"project":"alpha"}"#);
         assert_eq!(status, 200, "{body}");
         let v: Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["ok"], true);

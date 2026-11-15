@@ -1,4 +1,4 @@
-//! `/api/channels/*` (`docs/channels.md` §7) — the node's own small API over
+//! `/api/channels/*` — the node's own small API over
 //! [`adi_channels::Connections`], which both `/settings/channels` and `adi-mono channels` (both
 //! ADI-MONO-122, not this crate) call. Connecting and disconnecting also talk to the router
 //! (`POST /register`, `POST /disconnect`), so those two take the extra context
@@ -38,7 +38,7 @@ pub fn channel_status(connected: std::collections::BTreeMap<String, bool>) -> Re
 }
 
 /// `GET /api/channels/<id>` — one connection, for the connect flow's own poll on `linked`
-/// (`docs/channels.md` §7: "the node is just waiting on its own WebSocket for a `linked` frame").
+/// (the node is just waiting on its own WebSocket for a `linked` frame).
 #[must_use]
 pub fn channel(store: &Connections, id: &str) -> Response {
     match store.get(id) {
@@ -52,8 +52,8 @@ pub fn channel(store: &Connections, id: &str) -> Response {
 /// token) and mirror the fresh, unlinked connection the router created in the same call.
 /// `router_url`/`admin_secret` name where and how to reach the router — `admin_secret` is `None`
 /// for the ordinary node (ADI-MONO-125: registration is open, not admin-gated, any more). The
-/// allowlist starts at the router's own default (owner-only) — `docs/channels.md` §7 has "who may
-/// talk" as a separate step (`adi-mono channels allow`), not part of connect's own request.
+/// allowlist starts at the router's own default (owner-only) — "who may talk" is
+/// a separate step (`adi-mono channels allow`), not part of connect's own request.
 #[must_use]
 pub fn connect_channel(
     connections: &Connections,

@@ -62,7 +62,8 @@ impl PtyRunner {
                         with_knowledge(spec, with_workspace(spec, config.append_system_prompt)),
                     ),
                 );
-                let tools = crate::backends::mcp::scope_tools(config.allowed_tools.as_deref());
+                let mut tools = crate::backends::mcp::scope_tools(config.allowed_tools.as_deref());
+                crate::backends::mcp::grant_servers(&mut tools, &spec.mcp_servers);
                 Ok(pty::claude::argv(
                     &config,
                     Some(&crate::backends::mcp::config(spec, session)),
@@ -90,7 +91,10 @@ impl Runner for PtyRunner {
     fn check(&self, spec: &RunSpec) -> Result<()> {
         match &self.backend {
             Backend::PtyClaude => decode::<PtyClaudeArguments>(&spec.arguments).map(drop),
-            Backend::PtyCodex => decode::<PtyCodexArguments>(&spec.arguments).map(drop),
+            Backend::PtyCodex => {
+                crate::backends::mcp::refuse_unless_supported(&self.backend, &spec.mcp_servers)?;
+                decode::<PtyCodexArguments>(&spec.arguments).map(drop)
+            }
             other => Err(Error::NotRunnable(other.to_string())),
         }
     }
@@ -337,6 +341,7 @@ mod tests {
             knowledge_note: None,
             spawn_note: None,
             marker_note: None,
+            mcp_servers: Vec::new(),
         }
     }
 
@@ -439,7 +444,7 @@ mod tests {
         let config: Value = serde_json::from_str(&claude[at + 1]).expect("mcp config is json");
         assert_eq!(
             config["mcpServers"][crate::backends::mcp::SERVER]["args"][0],
-            "mcp"
+            "mcp-serve"
         );
         assert!(
             claude.iter().any(|arg| arg == "--strict-mcp-config"),

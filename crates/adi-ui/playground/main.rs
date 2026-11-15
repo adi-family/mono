@@ -2073,8 +2073,7 @@ fn ChapterRail() -> impl IntoView {
 /// Where this demo's `?` goes. A fixture, like the node names under it: `adi-ui` knows no product
 /// addresses — a host app passes its own (the panel keeps its list in `adi-webapp/src/links.rs`),
 /// and the gallery needs one real page so the link can actually be followed.
-const DEMO_DOC_SECTION: &str = "https://github.com/adi-family/mono/blob/main/docs/fleet.md\
-                                #13-driving-a-nodes-sessions-from-here";
+const DEMO_DOC_SECTION: &str = "https://docs.withadi.dev/sessions/#more-than-one-machine";
 
 /// Three live menus: the two anchorings, and every kind of line one can hold.
 ///
@@ -2677,7 +2676,7 @@ fn Playground() -> impl IntoView {
                      listed, because dropping it would say the thing behind it is gone. The head \
                      takes a "
                     <HelpLink
-                        href="https://github.com/adi-family/mono/tree/main/docs"
+                        href="https://docs.withadi.dev"
                         label="The docs"
                         class="align-text-bottom"
                     />

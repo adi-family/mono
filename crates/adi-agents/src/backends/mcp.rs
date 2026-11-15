@@ -82,7 +82,7 @@ pub(crate) fn config(spec: &RunSpec, session: &dyn Session) -> String {
     let server = serde_json::json!({
         "command": super::harness::adi_loop::adi_mono_program(),
         "args": [
-            "mcp",
+            "mcp-serve",
             "--agent", session.agent(),
             "--session", session.id(),
             "--dir", spec.cwd.to_string_lossy(),
@@ -90,7 +90,37 @@ pub(crate) fn config(spec: &RunSpec, session: &dyn Session) -> String {
     });
     let mut servers = serde_json::Map::new();
     servers.insert(SERVER.to_string(), server);
+    // The agent's own declared servers, each under its own id — resolved already (see
+    // `crate::mcp_servers`), so this is only ever a reshape into the CLI's own JSON, never a
+    // secret lookup. `--strict-mcp-config` (always alongside this, see `push_mcp_config`) is what
+    // keeps the run from also loading whatever else is configured on this machine.
+    for resolved in &spec.mcp_servers {
+        servers.insert(resolved.id.clone(), server_json(resolved));
+    }
     serde_json::json!({ "mcpServers": servers }).to_string()
+}
+
+/// One resolved server, in the shape `claude mcp add` itself writes — confirmed against a real
+/// `claude mcp add --transport http …` / `claude mcp add -- …` run, not guessed from the schema
+/// docs alone: `{"type":"http","url":…,"headers":{…}}` or `{"type":"stdio","command":…,"args":…,
+/// "env":…}`. ADI's own server above omits `"type"` (stdio is the CLI's own default); a server
+/// built from a definition says it anyway, since a reader comparing the two should not have to
+/// know that rule to see they agree.
+fn server_json(resolved: &crate::mcp_servers::ResolvedMcpServer) -> Value {
+    use crate::mcp_servers::ResolvedTransport;
+    match &resolved.transport {
+        ResolvedTransport::Http { url, headers } => json!({
+            "type": "http",
+            "url": url,
+            "headers": headers,
+        }),
+        ResolvedTransport::Stdio { command, args, env } => json!({
+            "type": "stdio",
+            "command": command,
+            "args": args,
+            "env": env,
+        }),
+    }
 }
 
 /// The engine's own shell, which no run ever gets. Ours replaces it — see the module docs for why
@@ -105,6 +135,29 @@ pub(crate) fn config(spec: &RunSpec, session: &dyn Session) -> String {
 /// still gets it ours. It is not a preference: a second shell would be a second conversation state,
 /// and the one thing this whole arrangement exists to guarantee is that there is exactly one.
 pub(crate) const ENGINE_SHELL_TOOLS: &[&str] = &["Bash", "BashOutput", "KillShell"];
+
+/// Refuse a launch outright when an agent declared MCP servers ([`crate::AgentManifest::mcp`])
+/// but `backend` has no way to speak MCP to its engine at all. The field's own promise is that a
+/// backend this crate does not wire up for it never just drops the servers silently — this is
+/// where that promise is kept, for the two backends with no engine-side MCP door at all
+/// (`harness:adi`, whose loop calls its own tools directly and never runs an engine CLI to hand
+/// a config to; `pty:codex`, a live terminal with no headless config flag reachable from here).
+///
+/// # Errors
+/// [`Error::Launch`] naming `backend` and the servers it cannot reach, when `servers` is
+/// non-empty. Never refuses an agent that declared none.
+pub(crate) fn refuse_unless_supported(
+    backend: &crate::backend::Backend,
+    servers: &[crate::mcp_servers::ResolvedMcpServer],
+) -> Result<()> {
+    if servers.is_empty() {
+        return Ok(());
+    }
+    Err(Error::Launch(format!(
+        "{backend} has no MCP support: it cannot be given the MCP server(s) this agent declares          ({}). Run it on harness:claude-sdk, pty:claude, process:claude, or process:codex          instead, or detach the servers with `agents save --no-mcp`",
+        servers.iter().map(|s| s.id.as_str()).collect::<Vec<_>>().join(", "),
+    )))
+}
 
 /// One run's tool surface: what exists, and what it may use without stopping to ask.
 ///
@@ -167,6 +220,31 @@ pub(crate) fn scope_tools(allowed: Option<&str>) -> ToolScope {
     ToolScope {
         builtins: builtins.join(","),
         allowed: grants.join(","),
+    }
+}
+
+/// Extend a run's tool scope with its own declared MCP servers, each granted whole
+/// (`mcp__<id>`) — the same unconditional, ungated grant [`scope_tools`] already gives this run's
+/// own server. Separate from `scope_tools` rather than folded into it, so every test exercising
+/// the built-in scope alone (by far most of them) is untouched by an agent that also happens to
+/// declare MCP servers; a caller that launches an engine actually reaches this.
+///
+/// Granted whole rather than per-tool, on the same reasoning `mcp__adi` already rests on: naming
+/// a server here is naming it as a whole capability, and `tools/list` is how the model learns
+/// what it can call on it — a second, finer-grained allowlist of individual `mcp__<id>__<tool>`
+/// names would be a thing nothing here can derive without first asking the server.
+pub(crate) fn grant_servers(scope: &mut ToolScope, servers: &[crate::mcp_servers::ResolvedMcpServer]) {
+    for resolved in servers {
+        let grant = format!("mcp__{}", resolved.id);
+        if scope.allowed.split(',').any(|g| g == grant) {
+            continue;
+        }
+        if scope.allowed.is_empty() {
+            scope.allowed = grant;
+        } else {
+            scope.allowed.push(',');
+            scope.allowed.push_str(&grant);
+        }
     }
 }
 
@@ -590,5 +668,154 @@ mod tests {
     fn an_unknown_method_is_method_not_found() {
         let replies = talk(r#"{"jsonrpc":"2.0","id":5,"method":"resources/list"}"#);
         assert_eq!(replies[0]["error"]["code"], -32601);
+    }
+
+    /// A real `python3` process, speaking MCP stdio for real — the point is not to test
+    /// [`crate::mcp_servers::resolve`] or [`config`] against each other's assumptions, but against
+    /// an independent third implementation of the protocol, the same one the Claude CLI would be.
+    ///
+    /// # What it exercises
+    /// A server definition's `command`/`args`/`env` reach [`adi_mcp::McpServers`] on disk, get
+    /// resolved by [`crate::mcp_servers::resolve`] against this run's attached secrets, get folded
+    /// into this module's own `--mcp-config` JSON by [`config`] under the server's own id (next to
+    /// `"adi"`), and *that exact command* — read back out of the JSON, not the one this test wrote
+    /// — launches a process that completes a real `initialize` + `tools/list` round trip.
+    /// A minimal [`Session`] double for the one test below that needs to hand [`config`] a real
+    /// one — not reused from the other test modules' own `FakeSession`s, each of which lives
+    /// behind its own module boundary.
+    struct FakeSession {
+        log: std::path::PathBuf,
+    }
+    impl Session for FakeSession {
+        fn id(&self) -> &'static str {
+            "conv-1"
+        }
+        fn agent(&self) -> &'static str {
+            "watcher"
+        }
+        fn has_started(&self) -> bool {
+            false
+        }
+        fn state(&self) -> Option<Value> {
+            None
+        }
+        fn set_state(&self, _value: Value) -> crate::error::Result<()> {
+            Ok(())
+        }
+        fn log_path(&self) -> &std::path::Path {
+            &self.log
+        }
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // the point is to drive a real subprocess end to end
+    fn a_declared_stdio_server_resolves_lands_in_the_config_and_really_speaks_mcp() {
+        let dir = scratch("stdio-e2e");
+        let script = dir.join("echo_server.py");
+        std::fs::write(
+            &script,
+            "import sys, json\n\
+             for line in sys.stdin:\n\
+             \x20   line = line.strip()\n\
+             \x20   if not line:\n\
+             \x20       continue\n\
+             \x20   req = json.loads(line)\n\
+             \x20   method = req.get('method')\n\
+             \x20   if method == 'initialize':\n\
+             \x20       result = {'protocolVersion': req.get('params', {}).get('protocolVersion', '2025-11-25'),\n\
+             \x20                 'capabilities': {'tools': {}}, 'serverInfo': {'name': 'echo-test', 'version': '0'}}\n\
+             \x20   elif method == 'tools/list':\n\
+             \x20       result = {'tools': [{'name': 'Echo', 'description': 'echoes back', 'inputSchema': {'type': 'object'}}]}\n\
+             \x20   else:\n\
+             \x20       continue\n\
+             \x20   print(json.dumps({'jsonrpc': '2.0', 'id': req['id'], 'result': result}), flush=True)\n",
+        )
+        .expect("write fixture server");
+
+        let store_config = adi_config::Config::with_root(dir.join("store"));
+        adi_mcp::McpServers::with_config(store_config.clone())
+            .save(
+                "echo",
+                adi_mcp::Manifest::new(
+                    "echo",
+                    adi_mcp::Transport::Stdio {
+                        command: "python3".to_string(),
+                        args: vec![script.display().to_string()],
+                        env: std::collections::BTreeMap::new(),
+                    },
+                ),
+            )
+            .expect("save definition");
+
+        let resolved = crate::mcp_servers::resolve(&store_config, &["echo".to_string()], &[]);
+        assert_eq!(resolved.len(), 1, "the definition just saved should resolve with no secrets needed");
+
+        let session = FakeSession { log: dir.join("conv-1.log") };
+        let spec = RunSpec {
+            credential: None,
+            cwd: dir.clone(),
+            path: String::new(),
+            env: Vec::new(),
+            inherited_strip: Vec::new(),
+            arguments: Value::Null,
+            tools: Vec::new(),
+            tool_help: None,
+            system_prompt: None,
+            workspace_note: None,
+            knowledge_note: None,
+            spawn_note: None,
+            marker_note: None,
+            mcp_servers: resolved,
+        };
+
+        let mcp_config_json = config(&spec, &session);
+        let parsed: Value = serde_json::from_str(&mcp_config_json).expect("valid json");
+        // ADI's own server is still there, untouched, right beside the agent's declared one.
+        assert!(parsed["mcpServers"]["adi"].is_object(), "{mcp_config_json}");
+        let echo = &parsed["mcpServers"]["echo"];
+        assert_eq!(echo["type"], "stdio");
+        assert_eq!(echo["command"], "python3");
+        let real_command = echo["command"].as_str().expect("command").to_string();
+        let real_args: Vec<String> = echo["args"]
+            .as_array()
+            .expect("args")
+            .iter()
+            .map(|v| v.as_str().expect("arg string").to_string())
+            .collect();
+
+        // Launch *exactly* what the config says to launch, and speak MCP to it for real.
+        let mut child = std::process::Command::new(&real_command)
+            .args(&real_args)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn the fixture server");
+        {
+            use std::io::Write as _;
+            let stdin = child.stdin.as_mut().expect("stdin");
+            writeln!(
+                stdin,
+                r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"protocolVersion":"2025-11-25"}}}}"#
+            )
+            .expect("write initialize");
+            writeln!(stdin, r#"{{"jsonrpc":"2.0","id":2,"method":"tools/list"}}"#).expect("write tools/list");
+        }
+        let mut lines = {
+            use std::io::{BufRead as _, BufReader};
+            let stdout = child.stdout.take().expect("stdout");
+            BufReader::new(stdout).lines()
+        };
+        let initialize_reply: Value =
+            serde_json::from_str(&lines.next().expect("a reply").expect("read line")).expect("json");
+        assert_eq!(initialize_reply["result"]["protocolVersion"], "2025-11-25");
+        assert_eq!(initialize_reply["result"]["serverInfo"]["name"], "echo-test");
+
+        let list_reply: Value =
+            serde_json::from_str(&lines.next().expect("a reply").expect("read line")).expect("json");
+        assert_eq!(list_reply["result"]["tools"][0]["name"], "Echo");
+
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

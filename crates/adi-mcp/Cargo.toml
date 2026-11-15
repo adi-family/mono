@@ -1,0 +1,22 @@
+[package]
+name = "adi-mcp"
+description = "MCP (Model Context Protocol) server definitions an ADI agent may be given: global or filed under a project, one TOML manifest per server under ~/.adi/mono/mcp. Pure library — no transport is spoken here, only the definitions and secret-reference resolution an agent's launch reads."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+adi-config = { workspace = true }
+adi-secrets = { workspace = true }
+
+serde = { workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+serde_json = { workspace = true }
+toml = { workspace = true }

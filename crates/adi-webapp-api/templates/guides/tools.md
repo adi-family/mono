@@ -5,6 +5,11 @@ tool is either **owned** (its code lives in the store) or **linked** (a manifest
 existing file). Each active tool is exposed as a `tools/.bin/<name>` shim, so an agent with that
 `.bin` directory on its PATH always sees the live set.
 
+Not the same thing as an **MCP server** (`agents.md`'s own section): a tool is a script this
+store owns and an agent runs as a CLI; an MCP server is an external integration (n8n, a SaaS
+product's own server, …) reached over the Model Context Protocol. Use a tool for "run this
+script"; use an MCP server for "give this agent the tools that server already exposes".
+
 ## Where it lives
 - `~/.adi/mono/tools/<name>.{sh,ts}` — an owned tool's script.
 - `~/.adi/mono/tools/.bin/<name>` — the generated shim (don't edit by hand; it's regenerated on

@@ -1,6 +1,6 @@
 //! The two HTTP calls a node makes to the router directly (everything else is the WebSocket):
 //! `POST /register` to mint a node token and a fresh connection, and `POST /send` to post a reply
-//! through one (`docs/channels.md` §1/§2). Blocking, like every other HTTP call this workspace
+//! through one. Blocking, like every other HTTP call this workspace
 //! makes from a synchronous context (see `adi-agents`' harness loop) — both calls happen off the
 //! tokio runtime (an API handler on the blocking pool, or the question forwarder's own
 //! blocking worker), never inside it.
@@ -188,7 +188,7 @@ impl RouterApi {
 
     /// Tell the router to drop `connection` — its Durable Object entry and the D1 routing row —
     /// and revoke `node_token` too if nothing else on this `(node, provider)` still needs it
-    /// (`docs/channels.md` §1 step 4). Bearer `node_token` is this provider's own node token, not
+    /// Bearer `node_token` is this provider's own node token, not
     /// `admin_secret` — the same credential [`Self::send`] uses.
     ///
     /// # Errors

@@ -87,7 +87,7 @@ final class ScreenshotTests: XCTestCase {
                       "the machine never dialled back — did `mesh join` run, and is the node up?")
         // Its dashboards arrive on a second round trip, and the first one usually fails: the node's
         // gateway serves from a snapshot of its registry and re-reads it every five seconds
-        // (`docs/fleet.md` §8), so for a moment after pairing it is still consulting a registry that
+        //, so for a moment after pairing it is still consulting a registry that
         // has never heard of this phone and refuses the connection. The app retries on its own and
         // the row carries the refusal meanwhile — which is honest, and is not what a store
         // screenshot should show. So: pull to refresh until the dashboard is really there.

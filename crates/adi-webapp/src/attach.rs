@@ -85,7 +85,7 @@ pub(crate) fn attaching(
 /// Where a stored attachment's bytes are served from.
 ///
 /// The one agent read that does not go through `/api/node/<node>` while a node's sessions are on
-/// screen (`docs/fleet.md` §13): the forwarder answers JSON and this answers a PNG. It goes to the
+/// screen: the forwarder answers JSON and this answers a PNG. It goes to the
 /// node's own origin instead, which needs nothing new — the front door routes `*.n.adi` to the
 /// gateway, and the gateway attaches the password this machine already holds (§11). An `<img src>`
 /// is a plain GET, so there is no preflight to fail on the way.

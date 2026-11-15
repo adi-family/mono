@@ -1,6 +1,6 @@
-//! The nine kinds a bundle element may be — agents, tools, dashboards, LLM and embedding
-//! backends, hive services, triggers, a project scaffold, a dashboard template
-//! (`docs/marketplace-bundles.md`).
+//! The ten kinds a bundle element may be — agents, tools, dashboards, LLM and embedding
+//! backends, hive services, triggers, a project scaffold, a dashboard template, an MCP server
+//! definition.
 //!
 //! Each kind carries two spellings, and they are deliberately not the same word:
 //!
@@ -15,7 +15,7 @@ use std::fmt;
 
 use serde::de::Error as _;
 
-/// One of the nine platform surfaces a bundle may carry an element for.
+/// One of the ten platform surfaces a bundle may carry an element for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Kind {
     Agent,
@@ -27,11 +27,12 @@ pub enum Kind {
     Trigger,
     Project,
     Template,
+    Mcp,
 }
 
 impl Kind {
     /// Every kind, in the order the repository layout table lists them.
-    pub const ALL: [Kind; 9] = [
+    pub const ALL: [Kind; 10] = [
         Kind::Agent,
         Kind::Tool,
         Kind::Dashboard,
@@ -41,6 +42,7 @@ impl Kind {
         Kind::Trigger,
         Kind::Project,
         Kind::Template,
+        Kind::Mcp,
     ];
 
     /// The word `elements[].kind` publishes.
@@ -56,6 +58,7 @@ impl Kind {
             Kind::Trigger => "trigger",
             Kind::Project => "project",
             Kind::Template => "template",
+            Kind::Mcp => "mcp",
         }
     }
 
@@ -73,6 +76,7 @@ impl Kind {
             Kind::Trigger => "triggers",
             Kind::Project => "project",
             Kind::Template => "templates",
+            Kind::Mcp => "mcp",
         }
     }
 
@@ -87,14 +91,14 @@ impl Kind {
     ///
     /// Not a validation failure to come back `None`: [`crate::BundleEntry::elements`] simply
     /// leaves such an element out of the preview, the same tolerance every other unrecognised
-    /// field in this manifest gets (`docs/marketplace-bundles.md` decision #2).
+    /// field in this manifest gets.
     #[must_use]
     pub fn from_wire(word: &str) -> Option<Kind> {
         Self::ALL.into_iter().find(|k| k.wire() == word)
     }
 
     /// The kind a repository's top-level directory name is, or `None` for anything else there —
-    /// which is not an error, just not one of the eight kind directories.
+    /// which is not an error, just not one of the ten kind directories.
     #[must_use]
     pub fn from_dir(word: &str) -> Option<Kind> {
         Self::ALL.into_iter().find(|k| k.dir() == word)
@@ -140,9 +144,10 @@ mod tests {
     }
 
     #[test]
-    fn llm_and_project_spell_the_same_either_way_everything_else_does_not() {
+    fn llm_project_and_mcp_spell_the_same_either_way_everything_else_does_not() {
         assert_eq!(Kind::Llm.wire(), Kind::Llm.dir());
         assert_eq!(Kind::Project.wire(), Kind::Project.dir());
+        assert_eq!(Kind::Mcp.wire(), Kind::Mcp.dir());
         assert_ne!(Kind::Agent.wire(), Kind::Agent.dir(), "singular vs. the directory's plural");
     }
 

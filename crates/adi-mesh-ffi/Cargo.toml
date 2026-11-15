@@ -16,14 +16,14 @@ crate-type = ["staticlib", "rlib"]
 [dependencies]
 # The mesh itself. Nothing here reimplements the wire protocol, the registry, or the pairing
 # handshake — this crate is a lifecycle and a C surface around them, and every behaviour the
-# contract pins (docs/fleet.md) stays pinned by that crate's tests.
+# contract pins stays pinned by that crate's tests.
 adi-mesh = { workspace = true }
 adi-config = { workspace = true }
 
 iroh = { workspace = true }
 
 # The node's control panel is reached with the same Basic-auth header a browser would send
-# (docs/fleet.md §5), so the credential has to be encoded exactly once, here.
+#, so the credential has to be encoded exactly once, here.
 base64 = { workspace = true }
 
 serde = { workspace = true }

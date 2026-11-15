@@ -1,4 +1,4 @@
-//! `adi.channels.message` — a [`ChannelMessage`] (§3 of `docs/channels.md`), emitted by
+//! `adi.channels.message` — a [`ChannelMessage`], emitted by
 //! [`crate::client::RouterClient`] the moment an `event` frame off the router is acked.
 //!
 //! **Why the whole-platform catalog is assembled here and not in `adi-agents` any more.**

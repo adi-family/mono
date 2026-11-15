@@ -1,6 +1,6 @@
 //! Drawing a QR code as an SVG, so a phone can be pointed at the control panel.
 //!
-//! The terminal's answer to the same question lives in `adi-cli/src/qr.rs` (`docs/fleet.md` §8);
+//! The terminal's answer to the same question lives in `adi-cli/src/qr.rs`;
 //! this is the screen's. They share the encoder and one of its choices, and nothing else — half
 //! blocks and ANSI colour pairs are a way of drawing square pixels in a grid of tall cells, and a
 //! browser has real pixels.

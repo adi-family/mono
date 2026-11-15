@@ -27,7 +27,7 @@ const HTTP_PORT_KEY: &str = "http";
 const FRONT_DOOR_NAME: &str = "adi-hive";
 const FRONT_DOOR_KEY: &str = "front-door";
 
-/// The reserved namespace for remote nodes: `<service>.<node>.n.adi` (docs/fleet.md §1). Nothing
+/// The reserved namespace for remote nodes: `<service>.<node>.n.adi`. Nothing
 /// local may claim a name inside it, which is exactly what guarantees a remote name can never
 /// collide with a local `<service>.adi` — the two zones are disjoint by construction.
 pub const MESH_ZONE: &str = "n.adi";
@@ -143,7 +143,7 @@ pub struct ServiceProxy {
     /// share one hostname: a dashboard's `frontend` takes the host, its `backend` takes
     /// `path: /api`. That is what lets a dashboard be *one origin* — the page uses relative URLs
     /// only and therefore works unchanged under `nosh.adi`, `nosh.laptop-b.n.adi` or a real
-    /// customer domain (docs/fleet.md §4).
+    /// customer domain.
     ///
     /// Longest prefix wins; a service with no path is the host's fallback. `/` means the same as
     /// no path at all — it is the fallback either way, which is why the many configs written with
@@ -1147,7 +1147,7 @@ pub fn is_mesh_host(host: &str) -> bool {
 /// The node label out of `<service>.<node>.n.adi`, for the error page that has to name it — the
 /// last label before the zone, so a service that is itself several labels (`app.nosh`) still
 /// names its node. The front door deliberately learns nothing else from the name: which peer key
-/// a node maps to, and which service it exposes, are the gateway's business (docs/fleet.md §3).
+/// a node maps to, and which service it exposes, are the gateway's business.
 #[must_use]
 pub fn mesh_node(host: &str) -> Option<String> {
     let key = host_key(host);

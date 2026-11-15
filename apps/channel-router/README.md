@@ -1,8 +1,8 @@
 # adi-channel-router
 
 The channel router: one ADI agent, reachable from Telegram, Slack, and whatever comes after
-them. Deployed as a Cloudflare **Worker** (not Pages -- see "Decisions taken" #1 in
-docs/channels.md) on **`hooks.withadi.dev`**. It holds the bot credentials, verifies each
+them. Deployed as a Cloudflare **Worker** (not Pages -- a Durable Object
+has to hold each node's socket; see below) on **`hooks.withadi.dev`**. It holds the bot credentials, verifies each
 service's webhook signature, maps the service's routing key (chat id, team id, ...) to a
 subscribed node, and forwards the event over that node's own outbound WebSocket -- queuing it
 if the node is offline.
@@ -19,9 +19,8 @@ Telegram / Slack ──webhook──▶  channel-router (this)
                                 node (adi-channels crate, ADI-MONO-121)
 ```
 
-Full design: [`docs/channels.md`](../../docs/channels.md). This app builds §1 (routes and
-storage), §2 (the WebSocket protocol) and §4 (the adapter interface, Telegram only -- Slack is
-a registry stub, see below).
+This app builds the routes and storage, the WebSocket protocol and the adapter interface
+(Telegram only -- Slack is a registry stub, see below).
 
 Same conventions as its sibling [`apps/oauth-router`](../oauth-router): a provider registry of
 public facts, credentials from env keyed on the provider id, signed expiring tokens, small
@@ -67,7 +66,7 @@ The registry is [`src/providers.ts`](src/providers.ts); adapters are one file pe
 | Name | Kind | Purpose |
 | --- | --- | --- |
 | `ROUTER_SECRET` | secret | HMAC key signing node tokens and link codes. `openssl rand -hex 32`. |
-| `ROUTER_ADMIN_SECRET` | secret | Optional bearer for `POST /register` (ADI-MONO-125) that skips its per-IP rate limit and per-node pending-connection cap. Not required for an ordinary node to register (docs/channels.md §8). |
+| `ROUTER_ADMIN_SECRET` | secret | Optional bearer for `POST /register` (ADI-MONO-125) that skips its per-IP rate limit and per-node pending-connection cap. Not required for an ordinary node to register. |
 | `TELEGRAM_BOT_TOKEN` | secret | The one Telegram bot ADI runs. |
 | `TELEGRAM_SECRET_TOKEN` | secret | `secret_token` set at `setWebhook` time; echoed back on every delivery. |
 | `TELEGRAM_BOT_USERNAME` | var | Public -- builds the `t.me/<bot>?start=<code>` install link. |
@@ -140,7 +139,7 @@ What the first live test found, none of it reachable by the local suite:
   the Slack OAuth callback consume it once.
 - **Ten minutes was too short.** The operator wasn't at the screen in time, twice, and an expired
   `/start` was acked in silence. TTL is now an hour, and a dead code is answered in the chat.
-- Node-side fixes from the same test are in `docs/channels.md` under "ADI-MONO-124".
+- Node-side fixes from the same test live in `crates/adi-channels`, under ADI-MONO-124.
 
 ## Security notes
 
@@ -148,8 +147,7 @@ What the first live test found, none of it reachable by the local suite:
   node token and a link code are both HMAC-signed over `ROUTER_SECRET` and carry their own
   issued-at, verified fresh on every use (see `src/state.ts`).
 - **Token scopes.** A node token is scoped to exactly `(node id, provider)` -- it cannot read or
-  send on a different node's connections, and a Telegram token cannot open a Slack socket
-  (docs/channels.md §8).
+  send on a different node's connections, and a Telegram token cannot open a Slack socket.
 - **`POST /register` is open, not admin-gated** (ADI-MONO-125) -- rate-limited per IP and capped
   per node on pending connections instead, since registering grants nothing by itself; the actual
   access-control boundary is linking, which still needs Start/Allow from the chat/workspace
@@ -168,10 +166,10 @@ What the first live test found, none of it reachable by the local suite:
   from `ROUTER_SECRET`, never the raw secret itself) runs before every `ctx.storage.put`, and
   `decryptCredential` runs only in `router.ts`, at the moment `/send` actually needs the
   plaintext. Never written to D1, never returned to a node.
-- **The allowlist is enforced on the node, not here** (docs/channels.md §5, §8) -- this router
+- **The allowlist is enforced on the node, not here** -- this router
   forwards every webhook for a linked routing key regardless of sender; a bug here can leak a
   message, never grant a reply from an agent a sender isn't allowed to talk to.
-- **Zero-copy, explicitly for Slack too** (docs/channels.md §8, and the
+- **Zero-copy, explicitly for Slack too** (and the
   `slack-agentexchange-listing-2026` research report §4): message content lives only in the DO's
   redelivery queue until acked, the same as every other provider -- nothing about Slack's
   listing requirements needs this router to hold anything longer.
@@ -242,11 +240,10 @@ Closes the one gap ADI-MONO-123's own notes above flagged rather than fixed:
   guess standing on `sender.name` -- it never fails the webhook delivery over a display name.
 
 The node side's own follow-up (actually calling `setThinking` when dispatching, and clearing it
-when a run finishes) lives in `crates/adi-channels` and is documented in `docs/channels.md`'s own
-"ADI-MONO-123 follow-up" section, not here -- this router's own half of that (the `/send` `status`
+when a run finishes) lives in `crates/adi-channels` (the ADI-MONO-123 follow-up), not here -- this router's own half of that (the `/send` `status`
 field, Slack's `setThinking`) was already built in ADI-MONO-123 itself.
 
-## Corrections made to docs/channels.md while building this
+## Corrections made to the original design while building this
 
 - **The Durable Object key is `(node, provider)`, not `node` alone.** §1 originally said "one
   Durable Object per node, keyed by node id"; §2 already required two sockets through two

@@ -154,6 +154,11 @@ the split `.test`/`.adi` zones and forwards the rest.
   agent** (`bin_tools`: tick it on /agents, `{{cli}} agents save <name> --tool <id>`, or the \
   `bin_tools` field of `POST /api/agents/save`), which is what puts the shim on its PATH and its \
   help in its prompt. You yourself carry every tool in the store. Panel: /tools.
+- MCP servers — external integrations (n8n, a SaaS product's own server, …) reached over the \
+  Model Context Protocol, kept under `~/.adi/mono/mcp/`. Define one with `{{cli}} mcp save`, \
+  then attach it to an agent (`{{cli}} agents save <name> --mcp <id>`, or the `mcp` field of \
+  `POST /api/agents/save`) the same way a tool is enabled — registering one gives it to nobody \
+  until it is attached.
 - Tasks — a simple task tree (/tasks). Agents — agent definitions like yourself (/agents). \
   Triggers — webhook or supervised background code blocks (/triggers). Mesh — peer-to-peer port \
   forwarding (/settings/mesh). Fleet — the remote adi machines this one is paired with, each \

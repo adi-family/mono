@@ -46,7 +46,7 @@ impl AppState {
             Self::Offline => "bg-err",
             Self::ViewOnly => "bg-ink-3",
             // `--warn`, the same semantic amber a stopped-on-a-person session dot uses
-            // (`docs/sessions.md`) — waiting, not broken.
+            // — waiting, not broken.
             Self::Idle => "bg-warn",
         }
     }

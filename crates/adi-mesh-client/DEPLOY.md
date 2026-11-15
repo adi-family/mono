@@ -192,7 +192,7 @@ one still pending:
    write (private browsing does this) and nothing else will work.
 3. On a machine you want to reach: `adi-mono mesh invite`. Paste the token into the client and press
    **Pair**. It takes about five seconds — the client is waiting out the node's own registry reload
-   (`docs/fleet.md` §8) so that the row, when it appears, is a row that opens.
+   so that the row, when it appears, is a row that opens.
 4. Tap the machine. Its control panel should render.
 5. Install it: Safari → Share → *Add to Home Screen*; Chrome → the install prompt.
 

@@ -5,7 +5,7 @@
 //! - **Linux:** a `systemd --user` unit (`~/.config/systemd/user/<label>.service`,
 //!   `Restart=always`), driven through `systemctl --user`. A fleet node is headless, so
 //!   [`enable`] also asks logind for *lingering*: without it the per-user manager — and every
-//!   service under it — is torn down at logout (`docs/fleet.md` §6).
+//!   service under it — is torn down at logout.
 //! - **Windows:** a per-user **Task Scheduler** task (logon trigger + run-now, restart-on-failure),
 //!   driven through `schtasks.exe`. A scheduled task is the unprivileged analog of a per-user
 //!   LaunchAgent: it runs as the interactive user with no stored credentials and no admin rights.

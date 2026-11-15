@@ -16,14 +16,14 @@ path = "src/main.rs"
 adi-config = { workspace = true }
 adi-osext = { workspace = true, features = ["signals"] }
 
-# Where a paired peer's last-seen activity is recorded (`docs/fleet.md` presence work): the
+# Where a paired peer's last-seen activity is recorded: the
 # platform's shared global database, so a reader outside this process (the control panel's `/api/*`
 # handlers, an operator's own query) sees the same answer the gateway just wrote, with no channel of
 # its own to keep in sync.
 adi-db = { workspace = true }
 
 # The node side of the mesh gateway resolves a service label against *this machine's* hive route
-# table (docs/fleet.md C6), so it depends on the front door's routing brain rather than reimplementing
+# table, so it depends on the front door's routing brain rather than reimplementing
 # it — a second lookup would be a second set of rules to keep in step. The direction is acyclic
 # (adi-hive knows nothing of the mesh), but it does pull hive's TLS stack (rustls/rcgen) into this
 # crate's build; splitting the gateway into its own `adi-gateway` crate is the escape hatch if that
@@ -40,7 +40,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
 
-# Basic authentication on the node side (see docs/fleet.md §5): base64 decodes the
+# Basic authentication on the node side: base64 decodes the
 # `Authorization` header, sha2 hashes the password with a per-node salt, subtle compares the
 # digests without leaking their prefix through timing, and rand mints the salt.
 # The gateway resolves a service label to a port the same way the front door does, and for a
@@ -53,8 +53,8 @@ sha2 = { workspace = true }
 subtle = "2"
 rand = { workspace = true }
 
-# The device-to-session-key sealing for BYO-credentials unlocks (`docs/byo-credentials.md` §8/§9,
-# ADI-MONO-180 P2.3), and `node_api`'s loopback request to a paired node's own `app` service
+# The device-to-session-key sealing for BYO-credentials unlocks
+# (ADI-MONO-180 P2.3), and `node_api`'s loopback request to a paired node's own `app` service
 # (lifted out of `adi-cli`, ADI-MONO-178 P1.12 / ADI-MONO-180 P2.5) — the same
 # `rustls-no-provider` + blocking client `adi-cli` already builds one of.
 chacha20poly1305 = { workspace = true }

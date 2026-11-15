@@ -4,7 +4,7 @@
  * exactly oauth-router's `state.ts` style (sign, compare, check age), over `ROUTER_SECRET`
  * instead of `STATE_SECRET`.
  *
- * - A **link code** (docs/channels.md §1 step 3) rides inside `t.me/<bot>?start=<code>`. It
+ * - A **link code** rides inside `t.me/<bot>?start=<code>`. It
  *   names the `(node, provider, connection)` a `/start` (or, later, an OAuth callback) is
  *   expected to complete -- short-lived, because it only has to survive one human clicking a
  *   link and sending one message.

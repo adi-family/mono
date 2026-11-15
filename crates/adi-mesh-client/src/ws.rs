@@ -64,7 +64,7 @@ pub struct Message {
 /// # Errors
 /// If the peer does not answer `101`, or answers with a `Sec-WebSocket-Accept` that is not the
 /// digest of the key we sent. The second check is not ceremony: it is exactly the check that
-/// caught n0's relay answering an upgrade it had not really understood (`docs/fleet.md` §9).
+/// caught n0's relay answering an upgrade it had not really understood.
 pub async fn handshake(stream: &mut Stream, request: Request) -> Result<Head> {
     let key = B64.encode(crate::random_bytes::<16>());
     let request = request

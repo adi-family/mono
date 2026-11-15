@@ -6,7 +6,7 @@ import WebKit
 /// The URL is `http://127.0.0.1:<port>` — a loopback listener inside this app that carries the
 /// request to the node over the mesh. That is a real origin, which is the point: relative URLs,
 /// cookies, `localStorage` and WebSocket upgrades all behave exactly as they do when the same
-/// dashboard is opened on a Mac, because `docs/fleet.md` §4 already forbids a page from knowing its
+/// dashboard is opened on a Mac, because the fleet design already forbids a page from knowing its
 /// own address.
 struct ServiceView: View {
     let node: Node
@@ -66,7 +66,7 @@ struct ServiceView: View {
         .navigationBarTitleDisplayMode(.inline)
         // The bar stays, page or no page. It used to be hidden once the port was bound, to spend
         // the ~44pt on the dashboard instead — a dashboard is one origin with its own header
-        // (`docs/fleet.md` §4), so the second bar restated the row that had just been tapped.
+        //, so the second bar restated the row that had just been tapped.
         //
         // That trade was wrong, and it was wrong in the direction that matters. What it bought was
         // a strip of pixels; what it cost was the way out: an opened dashboard became a full-screen
@@ -88,7 +88,7 @@ struct ServiceView: View {
                 // Its gateway serves from an in-memory snapshot of the registry and re-reads it
                 // every five seconds (`adi-mesh/src/gateway.rs`, `RELOAD_INTERVAL`), so a request
                 // sent the instant the grant lands is judged against a registry that has never
-                // heard of it. `docs/fleet.md` §8 says this in as many words: *a client must wait
+                // heard of it. The fleet design says this in as many words: *a client must wait
                 // out that window before it reports a pairing as done, or the operator pairs
                 // successfully and is then told they are not authorized.*
                 //

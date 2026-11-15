@@ -1,6 +1,7 @@
 //! Bounded Codex app-server stdio client, embedded in the binary.
 
 use crate::arguments::ProcessCodexArguments;
+use crate::mcp_servers::ResolvedMcpServer;
 
 /// Whether this turn opens a Codex thread or continues one the first turn established.
 ///
@@ -20,6 +21,7 @@ pub(crate) fn argv(
     message: &str,
     workspace: Option<&str>,
     cont: &Continuation<'_>,
+    mcp_servers: &[ResolvedMcpServer],
 ) -> Vec<String> {
     let mut command = vec![
         "codex".to_string(),
@@ -27,6 +29,12 @@ pub(crate) fn argv(
         "--listen".into(),
         "stdio://".into(),
     ];
+    // Declared alongside everything else this agent's `-c` overrides already push; the caller is
+    // expected to have run `codex_mcp::validate` first (`DetachedRunner::check`), so there is
+    // nothing left here to refuse.
+    for flag in super::codex_mcp::config_flags(mcp_servers) {
+        command.extend(["-c".to_string(), flag]);
+    }
     if let Some(effort) = config.reasoning_effort {
         command.extend([
             "-c".into(),
@@ -108,7 +116,7 @@ mod tests {
             web_search: true,
             ..Default::default()
         };
-        let args = argv(&config, "--help", Some("/workspace"), &Continuation::First);
+        let args = argv(&config, "--help", Some("/workspace"), &Continuation::First, &[]);
         let opts: serde_json::Value = serde_json::from_str(&args[4]).unwrap();
         assert_eq!(opts["thread"]["cwd"], "/workspace");
         assert_eq!(opts["thread"]["model"], "example");
@@ -121,6 +129,7 @@ mod tests {
             "-",
             None,
             &Continuation::Resume { thread_id: "saved" },
+            &[],
         );
         let opts: serde_json::Value = serde_json::from_str(&args[4]).unwrap();
         assert_eq!(opts["thread"]["threadId"], "saved");

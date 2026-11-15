@@ -4,7 +4,7 @@
 
 > The adi platform CLI — a thin argv adapter over adi-core's command surface.
 
-5 structs · 29 enums across 23 files.
+5 structs · 30 enums across 24 files.
 
 ## Index
 
@@ -22,6 +22,7 @@
 - [`src/llm.rs`](#srcllmrs) — `LlmCommand`
 - [`src/main.rs`](#srcmainrs) — `Cli`, `Command`
 - [`src/marketplace.rs`](#srcmarketplacers) — `MarketplaceCommand`
+- [`src/mcp.rs`](#srcmcprs) — `McpCommand`
 - [`src/mesh.rs`](#srcmeshrs) — `MeshCommand`
 - [`src/projects.rs`](#srcprojectsrs) — `ProjectsCommand`, `WorkspaceCommand`, `HookCommand`, `WorkspaceRow`, `HookRow`
 - [`src/qr.rs`](#srcqrrs) — `Rendered`
@@ -94,6 +95,10 @@ pub(crate) enum AgentsCommand {
         tools: Vec<String>,
         #[arg(long, conflicts_with = "tools")]
         no_tool: bool,
+        #[arg(long = "mcp")]
+        mcp_servers: Vec<String>,
+        #[arg(long, conflicts_with = "mcp_servers")]
+        no_mcp: bool,
         #[arg(long = "secret")]
         secrets: Vec<String>,
         #[arg(long, conflicts_with = "secrets")]
@@ -1167,7 +1172,7 @@ enum Command {
         json: bool,
     },
     #[command(hide = true)]
-    Mcp {
+    McpServe {
         #[arg(long)]
         agent: String,
         #[arg(long)]
@@ -1175,6 +1180,8 @@ enum Command {
         #[arg(long, value_name = "PATH")]
         dir: String,
     },
+    #[command(subcommand)]
+    Mcp(mcp::McpCommand),
     #[command(hide = true)]
     HarnessTurn {
         #[arg(long)]
@@ -1242,6 +1249,55 @@ pub(crate) enum MarketplaceCommand {
         force_element: Vec<String>,
         #[arg(long, value_name = "ID")]
         project: Option<String>,
+    },
+}
+```
+
+---
+
+## `src/mcp.rs`
+
+### enum `McpCommand`
+
+```rust
+#[derive(Debug, Subcommand)]
+pub(crate) enum McpCommand {
+    List {
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    Show {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Save {
+        id: String,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        description: Option<String>,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        transport: Option<String>,
+        #[arg(long)]
+        url: Option<String>,
+        #[arg(long = "header")]
+        headers: Vec<String>,
+        #[arg(long)]
+        command: Option<String>,
+        #[arg(long = "arg", allow_hyphen_values = true)]
+        args: Vec<String>,
+        #[arg(long = "env")]
+        env: Vec<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    Rm {
+        id: String,
     },
 }
 ```
@@ -1853,6 +1909,7 @@ pub(crate) enum TriggersCommand {
     Delete {
         name: String,
     },
+    RelayKey,
 }
 ```
 

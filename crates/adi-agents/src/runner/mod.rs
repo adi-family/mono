@@ -9,8 +9,6 @@
 //! It is also why there is no `Handle` in any signature: a runner that needs a local token keeps it
 //! in its own [state slot](Session::state), and a runner that needs none — one whose liveness is a
 //! request to somebody else's API — simply writes nothing there.
-//!
-//! See `docs/agent-runner.md` for the full design.
 
 pub mod detached;
 mod event;

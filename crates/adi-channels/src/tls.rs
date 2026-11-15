@@ -1,4 +1,4 @@
-//! `wss://` for the router socket — docs/channels.md's deployed router is https-only, so this is
+//! `wss://` for the router socket — the deployed router is https-only, so this is
 //! required before the ADI-MONO-124 go-live, not merely available (`ws.rs`'s own crate-level note
 //! flagged the gap this closes). Plain `ws://` (`wrangler dev`, and every one of this crate's own
 //! tests outside this file) never touches this module at all — see [`wants_tls`].

@@ -5,7 +5,7 @@
 //! under a name somebody chose. The two are separate because they change for different reasons:
 //! the prompt is edited when the job changes, the model when a subscription runs out.
 //!
-//! The whole design is `docs/llm-backends.md`; the short version is three layers and no fourth:
+//! The short version of the design is three layers and no fourth:
 //!
 //! ```text
 //! LAUNCH     start_at · overrides                              per run

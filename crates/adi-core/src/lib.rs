@@ -44,7 +44,7 @@ pub use adi_agents::launcher;
 /// caller that needs any of it needs the vocabulary around it.
 pub use adi_agents::llm;
 /// The embedding backend registry — a named, configurable set of ways to turn text into a vector,
-/// parallel to [`llm`] but narrower (no holds, no prober: see `docs/embedding-backends.md`).
+/// parallel to [`llm`] but narrower (no holds, no prober).
 /// Re-exported whole under a clean name for the same reason `llm` is: a caller reaching for one
 /// part of it (`EmbeddingBackends`, `Runtime`, a `CONSUMER_*` name) needs the vocabulary around it.
 pub use adi_embeddings as embeddings;
@@ -109,6 +109,11 @@ pub use adi_tools::{
 };
 
 pub use tools::{ToolRenamed, rename_tool};
+
+pub use adi_mcp::{
+    Error as McpError, Manifest as McpManifest, McpServer, McpServers, Transport as McpTransport,
+    Value as McpValue,
+};
 
 pub use adi_events::{
     ENVELOPE as EVENT_ENVELOPE, Error as EventsError, Event, EventRecord, EventType, Events,

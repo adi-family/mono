@@ -197,8 +197,8 @@ pub enum BackendKind {
     #[default]
     Single,
     /// An ordered list of other backends — [`members`](LlmBackendManifest::members) — tried best
-    /// first. A member may itself be a group: see `docs/llm-backends.md`'s "Groups" section for how
-    /// nesting expands at resolve time and why a cycle is refused at save time.
+    /// first. A member may itself be a group: nesting expands at resolve time, and a cycle is
+    /// refused at save time.
     Group,
 }
 

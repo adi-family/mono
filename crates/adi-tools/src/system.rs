@@ -24,8 +24,7 @@ pub const SYS_KNOWLEDGE: &str = "sys-knowledge";
 /// **This is a seatbelt, not a lock.** Every shim already forwards to `adi-mono`, so `adi-mono` is
 /// on every agent's `PATH` and any agent with a shell can pass `--root` for itself. What giving an
 /// agent this tool buys is intent: it is named in the tool list, it is legible in the manifest, and
-/// there is one place to say what it is for. Enforcement was never available at this layer — see
-/// the note on isolation in `docs/knowledge.md`.
+/// there is one place to say what it is for. Enforcement was never available at this layer.
 pub const SYS_KNOWLEDGE_ROOT: &str = "sys-knowledge-root";
 
 /// The fact CLI's stable id.

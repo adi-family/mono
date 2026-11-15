@@ -879,6 +879,7 @@ fn submit_onb_agent(state: State, form: OnboardingForm, m: &MetaState) {
         starred: Some(form.agent.starred.get_untracked()),
         project: None,
         bin_tools,
+        mcp: None,
         // The wizard offers no pre-run box, and a brand-new agent has nothing to keep: `None` is
         // both "leave it alone" and "there was nothing there".
         prelude: None,

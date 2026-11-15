@@ -401,6 +401,7 @@ fn preview_kind_dir(wire: &str) -> String {
         "service" => "services",
         "trigger" => "triggers",
         "template" => "templates",
+        "mcp" => "mcp",
         other => other,
     }
     .to_string()
@@ -496,7 +497,7 @@ fn back_link(open: OpenApp) -> AnyView {
 ///
 /// **This is the one element on the page that fetches from a host the operator did not choose**:
 /// the manifest's publisher did. Which is why the store only accepts `https://` and
-/// `data:image/…` (`docs/marketplace.md`), and why a fetch that fails falls back to the same tile
+/// `data:image/…`, and why a fetch that fails falls back to the same tile
 /// — a listing has no business looking damaged because somebody else's host is down, and the
 /// browser's broken-image glyph says nothing a reader can act on.
 fn app_icon(app: &MarketplaceApp) -> AnyView {
@@ -640,8 +641,8 @@ fn eyebrow(app: &MarketplaceApp) -> String {
 /// * The **legacy single-dashboard shape** opens the name form, and the form's own Install is the
 ///   orange. This button is not, because pressing it only asks a question.
 /// * A **general bundle** installs every element it offers, with no form at all: `name` and
-///   `start` mean nothing to it (`docs/marketplace-bundles.md` — every element lands under its own
-///   published name), so asking would be asking about something that will be ignored.
+///   `start` mean nothing to it (every element lands under its own published
+///   name), so asking would be asking about something that will be ignored.
 /// * A **partly installed** bundle offers the rest. An element already in the ledger is left as it
 ///   stands by the installer itself, so this is safe to press at any time.
 /// * A **fully installed** one offers nothing here: what is left to do to it is per element, in
@@ -683,8 +684,7 @@ fn hero_action(form: MarketplaceForm, app: &MarketplaceApp) -> AnyView {
     .into_any()
 }
 
-/// The v1 shape: no elements, no bundle status — one dashboard and nothing else
-/// (`docs/marketplace-bundles.md` decision #6).
+/// The v1 shape: no elements, no bundle status — one dashboard and nothing else.
 fn is_legacy(app: &MarketplaceApp) -> bool {
     app.bundle.is_none() && app.elements.is_empty()
 }
@@ -731,8 +731,8 @@ fn suggested_project(app: &MarketplaceApp) -> String {
 /// The three things this machine can actually promise about installing somebody else's item, in
 /// one line under the pictures.
 ///
-/// Not a marketing strip: every one of the three is a property the store implements and
-/// `docs/marketplace.md` argues for — the clone is local, arrival is inert, and the pin is the
+/// Not a marketing strip: every one of the three is a property the store implements —
+/// the clone is local, arrival is inert, and the pin is the
 /// whole identity of what lands. They sit here, between the pictures and the contents, because
 /// this is the moment in the page where somebody has decided they want it and started wondering
 /// what it costs them.
@@ -756,13 +756,13 @@ fn assurances() -> AnyView {
     .into_any()
 }
 
-/// The nine kind directories, in the fixed order the Rust side already sorts by
+/// The ten kind directories, in the fixed order the Rust side already sorts by
 /// (`adi_marketplace::Kind::ALL`) — repeated here rather than derived, since the wire type carries
 /// the spelling but not the enum. One order for every bundle is the whole point: the eye learns it
 /// once, and never has to re-learn it item to item.
-const KIND_ORDER: [&str; 9] = [
+const KIND_ORDER: [&str; 10] = [
     "agents", "tools", "dashboards", "llm", "embeddings", "services", "triggers", "project",
-    "templates",
+    "templates", "mcp",
 ];
 
 /// What one element of this kind is called, in the singular — the word on its row.
@@ -777,6 +777,7 @@ fn kind_label(kind: &str) -> &str {
         "triggers" => "trigger",
         "project" => "project",
         "templates" => "dashboard template",
+        "mcp" => "MCP server",
         // A kind this build does not know: the manifest is ahead of this binary. Drawn as
         // published rather than hidden, the same tolerance the rest of the page gives it.
         other => other,
@@ -789,6 +790,7 @@ fn kind_plural(kind: &str) -> String {
         "llm" => "LLM backends".to_string(),
         "embeddings" => "embedding backends".to_string(),
         "services" => "hive services".to_string(),
+        "mcp" => "MCP servers".to_string(),
         other => format!("{}s", kind_label(other)),
     }
 }
@@ -807,6 +809,7 @@ fn kind_icon(kind: &str) -> Lucide {
         "triggers" => Lucide::Zap,
         "project" => Lucide::Folder,
         "templates" => Lucide::FileCode,
+        "mcp" => Lucide::Plug,
         _ => Lucide::Package,
     }
 }

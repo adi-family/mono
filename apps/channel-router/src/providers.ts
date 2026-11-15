@@ -3,7 +3,7 @@
  * ("public facts in the registry, credentials from env keyed on the id"). Unlike oauth-router's
  * providers, a channel provider's credential shape isn't uniform (Telegram: one static bot
  * token; Slack: a token per workspace, minted at OAuth time and stored in the connection's own
- * Durable Object, never a Worker secret -- docs/channels.md §4), so there is no single
+ * Durable Object, never a Worker secret), so there is no single
  * `resolveProvider` returning a common shape here; each adapter reads its own env fields.
  *
  * `telegram` and, since ADI-MONO-123, `slack` both have working adapters (see

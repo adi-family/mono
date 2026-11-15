@@ -4,7 +4,7 @@
 
 > The wire contract and server handlers for the adi webapp: serde DTO types (compiled everywhere, incl. wasm) plus the /api/* logic over adi-ports-manager behind the `server` feature.
 
-356 structs · 20 enums · 1 type alias across 14 files.
+361 structs · 22 enums · 1 type alias across 14 files.
 
 ## Index
 
@@ -21,7 +21,7 @@
 - [`src/handlers/voice.rs`](#srchandlersvoicers) — `Wire`, `Engine`
 - [`src/http.rs`](#srchttprs) — `Request`
 - [`src/origin.rs`](#srcoriginrs) — `Refusal`
-- [`src/types.rs`](#srctypesrs) — `Health`, `UpdateState`, `SystemStatus`, `SystemService`, `SystemAction`, `SystemSetup`, `RunSystemAction`, `SetSystemPower`, `Accepted`, `DiagnosticReport`, `SharedAssetsMode`, `SharedAssetsState`, `SetSharedAssets`, `UsageEventsState`, `SetUsageEvents`, `Range`, `Lease`, `PortsState`, `ProcessUsage`, `UsedPort`, `UsedPorts`, `LeaseRef`, `ReserveResponse`, `ReleaseResponse`, `MeshState`, `MeshForward`, `MeshPortRef`, `MeshPeerRef`, `MeshForwardRef`, `MeshListenRef`, `FleetState`, `FleetNode`, `FleetRef`, `FleetRename`, `FleetGrantRef`, `FleetInstructions`, `FleetInvite`, `FleetJoinRef`, `FleetInviteRequest`, `FleetInvites`, `FleetPendingInvite`, `FleetInviteCancel`, `FleetJoined`, `Project`, `ProjectsState`, `NewProject`, `ProjectRef`, `RenameProject`, `ProjectRenamed`, `StartService`, `StartResult`, `StopResult`, `NewService`, `NewServiceDocker`, `ServiceState`, `ServicePort`, `ProjectService`, `ProjectDetail`, `TaskRow`, `TasksState`, `NewTask`, `TaskRef`, `CompleteTask`, `GiveUpTask`, `ToolDto`, `ToolsState`, `NewTool`, `LinkTool`, `ToolRef`, `ToolScript`, `WriteToolScript`, `RunTool`, `ToolRunResult`, `AgentFormSpec`, `AgentSetupPreset`, `AgentSetupSecret`, `AgentBackendOption`, `AgentFormField`, `AgentFieldOwner`, `AgentFormOption`, `AgentFormFieldKind`, `AgentBackendRowDto`, `AgentDto`, `AgentsState`, `CanSpawnRuleDto`, `SpawnedByDto`, `SpawnRefusalDto`, `ProjectRunLimit`, `SetRunLimit`, `SetSpawnPolicy`, `SpawnRuleEdit`, `SetAutoTitle`, `SaveAgent`, `AgentRef`, `RunAgent`, `AgentRunOverrides`, `TranscriptView`, `RunRef`, `RunSteps`, `AgentSteps`, `HideRun`, `StarRun`, `RenameRun`, `ReplyToRun`, `QueueMode`, `AgentAttachment`, `AnswerRun`, `AgentQuestion`, `AgentChoice`, `AgentAsk`, `PendingAsk`, `PendingAsks`, `AgentGoal`, `PromptsOf`, `AgentPrompt`, `AgentPrompts`, `GoalsOf`, `SetGoal`, `CloseGoal`, `AgentGoals`, `AgentAwait`, `IgnoreAwait`, `AgentAwaits`, `UnqueueFromRun`, `AgentTurn`, `TurnMarker`, `AgentToolStatus`, `AgentStep`, `AgentTurnMetrics`, `AgentCapabilities`, `RunState`, `AgentRunInfo`, `AgentRunOutcome`, `AgentRuns`, `AllAgentRuns`, `RunGroup`, `AgentRunResult`, `ReviewRun`, `AgentReviewStarted`, `AgentKeys`, `AgentPeek`, `AgentStepRef`, `AgentToolUse`, `AgentChatStats`, `AgentTokenSource`, `AgentRepeatShape`, `AgentTokenSite`, `AgentTokenSplit`, `AgentRepeat`, `AgentNearDup`, `AgentTokens`, `SimulateAgent`, `AgentToken`, `AgentSimSection`, `AgentSimField`, `AgentSimFieldKind`, `AgentSimTool`, `AgentSimState`, `AgentSimBlock`, `SimulateTurn`, `AgentSimResult`, `AgentSimTurn`, `MetaState`, `TriggerKindOption`, `TriggerRuntimeOption`, `TriggerPresetField`, `TriggerPreset`, `TriggerDto`, `TriggersState`, `EventTypeDto`, `SaveTrigger`, `EmitEvent`, `EmitAck`, `TriggerRef`, `TriggerFireResult`, `TriggerLog`, `HookAck`, `WorkflowsState`, `WorkflowDto`, `WorkflowRef`, `RunWorkflow`, `WorkflowStarted`, `RunsQuery`, `RunsState`, `RunDto`, `WorkflowRunRef`, `RunDetailDto`, `StepDto`, `RewindRun`, `FileEntry`, `FilesRef`, `DirListing`, `FileContent`, `WriteFile`, `FsRef`, `FsListing`, `FsContent`, `FsWrite`, `FsCreate`, `ProjectHookDto`, `WorkspaceDto`, `WorkspacesState`, `WorkspacesRef`, `NewWorkspace`, `WorkspaceRef`, `ProjectHookRef`, `NewProjectHook`, `WorkspaceCreateResult`, `ProjectHookRunResult`, `WorkspaceTermRef`, `WorkspaceTermKeys`, `WorkspaceTerm`, `ProjectHookLog`, `HiveService`, `HiveState`, `FrontDoorStatus`, `Dashboard`, `NewDashboard`, `DashboardsState`, `DashboardCreated`, `DashboardTemplate`, `DashboardTemplatesState`, `DashboardRef`, `SetDashboardProject`, `TransferMode`, `TransferDashboard`, `DashboardTransferred`, `MarketplaceState`, `MarketplaceSource`, `MarketplaceApp`, `MarketplaceElementPreview`, `MarketplaceBundleStatus`, `MarketplaceBundleInstall`, `MarketplaceBundleElement`, `MarketplaceMedia`, `MarketplaceMediaKind`, `MarketplaceInstall`, `InstallMarketplaceApp`, `UninstallMarketplaceElement`, `StartMarketplaceApp`, `StartMarketplaceService`, `UpdateMarketplaceApp`, `UpdateMarketplaceBundle`, `MarketplaceDone`, `FleetDashboards`, `NodeDashboards`, `NodeDashboard`, `UnlockNode`, `FleetNodes`, `FleetNodeAccess`, `FleetReach`, `NodeReach`, `Reach`, `NodeServiceRef`, `SecretDto`, `OAuthInfoDto`, `SetOAuthSecret`, `SecretsState`, `SetSecret`, `SecretRef`, `RevealedSecret`, `MySecretDto`, `MySecretsState`, `SetMySecret`, `WrapDto`, `RemoveMySecret`, `SetMySettings`, `SetSecretsPolicy`, `SecretsPolicyState`, `DbInfoDto`, `DbState`, `DbScope`, `DbColumnDto`, `DbTableDto`, `DbTablesState`, `DbSchema`, `DbQuery`, `DbQueryResult`, `DbExecResult`, `LimitRuleDto`, `ProbeDto`, `LlmBackendDto`, `HoldDto`, `LlmBackendsDto`, `ContextWarningDto`, `DanglingRowDto`, `LlmSettingsDto`, `SaveLlmBackend`, `LlmBackendRef`, `SaveLlmSettings`, `TestLlmBackend`, `TestResultDto`, `EmbeddingBackendDto`, `EmbeddingBackendsDto`, `ConsumerAssignmentDto`, `SaveEmbeddingBackend`, `EmbeddingBackendRef`, `SaveEmbeddingSettings`, `TestEmbeddingBackend`, `LlmQuery`, `LlmCallRef`, `LlmTokens`, `LlmCallDto`, `LlmGroupDto`, `LlmSummary`, `LlmBucketDto`, `LlmCalls`, `LlmHeaderDto`, `LlmBlockDto`, `LlmCallDetail`, `LlmEventCountDto`, `ApiError`, `KnowledgeBaseDto`, `KnowledgeProviderDto`, `KnowledgeState`, `KnowledgeNoteDto`, `KnowledgeNotes`, `KnowledgeHitDto`, `KnowledgeResults`, `KnowledgeSearch`, `KnowledgeBaseRef`, `NewKnowledgeBase`, `NewKnowledgeNote`, `KnowledgeNoteRef`, `KnowledgeSaved`, `KnowledgeReembed`, `VoiceEngineDto`, `VoiceState`, `VoiceAgentDto`, `Transcript`, `RealtimeSessionRequest`, `RealtimeSessionDto`, `ChannelTargetDto`, `ChannelAllowlistDto`, `ChannelConnectionDto`, `ChannelsState`, `ConnectChannel`, `ChannelConnected`, `ChannelRef`, `RouteChannel`, `PauseChannel`, `AllowChannel`, `ChannelReplyRequest`, `ChannelProviderStatus`
+- [`src/types.rs`](#srctypesrs) — `Health`, `UpdateState`, `SystemStatus`, `SystemService`, `SystemAction`, `SystemSetup`, `RunSystemAction`, `SetSystemPower`, `Accepted`, `DiagnosticReport`, `SharedAssetsMode`, `SharedAssetsState`, `SetSharedAssets`, `UsageEventsState`, `SetUsageEvents`, `Range`, `Lease`, `PortsState`, `ProcessUsage`, `UsedPort`, `UsedPorts`, `LeaseRef`, `ReserveResponse`, `ReleaseResponse`, `MeshState`, `MeshForward`, `MeshPortRef`, `MeshPeerRef`, `MeshForwardRef`, `MeshListenRef`, `FleetState`, `FleetNode`, `FleetRef`, `FleetRename`, `FleetGrantRef`, `FleetInstructions`, `FleetInvite`, `FleetJoinRef`, `FleetInviteRequest`, `FleetInvites`, `FleetPendingInvite`, `FleetInviteCancel`, `FleetJoined`, `Project`, `ProjectsState`, `NewProject`, `ProjectRef`, `RenameProject`, `ProjectRenamed`, `StartService`, `StartResult`, `StopResult`, `NewService`, `NewServiceDocker`, `ServiceState`, `ServicePort`, `ProjectService`, `ProjectDetail`, `TaskRow`, `TasksState`, `NewTask`, `TaskRef`, `CompleteTask`, `GiveUpTask`, `ToolDto`, `ToolsState`, `NewTool`, `LinkTool`, `ToolRef`, `ToolScript`, `WriteToolScript`, `RunTool`, `ToolRunResult`, `McpValueDto`, `McpTransportDto`, `McpServerDto`, `McpServersState`, `SaveMcpServer`, `McpServerRef`, `AgentFormSpec`, `AgentSetupPreset`, `AgentSetupSecret`, `AgentBackendOption`, `AgentFormField`, `AgentFieldOwner`, `AgentFormOption`, `AgentFormFieldKind`, `AgentBackendRowDto`, `AgentDto`, `AgentsState`, `CanSpawnRuleDto`, `SpawnedByDto`, `SpawnRefusalDto`, `ProjectRunLimit`, `SetRunLimit`, `SetSpawnPolicy`, `SpawnRuleEdit`, `SetAutoTitle`, `SaveAgent`, `AgentRef`, `RunAgent`, `AgentRunOverrides`, `TranscriptView`, `RunRef`, `RunSteps`, `AgentSteps`, `HideRun`, `StarRun`, `RenameRun`, `ReplyToRun`, `QueueMode`, `AgentAttachment`, `AnswerRun`, `AgentQuestion`, `AgentChoice`, `AgentAsk`, `PendingAsk`, `PendingAsks`, `AgentGoal`, `PromptsOf`, `AgentPrompt`, `AgentPrompts`, `GoalsOf`, `SetGoal`, `CloseGoal`, `AgentGoals`, `AgentAwait`, `IgnoreAwait`, `AgentAwaits`, `UnqueueFromRun`, `AgentTurn`, `TurnMarker`, `AgentToolStatus`, `AgentStep`, `AgentTurnMetrics`, `AgentCapabilities`, `RunState`, `AgentRunInfo`, `AgentRunOutcome`, `AgentRuns`, `AllAgentRuns`, `RunGroup`, `AgentRunResult`, `ReviewRun`, `AgentReviewStarted`, `AgentKeys`, `AgentPeek`, `AgentStepRef`, `AgentToolUse`, `AgentChatStats`, `AgentTokenSource`, `AgentRepeatShape`, `AgentTokenSite`, `AgentTokenSplit`, `AgentRepeat`, `AgentNearDup`, `AgentTokens`, `SimulateAgent`, `AgentToken`, `AgentSimSection`, `AgentSimField`, `AgentSimFieldKind`, `AgentSimTool`, `AgentSimState`, `AgentSimBlock`, `SimulateTurn`, `AgentSimResult`, `AgentSimTurn`, `MetaState`, `TriggerKindOption`, `TriggerRuntimeOption`, `TriggerPresetField`, `TriggerPreset`, `TriggerDto`, `TriggersState`, `EventTypeDto`, `SaveTrigger`, `EmitEvent`, `EmitAck`, `TriggerRef`, `TriggerFireResult`, `TriggerLog`, `RelayKey`, `HookAck`, `WorkflowsState`, `WorkflowDto`, `WorkflowRef`, `RunWorkflow`, `WorkflowStarted`, `RunsQuery`, `RunsState`, `RunDto`, `WorkflowRunRef`, `RunDetailDto`, `StepDto`, `RewindRun`, `FileEntry`, `FilesRef`, `DirListing`, `FileContent`, `WriteFile`, `FsRef`, `FsListing`, `FsContent`, `FsWrite`, `FsCreate`, `ProjectHookDto`, `WorkspaceDto`, `WorkspacesState`, `WorkspacesRef`, `NewWorkspace`, `WorkspaceRef`, `ProjectHookRef`, `NewProjectHook`, `WorkspaceCreateResult`, `ProjectHookRunResult`, `WorkspaceTermRef`, `WorkspaceTermKeys`, `WorkspaceTerm`, `ProjectHookLog`, `HiveService`, `HiveState`, `FrontDoorStatus`, `Dashboard`, `NewDashboard`, `DashboardsState`, `DashboardCreated`, `DashboardTemplate`, `DashboardTemplatesState`, `DashboardRef`, `SetDashboardProject`, `TransferMode`, `TransferDashboard`, `DashboardTransferred`, `MarketplaceState`, `MarketplaceSource`, `MarketplaceApp`, `MarketplaceElementPreview`, `MarketplaceBundleStatus`, `MarketplaceBundleInstall`, `MarketplaceBundleElement`, `MarketplaceMedia`, `MarketplaceMediaKind`, `MarketplaceInstall`, `InstallMarketplaceApp`, `UninstallMarketplaceElement`, `StartMarketplaceApp`, `StartMarketplaceService`, `UpdateMarketplaceApp`, `UpdateMarketplaceBundle`, `MarketplaceDone`, `FleetDashboards`, `NodeDashboards`, `NodeDashboard`, `UnlockNode`, `FleetNodes`, `FleetNodeAccess`, `FleetReach`, `NodeReach`, `Reach`, `NodeServiceRef`, `SecretDto`, `OAuthInfoDto`, `SetOAuthSecret`, `SecretsState`, `SetSecret`, `SecretRef`, `RevealedSecret`, `MySecretDto`, `MySecretsState`, `SetMySecret`, `WrapDto`, `RemoveMySecret`, `SetMySettings`, `SetSecretsPolicy`, `SecretsPolicyState`, `DbInfoDto`, `DbState`, `DbScope`, `DbColumnDto`, `DbTableDto`, `DbTablesState`, `DbSchema`, `DbQuery`, `DbQueryResult`, `DbExecResult`, `LimitRuleDto`, `ProbeDto`, `LlmBackendDto`, `HoldDto`, `LlmBackendsDto`, `ContextWarningDto`, `DanglingRowDto`, `LlmSettingsDto`, `SaveLlmBackend`, `LlmBackendRef`, `SaveLlmSettings`, `TestLlmBackend`, `TestResultDto`, `EmbeddingBackendDto`, `EmbeddingBackendsDto`, `ConsumerAssignmentDto`, `SaveEmbeddingBackend`, `EmbeddingBackendRef`, `SaveEmbeddingSettings`, `TestEmbeddingBackend`, `LlmQuery`, `LlmCallRef`, `LlmTokens`, `LlmCallDto`, `LlmGroupDto`, `LlmSummary`, `LlmBucketDto`, `LlmCalls`, `LlmHeaderDto`, `LlmBlockDto`, `LlmCallDetail`, `LlmEventCountDto`, `ApiError`, `KnowledgeBaseDto`, `KnowledgeProviderDto`, `KnowledgeState`, `KnowledgeNoteDto`, `KnowledgeNotes`, `KnowledgeHitDto`, `KnowledgeResults`, `KnowledgeSearch`, `KnowledgeBaseRef`, `NewKnowledgeBase`, `NewKnowledgeNote`, `KnowledgeNoteRef`, `KnowledgeSaved`, `KnowledgeReembed`, `VoiceEngineDto`, `VoiceState`, `VoiceAgentDto`, `Transcript`, `RealtimeSessionRequest`, `RealtimeSessionDto`, `ChannelTargetDto`, `ChannelAllowlistDto`, `ChannelConnectionDto`, `ChannelsState`, `ConnectChannel`, `ChannelConnected`, `ChannelRef`, `RouteChannel`, `PauseChannel`, `AllowChannel`, `ChannelReplyRequest`, `ChannelProviderStatus`
 
 ---
 
@@ -29,7 +29,7 @@
 
 ### struct `FleetSender`
 
-The fleet node behind a request, off the headers the mesh gateway attaches when it forwards a peer's request to this machine's own `/api/*` (`adi_mesh::auth::FLEET_NODE_HEADER`/ `FLEET_USER_HEADER`/`FLEET_PETNAME_HEADER`, `docs/fleet.md` §13). `None` for a request that never left this machine, which is what the control panel's own composer always sends.
+The fleet node behind a request, off the headers the mesh gateway attaches when it forwards a peer's request to this machine's own `/api/*` (`adi_mesh::auth::FLEET_NODE_HEADER`/ `FLEET_USER_HEADER`/`FLEET_PETNAME_HEADER`). `None` for a request that never left this machine, which is what the control panel's own composer always sends.
 
 ```rust
 #[derive(Debug, Clone, Copy)]
@@ -893,7 +893,7 @@ pub struct FleetState {
 
 ### struct `FleetNode`
 
-One paired node: all three of its names (`docs/fleet.md` §2) and what it may reach here (§5).
+One paired node: all three of its names and what it may reach here (§5).
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1586,6 +1586,107 @@ pub struct ToolRunResult {
 }
 ```
 
+### enum `McpValueDto`
+
+One header/env value: written out in full, or naming a secret to resolve at launch instead — the wire mirror of `adi_mcp::Value`. `#[serde(untagged)]` tells the two apart by shape: a bare string is a literal, a one-field object naming `secret` is a reference.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum McpValueDto {
+    Literal(String),
+    Secret {
+        secret: String,
+    },
+}
+```
+
+### enum `McpTransportDto`
+
+How an MCP server is reached — the wire mirror of `adi_mcp::Transport`.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum McpTransportDto {
+    Http {
+        url: String,
+        #[serde(default)]
+        headers: BTreeMap<String, McpValueDto>,
+    },
+    Stdio {
+        command: String,
+        #[serde(default)]
+        args: Vec<String>,
+        #[serde(default)]
+        env: BTreeMap<String, McpValueDto>,
+    },
+}
+```
+
+### struct `McpServerDto`
+
+One registered MCP server definition, as `GET /api/mcp` and every mutation below answer it.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpServerDto {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub project: Option<String>,
+    pub transport: McpTransportDto,
+    #[serde(default)]
+    pub required_secrets: Vec<String>,
+    #[serde(default)]
+    pub missing_secrets: Vec<String>,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+```
+
+### struct `McpServersState`
+
+`GET /api/mcp` — every registered server. Each mutation below returns a fresh one, so the client refreshes from one round-trip.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpServersState {
+    pub servers: Vec<McpServerDto>,
+}
+```
+
+### struct `SaveMcpServer`
+
+`POST /api/mcp/save` — create or replace a server definition, the whole object at once (the same shape `SaveEmbeddingBackend` and `llm backends save` already use: a handful of fields, where an omit-to-keep save would be how a header quietly disappears).
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SaveMcpServer {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub project: Option<String>,
+    pub transport: McpTransportDto,
+}
+```
+
+### struct `McpServerRef`
+
+Request body naming a server — `POST /api/mcp/remove`.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpServerRef {
+    pub id: String,
+}
+```
+
 ### struct `AgentFormSpec`
 
 UI/schema metadata for the Agents create/edit form. The backend owns this so adding a backend or exposing another backend-specific parameter doesn't require a webapp rebuild that hardcodes the new option list or placeholder text.
@@ -1698,7 +1799,7 @@ pub struct AgentFormField {
 
 ### enum `AgentFieldOwner`
 
-Whether a form field describes the agent, the login its backend uses, or a dial on that backend's model — the split `docs/llm-backends.md` draws between an agent's identity and one complete way to answer a turn.
+Whether a form field describes the agent, the login its backend uses, or a dial on that backend's model — the split between an agent's identity and one complete way to answer a turn.
 
 ```rust
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1774,6 +1875,8 @@ pub struct AgentDto {
     pub project: Option<String>,
     #[serde(default)]
     pub bin_tools: Vec<String>,
+    #[serde(default)]
+    pub mcp: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub prelude: Vec<String>,
     #[serde(default)]
@@ -1963,6 +2066,8 @@ pub struct SaveAgent {
     pub project: Option<String>,
     #[serde(default)]
     pub bin_tools: Option<Vec<String>>,
+    #[serde(default)]
+    pub mcp: Option<Vec<String>>,
     #[serde(default)]
     pub prelude: Option<Vec<String>>,
     #[serde(default)]
@@ -3455,6 +3560,17 @@ pub struct TriggerLog {
 }
 ```
 
+### struct `RelayKey`
+
+`GET /api/triggers/relay-key` (ADI-MONO-223) — this node's webhook-relay public signing key, OpenSSH-rendered, for a self-host operator's own `authorized_keys` file. Answered by `adi-app` (never this crate: the key lives in `adi_relay`, a dependency only the binary that actually runs a node takes).
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelayKey {
+    pub public_key: String,
+}
+```
+
 ### struct `HookAck`
 
 The response an external webhook caller gets from `/api/hooks/<name>`: an acknowledgement that the named trigger's code block was spawned.
@@ -4306,7 +4422,7 @@ pub struct MarketplaceElementPreview {
 
 ### struct `MarketplaceBundleStatus`
 
-A general bundle's status for the listing (`docs/marketplace-bundles.md`, "What 'installed' means for a partially-installed bundle").
+A general bundle's status for the listing ("What 'installed' means for a partially-installed bundle").
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -4425,7 +4541,7 @@ pub struct InstallMarketplaceApp {
 
 ### struct `UninstallMarketplaceElement`
 
-`POST /api/marketplace/uninstall` — remove one installed element of a bundle by its own kind's ordinary path (`docs/marketplace-bundles.md`, "Uninstall"). There is no whole-bundle uninstall verb, the same as v1 has none for an app — a legacy dashboard install still goes through the Dashboards page.
+`POST /api/marketplace/uninstall` — remove one installed element of a bundle by its own kind's ordinary path ("Uninstall"). There is no whole-bundle uninstall verb, the same as v1 has none for an app — a legacy dashboard install still goes through the Dashboards page.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -4479,7 +4595,7 @@ pub struct UpdateMarketplaceApp {
 
 ### struct `UpdateMarketplaceBundle`
 
-`POST /api/marketplace/bundle/update` — fast-forward a general bundle's own internal clone onto its manifest's current pin, and re-apply every ledgered element, per element rather than all-or-nothing (`docs/marketplace-bundles.md`, "Update"). `force` lists the `<kind>/<name>` pairs to overwrite past their own local edit; every other ledgered element fast-forwards, or is left alone and reported.
+`POST /api/marketplace/bundle/update` — fast-forward a general bundle's own internal clone onto its manifest's current pin, and re-apply every ledgered element, per element rather than all-or-nothing ("Update"). `force` lists the `<kind>/<name>` pairs to overwrite past their own local edit; every other ledgered element fast-forwards, or is left alone and reported.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -4757,7 +4873,7 @@ pub struct RevealedSecret {
 
 ### struct `MySecretDto`
 
-One of a user's own secret names — `GET /api/secrets/mine`'s list entries. No `project` field: `<u>` is never a project id (`docs/byo-credentials.md` §4.2), and nothing here needs one.
+One of a user's own secret names — `GET /api/secrets/mine`'s list entries. No `project` field: `<u>` is never a project id, and nothing here needs one.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -4789,7 +4905,7 @@ pub struct MySecretsState {
 
 ### struct `SetMySecret`
 
-`POST /api/secrets/mine/set` — a value already sealed on the caller's own device (`docs/byo-credentials.md` §7, §8, ADI-MONO-180 P2.1): `ciphertext`/`nonce` are the value sealed under a fresh DEK, and `wraps` is that DEK sealed to the device(s) that may unwrap it (exactly one in v1). The server stores exactly this; it never decrypts any of it.
+`POST /api/secrets/mine/set` — a value already sealed on the caller's own device : `ciphertext`/`nonce` are the value sealed under a fresh DEK, and `wraps` is that DEK sealed to the device(s) that may unwrap it (exactly one in v1). The server stores exactly this; it never decrypts any of it.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -4832,7 +4948,7 @@ pub struct RemoveMySecret {
 
 ### struct `SetMySettings`
 
-`POST /api/secrets/mine/settings` — a user's own `missing` preference (`docs/byo-credentials.md` §4.2). `None` clears it back to "no preference: the server's own setting governs outright".
+`POST /api/secrets/mine/settings` — a user's own `missing` preference . `None` clears it back to "no preference: the server's own setting governs outright".
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -4844,7 +4960,7 @@ pub struct SetMySettings {
 
 ### struct `SetSecretsPolicy`
 
-`POST /api/secrets/policy` — the server's own `[user_secrets]` (`docs/byo-credentials.md` §4.1). Admin-only — on the member gate's blocked list alongside the global-scope secrets actions.
+`POST /api/secrets/policy` — the server's own `[user_secrets]`. Admin-only — on the member gate's blocked list alongside the global-scope secrets actions.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -5923,7 +6039,7 @@ pub struct RealtimeSessionDto {
 
 ### enum `ChannelTargetDto`
 
-What a connection dispatches to — only `agent` is built today; `trigger`/`app_route` are named so a bundle-installed channel (`docs/channels.md` §6) never has to widen this type later. Mirrors `adi_channels::connection::Target`, kept as its own plain type here since this module compiles for wasm and `adi-channels` (tokio, reqwest) does not.
+What a connection dispatches to — only `agent` is built today; `trigger`/`app_route` are named so a bundle-installed channel never has to widen this type later. Mirrors `adi_channels::connection::Target`, kept as its own plain type here since this module compiles for wasm and `adi-channels` (tokio, reqwest) does not.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -5991,7 +6107,7 @@ pub struct ChannelsState {
 
 ### struct `ConnectChannel`
 
-`POST /api/channels/connect` — `docs/channels.md` §7.
+`POST /api/channels/connect`.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -6018,7 +6134,7 @@ pub struct ChannelConnected {
 
 ### struct `ChannelRef`
 
-Request body naming one connection — `/pause`, `/disconnect`, and the `GET /api/channels/<id>` poll (`docs/channels.md` §7: "the node is just waiting on its own WebSocket for a `linked` frame").
+Request body naming one connection — `/pause`, `/disconnect`, and the `GET /api/channels/<id>` poll (the node is just waiting on its own WebSocket for a `linked` frame).
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

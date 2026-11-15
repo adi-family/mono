@@ -105,6 +105,16 @@ pub(crate) enum AgentsCommand {
         /// Clear the agent's enabled tools (see `--tool`).
         #[arg(long, conflicts_with = "tools")]
         no_tool: bool,
+        /// An `adi-mcp` MCP server id to give this agent's runs, beside ADI's own per-conversation
+        /// server. Repeatable; comma-separated values are also accepted (`adi-mono mcp list`
+        /// shows the ids). Omit every `--mcp` to leave an existing agent's servers as they are;
+        /// pass `--no-mcp` to detach them all. A backend with no MCP support refuses to launch
+        /// rather than silently drop them (`adi-mono agents show` lists which backends can).
+        #[arg(long = "mcp")]
+        mcp_servers: Vec<String>,
+        /// Detach every MCP server from the agent (see `--mcp`).
+        #[arg(long, conflicts_with = "mcp_servers")]
+        no_mcp: bool,
         /// A secret to attach to this agent (injected into its runs as an env var under its name).
         /// Give `NAME` for a global secret or `PROJECT/NAME` for a project-scoped one. Repeatable;
         /// comma-separated values are also accepted. Only attached secrets are injected — an
@@ -518,6 +528,8 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
             no_project,
             tools,
             no_tool,
+            mcp_servers,
+            no_mcp,
             secrets,
             no_secret,
             path,
@@ -658,6 +670,11 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
                     stated(tools, clean_tags),
                     old.map(|m| m.bin_tools.clone()),
                 ),
+                mcp: kept(
+                    no_mcp,
+                    stated(mcp_servers, clean_tags),
+                    old.map(|m| m.mcp.clone()),
+                ),
                 secrets: kept(
                     no_secret,
                     stated(secrets, parse_secret_attachments),
@@ -744,7 +761,7 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
             let overrides = RunOverrides::parse_pairs(&set)?;
 
             // A run started inside a leased run forwards to `adi-app` instead of launching
-            // in-process (`docs/byo-credentials.md` §11, ADI-MONO-182 P3.3): `adi-app` is the
+            // in-process (ADI-MONO-182 P3.3): `adi-app` is the
             // only process that can provision the lease's values, so a child that inherited
             // `$ADI_LEASE` has to ask it, not guess at the server's own values locally.
             if let Ok(capability) = std::env::var(LEASE_CAP_ENV) {
@@ -1410,6 +1427,9 @@ fn print_agent(agent: &StoredAgent) {
     if !agent.manifest.bin_tools.is_empty() {
         println!("  tools (.bin): {}", agent.manifest.bin_tools.join(", "));
     }
+    if !agent.manifest.mcp.is_empty() {
+        println!("  mcp servers: {}", agent.manifest.mcp.join(", "));
+    }
     // One line per command rather than a joined list: these are shell commands, and a reader
     // scanning a comma-separated line of them cannot tell a separator from a command's own comma.
     for command in &agent.manifest.prelude {
@@ -1564,7 +1584,7 @@ fn follow_the_run(
 }
 
 /// Forward `agents run` to `$ADI_LEASE_URL/api/agents/run` with `X-Adi-Lease: $ADI_LEASE`
-/// (`docs/byo-credentials.md` §11, ADI-MONO-182 P3.3) — the body `run_agent_leased` expects, in
+/// (ADI-MONO-182 P3.3) — the body `run_agent_leased` expects, in
 /// `RunAgent`'s own field names. `adi-app` ignores whatever `launched_by` this sends (it derives
 /// the real caller from the capability itself, P3.2), so nothing here bothers naming one.
 ///

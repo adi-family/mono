@@ -5,7 +5,7 @@ else that machine runs. There is no server: the page is static files, and everyt
 fetched itself over QUIC from a machine that is listening on nothing — no `:22`, no `:80`, no
 `:443`.
 
-`docs/fleet.md` §12 is the contract. This file is how it is built, how it is tested, and the three
+This file is how it is built, how it is tested, and the three
 things that cost a day to find out.
 
 ```
@@ -23,7 +23,7 @@ harness/e2e.sh --scan                 # the same, with the invite arriving throu
 | `src/protocol.rs` | **not a file** — `#[path]`-included from `crates/adi-mesh/src/protocol.rs` |
 | `src/http.rs` | HTTP/1.1 as a client, with the body delivered as chunks rather than read to end |
 | `src/ws.rs` | an RFC 6455 client, spoken by the tab over the same QUIC stream |
-| `src/invite.rs` | pairing, from the side that dials (`docs/fleet.md` §8) |
+| `src/invite.rs` | pairing, from the side that dials |
 | `src/scan.rs` | the camera, and reading an invite out of it — the other end of `mesh invite --qr` |
 | `src/store.rs` | IndexedDB: the browser's secret key, and one record per node |
 | `src/dashboards.rs` | what a node runs, asked of the node's own panel — and asking for a grant |
@@ -156,7 +156,7 @@ out, which is why **Pair** takes about five seconds and why the row, when it app
 
 Under each machine in the list are the dashboards it runs, read from that node's own
 `GET /api/dashboards` over `app` — the service pairing grants — with what this browser may reach
-read from its `GET /api/fleet` **by key**. That is `docs/fleet.md` §11's fleet rail asked from a
+read from its `GET /api/fleet` **by key**. That is the desktop panel's fleet rail asked from a
 phone, and it needs no new wire format: `adi/mesh/http/1` deliberately cannot answer "what do you
 serve?", because §5 refuses an unauthorized peer before the route table is consulted.
 
@@ -168,7 +168,7 @@ writes the grant, and the node enforces it.
 **The cost is one origin.** This origin's IndexedDB holds the browser's secret key *and* every
 node's password, so a dashboard rendered here can read the credentials for every machine in the
 list. What bounds it is that the code is the operator's own and that nothing is reached that a tap
-did not ask a node to allow — not isolation, which is `docs/fleet.md` I8: a sub-origin per
+did not ask a node to allow — not isolation, which would be a sub-origin per
 `(node, service)` under a wildcard domain, with the key store on the parent. Still open.
 
 ## What this still deliberately does not do

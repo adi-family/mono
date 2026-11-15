@@ -10,7 +10,7 @@
 //! {"ok": false, "error": "a sentence for a human"}
 //! ```
 //!
-//! Errors are sentences, not codes, for the same reason a join refusal is (`docs/fleet.md` §8):
+//! Errors are sentences, not codes, for the same reason a join refusal is:
 //! the things that go wrong here — not paired, no relay yet, node asleep — have different fixes and
 //! the person reading them is holding the phone.
 //!

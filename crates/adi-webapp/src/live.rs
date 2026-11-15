@@ -46,7 +46,7 @@ pub(crate) struct Sub {
 
 impl Sub {
     /// Watch a `GET` endpoint, deserializing each answer into `T`. Always local — see
-    /// [`Self::get_on`] for a read that follows a specific source (`docs/fleet.md` §13).
+    /// [`Self::get_on`] for a read that follows a specific source.
     pub(crate) fn get<T, F>(path: impl Into<String>, apply: F) -> Self
     where
         T: DeserializeOwned,
@@ -71,7 +71,7 @@ impl Sub {
     ///
     /// No bare, always-local `post` beside [`Self::get`]: every POST-shaped watch this crate has
     /// ever needed is either an explicit `(source, run_id)` read (§13) or an ordinary panel read
-    /// that follows the source picker (`docs/fleet.md` §14), and both go through `node` here —
+    /// that follows the source picker, and both go through `node` here —
     /// there has been no POST-shaped read yet that belongs on neither. Add one back the day there
     /// is; until then a function nothing calls is a worse trap than the two extra characters at
     /// each of today's call sites.

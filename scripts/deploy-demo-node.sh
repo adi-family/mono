@@ -14,7 +14,7 @@
 # ## How this differs from deploy-relay.sh, and why it is so much shorter
 #
 # A relay is a public server: it needs a static address, a DNS record, a certificate and an open
-# :80/:443/udp:7842. **A node needs none of that.** `docs/fleet.md` §6 is the whole reason — a
+# :80/:443/udp:7842. **A node needs none of that.** The whole reason: a
 # node's only network-facing action is an *outbound* QUIC session, so it listens on nothing and is
 # reached back down the session it opened. So there is no address to reserve, no firewall rule to
 # add, no DNS to publish and nothing to wait for. It does keep an ephemeral external IP, purely for

@@ -1,5 +1,5 @@
 //! `connections.toml`, on **this device**: per-server-connection BYO-credentials settings
-//! (`docs/byo-credentials.md` §4.3, §4.4, ADI-MONO-180 P2.4) — which of this device's own values
+//! (ADI-MONO-180 P2.4) — which of this device's own values
 //! it releases to which paired server, for how long, and whether it unlocks on connect without
 //! asking.
 //!
@@ -24,7 +24,7 @@ use std::str::FromStr;
 /// The typed config file within the `mesh` module dir.
 const CONNECTIONS_FILE: &str = "connections.toml";
 
-/// How long a device's lease outlives the connection (`docs/byo-credentials.md` §4.3) —
+/// How long a device's lease outlives the connection —
 /// `0` | `"<n>h"` | `"forever"` on the wire, via [`FromStr`]/[`fmt::Display`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
@@ -60,7 +60,7 @@ impl LeaseLength {
 
     /// Clamp to `max` (the server's `max_lease`, already parsed) — `Forever` becomes `max`, and
     /// anything longer than it is shortened to it. `None` is "no cap": `self` unchanged
-    /// (`docs/byo-credentials.md` §4.1).
+    ///.
     #[must_use]
     pub fn clamp(self, max: Option<Self>) -> Self {
         match max {
@@ -116,7 +116,7 @@ impl From<LeaseLength> for String {
     }
 }
 
-/// One server connection's BYO-credentials settings (`docs/byo-credentials.md` §4.3).
+/// One server connection's BYO-credentials settings.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Connection {

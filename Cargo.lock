@@ -9,6 +9,7 @@ dependencies = [
  "adi-config",
  "adi-events",
  "adi-knowledge",
+ "adi-mcp",
  "adi-osext",
  "adi-pty",
  "adi-secrets",
@@ -46,10 +47,12 @@ dependencies = [
  "adi-db",
  "adi-events",
  "adi-knowledge",
+ "adi-mcp",
  "adi-mesh",
  "adi-osext",
  "adi-ports-manager",
  "adi-projects",
+ "adi-relay",
  "adi-secrets",
  "adi-tasks",
  "adi-tools",
@@ -130,6 +133,7 @@ dependencies = [
  "adi-knowledge",
  "adi-marketplace",
  "adi-mesh",
+ "adi-relay",
  "adi-secrets",
  "adi-usage",
  "base64 0.22.1",
@@ -163,6 +167,7 @@ dependencies = [
  "adi-hive",
  "adi-hooks",
  "adi-knowledge",
+ "adi-mcp",
  "adi-ports-manager",
  "adi-projects",
  "adi-secrets",
@@ -408,6 +413,7 @@ dependencies = [
  "adi-dashboards",
  "adi-embeddings",
  "adi-hive",
+ "adi-mcp",
  "adi-projects",
  "adi-secrets",
  "adi-templates",
@@ -421,6 +427,17 @@ dependencies = [
  "serde_yaml_ng",
  "sha2 0.11.0",
  "thiserror 2.0.20",
+ "toml",
+]
+
+[[package]]
+name = "adi-mcp"
+version = "0.1.0"
+dependencies = [
+ "adi-config",
+ "adi-secrets",
+ "serde",
+ "serde_json",
  "toml",
 ]
 
@@ -528,6 +545,55 @@ dependencies = [
  "adi-config",
  "portable-pty",
  "vt100",
+]
+
+[[package]]
+name = "adi-relay"
+version = "0.1.0"
+dependencies = [
+ "adi-config",
+ "anyhow",
+ "base64 0.22.1",
+ "chacha20poly1305",
+ "ed25519-dalek",
+ "hex",
+ "hkdf",
+ "rand 0.10.2",
+ "reqwest",
+ "rustls",
+ "serde_json",
+ "sha2 0.11.0",
+ "tokio",
+ "tracing",
+ "x25519-dalek",
+ "zeroize",
+]
+
+[[package]]
+name = "adi-relay-server"
+version = "0.1.0"
+dependencies = [
+ "adi-osext",
+ "adi-relay",
+ "anyhow",
+ "base64 0.22.1",
+ "chrono",
+ "ed25519-dalek",
+ "hex",
+ "rand 0.10.2",
+ "reqwest",
+ "rusqlite",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "subtle",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "x25519-dalek",
 ]
 
 [[package]]
@@ -683,6 +749,7 @@ dependencies = [
  "adi-hooks",
  "adi-knowledge",
  "adi-marketplace",
+ "adi-mcp",
  "adi-mesh",
  "adi-osext",
  "adi-ports-manager",

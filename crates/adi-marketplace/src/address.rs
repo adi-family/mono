@@ -15,8 +15,7 @@
 //!
 //! `kind` is part of the address, not just of the layout, because the same published name can
 //! appear under two kinds (`agents/reviewer` and `tools/reviewer` are not the same element) and
-//! the address has to disambiguate that without reading the repository first
-//! (`docs/marketplace-bundles.md`).
+//! the address has to disambiguate that without reading the repository first.
 
 use std::fmt;
 
@@ -37,7 +36,7 @@ pub struct Address {
 /// The third coordinate: which element, of which kind.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ElementAddress {
-    /// Which of the eight kind directories it lives under.
+    /// Which of the ten kind directories it lives under.
     pub kind: Kind,
     /// The published name — absent only for [`Kind::Project`], the one singleton kind.
     pub name: Option<String>,

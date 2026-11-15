@@ -244,7 +244,7 @@ const MIGRATIONS: &[&str] = &[
     // Whose lease a session's turns look for, and which names — JSON, NULL on every session ever
     // opened before this existed and on any launch with no user scope to give it (every
     // automation, every local launch). NULL reads as "server values only"
-    // (`docs/byo-credentials.md` §11). See `SessionRecord::lease`.
+    // See `SessionRecord::lease`.
     "ALTER TABLE sessions ADD COLUMN lease TEXT",
     // SHA-256 of the session's `ADI_LEASE` capability (ADI-MONO-177 P1.6; minted and read from
     // phase 3 on). NULL whenever `lease` is NULL, and also NULL for a leased session until its

@@ -1,5 +1,4 @@
-//! The `mesh` command group: enrol this machine into a fleet, or enrol machines into ours
-//! (`docs/fleet.md` §2, §5, E3).
+//! The `mesh` command group: enrol this machine into a fleet, or enrol machines into ours.
 //!
 //! Two commands do the work and they run on opposite machines. On the **viewer** — the one you
 //! sit at — `mesh invite` mints a one-time token. On the **node** — a box reached over ssh, a
@@ -102,7 +101,7 @@ pub(crate) enum MeshCommand {
         /// A `key=value` label filed on the node's record once it pairs. Repeatable.
         #[arg(long = "label")]
         labels: Vec<String>,
-        /// `admin` or `member` (`docs/fleet.md`'s peer role), instead of the default `admin`.
+        /// `admin` or `member` (the peer role), instead of the default `admin`.
         /// Only takes effect on a fresh pairing — never on a re-pair.
         #[arg(long)]
         role: Option<String>,
@@ -147,7 +146,7 @@ pub(crate) enum MeshCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Rename a node locally — the far side is not involved (`docs/fleet.md` §2 rule 5).
+    /// Rename a node locally — the far side is not involved.
     Rename {
         /// Its current petname.
         from: String,
@@ -206,7 +205,7 @@ pub(crate) enum MeshCommand {
         json: bool,
     },
     /// Edit this device's own BYO-credentials settings for one server connection
-    /// (`docs/byo-credentials.md` §4.3, §4.4, ADI-MONO-180 P2.5) — writes `connections.toml` only;
+    /// (ADI-MONO-180 P2.5) — writes `connections.toml` only;
     /// nothing is sent until the next `mesh unlock`.
     Share {
         /// The paired server this applies to.
@@ -225,7 +224,7 @@ pub(crate) enum MeshCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Unlock this device's shared values on `server` now (`docs/byo-credentials.md` §9):
+    /// Unlock this device's shared values on `server` now:
     /// unwraps each shared value with this device's own key, reseals it to the server's session,
     /// and uploads it.
     Unlock {
@@ -233,7 +232,7 @@ pub(crate) enum MeshCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Revoke this device's lease on `server` now (`docs/byo-credentials.md` §10.1): drops the
+    /// Revoke this device's lease on `server` now: drops the
     /// lease there and voids its capability. Leaves `connections.toml` alone, so the next connect
     /// re-unlocks under `auto_unlock`.
     Lock {
@@ -613,7 +612,7 @@ fn rename(from: &str, to: &str) -> Result<(), String> {
     if renamed.is_ok() {
         record_front_door(from, false);
         record_front_door(to, true);
-        // `connections.toml` (`docs/byo-credentials.md` §4.3) is keyed by the same petname but
+        // `connections.toml` is keyed by the same petname but
         // lives in its own file, so the registry's own rename never moves it — the one coupling
         // between the two files, run here rather than inside `FleetRegistry::rename` itself.
         move_connection(from, to);
@@ -769,7 +768,7 @@ fn name(nickname: Option<&str>, json: bool) -> Result<(), String> {
     Ok(())
 }
 
-// -- BYO-credentials: share / unlock / lock (docs/byo-credentials.md §4.4, ADI-MONO-180 P2.5) --
+// -- BYO-credentials: share / unlock / lock (ADI-MONO-180 P2.5) --
 
 /// `mesh share` — edits this device's own `connections.toml` only (§4.3). Omitted flags leave
 /// the stored setting as it was, the same convention `secrets policy`'s local edit uses.
@@ -993,7 +992,7 @@ fn short_key(record: &NodeRecord) -> String {
 }
 
 /// Grants on one line, or an explicit `(none)` — because an empty list is default-**deny**
-/// (`docs/fleet.md` §5) and printing nothing would read as "unrestricted".
+/// and printing nothing would read as "unrestricted".
 fn grants_line(grants: &[Grant]) -> String {
     if grants.is_empty() {
         return "(none — this peer may reach nothing)".to_string();

@@ -6,8 +6,8 @@
 //!   Authorization prompt; `.adi` is routed with an `/etc/resolver/adi` file.
 //! - **Linux:** an unprivileged per-user resolver unit (`127.0.0.1:10053`) and a front-door unit
 //!   *beside it, under the same `systemd --user` manager* — deliberately **not** a root system
-//!   unit. A node runs everything as an ordinary user (`docs/fleet.md` §6,
-//!   `apps/linux/README.md`); a root daemon would have to be told whose `~/.adi/mono` to read,
+//!   unit. A node runs everything as an ordinary user
+//!   (`apps/linux/README.md`); a root daemon would have to be told whose `~/.adi/mono` to read,
 //!   would leave root-owned files in it, and would move the one process that terminates every
 //!   `.adi` connection outside the privilege boundary the rest of the node keeps. So the front
 //!   door stays unprivileged and is granted exactly one thing — `CAP_NET_BIND_SERVICE` on the
@@ -147,7 +147,7 @@ const FRONTDOOR_PROBE_TIMEOUT: Duration = Duration::from_millis(250);
 const FRONTDOOR_CONFIRM_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// The loopback port the local **mesh gateway** listens on — where the front door hands every
-/// `*.n.adi` request (`docs/fleet.md` §3).
+/// `*.n.adi` request.
 ///
 /// Re-exported, not defined here. The number has to be agreed by two crates that cannot see each
 /// other — this one writes it into the generated front door's `proxy.mesh_gateway`, and
@@ -1430,7 +1430,7 @@ fn report_frontdoor_port_taken(occupant: &str) {
     );
 }
 
-// MARK: paired nodes on the front door (docs/fleet.md F2)
+// MARK: paired nodes on the front door
 
 /// What recording a paired node did to the front door.
 ///
@@ -1454,7 +1454,7 @@ pub enum MeshNodeChange {
     Failed,
 }
 
-/// Whether `name` is usable as a petname *here*: one lowercase DNS label (`docs/fleet.md` §2).
+/// Whether `name` is usable as a petname *here*: one lowercase DNS label.
 /// The fleet registry validates the same shape at pairing; this is the front door refusing to
 /// write a name it could not turn into a `*.<name>.n.adi` SAN, rather than trusting its caller.
 fn is_petname(name: &str) -> bool {
@@ -2041,7 +2041,7 @@ impl Service for Dns {
     #[cfg(target_os = "linux")]
     fn on_enable(&self) {
         // The rendered front-door config is also the node's **route table**: the mesh gateway
-        // resolves an incoming service label against it (`docs/fleet.md` §6), falling back to this
+        // resolves an incoming service label against it, falling back to this
         // generated file when there is no hand-managed `hive/hive.yaml`. So it is written on every
         // `up` regardless of whether a front door is, or will ever be, running. Writing it only
         // alongside the unit was the bug that made a mesh-only node — the normal case, since a
@@ -2283,7 +2283,7 @@ mod tests {
         }
     }
 
-    // MARK: mesh (docs/fleet.md F1/F2)
+    // MARK: mesh
 
     /// A node's front door has to fan in dashboards and projects, and route them without running
     /// them. Both halves were missing: dashboards were scaffolded and never reachable by any
@@ -2569,7 +2569,7 @@ mod tests {
         assert_eq!(route_action(true).args, vec!["dns", "remove-route"]);
     }
 
-    // MARK: Linux — a node's route and front door (docs/fleet.md §6)
+    // MARK: Linux — a node's route and front door
     //
     // None of this runs on the host that builds it, and it will not run on macOS or Windows at
     // all. So the tests are about *data*: the exact bytes that would be written and the exact argv

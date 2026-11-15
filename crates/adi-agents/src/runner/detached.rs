@@ -111,7 +111,8 @@ impl DetachedRunner {
                         with_knowledge(spec, with_workspace(spec, config.append_system_prompt)),
                     ),
                 );
-                let tools = crate::backends::mcp::scope_tools(config.allowed_tools.as_deref());
+                let mut tools = crate::backends::mcp::scope_tools(config.allowed_tools.as_deref());
+                crate::backends::mcp::grant_servers(&mut tools, &spec.mcp_servers);
                 Ok(process::claude::argv(
                     &config,
                     message,
@@ -203,6 +204,7 @@ impl DetachedRunner {
                     message,
                     spec.cwd.to_str(),
                     &cont,
+                    &spec.mcp_servers,
                 ))
             }
             Backend::HarnessClaudeSdk => {
@@ -220,7 +222,8 @@ impl DetachedRunner {
                 } else {
                     ClaudeContinuation::First { session_id }
                 };
-                let tools = crate::backends::mcp::scope_tools(config.allowed_tools.as_deref());
+                let mut tools = crate::backends::mcp::scope_tools(config.allowed_tools.as_deref());
+                crate::backends::mcp::grant_servers(&mut tools, &spec.mcp_servers);
                 Ok(harness::claude_sdk::argv(
                     &config,
                     message,
@@ -299,6 +302,10 @@ impl DetachedRunner {
         }
         if matches!(self.backend, Backend::ProcessCodex) {
             quiet_codex_env(&mut env);
+            // The bearer tokens `process::codex_mcp::config_flags` told Codex to read by name —
+            // set here, not resolved twice, so `argv` and the process it spawns can never disagree
+            // about what an env var called `ADI_MCP_…_BEARER` holds.
+            env.extend(process::codex_mcp::bearer_env(&spec.mcp_servers));
         }
         env
     }
@@ -328,11 +335,17 @@ impl Runner for DetachedRunner {
     fn check(&self, spec: &RunSpec) -> Result<()> {
         match &self.backend {
             Backend::ProcessClaude => decode::<ProcessClaudeArguments>(&spec.arguments).map(drop),
-            Backend::ProcessCodex => decode::<ProcessCodexArguments>(&spec.arguments).map(drop),
+            Backend::ProcessCodex => {
+                decode::<ProcessCodexArguments>(&spec.arguments)?;
+                process::codex_mcp::validate(&spec.mcp_servers)
+            }
             Backend::HarnessClaudeSdk => {
                 decode::<HarnessClaudeSdkArguments>(&spec.arguments).map(drop)
             }
-            Backend::HarnessAdi => harness::adi_loop::validate(&decode(&spec.arguments)?),
+            Backend::HarnessAdi => {
+                crate::backends::mcp::refuse_unless_supported(&self.backend, &spec.mcp_servers)?;
+                harness::adi_loop::validate(&decode(&spec.arguments)?)
+            }
             other => Err(Error::NotRunnable(other.to_string())),
         }
     }
@@ -2273,6 +2286,7 @@ mod tests {
             knowledge_note: None,
             spawn_note: None,
             marker_note: None,
+            mcp_servers: Vec::new(),
         }
     }
 
@@ -3887,7 +3901,7 @@ mod tests {
                 .iter()
                 .map(|a| a.as_str().expect("string"))
                 .collect();
-            assert_eq!(spawn_args[0], "mcp");
+            assert_eq!(spawn_args[0], "mcp-serve");
             assert!(spawn_args.contains(&"solver"), "{spawn_args:?}");
             assert!(spawn_args.contains(&"conv-1"), "{spawn_args:?}");
             let dir = spawn_args

@@ -1,7 +1,7 @@
 /**
  * The channel router. One deployment fronts many providers; every webhook and every node
  * socket passes through here on the way to or from a `NodeConnection` Durable Object
- * (`do.ts`). docs/channels.md §1 is the route table this mirrors.
+ * (`do.ts`).
  *
  * - `POST /webhook/<provider>` -- verify the service's signature, resolve the routing key
  *   (chat id / team id) to a node via the `routing_keys` D1 table, forward to that node's DO.

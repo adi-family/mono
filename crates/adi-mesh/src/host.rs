@@ -5,7 +5,7 @@
 //!
 //! This is also the endpoint's **only** accept loop, and an endpoint now carries three ALPNs, so
 //! the loop dispatches: `adi/mesh/http/1` connections are the fleet gateway's and go to
-//! [`crate::gateway::serve_peer`] (`docs/fleet.md` §7), `adi/mesh/join/1` connections are a node
+//! [`crate::gateway::serve_peer`], `adi/mesh/join/1` connections are a node
 //! asking to be paired and go to [`crate::join::serve_join`] (E3), and everything else is the raw
 //! forward below. The branch is a byte compare on `conn.alpn()` — the handshake already picked
 //! the protocol, so nothing on the wire has to carry a discriminator.
@@ -132,8 +132,8 @@ async fn refuse(conn: &Connection, send: &mut SendStream, status: Status) -> any
 /// ([`crate::fleet`]) and the gateway already enforces ([`crate::gateway::admit`]).
 ///
 /// It used to be the opposite — an empty list meant *any* peer — and on an endpoint reachable
-/// through a public relay that is an open door for anyone who learns the id (`docs/fleet.md` §5
-/// said so about itself). Nothing is lost by closing it: pairing does not write this list, it
+/// through a public relay that is an open door for anyone who learns the id (the fleet
+/// design said so about itself). Nothing is lost by closing it: pairing does not write this list, it
 /// writes a fleet record, so an empty list never meant "the peers I paired" — it meant "everyone".
 /// Raw forwards are now what they should have been, something you name a key for.
 ///

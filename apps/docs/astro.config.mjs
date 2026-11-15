@@ -28,7 +28,8 @@ export default defineConfig({
 	},
 	integrations: [
 		starlight({
-			title: 'ADI Mono',
+			title: 'ADI Docs',
+			lastUpdated: true,
 			customCss: ['./src/styles/wiki-link.css', './src/styles/theme.css'],
 			// Dark only, per design/DESIGN.md §3 — these two replace Starlight's default
 			// dark/light toggle with a fixed dark theme; see the components themselves.
@@ -43,11 +44,12 @@ export default defineConfig({
 				ThemeSelect: './src/components/ThemeSelect.astro',
 				SiteTitle: './src/components/SiteTitle.astro',
 				Header: './src/components/Header.astro',
+				Head: './src/components/Head.astro',
 				TableOfContents: './src/components/toc/TableOfContents.astro',
 				MobileTableOfContents: './src/components/toc/MobileTableOfContents.astro',
 			},
 			head: [
-				// Geist / Geist Mono, loaded the same way design/examples/landing.html does.
+				// Geist / Geist Mono from Google Fonts.
 				{ tag: 'link', attrs: { rel: 'preconnect', href: 'https://fonts.googleapis.com' } },
 				{
 					tag: 'link',
@@ -105,6 +107,7 @@ export default defineConfig({
 					items: [
 						{ label: 'The adi-mono CLI', link: '/cli/' },
 						{ label: 'Shared assets', link: '/shared-assets/' },
+						{ label: 'What ADI sends over the network', link: '/network/' },
 					],
 				},
 			],

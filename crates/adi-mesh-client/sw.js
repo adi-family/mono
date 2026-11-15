@@ -1,7 +1,7 @@
 // The service worker: what makes a node's control panel a page in this browser.
 //
 // A panel is a whole single-page app — HTML, wasm, CSS, fonts, `/api/*` calls — and it fetches all
-// of that with **root-absolute URLs**, because `docs/fleet.md` §4 requires a dashboard never to
+// of that with **root-absolute URLs**, because a dashboard is required never to
 // learn its own address. There is no way to serve such an app from a subpath, and no way to give
 // each node a real origin without a wildcard domain and a certificate per fleet. So the app is
 // served at the origin root and the *client id* decides which node it belongs to.
@@ -29,7 +29,7 @@ const CACHE = "adi-mesh-client-v2";
 const SHELL = ["/", "/manifest.webmanifest", "/__adi/panel-shim.js"];
 
 // `/n/<target>/…` is the one reserved path on this origin. The target is a node's mesh hostname
-// with the fleet zone taken off — `<service>.<petname>`, the same shape `docs/fleet.md` §1
+// with the fleet zone taken off — `<service>.<petname>`, the same shape the fleet
 // addresses as `nosh.laptop-b.n.adi` — and a bare `<petname>` means that node's own control panel.
 // Every label is a DNS label (§2); which of them is the node is decided in `src/bridge.rs`, since
 // a service name may itself be several (`app.nosh`).
@@ -266,7 +266,7 @@ function fromNode(request, node, path, inject) {
  * The headers to send to the node.
  *
  * A deliberate allow-list rather than a copy, because these bytes are spliced into a real HTTP
- * connection on somebody else's machine (`docs/fleet.md` §3 keeps the head verbatim). `Origin`,
+ * connection on somebody else's machine (the head is kept verbatim). `Origin`,
  * `Referer` and `Sec-Fetch-*` are dropped: they name *this* origin, which the node has never heard
  * of, and the panel refuses an `/api/*` request whose `Origin` is another site
  * (`adi-app/src/origin.rs`) — absent is what passes. `Cookie` is dropped because a node's cookie

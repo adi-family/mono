@@ -11,7 +11,7 @@
 //! reproduce: every door opens *something*, every time.
 //!
 //! Nothing here knows a DMG from a tarball. The server hands back the same
-//! [`UpdateState`] on every platform (`docs/adi-update.md`), so a Mac, a Linux node and a
+//! [`UpdateState`] on every platform, so a Mac, a Linux node and a
 //! Windows node all get this bar — and a release that publishes no artifact for the host
 //! reads as "no update for this machine", not as an offer that would fail to download.
 //!

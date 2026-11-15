@@ -7,7 +7,7 @@
 //! * **It dials and never accepts.** No `alpns()` is set on the endpoint, so nothing can open a
 //!   stream to this tab. Every ALPN we speak is one we opened.
 //! * **Everything is relayed, for the whole session.** A browser has no UDP socket, so there is no
-//!   direct path to hole-punch and no fallback if the relay is unreachable (`docs/fleet.md` §9).
+//!   direct path to hole-punch and no fallback if the relay is unreachable.
 //!   That makes the relay a hard precondition rather than a latency question, which is why
 //!   [`Mesh::bind`] pins one instead of taking iroh's preset.
 //!
@@ -39,7 +39,7 @@ pub const STEP_TIMEOUT: Duration = Duration::from_secs(20);
 /// `adi_config` and the local store) and the value is load-bearing in a way a default is not — a
 /// browser that lands on n0's public relay cannot dial *anything*, because that relay answers the
 /// websocket upgrade without echoing `sec-websocket-protocol` and RFC 6455 §4.1 makes the browser
-/// fail the connection (measured 2026-08-24, `spikes/mesh-browser`).
+/// fail the connection (measured 2026-08-24 by the mesh-browser spike, commit `24ac77c`).
 ///
 /// **One, where the node list is two.** Nothing ever dials a browser, so this is the tab's own home
 /// relay and not how anyone reaches it: a node is reached through *its* relay, carried in that
@@ -159,7 +159,7 @@ impl Mesh {
         .await?
         .map_err(|e| format!("reading the mesh status failed: {e}"))?;
         if status != HttpStatus::Ok {
-            // The node's own words. These are the three refusals `docs/fleet.md` §7 defines, and
+            // The node's own words. These are the three refusals the gateway protocol defines, and
             // the caller renders them as a local page rather than guessing from a status line it
             // never received.
             return Err(status.reason().to_string());

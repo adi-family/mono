@@ -1,4 +1,4 @@
-//! Where a node token (`docs/channels.md` §1) lives: one per `(node, provider)`, shared across
+//! Where a node token lives: one per `(node, provider)`, shared across
 //! every connection this node holds on that provider, in `adi-secrets`' reserved-scope mechanism —
 //! the same one a fleet node's own password uses (`adi-app/src/viewer.rs`'s `CREDENTIAL_SCOPE`).
 //! `"channels-nodes"` is never a real `adi-projects` id, so [`adi_secrets::Secrets::resolve`] —

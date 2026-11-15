@@ -1,4 +1,4 @@
-//! The mesh HTTP gateway — both ends of `adi/mesh/http/1` (`docs/fleet.md` §3, §5, §7, C5+C6).
+//! The mesh HTTP gateway — both ends of `adi/mesh/http/1`.
 //!
 //! One process plays both parts, because every adi machine is potentially both a viewer and a
 //! node:
@@ -17,7 +17,7 @@
 //! **Nothing in the head is rewritten.** Not `Host`, not the request target. The node cannot know
 //! what the viewer calls it, so a rewritten `Host` would send its absolute redirects to a
 //! same-named host on the *viewer's* machine, and a rewritten path would make a dashboard's `/api`
-//! answer at a URL the page never asked for (`docs/fleet.md` §3, §4). What the gateway matched and
+//! answer at a URL the page never asked for. What the gateway matched and
 //! what the service reads are the same bytes. Headers are *added* — the password this machine
 //! already holds for the node ([`prefill_auth`]), and, on the node side, the calling node's own
 //! identity ([`auth::FLEET_NODE_HEADER`], [`auth::FLEET_USER_HEADER`], attached in [`negotiate`])
@@ -155,7 +155,7 @@ const BIND_RETRY_MAX: Duration = Duration::from_secs(15);
 const BIND_RETRY_WARN_EVERY: u32 = 40;
 
 /// The zone a node's own services live in locally (`nosh.adi`), and therefore the host a service
-/// *name* off the wire is resolved as. `docs/fleet.md` §1: the same service the fleet addresses
+/// *name* off the wire is resolved as: the same service the fleet addresses
 /// as `nosh.laptop-b.n.adi` is `nosh.adi` on the node itself.
 ///
 /// A name, not a label: the wire carries everything left of the node label, so `app.nosh` off
@@ -328,7 +328,7 @@ impl Routes {
     /// answers it the same way whether that host is two labels deep or four.
     ///
     /// `target` is the raw request target, so a service that claims a path prefix on another's
-    /// host (a dashboard's `/api` backend, `docs/fleet.md` §4) resolves the same way here as at
+    /// host (a dashboard's `/api` backend) resolves the same way here as at
     /// the front door — otherwise "one origin per dashboard" would hold locally and quietly break
     /// over the mesh.
     #[must_use]
@@ -364,7 +364,7 @@ impl Routes {
 /// policy attached to it.
 #[derive(Debug, Clone)]
 pub struct Peer {
-    /// What *this* machine calls the peer (`docs/fleet.md` §2).
+    /// What *this* machine calls the peer.
     pub petname: String,
     /// Its grants and credential.
     pub record: NodeRecord,
@@ -382,7 +382,7 @@ pub trait NodeSide: Send + Sync + 'static {
 
     /// Whether `service`'s host is *carved up* — some route on it claims a path prefix, so which
     /// upstream answers depends on the request and not merely on the label. Every dashboard is
-    /// (its backend claims `/api`, `docs/fleet.md` §4).
+    /// (its backend claims `/api`).
     fn carved(&self, service: &str) -> bool;
 
     /// The Basic-auth realm — this node's name, which is what a browser shows in its prompt.
@@ -439,7 +439,7 @@ pub trait NodeCredentials: std::fmt::Debug + Send + Sync + 'static {
 #[derive(Debug)]
 pub struct Gateway {
     /// This machine's key. It appears on the not-paired page because it is the thing the far
-    /// side's operator has to authorize; a name grants nothing (`docs/fleet.md` §2).
+    /// side's operator has to authorize; a name grants nothing.
     local_key: EndpointId,
     /// The Basic-auth realm: this machine's own nickname ([`crate::node`]). A snapshot like the
     /// rest, so `mesh name` takes effect on the next tick — the alternative is a browser prompt
@@ -717,7 +717,7 @@ where
     let verified = authenticated(&head, &peer_record);
     if !verified.any() {
         debug!(peer = %peer_record.petname, %service, "gateway: 401 — no usable credentials");
-        // A `401` is an ordinary HTTP response on an `Ok` stream (`docs/fleet.md` §7): the
+        // A `401` is an ordinary HTTP response on an `Ok` stream: the
         // transport worked, the human did not authenticate. Checked before the holding page
         // below too — an unauthenticated peer learns nothing about whether a service is up,
         // starting, or asleep.
@@ -735,7 +735,7 @@ where
     let Some(mut upstream) = upstream else {
         // On demand, and still nothing to splice to after the start window: the visitor gets the
         // holding page `adi-hive` shows for exactly this over the front door — no wire status for
-        // it (`docs/fleet.md` §7), an ordinary HTTP response on the `Ok` stream already written.
+        // it, an ordinary HTTP response on the `Ok` stream already written.
         let host = header_value(&head, "host").unwrap_or_default();
         respond_starting(send, &host).await?;
         return Ok(None);
@@ -851,7 +851,7 @@ fn admit<N: NodeSide + ?Sized>(
     service: &str,
 ) -> Result<(Peer, SocketAddr), HttpStatus> {
     // Default-deny, both times: an unpaired key has no record, and a record with no matching
-    // grant allows nothing. There is no "empty means everyone" path here (`docs/fleet.md` §5).
+    // grant allows nothing. There is no "empty means everyone" path here.
     let peer = node.peer(peer).ok_or(HttpStatus::NotAuthorized)?;
     if !peer.record.allows(Target::Http(service)) {
         return Err(HttpStatus::NotAuthorized);
@@ -890,8 +890,8 @@ impl Verified {
 /// Does this request head carry credentials that verify against the peer's stored one?
 ///
 /// Nothing about the request is inspected but the credentials — not the method, not the path, not
-/// `Upgrade` — so a WebSocket handshake is gated by *not* adding an exception (`docs/fleet.md`
-/// §5). Default-deny: a peer with no password configured authenticates nobody.
+/// `Upgrade` — so a WebSocket handshake is gated by *not* adding an exception.
+/// Default-deny: a peer with no password configured authenticates nobody.
 fn authenticated(head: &[u8], peer: &Peer) -> Verified {
     let verify = |candidate: Option<(String, String)>| {
         candidate.is_some_and(|(user, password)| peer.record.verify_password(&user, &password))
@@ -949,7 +949,7 @@ fn wake_if_elsewhere<N: NodeSide + ?Sized>(node: &N, wanted: &Wanted) {
 
 /// Serve the holding page in place of a refusal: an on-demand service has not come up within
 /// [`START_WINDOW`]. HTTP-level, exactly like the `401` above it — the transport already said
-/// [`HttpStatus::Ok`] (`docs/fleet.md` §7), so this is an ordinary response on that stream and
+/// [`HttpStatus::Ok`], so this is an ordinary response on that stream and
 /// no wire status is added for it: a viewer's node splices raw bytes and needs no update at all
 /// to render it.
 ///
@@ -1239,7 +1239,7 @@ impl Dialer for IrohDialer {
 
     async fn dial(&self, peer: EndpointId) -> anyhow::Result<Connection> {
         // By key alone: discovery resolves it to current addresses, and the key is the identity
-        // of record (`docs/fleet.md` §2) — a stale address list would be a second source of truth.
+        // of record — a stale address list would be a second source of truth.
         Ok(self.endpoint.connect(peer, protocol::HTTP_ALPN).await?)
     }
 
@@ -1640,7 +1640,7 @@ async fn respond<W: AsyncWrite + Unpin>(
 /// The page a viewer gets when the hostname names a node this machine has not paired with.
 ///
 /// This page is the gateway's, not the front door's: the front door sees a reserved suffix and
-/// hands the connection on, deliberately knowing nothing about peers (`docs/fleet.md` A4). What
+/// hands the connection on, deliberately knowing nothing about peers. What
 /// it cannot say, and this can, is *which key* to authorize — a name grants nothing, so the key
 /// is the only actionable thing on the screen.
 #[must_use]
@@ -2159,7 +2159,7 @@ mod tests {
     #[test]
     fn a_label_resolves_through_the_nodes_own_hive_table() {
         // The label names the *local* `<service>.adi` host, which is how the same service is
-        // reachable on the node itself (docs/fleet.md §1).
+        // reachable on the node itself.
         let table = routes(&[
             ("nosh", "nosh.adi", None, 8010),
             ("api", "nosh.adi", Some("/api"), 8011),
@@ -2413,7 +2413,7 @@ mod tests {
     #[tokio::test]
     async fn an_upgrade_request_is_gated_like_any_other() {
         // A WebSocket handshake is an ordinary request until the `101`, so it is gated by *not*
-        // making an exception for it (docs/fleet.md §5).
+        // making an exception for it.
         let key = some_key();
         let (_listener, port) = idle_upstream().await;
         let node = StubNode::new(routes(&[("nosh", "nosh.adi", None, port)])).with_peer(
@@ -2604,7 +2604,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_path_prefixed_request_reaches_the_backend_not_the_frontend() {
-        // One origin per dashboard (docs/fleet.md §4) has to hold over the mesh too, or a page
+        // One origin per dashboard has to hold over the mesh too, or a page
         // that works under `nosh.adi` would 404 its own `/api` under `nosh.laptop-b.n.adi`.
         let key = some_key();
         let (frontend, frontend_port) = idle_upstream().await;

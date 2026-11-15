@@ -1,4 +1,4 @@
-//! The device-wrap crypto for a [`crate::Scope::User`] secret (`docs/byo-credentials.md` §8):
+//! The device-wrap crypto for a [`crate::Scope::User`] secret:
 //! a fresh per-secret data key (DEK) seals the value, and the DEK itself is sealed ("wrapped")
 //! to the device's own key. Both steps are plain `XChaCha20-Poly1305`, the same primitive
 //! [`crate::crypto`] uses for the master key — only the key and the AAD differ.
@@ -7,7 +7,7 @@
 //! [`seal_value`]/[`wrap_dek`] *before* a secret ever reaches `POST /api/secrets/mine/set`; the
 //! server only ever calls [`Secrets::set_wrapped`](crate::Secrets::set_wrapped), which stores
 //! what it is given and decrypts none of it. The reverse half — [`open_value`]/[`unwrap_dek`] —
-//! is for the device's own unlock path (`docs/byo-credentials.md` §9) and is never reachable from
+//! is for the device's own unlock path and is never reachable from
 //! any server-side code; this module doesn't know or care which process calls it, so that
 //! boundary is enforced by who is given the device's key, not by anything here.
 
@@ -18,8 +18,8 @@ use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
 
 use crate::error::{Error, Result};
 
-/// A fresh 256-bit data-encryption key, one per secret (`docs/byo-credentials.md` §8: "setting a
-/// new value mints a new DEK").
+/// A fresh 256-bit data-encryption key, one per secret ("setting a new
+/// value mints a new DEK").
 #[must_use]
 pub fn generate_dek() -> [u8; 32] {
     let key = XChaCha20Poly1305::generate_key(&mut OsRng);

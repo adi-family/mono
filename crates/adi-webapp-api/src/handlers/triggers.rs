@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use adi_triggers::Error as TriggerStoreError;
 use adi_triggers::RunState;
@@ -13,7 +13,7 @@ use crate::types::{
     TriggerRuntimeOption, TriggersState,
 };
 
-use super::response::{FromBody, Response, clean, error, mutate, ok_json};
+use super::response::{FromBody, Response, clean, error, ok_json, require};
 
 /// Trim dynamic backend parameters and drop empty or unsafe keys. Which keys are *meaningful*
 /// is the code block's business (its preset declares them, and each reaches it as `ADI_<KEY>`),
@@ -82,53 +82,94 @@ fn event_types() -> Vec<EventTypeDto> {
         .collect()
 }
 
-/// `POST /api/triggers/save` — create or update a trigger definition (an upsert keyed by
-/// `name`), then report the fresh list. `name` and `kind` are required.
+/// Decode a `/api/triggers/save` body into the `(name, TriggerManifest)` it describes, without
+/// writing anything. Split out of [`save_trigger`] so a caller who needs to act *before* the
+/// write lands can inspect the manifest first — ADI-MONO-223's relay register-on-save, which
+/// must not persist a trigger whose registration it just failed.
+///
+/// # Errors
+/// The 400 [`Response`] `name`/`kind` being absent or a malformed body would produce.
+pub fn parse_save_trigger(body: &[u8]) -> Result<(String, TriggerManifest), Response> {
+    let req = require::<SaveTrigger>(body)?;
+    let manifest = TriggerManifest {
+        // The store normalizes both onto the kinds/runtimes this build understands.
+        kind: req.kind.trim().to_string(),
+        runtime: req.runtime.trim().to_string(),
+        code: req.code,
+        preset: clean(req.preset),
+        description: req.description.trim().to_string(),
+        enabled: req.enabled,
+        project: clean(req.project),
+        extra: clean_extra(req.extra),
+        events: clean_events(req.events),
+        trigger_on: clean_trigger_on(req.trigger_on),
+        // The store owns the timestamps.
+        created_at: 0,
+        updated_at: 0,
+    };
+    Ok((req.name.trim().to_string(), manifest))
+}
+
+/// Write `manifest` under `name` and report the fresh list — the tail half of
+/// `/api/triggers/save`, after whatever pre-write work (if any) a caller like
+/// [`parse_save_trigger`]'s needed to do first.
 ///
 /// Saving is also how a background trigger is started and stopped: the supervisor runs exactly
 /// the enabled ones, so it is poked here to pick the change up now rather than at its next tick.
 #[must_use]
-pub fn save_trigger(store: &Triggers, supervisor: &Supervisor, body: &[u8]) -> Response {
-    mutate(
-        body,
-        |req: SaveTrigger| {
-            let manifest = TriggerManifest {
-                // The store normalizes both onto the kinds/runtimes this build understands.
-                kind: req.kind.trim().to_string(),
-                runtime: req.runtime.trim().to_string(),
-                code: req.code,
-                preset: clean(req.preset),
-                description: req.description.trim().to_string(),
-                enabled: req.enabled,
-                project: clean(req.project),
-                extra: clean_extra(req.extra),
-                events: clean_events(req.events),
-                trigger_on: clean_trigger_on(req.trigger_on),
-                // The store owns the timestamps.
-                created_at: 0,
-                updated_at: 0,
-            };
-            store.save(req.name.trim(), manifest)
-        },
-        || {
+pub fn commit_trigger(store: &Triggers, supervisor: &Supervisor, name: &str, manifest: TriggerManifest) -> Response {
+    match store.save(name, manifest) {
+        Ok(_) => {
             supervisor.poke();
             triggers(store)
-        },
-    )
+        }
+        Err(e) => Response::from(&e),
+    }
 }
 
-/// `POST /api/triggers/delete` — delete a trigger definition, then report the fresh list. A
-/// deleted background trigger's process is stopped by the supervisor on its next reconcile.
+/// `POST /api/triggers/save` — create or update a trigger definition (an upsert keyed by
+/// `name`), then report the fresh list. `name` and `kind` are required.
 #[must_use]
-pub fn delete_trigger(store: &Triggers, supervisor: &Supervisor, body: &[u8]) -> Response {
-    mutate(
-        body,
-        |req: TriggerRef| store.delete(req.name.trim()),
-        || {
+pub fn save_trigger(store: &Triggers, supervisor: &Supervisor, body: &[u8]) -> Response {
+    match parse_save_trigger(body) {
+        Ok((name, manifest)) => commit_trigger(store, supervisor, &name, manifest),
+        Err(resp) => resp,
+    }
+}
+
+/// Decode a `{ "name": "…" }` body into the trimmed name it names — the shape
+/// `/api/triggers/delete`, `/fire`, `/restart`, and `/log` all share. Split out for the same
+/// reason [`parse_save_trigger`] is: a caller needing to act *before* the delete lands
+/// (ADI-MONO-223's relay deregister-on-delete, a best-effort call this crate has no business
+/// making) needs the name without yet deleting anything.
+///
+/// # Errors
+/// The 400 [`Response`] a missing or blank `name` produces.
+pub fn parse_trigger_ref(body: &[u8]) -> Result<String, Response> {
+    let req = require::<TriggerRef>(body)?;
+    Ok(req.name.trim().to_string())
+}
+
+/// Delete `name` and report the fresh list — the tail half of `/api/triggers/delete`. A deleted
+/// background trigger's process is stopped by the supervisor on its next reconcile.
+#[must_use]
+pub fn commit_delete_trigger(store: &Triggers, supervisor: &Supervisor, name: &str) -> Response {
+    match store.delete(name) {
+        Ok(_) => {
             supervisor.poke();
             triggers(store)
-        },
-    )
+        }
+        Err(e) => Response::from(&e),
+    }
+}
+
+/// `POST /api/triggers/delete` — delete a trigger definition, then report the fresh list.
+#[must_use]
+pub fn delete_trigger(store: &Triggers, supervisor: &Supervisor, body: &[u8]) -> Response {
+    match parse_trigger_ref(body) {
+        Ok(name) => commit_delete_trigger(store, supervisor, &name),
+        Err(resp) => resp,
+    }
 }
 
 /// `POST /api/triggers/restart` — replace a supervised background trigger's process with a
@@ -161,7 +202,7 @@ pub fn restart_trigger(store: &Triggers, supervisor: &Supervisor, body: &[u8]) -
 pub fn fire_trigger(store: &Triggers, body: &[u8]) -> Response {
     let req = require!(body, TriggerRef);
     let name = req.name.trim();
-    let firing = match store.fire(name, None) {
+    let firing = match store.fire(name, None, None) {
         Ok(firing) => firing,
         Err(e) => return Response::from(&e),
     };
@@ -197,12 +238,20 @@ pub fn trigger_log(store: &Triggers, body: &[u8]) -> Response {
 }
 
 /// `POST|GET /api/hooks/<name>` — the public webhook endpoint: launch the named trigger with the
-/// request body as its payload. Only an **enabled** trigger of the `webhook` kind launches; when
-/// its `secret` extra is set, the caller must match it with a `?secret=` query parameter.
-/// An unknown name and a background trigger answer the same 404, so the endpoint doesn't
-/// reveal which internal names exist.
+/// request body as its payload and the request's headers (`headers`, lowercase names) handed to
+/// the code block via `ADI_HEADERS_FILE` — the only way a trigger can check a provider's HMAC
+/// signature header (`X-Hub-Signature-256`, `Stripe-Signature`, …). Only an **enabled** trigger
+/// of the `webhook` kind launches; when its `secret` extra is set, the caller must match it with
+/// a `?secret=` query parameter. An unknown name and a background trigger answer the same 404,
+/// so the endpoint doesn't reveal which internal names exist.
 #[must_use]
-pub fn hook_trigger(store: &Triggers, name: &str, query: &str, payload: &[u8]) -> Response {
+pub fn hook_trigger(
+    store: &Triggers,
+    name: &str,
+    query: &str,
+    headers: &HashMap<String, String>,
+    payload: &[u8],
+) -> Response {
     let trigger = match store.get(name) {
         Ok(Some(t)) => t,
         // An unregistered and an unsafely-named hook answer identically, revealing nothing.
@@ -235,7 +284,7 @@ pub fn hook_trigger(store: &Triggers, name: &str, query: &str, payload: &[u8]) -
     {
         return error(403, &format!("hook {name} is not enabled for this project"));
     }
-    match store.fire(&trigger.name, Some(payload)) {
+    match store.fire(&trigger.name, Some(payload), Some(headers)) {
         Ok(_) => ok_json(&HookAck {
             ok: true,
             trigger: trigger.name,

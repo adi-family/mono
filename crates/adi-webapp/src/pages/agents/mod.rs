@@ -1,4 +1,4 @@
-//! The Agents page: the list of agent definitions (docs/adi-agents.md §5), each row carrying
+//! The Agents page: the list of agent definitions, each row carrying
 //! its launch and edit actions in its ⋯ menu. Run starts either an interactive pty session or a
 //! headless background process; deeper orchestration is future work.
 //!
@@ -322,6 +322,10 @@ pub(crate) fn agent_detail_view(state: State, form: AgentsForm, route: RwSignal<
                     // states the list even when empty. The store still refuses this outright when
                     // the save itself comes from inside a run, whatever is sent here.
                     can_spawn: Some(form.can_spawn.get()),
+                    // The MCP servers this agent's runs are given, beside ADI's own
+                    // per-conversation server — this is the form that owns the chip list, so it
+                    // states it even when empty.
+                    mcp: Some(form.mcp.get()),
                     // This is the one form that edits the run environment, so it always states it —
                     // `Some(empty)` clears, where the `None` other forms send means "leave as is".
                     prelude: Some(parsed_prelude(&form.prelude.get())),
@@ -354,6 +358,11 @@ pub(crate) fn agent_detail_view(state: State, form: AgentsForm, route: RwSignal<
                     <h2 class="adi-agents__h2">"Tools"</h2>
                     {move || agent_tool_checkboxes(state, form)}
                     {move || agent_cli_field(state, form)}
+                </section>
+
+                <section class="adi-agents__section">
+                    <h2 class="adi-agents__h2">"MCP servers"</h2>
+                    {move || agent_mcp_field(form)}
                 </section>
 
                 <section class="adi-agents__section">
@@ -907,6 +916,89 @@ fn add_can_spawn_rule(form: AgentsForm) {
         }
     });
     form.can_spawn_draft.set(String::new());
+}
+
+/// The MCP servers this agent's runs are given, as removable chips plus a free-text add box — a
+/// minimal field, not a picker: this page does not otherwise fetch the `adi-mcp` registry, and
+/// `adi-mono mcp list` is one command away for the id. See `agents save --mcp`'s own CLI doc for
+/// what a backend with no MCP support does with a non-empty list here (refuses to launch).
+fn agent_mcp_field(form: AgentsForm) -> AnyView {
+    view! {
+        <div class="adi-field" style=SPAWN_FIELD_WIDE>
+            <span class="adi-field__label">"Given to this agent"</span>
+            {move || agent_mcp_chips(form)}
+            {move || agent_mcp_add(form)}
+            {field_hint(
+                "An MCP server id (`adi-mono mcp list`), beside ADI's own per-conversation                  server. Empty means this agent's runs reach none but ADI's own.",
+            )}
+        </div>
+    }
+    .into_any()
+}
+
+/// The `mcp` chips: the draft server-id list this form owns.
+fn agent_mcp_chips(form: AgentsForm) -> AnyView {
+    let ids = form.mcp.get();
+    if ids.is_empty() {
+        return view! {
+            <p class="adi-hint">"No MCP servers given — just ADI's own."</p>
+        }
+        .into_any();
+    }
+    let chips = ids
+        .into_iter()
+        .map(|id| {
+            let remove = id.clone();
+            let title = format!("Remove {id}");
+            view! {
+                <span class="adi-agents__rule-chip">
+                    <span class="adi-mono">{id}</span>
+                    <button type="button" title=title.clone() aria-label=title
+                        on:click=move |_| {
+                            form.mcp.update(|ids| ids.retain(|existing| existing != &remove));
+                        }>
+                        <Icon icon=Lucide::X size=IconSize::Sm/>
+                    </button>
+                </span>
+            }
+        })
+        .collect::<Vec<_>>();
+    view! { <div class="adi-agents__rule-chips">{chips}</div> }.into_any()
+}
+
+/// The box that adds one MCP server id to the draft list. Purely local: it joins
+/// `form.mcp` and is only actually saved on the form's own Save.
+fn agent_mcp_add(form: AgentsForm) -> AnyView {
+    view! {
+        <div class="adi-agents__chain-add">
+            <input class="adi-input adi-mono"
+                aria-label="Add an MCP server id" placeholder="n8n"
+                prop:value=move || form.mcp_draft.get()
+                on:input=move |ev| form.mcp_draft.set(event_target_value(&ev))
+                on:keydown=move |ev| if ev.key() == "Enter" {
+                    ev.prevent_default();
+                    add_mcp_server(form);
+                } />
+            <button class="adi-btn" type="button" on:click=move |_| add_mcp_server(form)>
+                "Add"
+            </button>
+        </div>
+    }
+    .into_any()
+}
+
+/// Add the draft box's text to `form.mcp` (trimmed, deduped) and clear it.
+fn add_mcp_server(form: AgentsForm) {
+    let id = form.mcp_draft.get_untracked().trim().to_string();
+    if id.is_empty() {
+        return;
+    }
+    form.mcp.update(|ids| {
+        if !ids.iter().any(|existing| existing == &id) {
+            ids.push(id);
+        }
+    });
+    form.mcp_draft.set(String::new());
 }
 
 /// The "Can be launched by" rows: one per caller currently reaching this agent, each either

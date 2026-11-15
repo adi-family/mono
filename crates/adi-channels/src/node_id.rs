@@ -1,7 +1,7 @@
-//! This node's own opaque id, as the router sees it — `docs/channels.md` §1: a node token is
+//! This node's own opaque id, as the router sees it: a node token is
 //! scoped to `(node id, provider)`.
 //!
-//! Deliberately **not** the fleet node name (`docs/fleet.md`): the design doc is explicit that
+//! Deliberately **not** the fleet node name: the design is explicit that
 //! "node" here means "an ADI install" and draws no analogy to a fleet peer beyond the shared
 //! English word, so reusing the fleet name would wire a coupling the design never asked for.
 //! Instead this is a random id, minted once and kept forever at `channels/node_id`.

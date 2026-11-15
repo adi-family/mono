@@ -487,8 +487,8 @@ where
 }
 
 /// [`apply_mutation`], but never naming the panel-wide picker's node in the flash it leaves behind —
-/// for the couple of pages (`fleet.rs`, `mesh.rs`) whose every mutation is one of `docs/fleet.md`
-/// §14's L3 exemptions (`/api/fleet/*`, `/api/mesh*`) and so never actually reaches whatever the
+/// for the couple of pages (`fleet.rs`, `mesh.rs`) whose every mutation is always local,
+/// exempt from the picker (`/api/fleet/*`, `/api/mesh*`) and so never actually reaches whatever the
 /// picker points at, however it is set.
 pub(crate) fn apply_mutation_local<T, S, F>(
     state: State,
@@ -543,7 +543,7 @@ fn apply_mutation_impl<T, S, F>(
 /// A native confirm dialog, returning `true` only when the user accepts. A browser that has no
 /// `confirm` (or denies it) reads as "cancelled", so nothing is destroyed by accident.
 ///
-/// Loud about the panel-wide picker (`docs/fleet.md` §14) before a destructive action runs, not
+/// Loud about the panel-wide picker before a destructive action runs, not
 /// only after (ADI-MONO-89): when it is pointed at a node, that node's name is stitched onto the
 /// message, ahead of what the caller wrote, so an operator reading only the first line still sees
 /// it before pressing OK. [`confirm_local`] is the same dialog without that — for an action that
@@ -558,7 +558,7 @@ pub(crate) fn confirm(message: &str) -> bool {
 }
 
 /// [`confirm`], but never naming the panel-wide picker's node — for `fleet.rs`'s own actions
-/// (`/api/fleet/*` is always local, `docs/fleet.md` §14's L3) and for the sessions rail's per-row
+/// (`/api/fleet/*` is always local) and for the sessions rail's per-row
 /// actions, which already name their own explicit source on the row (§13's K6) and would be
 /// misnamed by whatever the picker happens to point at instead.
 pub(crate) fn confirm_local(message: &str) -> bool {

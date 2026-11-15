@@ -2,7 +2,7 @@
 //!
 //! v2 shipped with one install per bundle and no choice about where it went — a bundle's elements
 //! landed globally unless the bundle itself carried a `project/config.toml`, which is what
-//! `docs/marketplace-bundles.md` decision #4 means by "a bundle's own project is the only way to
+//! the v2 design means by "a bundle's own project is the only way to
 //! get project-scoped elements". That is still true of what a *publisher* can ask for. What this
 //! module adds is what an **operator** can ask for: the destination is theirs to choose, and the
 //! same bundle may be installed into as many projects as they like.

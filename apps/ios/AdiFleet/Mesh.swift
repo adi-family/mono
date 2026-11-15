@@ -69,7 +69,6 @@ actor Mesh {
     }
 
     /// Spend an invite a machine minted with `adi-mono mesh invite`. The mirror of `invite()` —
-    /// see `docs/fleet.md` §8 for why both directions are the same handshake.
     ///
     /// Answers the same `Pairing` shape `takePairings()` does, and under the same rule: the
     /// password inside it exists in plaintext only in this one reply, so the caller must hand it

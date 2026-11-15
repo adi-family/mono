@@ -14,7 +14,7 @@
 //!   opens itself where there is no camera API to call, so the fallback is never *hidden* — it is
 //!   only quiet.
 //! * **A node's dashboards are rows under it**, not a thing to go looking for behind its panel:
-//!   what a machine runs is the reason to open it at all (`docs/fleet.md` §11, [`crate::dashboards`]).
+//!   what a machine runs is the reason to open it at all ([`crate::dashboards`]).
 //! * **This browser's key is behind a disclosure.** It is the identity of record (§2) and the only
 //!   thing a reader can quote when a node refuses them — which makes it a thing to find when
 //!   something is wrong, not a thing to read every time the page opens.
@@ -395,7 +395,7 @@ fn NodeList(
 /// A row that this browser holds no grant for is drawn as an offer rather than as a link that
 /// would answer *not authorized*: pairing grants `http:app` and nothing else, so the first tap on
 /// such a row asks the node for `http:<service>` and opens it once the node has taken it up
-/// (`docs/fleet.md` §11, [`dashboards::allow`]). That escalates nothing — this browser already
+/// ([`dashboards::allow`]). That escalates nothing — this browser already
 /// holds the node's control panel, which *is* the thing that hands out grants.
 #[component]
 fn Boards(record: NodeRecord, screen: RwSignal<Screen>, boards: RwSignal<Boards>) -> impl IntoView {
@@ -664,7 +664,7 @@ fn DeepLinkConfirm(
 
     // The best name a reader can be shown before they have paired: an invite carries no node
     // name, only its address, so this is the short form of the key underneath — the same
-    // rendering a peer known only by key gets elsewhere (`docs/fleet.md` §2).
+    // rendering a peer known only by key gets elsewhere.
     let node_name = move || {
         deep_link
             .get()
@@ -864,7 +864,7 @@ async fn pair_with(mesh: &Mesh, token: &str) -> Result<NodeRecord, String> {
         key: addr.id.to_string(),
         // The relay the node named in its own ticket. Not this client's home relay: a node need
         // not be on the same one, and carrying it per node is what lets a client served from one
-        // domain reach a fleet spread over several (`docs/fleet.md` §9).
+        // domain reach a fleet spread over several.
         relay: relay_of(&addr),
         username: accepted.username,
         password: accepted.password,

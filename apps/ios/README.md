@@ -3,7 +3,7 @@
 A phone joins the fleet as a **viewer**: it holds an Ed25519 identity, is authorized by key like any
 other peer, and reaches a node's services over the same `adi/mesh/http/1` that a Mac uses. What it
 never does is host. It runs no hive, no DNS, no services, and answers exactly one ALPN — the
-[pairing](../../docs/fleet.md) one, so a node can dial back to be enrolled. Everything else it
+pairing one, so a node can dial back to be enrolled. Everything else it
 initiates.
 
 That asymmetry is the whole reason this needs no entitlement, no VPN profile, no paid developer
@@ -70,7 +70,7 @@ the same files as `apps/macos/Sources`, so a fix lands in both by copying.
 
 ## Pairing
 
-The handshake is symmetric and which side dials is a deployment choice (`docs/fleet.md` §8), so the
+The handshake is symmetric and which side dials is a deployment choice, so the
 sheet offers both directions. They end in the same registry record, and a node paired either way is
 indistinguishable afterwards.
 
@@ -107,7 +107,7 @@ prompt.
 ## Dashboards
 
 A node's dashboards are listed under it by name, and a tap opens one full-screen on its own origin
-— the same page, the same `/api`, as on the machine itself (`docs/fleet.md` §4).
+— the same page, the same `/api`, as on the machine itself.
 
 Two things had to be true for that, and neither is a protocol change:
 

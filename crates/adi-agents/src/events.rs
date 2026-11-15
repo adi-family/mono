@@ -213,7 +213,7 @@ impl Event for AgentRunIdle {
 
 /// `adi.agents.run.waiting_on_unlock` — a turn didn't start because its session's lease has no
 /// live value for a name it needs and the effective `missing` is `"wait"`
-/// (`docs/byo-credentials.md` §10, ADI-MONO-181 P2.7/P2.8). The message stays in the queue (so the
+/// (ADI-MONO-181 P2.7/P2.8). The message stays in the queue (so the
 /// run already reads `RunLifecycle::Waiting`, through the same pending-queue set
 /// [`AgentRunIdle`] uses); this is the specific reason, for the rail to show instead of a spinner.
 /// Published once per turn it stays parked — the same [`SessionStore::note_lease_wait`]-gated
@@ -505,7 +505,7 @@ pub fn event_types() -> Vec<EventType> {
         ),
         EventType::of_event(
             "A turn didn't start because its session's lease has no live value for a name it \
-             needs, under missing = \"wait\" (docs/byo-credentials.md §10).",
+             needs, under missing = \"wait\".",
             schema::<AgentRunWaitingOnUnlock>(),
             &AgentRunWaitingOnUnlock {
                 agent: "my-agent".into(),

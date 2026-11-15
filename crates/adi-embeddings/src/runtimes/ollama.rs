@@ -5,7 +5,7 @@
 //! `adi-facts`'s version read `ADI_FACTS_OLLAMA`/`ADI_FACTS_EMBED` at construction, but a
 //! registry backend's host and model are dials on the manifest, not ambient configuration — those
 //! two environment variables are honoured once, at seed time, by [`crate::seed`], and never read
-//! again. See "Migration" in `docs/embedding-backends.md`.
+//! again.
 
 use std::time::Duration;
 

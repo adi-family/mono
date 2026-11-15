@@ -3,7 +3,7 @@
 //! The same `adi-app` serves this page on two different names. On the machine that runs it the
 //! address bar says `app.adi`; from another machine on the fleet it says `app.<node>.n.adi`, and
 //! the bytes reach the browser through the viewer's front door, its mesh gateway, and the node's
-//! gateway (`docs/fleet.md` §3). Nothing in the page changes — the `Host` header is deliberately
+//! gateway. Nothing in the page changes — the `Host` header is deliberately
 //! never rewritten — so the node cannot tell the two apart, and it certainly cannot know what the
 //! viewer calls it. Only the URL the browser already holds knows that.
 //!

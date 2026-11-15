@@ -416,7 +416,7 @@ pub const ENFORCED_GRANT_FAMILIES: [&str; 1] = ["http"];
 /// [`ENFORCED_GRANT_FAMILIES`].
 pub const GRANT_PLACEHOLDER: &str = "http:* — or http:nosh, http:app.nosh";
 
-/// One paired node: all three of its names (`docs/fleet.md` §2) and what it may reach here (§5).
+/// One paired node: all three of its names and what it may reach here (§5).
 ///
 /// **The verifier never leaves the machine.** The registry stores each node's Basic-auth
 /// credential as a salted digest beside its salt; this carries only a `has_password` flag —
@@ -566,7 +566,7 @@ pub struct FleetInstructions {
     pub instructions: String,
 }
 
-/// Where a pairing QR is meant to be pointed: the browser mesh client (`docs/fleet.md` §12).
+/// Where a pairing QR is meant to be pointed: the browser mesh client.
 ///
 /// The code carries the token and nothing else — not a URL, so it never reaches an address bar or
 /// a history entry — which means a phone's own camera app will only offer to copy it. Somebody has
@@ -676,7 +676,7 @@ pub struct FleetInviteCancel {
 
 /// What a spent invite bought — the answer to `POST /api/fleet/join`.
 ///
-/// Pairing is symmetric (`docs/fleet.md` §8), so this describes a relationship both machines now
+/// Pairing is symmetric, so this describes a relationship both machines now
 /// hold: the far side filed this one under [`petname`](Self::petname) with `http:app`, and this
 /// one filed the far side under [`viewer`](Self::viewer) with the same. Two names for two
 /// registries, never conflated — §2's rule, at the one moment both are minted.
@@ -1278,6 +1278,91 @@ pub struct ToolRunResult {
     pub state: ToolsState,
 }
 
+// ---- mcp (MCP server definitions under ~/.adi/mono/mcp) -----------------------------
+
+/// One header/env value: written out in full, or naming a secret to resolve at launch instead —
+/// the wire mirror of `adi_mcp::Value`. `#[serde(untagged)]` tells the two apart by shape: a bare
+/// string is a literal, a one-field object naming `secret` is a reference.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum McpValueDto {
+    Literal(String),
+    Secret { secret: String },
+}
+
+/// How an MCP server is reached — the wire mirror of `adi_mcp::Transport`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum McpTransportDto {
+    Http {
+        url: String,
+        #[serde(default)]
+        headers: BTreeMap<String, McpValueDto>,
+    },
+    Stdio {
+        command: String,
+        #[serde(default)]
+        args: Vec<String>,
+        #[serde(default)]
+        env: BTreeMap<String, McpValueDto>,
+    },
+}
+
+/// One registered MCP server definition, as `GET /api/mcp` and every mutation below answer it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpServerDto {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// The project this server is filed under (its id), or `None` for a global server.
+    #[serde(default)]
+    pub project: Option<String>,
+    pub transport: McpTransportDto,
+    /// Every secret name this definition's headers/env declare (never a value) — what
+    /// `agents save --mcp` is really attaching, and what an agent still needs attached for the
+    /// server to actually authenticate.
+    #[serde(default)]
+    pub required_secrets: Vec<String>,
+    /// The subset of `required_secrets` this machine has no value for at all, global or this
+    /// server's own project scope — not whether any particular agent has it *attached*, which is
+    /// a question about the agent, not the server. What the installer/editor tells the operator
+    /// is still missing.
+    #[serde(default)]
+    pub missing_secrets: Vec<String>,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
+/// `GET /api/mcp` — every registered server. Each mutation below returns a fresh one, so the
+/// client refreshes from one round-trip.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpServersState {
+    pub servers: Vec<McpServerDto>,
+}
+
+/// `POST /api/mcp/save` — create or replace a server definition, the whole object at once (the
+/// same shape `SaveEmbeddingBackend` and `llm backends save` already use: a handful of fields,
+/// where an omit-to-keep save would be how a header quietly disappears).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SaveMcpServer {
+    pub id: String,
+    /// Defaults to `id` when blank.
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub project: Option<String>,
+    pub transport: McpTransportDto,
+}
+
+/// Request body naming a server — `POST /api/mcp/remove`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpServerRef {
+    pub id: String,
+}
+
 // ---- agents (AgentDef definitions under ~/.adi/mono/agents) --------------------------
 
 /// UI/schema metadata for the Agents create/edit form. The backend owns this so adding a
@@ -1411,7 +1496,7 @@ pub struct AgentFormField {
 }
 
 /// Whether a form field describes the agent, the login its backend uses, or a dial on that
-/// backend's model — the split `docs/llm-backends.md` draws between an agent's identity and one
+/// backend's model — the split between an agent's identity and one
 /// complete way to answer a turn.
 ///
 /// The **model** is deliberately not a variant: it is a field of its own on a backend (params that
@@ -1493,6 +1578,11 @@ pub struct AgentDto {
     /// `--allowed-tools` in `arguments.tools`.
     #[serde(default)]
     pub bin_tools: Vec<String>,
+    /// The ids of the `adi-mcp` **MCP server** definitions given to this agent's runs, beside
+    /// ADI's own per-conversation server (`adi_agents::backends::mcp`) — see `adi-mcp`'s crate
+    /// docs for the definition's own shape.
+    #[serde(default)]
+    pub mcp: Vec<String>,
     /// Shell commands really run before this agent's first message reaches the model, in order —
     /// its standing orientation read. Same shell, directory, `PATH` and environment as the agent's
     /// own `Bash`; the real output is carried into the opening message, framed as the tool calls
@@ -1747,6 +1837,11 @@ pub struct SaveAgent {
     /// saying nothing. Send an empty list to actually clear.
     #[serde(default)]
     pub bin_tools: Option<Vec<String>>,
+    /// The ids of the `adi-mcp` **MCP server** definitions given to this agent's runs, beside
+    /// ADI's own per-conversation server (see [`AgentDto::mcp`]). **Omit to keep whatever the
+    /// agent already has**, for the same reason as `bin_tools`; send an empty list to clear.
+    #[serde(default)]
+    pub mcp: Option<Vec<String>>,
     /// The commands every run of this agent really runs before its first message reaches the model
     /// (see [`AgentDto::prelude`]). **Omit to keep whatever the agent already has**, for the same
     /// reason as `bin_tools`; send an empty list to clear.
@@ -2979,7 +3074,7 @@ pub struct AllAgentRuns {
     /// attached one (`adi_mesh`'s `FLEET_USER_HEADER`, read into `handlers::agents::FleetSender`)
     /// — or `None` for a request that never left this machine. What `?filter=me` narrows the
     /// index by, and what the client reads to mirror that narrowing over `watch.runs`, which this
-    /// parameter never touches (`docs/sessions.md`).
+    /// parameter never touches.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asking_user: Option<String>,
     /// The sessions rail's project grouping, worked out here rather than by the client:
@@ -3895,6 +3990,15 @@ pub struct TriggerLog {
     pub fired_at: Option<u64>,
 }
 
+/// `GET /api/triggers/relay-key` (ADI-MONO-223) — this node's
+/// webhook-relay public signing key, OpenSSH-rendered, for a self-host operator's own
+/// `authorized_keys` file. Answered by `adi-app` (never this crate: the key lives in
+/// `adi_relay`, a dependency only the binary that actually runs a node takes).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelayKey {
+    pub public_key: String,
+}
+
 /// The response an external webhook caller gets from `/api/hooks/<name>`: an acknowledgement
 /// that the named trigger's code block was spawned.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -4434,7 +4538,7 @@ pub struct FrontDoorStatus {
 /// One dashboard under `~/.adi/mono/dashboards/<id>/` — a bun-served frontend + backend pair
 /// whose UI is authored as loose `.ts` files by agents.
 ///
-/// **One dashboard is one origin** (`docs/fleet.md` §4): both services declare the same
+/// **One dashboard is one origin**: both services declare the same
 /// `proxy.host`, the frontend owning `/` and the backend `/api`. So [`host`](Self::host) — not a
 /// port — is the dashboard's address. The loopback ports remain on the wire because they are what
 /// says whether each half is actually *up*, but reaching a dashboard past its front door is what
@@ -4597,7 +4701,7 @@ pub struct SetDashboardProject {
     pub project: Option<String>,
 }
 
-// MARK: moving a dashboard to another machine (`docs/fleet.md` §10)
+// MARK: moving a dashboard to another machine
 
 // The bundle a dashboard travels as lives in `adi-dashboards` beside the rules that confine it;
 // re-exported here so the wire contract stays one import away for both halves of the panel.
@@ -4618,7 +4722,7 @@ pub enum TransferMode {
 /// `POST /api/dashboards/transfer` — send a dashboard to a paired node and, in
 /// [`TransferMode::Move`], stand the local copy down.
 ///
-/// The credential is the node's own Basic-auth pair (`docs/fleet.md` §5). It is supplied per
+/// The credential is the node's own Basic-auth pair. It is supplied per
 /// transfer and **stored nowhere**: this machine holds only a verifier for the node's password,
 /// never the password, and a transfer is not a reason to start keeping one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -4662,7 +4766,7 @@ pub struct DashboardTransferred {
     pub dashboards: DashboardsState,
 }
 
-// MARK: the apps marketplace (docs/marketplace.md)
+// MARK: the apps marketplace
 
 /// `GET /api/marketplace` — the configured sources and the cached entries, read from the store
 /// with no network: a listing answers offline, and says per source when it was last synced and
@@ -4738,7 +4842,7 @@ pub struct MarketplaceApp {
     #[serde(default)]
     pub installs: Vec<MarketplaceInstall>,
     /// What the manifest's own preview publishes for this bundle — advisory, not authoritative
-    /// (`docs/marketplace-bundles.md` decision #2). Empty for an old-shape entry, or one that
+    ///. Empty for an old-shape entry, or one that
     /// publishes no preview yet; the app-only case v1 shipped looks exactly like that.
     #[serde(default)]
     pub elements: Vec<MarketplaceElementPreview>,
@@ -4763,7 +4867,7 @@ pub struct MarketplaceElementPreview {
     pub description: Option<String>,
 }
 
-/// A general bundle's status for the listing (`docs/marketplace-bundles.md`, "What 'installed'
+/// A general bundle's status for the listing ("What 'installed'
 /// means for a partially-installed bundle").
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MarketplaceBundleStatus {
@@ -4872,7 +4976,7 @@ pub struct MarketplaceInstall {
 ///
 /// `element`, when given, installs one `<kind>/<name>` of the bundle alone (`project` for the
 /// scaffold, no name) rather than the whole thing — `name`/`start` still apply, and still mean
-/// something only for the legacy single-dashboard shape (`docs/marketplace-bundles.md`): an
+/// something only for the legacy single-dashboard shape: an
 /// element of a general bundle always lands under its own published name.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InstallMarketplaceApp {
@@ -4881,7 +4985,7 @@ pub struct InstallMarketplaceApp {
     #[serde(default)]
     pub element: Option<String>,
     /// File everything under this project, by id — the recommended destination, and the only way
-    /// to hold the same bundle twice (`docs/marketplace-bundles.md` decision #7). Absent, and with
+    /// to hold the same bundle twice. Absent, and with
     /// no `new_project` either, installs globally.
     #[serde(default)]
     pub project: Option<String>,
@@ -4903,7 +5007,7 @@ pub struct InstallMarketplaceApp {
 }
 
 /// `POST /api/marketplace/uninstall` — remove one installed element of a bundle by its own kind's
-/// ordinary path (`docs/marketplace-bundles.md`, "Uninstall"). There is no whole-bundle uninstall
+/// ordinary path ("Uninstall"). There is no whole-bundle uninstall
 /// verb, the same as v1 has none for an app — a legacy dashboard install still goes through the
 /// Dashboards page.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -4950,7 +5054,7 @@ pub struct UpdateMarketplaceApp {
 
 /// `POST /api/marketplace/bundle/update` — fast-forward a general bundle's own internal clone onto
 /// its manifest's current pin, and re-apply every ledgered element, per element rather than
-/// all-or-nothing (`docs/marketplace-bundles.md`, "Update"). `force` lists the `<kind>/<name>`
+/// all-or-nothing ("Update"). `force` lists the `<kind>/<name>`
 /// pairs to overwrite past their own local edit; every other ledgered element fast-forwards, or is
 /// left alone and reported.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -4973,7 +5077,7 @@ pub struct MarketplaceDone {
     pub message: String,
 }
 
-// MARK: viewing a fleet's dashboards (`docs/fleet.md` §11)
+// MARK: viewing a fleet's dashboards
 
 /// `GET /api/fleet/dashboards` — what every paired node is running, asked node by node.
 ///
@@ -4995,8 +5099,8 @@ pub struct NodeDashboards {
     /// The node's petname, as this machine files it.
     pub node: String,
     /// No credential is stored here for this node, so it was never asked. The password is the
-    /// human-scoped half of `docs/fleet.md` §5 and is enforced *on the node*; without it there is
-    /// nothing to ask with.
+    /// human-scoped half of a node's access control and is enforced *on the node*; without it
+    /// there is nothing to ask with.
     pub locked: bool,
     /// Why the node could not be listed — already phrased for an operator. `None` when it was.
     #[serde(default)]
@@ -5073,7 +5177,7 @@ pub struct UnlockNode {
     pub password: String,
 }
 
-// MARK: driving a node through this panel (`docs/fleet.md` §13)
+// MARK: driving a node through this panel
 
 /// `GET /api/fleet/nodes` — which paired nodes this machine can *ask* things of.
 ///
@@ -5235,11 +5339,11 @@ pub struct RevealedSecret {
 }
 
 // MARK: a user's own scope — `/api/secrets/mine/*` and `/api/secrets/policy`
-// (`docs/byo-credentials.md` §7, ADI-MONO-178 P1.11). This scope is write-only: no route here
+//. This scope is write-only: no route here
 // ever returns a value, for an admin or for the user themselves.
 
 /// One of a user's own secret names — `GET /api/secrets/mine`'s list entries. No `project`
-/// field: `<u>` is never a project id (`docs/byo-credentials.md` §4.2), and nothing here needs
+/// field: `<u>` is never a project id, and nothing here needs
 /// one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MySecretDto {
@@ -5248,7 +5352,7 @@ pub struct MySecretDto {
     pub description: Option<String>,
     pub updated_at: u64,
     /// Still sealed under this device's own DEK — never a plaintext. Present so a device's
-    /// unlock path (`docs/byo-credentials.md` §9 step 2) can read its own wraps straight off
+    /// unlock path can read its own wraps straight off
     /// this same `GET /api/secrets/mine` without a second route; the "My keys" panel page (§7,
     /// P4.2) simply has nothing to do with these fields.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -5270,7 +5374,7 @@ pub struct MySecretsState {
 }
 
 /// `POST /api/secrets/mine/set` — a value already sealed on the caller's own device
-/// (`docs/byo-credentials.md` §7, §8, ADI-MONO-180 P2.1): `ciphertext`/`nonce` are the value
+///: `ciphertext`/`nonce` are the value
 /// sealed under a fresh DEK, and `wraps` is that DEK sealed to the device(s) that may unwrap it
 /// (exactly one in v1). The server stores exactly this; it never decrypts any of it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -5305,7 +5409,7 @@ pub struct RemoveMySecret {
 }
 
 /// `POST /api/secrets/mine/settings` — a user's own `missing` preference
-/// (`docs/byo-credentials.md` §4.2). `None` clears it back to "no preference: the server's own
+///. `None` clears it back to "no preference: the server's own
 /// setting governs outright".
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SetMySettings {
@@ -5313,8 +5417,8 @@ pub struct SetMySettings {
     pub missing: Option<String>,
 }
 
-/// `POST /api/secrets/policy` — the server's own `[user_secrets]` (`docs/byo-credentials.md`
-/// §4.1). Admin-only — on the member gate's blocked list alongside the global-scope secrets
+/// `POST /api/secrets/policy` — the server's own `[user_secrets]`.
+/// Admin-only — on the member gate's blocked list alongside the global-scope secrets
 /// actions.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SetSecretsPolicy {
@@ -5719,7 +5823,7 @@ pub struct TestResultDto {
 /// live state the page needs: whether this binary can actually build it.
 ///
 /// Flat, like [`LlmBackendDto`]: never built on another backend. The only reuse is a fallback list,
-/// and only between backends declaring the same model and width — see `docs/embedding-backends.md`.
+/// and only between backends declaring the same model and width —.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct EmbeddingBackendDto {
     /// The name it is known by, which is its filename in `embeddings/backends/`.
@@ -6381,10 +6485,10 @@ pub struct RealtimeSessionDto {
     pub expires_at: Option<i64>,
 }
 
-// ---- channels (docs/channels.md — Telegram/Slack connections to an agent) -----------
+// ---- channels (Telegram/Slack connections to an agent) ------------------------------
 
 /// What a connection dispatches to — only `agent` is built today; `trigger`/`app_route` are named
-/// so a bundle-installed channel (`docs/channels.md` §6) never has to widen this type later.
+/// so a bundle-installed channel never has to widen this type later.
 /// Mirrors `adi_channels::connection::Target`, kept as its own plain type here since this module
 /// compiles for wasm and `adi-channels` (tokio, reqwest) does not.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -6429,7 +6533,7 @@ pub struct ChannelsState {
     pub connections: Vec<ChannelConnectionDto>,
 }
 
-/// `POST /api/channels/connect` — `docs/channels.md` §7.
+/// `POST /api/channels/connect`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConnectChannel {
     pub provider: String,
@@ -6450,8 +6554,7 @@ pub struct ChannelConnected {
 }
 
 /// Request body naming one connection — `/pause`, `/disconnect`, and the `GET /api/channels/<id>`
-/// poll (`docs/channels.md` §7: "the node is just waiting on its own WebSocket for a `linked`
-/// frame").
+/// poll (the node is just waiting on its own WebSocket for a `linked` frame).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChannelRef {
     pub id: String,

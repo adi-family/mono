@@ -1,7 +1,7 @@
 /**
  * The router's runtime configuration and the shapes every module shares. Injected by
  * Cloudflare from `wrangler.toml` `[vars]` / `wrangler secret put` (the scalar fields) and the
- * Durable Object / D1 bindings declared there (the rest). See docs/channels.md §1.
+ * Durable Object / D1 bindings declared there (the rest).
  */
 export interface Env {
   /** HMAC key that signs node tokens and link codes (this router's `STATE_SECRET`-equivalent). */
@@ -35,7 +35,7 @@ export interface Env {
   ROUTING_KEYS: D1Database;
 }
 
-/** The provider-neutral message schema (v1) -- docs/channels.md §3. */
+/** The provider-neutral message schema (v1). */
 export interface ChannelMessage {
   v: 1;
   /** Dedup key -- stable across redelivery, unique per (provider, id). */
@@ -63,7 +63,7 @@ export interface ChannelMessage {
   received_at: number;
 }
 
-/** docs/channels.md §5. Only `agent` is built; `trigger`/`app_route` are named so a bundle-
+/** Only `agent` is built; `trigger`/`app_route` are named so a bundle-
  * installed channel never has to widen this type later (§6). */
 export type Target =
   | { kind: "agent"; agent: string }
@@ -75,7 +75,7 @@ export type Allowlist =
   | { kind: "list"; sender_ids: string[] }
   | { kind: "open" };
 
-/** One `(provider, routing key)` bound to one target and one allowlist -- docs/channels.md §5.
+/** One `(provider, routing key)` bound to one target and one allowlist.
  * Lives inside the owning Durable Object; the router never enforces the allowlist itself (§5,
  * §8 -- that's the node's job), it only stores it so the node's mirror has somewhere to come
  * from. */
@@ -110,11 +110,11 @@ export interface OutboundReply {
 }
 
 /**
- * One file per service (docs/channels.md §4). `verify`/`routingKey` run before anything else
+ * One file per service. `verify`/`routingKey` run before anything else
  * touches a webhook body; `normalize` is async because an adapter may have to round-trip to its
  * own service first (Telegram's photo attachments resolve through `getFile` before forwarding,
  * never after -- see the Telegram section below) -- the spec's original signature had this
- * synchronous, which this build corrects (see docs/channels.md's "Decisions taken").
+ * synchronous, which this build corrects.
  *
  * `extractLinkCode` is this build's addition, not in the original spec text: Telegram's "link"
  * is just another webhook (its `/start <code>` arrives as an ordinary `message` update, per §4),
@@ -155,7 +155,7 @@ export interface ChannelAdapter {
 
 /** The Durable Object id for one `(node, provider)` pair.
  *
- * docs/channels.md §1 says "one Durable Object per node, keyed by node id", but §2 also says a
+ * The design said "one Durable Object per node, keyed by node id", but it also said a
  * node talking to both Telegram and Slack "holds two sockets, because each is subscribed
  * through a different Durable Object" -- which only both hold if the key is actually the pair,
  * not the node id alone. This build takes the pair as authoritative (it's also exactly the

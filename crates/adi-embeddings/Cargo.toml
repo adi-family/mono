@@ -11,7 +11,7 @@ repository.workspace = true
 [features]
 # The in-process runtime: jina-embeddings-v2-base-code on candle, borrowed whole from the
 # indexer. On by default, so a store built normally can actually resolve a `candle` backend
-# rather than merely list one as unavailable. See `docs/embedding-backends.md`.
+# rather than merely list one as unavailable.
 candle = ["adi-indexer/candle"]
 default = ["candle"]
 
@@ -36,8 +36,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 # The `ollama` and `openai` runtimes talk plain HTTP. Blocking, and no tokio: every embedder in
-# this tree runs synchronously on a blocking pool, never inside the async runtime — see
-# `docs/embedding-backends-survey.md` §2 and §7.
+# this tree runs synchronously on a blocking pool, never inside the async runtime.
 reqwest = { workspace = true, features = ["blocking"] }
 # reqwest is taken workspace-wide with `rustls-no-provider`, so a client cannot be built until
 # somebody installs a crypto provider process-wide. See `runtimes::install_tls_provider`.

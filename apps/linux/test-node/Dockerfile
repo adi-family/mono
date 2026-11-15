@@ -1,4 +1,4 @@
-# A throwaway Linux "node" for testing docs/fleet.md §6 end to end.
+# A throwaway Linux "node" for testing the node stack end to end.
 #
 # Real systemd as PID 1, because the whole point is to exercise adi-core's systemd back-end —
 # the unit files, `systemctl --user`, and lingering. A container that fakes supervision would
@@ -21,7 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl unzip iproute2 procps dnsutils \
     && rm -rf /var/lib/apt/lists/*
 
-# bun, because a dashboard is a pair of bun services (docs/fleet.md §4). The node package does
+# bun, because a dashboard is a pair of bun services. The node package does
 # not ship it — this is the prerequisite that has to be documented or installed, and testing the
 # dashboard path is how we find out which.
 RUN curl -fsSL https://bun.sh/install | bash -s -- bun-v1.1.38 \

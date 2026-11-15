@@ -273,7 +273,7 @@ impl Viewer {
 
     /// Spend an invite a **machine** minted, pairing with it from this side.
     ///
-    /// The mirror of [`invite`](Self::invite), and the other direction `docs/fleet.md` §8 says the
+    /// The mirror of [`invite`](Self::invite), and the other direction the
     /// protocol allows: there the phone mints and the node dials, here the node mints
     /// (`adi-mono mesh invite`) and the phone dials. Both end with the same record in the same
     /// registry, so a node paired this way is indistinguishable afterwards — it appears in
@@ -702,7 +702,7 @@ fn paired(node: &str) -> anyhow::Result<(EndpointId, Vec<Grant>)> {
 /// this phone's own node list never mentions, and `http:*` would be the only way to see one.
 ///
 /// It is a mirror and never a source: [`Viewer::open`] does not consult it, and the node decides
-/// every request on its own copy (`docs/fleet.md` §5). So a failure to write it is logged and
+/// every request on its own copy. So a failure to write it is logged and
 /// nothing more — the dashboard still opens.
 fn mirror_grant(node: &str, service: &str) {
     let mut registry = match FleetRegistry::load() {

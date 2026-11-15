@@ -8,7 +8,7 @@
 //! ([`crate::supervisor`]) builds the same launch under tokio so it can wait on the child and
 //! relaunch it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -67,17 +67,24 @@ pub(crate) fn payload_path(module_dir: &Path, name: &str) -> PathBuf {
     module_dir.join(LOGS_DIR).join(format!("{name}.payload"))
 }
 
+/// The headers file a fire writes for its code block: `<module_dir>/logs/<name>.headers`.
+#[must_use]
+pub(crate) fn headers_path(module_dir: &Path, name: &str) -> PathBuf {
+    module_dir.join(LOGS_DIR).join(format!("{name}.headers"))
+}
+
 /// Resolve `trigger` into a spawnable [`Launch`]: pick the interpreter for its runtime (staging
 /// a `ts` block to `src/<name>.ts`), export its identity and every setting, and — when the event
 /// carries one — write the payload file the block reads.
 ///
 /// # Errors
 /// [`Error::NoCode`] when the trigger has no code block, or [`Error::Io`] when the staged
-/// source or payload file can't be written.
+/// source, payload, or headers file can't be written.
 pub(crate) fn launch(
     module_dir: &Path,
     trigger: &Trigger,
     payload: Option<&[u8]>,
+    headers: Option<&HashMap<String, String>>,
     event: Option<&str>,
     run_env: &[(String, String)],
 ) -> Result<Launch> {
@@ -126,6 +133,19 @@ pub(crate) fn launch(
         {
             env.push(("ADI_PAYLOAD".to_string(), text.to_string()));
         }
+    }
+
+    // Request headers, when the event source carries them (a webhook delivery) — written the
+    // same way the payload is, so a code block can verify a provider's HMAC signature over a
+    // header it couldn't see at all before this.
+    if let Some(h) = headers {
+        let file = headers_path(module_dir, &trigger.name);
+        std::fs::create_dir_all(
+            file.parent()
+                .expect("headers path has the logs dir as parent"),
+        )?;
+        std::fs::write(&file, serde_json::to_vec(h).expect("header map serializes"))?;
+        env.push(("ADI_HEADERS_FILE".to_string(), file.display().to_string()));
     }
 
     Ok(Launch { program, args, env })
@@ -187,10 +207,11 @@ pub(crate) fn fire(
     module_dir: &Path,
     trigger: &Trigger,
     payload: Option<&[u8]>,
+    headers: Option<&HashMap<String, String>>,
     event: Option<&str>,
     run_env: &[(String, String)],
 ) -> Result<Firing> {
-    let spec = launch(module_dir, trigger, payload, event, run_env)?;
+    let spec = launch(module_dir, trigger, payload, headers, event, run_env)?;
     let log_file = open_log(module_dir, &trigger.name, false)?;
     let errlog = log_file.try_clone()?;
 
@@ -307,7 +328,7 @@ mod tests {
         let dir = scratch_dir("nocode");
         let t = trigger("empty", "   ");
         assert!(matches!(
-            fire(&dir, &t, None, None, &[]),
+            fire(&dir, &t, None, None, None, &[]),
             Err(Error::NoCode(_))
         ));
         let _ = std::fs::remove_dir_all(&dir);
@@ -320,7 +341,7 @@ mod tests {
             "greeter",
             "printf '%s/%s' \"$ADI_TRIGGER\" \"$ADI_TRIGGER_KIND\"",
         );
-        let firing = fire(&dir, &t, None, None, &[]).expect("fire");
+        let firing = fire(&dir, &t, None, None, None, &[]).expect("fire");
         assert!(firing.pid > 0);
         let text = wait_for_log(&firing.log, |s| !s.is_empty());
         assert_eq!(text, "greeter/background");
@@ -339,13 +360,45 @@ mod tests {
             "hook",
             "printf '%s|' \"$ADI_PAYLOAD\"; cat \"$ADI_PAYLOAD_FILE\"",
         );
-        let firing = fire(&dir, &t, Some(b"{\"x\":1}"), None, &[]).expect("fire");
+        let firing = fire(&dir, &t, Some(b"{\"x\":1}"), None, None, &[]).expect("fire");
         assert_eq!(
             std::fs::read(payload_path(&dir, "hook")).expect("payload file"),
             b"{\"x\":1}"
         );
         let text = wait_for_log(&firing.log, |s| s.contains('|') && s.len() > 8);
         assert_eq!(text, "{\"x\":1}|{\"x\":1}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The headers counterpart of the payload test above: a webhook delivery's request headers
+    /// land in `ADI_HEADERS_FILE` as JSON, so a code block can check a provider's HMAC signature
+    /// header it had no way to see before this.
+    #[test]
+    fn fire_hands_headers_over_as_a_json_file() {
+        let dir = scratch_dir("headers");
+        let t = trigger("hook", "cat \"$ADI_HEADERS_FILE\"");
+        let mut headers = HashMap::new();
+        headers.insert("x-hub-signature-256".to_string(), "sha256=abc".to_string());
+        let firing = fire(&dir, &t, None, Some(&headers), None, &[]).expect("fire");
+        let text = wait_for_log(&firing.log, |s| !s.is_empty());
+        let got: HashMap<String, String> = serde_json::from_str(&text).expect("json headers");
+        assert_eq!(got, headers);
+        assert_eq!(
+            std::fs::read(headers_path(&dir, "hook")).expect("headers file"),
+            serde_json::to_vec(&headers).unwrap()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A fire with no headers writes no headers file at all, and sets no `ADI_HEADERS_FILE` — a
+    /// manual fire or an event trigger never has request headers to pass on.
+    #[test]
+    fn fire_without_headers_writes_no_headers_file() {
+        let dir = scratch_dir("noheaders");
+        let t = trigger("hook", "printf '%s' \"${ADI_HEADERS_FILE:-unset}\"");
+        let firing = fire(&dir, &t, None, None, None, &[]).expect("fire");
+        assert_eq!(wait_for_log(&firing.log, |s| !s.is_empty()), "unset");
+        assert!(!headers_path(&dir, "hook").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -359,6 +412,7 @@ mod tests {
             &dir,
             &t,
             Some(b"{\"id\":\"t1\"}"),
+            None,
             Some("adi.tasks.created"),
             &[],
         )
@@ -382,7 +436,7 @@ mod tests {
         t.manifest
             .extra
             .insert("token_env".into(), "MY_TOKEN".into());
-        let firing = fire(&dir, &t, None, None, &[]).expect("fire");
+        let firing = fire(&dir, &t, None, None, None, &[]).expect("fire");
         assert_eq!(
             wait_for_log(&firing.log, |s| s.contains('/')),
             "4242/MY_TOKEN"
@@ -415,7 +469,7 @@ mod tests {
             // A secret unwisely named after a platform var must lose to the real one.
             ("ADI_TRIGGER".to_string(), "hijacked".to_string()),
         ];
-        let firing = fire(&dir, &t, None, None, &run_env).expect("fire");
+        let firing = fire(&dir, &t, None, None, None, &run_env).expect("fire");
         assert_eq!(
             wait_for_log(&firing.log, |s| s.contains('|')),
             "s3cr3t|reader"
@@ -431,7 +485,7 @@ mod tests {
         let mut t = trigger("poller", "console.log('hi');\n");
         t.manifest.runtime = RUNTIME_TS.into();
 
-        let spec = launch(&dir, &t, None, None, &[]).expect("launch");
+        let spec = launch(&dir, &t, None, None, None, &[]).expect("launch");
         assert_eq!(spec.program, "bun");
         let staged = dir.join(SRC_DIR).join("poller.ts");
         assert_eq!(

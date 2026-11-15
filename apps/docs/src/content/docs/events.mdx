@@ -37,9 +37,9 @@ paged for things nobody needs to see. The pattern that actually says what you me
 
 ## Subscribing
 
-An `event`-kind [[Triggers|trigger]] runs its code block whenever a published name matches one of
+An `event`-kind [[triggers|trigger]] runs its code block whenever a published name matches one of
 its patterns, with the event name in `$ADI_EVENT` and its body in `$ADI_PAYLOAD` (also written to
-`$ADI_PAYLOAD_FILE`). See [[Triggers]] for how a trigger is defined and run — this page is only
+`$ADI_PAYLOAD_FILE`). See [[triggers|Triggers]] for how a trigger is defined and run — this page is only
 about what it's reacting to. An agent run can subscribe the same way without a trigger, via
 `Await` — see below.
 
@@ -156,5 +156,5 @@ alongside `event_types[]` (name, summary, schema, example) for the same catalog 
 
 ## See also
 
-[[Triggers]] for how an `event` trigger is defined and run, [[Agents]] for how a run waits on one
+[[triggers|Triggers]] for how an `event` trigger is defined and run, [[Agents]] for how a run waits on one
 without polling.

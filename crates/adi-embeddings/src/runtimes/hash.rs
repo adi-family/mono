@@ -2,8 +2,7 @@
 //!
 //! Moved down from `adi-knowledge`, where it lived before this crate existed
 //! (`adi_knowledge::HashEmbedder` re-exports this type so every existing caller keeps working
-//! unchanged). A registry that cannot list every runtime in one place is not a registry — see
-//! `docs/embedding-backends.md`.
+//! unchanged). A registry that cannot list every runtime in one place is not a registry.
 //!
 //! Each token is hashed into one of [`HASH_DIMENSIONS`] buckets and the vector is L2-normalized,
 //! so cosine similarity between two texts is essentially their **word overlap**.

@@ -3,8 +3,8 @@
 //!
 //! A consumer (`indexer`, `knowledge`, `facts`) names an assignment. An assignment names a
 //! backend. A backend is one complete way to embed — a [`Runtime`], a model,
-//! and the dials it runs with, under a name a human chose. The whole design is
-//! `docs/embedding-backends.md`; the short version is two layers and no third:
+//! and the dials it runs with, under a name a human chose. In short, it is
+//! two layers and no third:
 //!
 //! ```text
 //! CONSUMER    indexer · knowledge · facts                    which store is asking?
@@ -30,7 +30,7 @@
 //! (this crate depends on `adi-indexer`, so the reverse edge would be a cycle) and instead has
 //! its one production caller, `adi-cli`'s `indexer` command group, resolve on its behalf and
 //! hand the result to `Indexer::open_with_embedder`. What phase C still owes is the operator
-//! surface: a CLI, an API, and a panel tab. See `docs/embedding-backends.md`.
+//! surface: a CLI, an API, and a panel tab.
 
 pub mod backend;
 pub mod ondemand;
@@ -119,8 +119,8 @@ mod tests {
     ///
     /// Only `facts` (the `ollama` runtime) is resolved all the way to a built [`Embedder`] here:
     /// `indexer`/`knowledge` seed to `candle`, and *constructing* [`adi_indexer::embed::
-    /// CandleEmbedder`] downloads model weights on first use — exactly the cost
-    /// `docs/embedding-backends-survey.md` §7 flags as synchronous and network-bound, wrong to
+    /// CandleEmbedder`] downloads model weights on first use — exactly the cost that is
+    /// synchronous and network-bound, wrong to
     /// pay inside a unit test. Checking the assignment exists proves seeding ran; resolving
     /// `ollama` (pure construction, no I/O until `embed()` is called) proves `resolve` actually
     /// walks consumer → assignment → backend → `Embedder`.

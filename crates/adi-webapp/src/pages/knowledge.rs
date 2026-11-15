@@ -3,7 +3,7 @@
 //! A **knowledge** is one note of any length; it lives in a **base** at one of three isolation
 //! levels — global, a project's, or an agent's own memory. Every note is embedded, so the search
 //! box answers "how do I bring the panel back up" with the note titled "Restarting the control
-//! panel" even though they share no words. See `docs/knowledge.md`.
+//! panel" even though they share no words..
 //!
 //! Search comes first because it is what the page is *for*. The bases and their notes sit under
 //! it, in that order: you look something up far more often than you file something.

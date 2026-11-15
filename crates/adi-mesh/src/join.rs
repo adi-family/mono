@@ -1,4 +1,4 @@
-//! Pull-only bootstrap — `adi/mesh/join/1` (`docs/fleet.md` E3, §2, §5, §6).
+//! Pull-only bootstrap — `adi/mesh/join/1`.
 //!
 //! §6 says a node's only network-facing action is an *outbound* QUIC session: no `:22`, no
 //! `:80`, no `:443`. Pairing is the one moment that promise is easy to break, because the
@@ -104,7 +104,7 @@ const INVITES_FILE: &str = "invites.toml";
 /// answer said less helpfully.
 const INVITE_KEEP: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// The username minted credentials carried before `docs/byo-credentials.md` §3.2. Still what a
+/// The username minted credentials carried before per-user scopes. Still what a
 /// pinned [`InviteSpec::username`] falls back to meaning in prose (a record pairing as a shared
 /// `PAIR_USER` carries no security weight), but [`decide`] no longer writes it: §3.2's threat is
 /// that two members paired without a `username` in the invite become the *same* user to
@@ -124,7 +124,7 @@ const PASSWORD_LEN: usize = 24;
 /// `http:*`, so no dashboard is exposed until somebody names it; it is not `tcp:`, which would
 /// splice a raw socket past the HTTP password layer entirely; and it is not `ctl:`, which is the
 /// control plane. It *is* the panel, because that is the thing you paired the node for
-/// (`docs/fleet.md` §1) — a default that granted nothing would leave every operator running the
+/// — a default that granted nothing would leave every operator running the
 /// same `mesh grant` immediately after every join, which is a default that has chosen wrong.
 const DEFAULT_SERVICE: &str = "app";
 
@@ -463,7 +463,7 @@ pub struct JoinRequest {
     pub v: u8,
     /// The nonce copied out of the invite.
     pub nonce: String,
-    /// What the node calls itself (`docs/fleet.md` §2) — a suggestion, never a claim.
+    /// What the node calls itself — a suggestion, never a claim.
     pub nickname: String,
 }
 
@@ -541,7 +541,7 @@ pub struct Joined {
     pub petname: String,
     /// What this node now calls the viewer.
     pub viewer: String,
-    /// The viewer's key — the identity of record for the relationship (`docs/fleet.md` §2).
+    /// The viewer's key — the identity of record for the relationship.
     pub viewer_key: EndpointId,
     /// The username to type into the browser prompt.
     pub username: String,
@@ -626,7 +626,7 @@ pub fn decide(
     // already have is what an operator does when the password is lost, and quietly re-issuing a
     // secret they no longer hold would answer the wrong question. The username and the id behind
     // it are different: once a record carries a `user`, a re-pair keeps both
-    // (`docs/byo-credentials.md` §3), because rotating either would orphan every value stored
+    //, because rotating either would orphan every value stored
     // under the old id, or quietly move which user a differently-pinned re-invite names. Only a
     // record with no `user` yet — a legacy `adi` record, or one re-paired without ever getting
     // one — resolves the invite's username here, same as a fresh pairing does.
@@ -721,14 +721,14 @@ fn pair_or_suggest(
 
 /// The node's side of the bookkeeping: file the viewer, and store the verifier for the password
 /// it just handed us, so the viewer's later HTTP requests are gated by exactly that password
-/// (`docs/fleet.md` §5).
+///.
 ///
 /// The viewer offers no nickname of its own — the invite carries an address and a secret, nothing
 /// cosmetic — so it is filed under its key's short form. That is an honest name for a peer we
 /// know only by key, and [`FleetRegistry::rename`] is one command away.
 ///
-/// `grant_back` is ADI-MONO-171 G4's one-way join: pairing is otherwise mutual (`docs/fleet.md`
-/// §8), so by default this hands the viewer back exactly what it granted *us* (`accepted.grants`,
+/// `grant_back` is ADI-MONO-171 G4's one-way join: pairing is otherwise mutual, so
+/// by default this hands the viewer back exactly what it granted *us* (`accepted.grants`,
 /// ordinarily `http:app`) — the viewer can now reach this node's panel over the mesh, same as this
 /// node can reach the viewer's. A node dialling a viewer it does not want that kind of relationship
 /// with — a sandbox it is only being shown around, say — passes `false`, and the viewer is filed
@@ -953,7 +953,7 @@ fn decide_and_persist(key: &EndpointId, request: &JoinRequest) -> anyhow::Result
     invites.save_to(&store)?;
     if matches!(reply, JoinReply::Accepted(_)) {
         registry.save_to(&store)?;
-        // The front door's certificate list wants the new petname here (`docs/fleet.md` F2), but
+        // The front door's certificate list wants the new petname here, but
         // that lives in `adi_core::dns::Dns::add_mesh_node` and this crate does not depend on
         // adi-core — nor should it, since the dependency runs the other way everywhere else. The
         // owner of that call is whoever owns this daemon's lifecycle and can see both crates:
@@ -1010,7 +1010,7 @@ pub async fn join_with(token: &str, grant_back: bool) -> anyhow::Result<Joined> 
 /// would happen every time.
 ///
 /// Nothing else differs. The dialling side is the dialling side whichever machine it is, which is
-/// the point `docs/fleet.md` §8 makes about the protocol being symmetric: the phone spending an
+/// the point about the protocol being symmetric: the phone spending an
 /// invite a node minted is the same handshake as a node spending one a phone minted, with the
 /// roles the other way round.
 ///
@@ -1715,7 +1715,7 @@ mod tests {
     fn a_re_pair_of_a_legacy_adi_record_mints_a_fresh_id() {
         // A record paired before this shipped (or re-paired without `decide` ever minting one for
         // it) carries `PAIR_USER` and no `user`. Re-inviting it is how such a record gets a user
-        // scope (`docs/byo-credentials.md` §3).
+        // scope.
         let mut registry = FleetRegistry::default();
         let key = some_key();
         let _ = registry.pair(&key, "laptop-b");

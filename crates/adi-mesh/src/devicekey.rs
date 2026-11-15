@@ -1,4 +1,4 @@
-//! This device's own key-wrapping key (`docs/byo-credentials.md` §8) — the key that seals (and
+//! This device's own key-wrapping key — the key that seals (and
 //! only ever this device unseals) the DEK behind each of this user's own secrets wrapped here.
 //!
 //! **Decided 2026-10-28 (Igor), replacing the original design's Keychain/WebAuthn PRF plan for
@@ -8,7 +8,7 @@
 //! reusing it here would make "can pair as you" and "can read your subscription" one capability
 //! (§8's own reasoning for why they must differ). A macOS Keychain item and a browser
 //! `adi-mesh-client` `WebAuthn` PRF key are later hardening for the same role, not built here — see
-//! `docs/byo-credentials.md` §15 Q12, which this decision settles as moot for v1: there is no
+//! The open Keychain-prompt question is settled by this decision as moot for v1: there is no
 //! Keychain prompt to worry the separate `adi-mono` binary with, because nothing here calls the
 //! Keychain at all.
 //!

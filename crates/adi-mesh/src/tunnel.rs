@@ -18,7 +18,7 @@ pub async fn splice(tcp: TcpStream, send: SendStream, recv: RecvStream) {
 ///
 /// **The node side only**, where `tcp` is the local service and so the `tcp → peer` direction is
 /// the response. The caller uses this on a *carved* host — one where a second service claims a
-/// path prefix, which is every dashboard (`docs/fleet.md` §4).
+/// path prefix, which is every dashboard.
 ///
 /// The reason is the same one the front door has: the upstream was resolved from *this* request,
 /// and what follows is a byte splice, so every later request on the same connection lands on the

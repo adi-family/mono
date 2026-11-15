@@ -5,7 +5,7 @@
 //! nobody can enumerate a machine's services by watching `ServiceUnknown` and `NotAuthorized`
 //! differ. So the question is put to the node's control panel, which is a service like any other,
 //! is what pairing grants, sits behind the node's Basic gate, and already publishes
-//! `GET /api/dashboards`. This is `docs/fleet.md` §11 — the desktop panel's fleet rail — asked
+//! `GET /api/dashboards`. This is the desktop panel's fleet rail, asked
 //! from a phone, and it needs no new wire format, no new grant kind and no version bump.
 //!
 //! Two of §11's rules are the whole reason this module is more than one request:

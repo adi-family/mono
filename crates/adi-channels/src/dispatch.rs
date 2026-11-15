@@ -1,5 +1,5 @@
 //! Routing one normalized [`ChannelMessage`] to the agent its connection names
-//! (`docs/channels.md` §5): allowlist enforcement, the thread->conversation map, and stamping
+//! allowlist enforcement, the thread->conversation map, and stamping
 //! [`Marker::From`] so the agent reads the message as "somebody else, speaking through this
 //! surface" rather than this machine's own voice.
 
@@ -19,7 +19,7 @@ use crate::router_api::RouterApi;
 const THINKING_STATUS: &str = "thinking…";
 
 /// Handle one inbound message: enforce the allowlist, then run or reply on the target it names.
-/// Silent, by design, on everything `docs/channels.md` §5/§8 says must be silent — a paused
+/// Silent, by design, on everything the design says must be silent — a paused
 /// connection, a disallowed sender, a target this build doesn't dispatch to yet
 /// ([`Target::Trigger`]/[`Target::AppRoute`]/[`Target::Unknown`], §6: "skipped, not refused").
 ///
@@ -127,7 +127,7 @@ pub fn handle(
 /// Whether `sender_id` may talk to `connection`'s target — claiming the first sender as the owner
 /// if `owner_only` has nobody recorded yet.
 ///
-/// **Open item, not settled by `docs/channels.md`.** §2's `linked` frame carries only
+/// **Open item, not settled by the design.** The `linked` frame carries only
 /// `{connection, provider, routing_key}` — no sender — so [`Connection::manifest.owner_sender_id`]
 /// has nothing to be bound from at link time. Claiming the first sender to actually say something
 /// is the best available proxy for "whoever completed the link": for Telegram (a DM) that is

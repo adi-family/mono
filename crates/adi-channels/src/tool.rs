@@ -1,4 +1,4 @@
-//! The `channel-reply` tool (`docs/channels.md` §5, "Decisions taken" #4): an **ordinary**
+//! The `channel-reply` tool: an **ordinary**
 //! `adi-tools`-owned script, not an engine-native tool like `Ask`/`Report` — so it works
 //! identically on every backend, pty/process/harness alike, rather than only the ones with a
 //! native MCP tool surface.

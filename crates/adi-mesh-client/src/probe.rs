@@ -1,14 +1,14 @@
 //! The measurement this client is allowed to exist because of: **can a long-lived stream cross
 //! `adi/mesh/http/1` from a browser tab?**
 //!
-//! The spike that proved a tab can be an iroh peer (`spikes/mesh-browser`) tested exactly one
+//! The spike that proved a tab can be an iroh peer (commit `24ac77c`, since removed) tested exactly one
 //! request and one response. A control panel needs more than that — its live channel is a
 //! websocket, and any dashboard worth opening pushes — and nothing in the mesh had ever carried a
 //! response that does not end. If it could not, this client could not serve the panel and the
 //! design changed; so it is measured here, first, against a real `adi-mesh` daemon, before any of
 //! the UI exists.
 //!
-//! It stays in the shipped crate rather than living in `spikes/` for one reason: it is a
+//! It stays in the shipped crate rather than living in a throwaway spike for one reason: it is a
 //! regression test for somebody else's code. The property being measured is that
 //! `gateway::negotiate` exempts an upgrade from `Connection: close` and that `tunnel::splice`
 //! pumps rather than buffers. Both are one careless edit away from becoming false, in a crate that

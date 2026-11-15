@@ -855,6 +855,8 @@ pub(crate) fn load_agent_into_form(form: AgentsForm, a: &AgentDto) {
     form.dispatch.set(a.dispatch);
     form.can_spawn.set(a.can_spawn.iter().map(|r| r.rule.clone()).collect());
     form.can_spawn_draft.set(String::new());
+    form.mcp.set(a.mcp.clone());
+    form.mcp_draft.set(String::new());
     form.spawn_grant_draft.set(String::new());
     form.secrets.set(
         a.secrets
@@ -910,7 +912,9 @@ pub(crate) fn clear_agent_form(form: AgentsForm) {
     form.memory.set(false);
     form.dispatch.set(false);
     form.can_spawn.set(Vec::new());
+    form.mcp.set(Vec::new());
     form.can_spawn_draft.set(String::new());
+    form.mcp_draft.set(String::new());
     form.spawn_grant_draft.set(String::new());
     form.secrets.set(std::collections::BTreeSet::new());
     form.prelude.set(String::new());

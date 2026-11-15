@@ -9,7 +9,7 @@
 //! * [`HUMAN`] — a person asked for it. The control panel (somebody is looking at it), or a
 //!   terminal somebody typed into. [`HUMAN_PREFIX`] is the same word, named: `human:<user>` when
 //!   the request crossed the mesh under a credential (`adi_mesh`'s `FLEET_USER_HEADER`), which is
-//!   what tells one person's launches apart from another's once a fleet (`docs/fleet.md` §13) can
+//!   what tells one person's launches apart from another's once a fleet can
 //!   put more than one in the same session store. The bare word is still every local launch — a
 //!   machine paired with nobody, or a peer who verified with no username on the credential, is
 //!   only ever one person, and naming the only person it could be would be noise.

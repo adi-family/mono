@@ -10,7 +10,7 @@
 //! Deliberately smaller than [`crate::llm`]: no holds, no prober, and no migrate. There is nothing
 //! here rate-limited the way a chat subscription is — a `candle`/`hash` backend is local and free,
 //! and `ollama`/`openai` fail over per call through the registry's own chain rather than a
-//! background sweep. See `docs/embedding-backends.md`'s "why this is narrower than the LLM design."
+//! background sweep.
 
 use adi_core::Adi;
 use adi_core::embeddings::{
@@ -70,8 +70,8 @@ pub(crate) enum EmbeddingsCommand {
         #[arg(long = "api-key-env")]
         api_key_env: Option<String>,
         /// Repeatable: another backend id to fail over to if this one fails to build or answer.
-        /// Refused unless it declares the same model and width — see
-        /// `docs/embedding-backends.md`'s "the same-model failover rule."
+        /// Refused unless it declares the same model and width: failover never
+        /// switches models.
         #[arg(long = "fallback")]
         fallbacks: Vec<String>,
     },

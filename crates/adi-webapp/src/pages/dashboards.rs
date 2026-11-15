@@ -6,7 +6,7 @@
 //! points, are what actually tell you what a dashboard does. That is what this page surfaces.
 //!
 //! Every link out of this page goes to a dashboard's **host**, not to a port — see [`open_url`].
-//! A dashboard is one origin (`docs/fleet.md` §4), and only its host routes the `/api` prefix its
+//! A dashboard is one origin, and only its host routes the `/api` prefix its
 //! page calls.
 //!
 //! It is also where a dashboard leaves this machine: [`transfer_panel`] sends one to a paired node
@@ -159,7 +159,7 @@ fn template_picker(state: State, form: DashboardsForm) -> AnyView {
     .into_any()
 }
 
-// MARK: transferring a dashboard to a node (`docs/fleet.md` §10)
+// MARK: transferring a dashboard to a node
 
 /// The transfer panel: pick a node, say copy or move, type the node's password, send.
 ///
@@ -169,7 +169,7 @@ fn template_picker(state: State, form: DashboardsForm) -> AnyView {
 /// person wants to see beside each other before committing.
 ///
 /// The password field is deliberately empty every time. This machine keeps a *verifier* for each
-/// node's credential and not the credential (`docs/fleet.md` §8); nothing here is stored, so
+/// node's credential and not the credential; nothing here is stored, so
 /// nothing here can be pre-filled.
 fn transfer_panel(state: State, form: DashboardsForm) -> AnyView {
     view! {
@@ -597,7 +597,7 @@ fn cell(col: &str, d: &Dashboard, state: State) -> AnyView {
 
 /// Where to actually open a dashboard, or `None` when nothing is up to open.
 ///
-/// **Its host, whenever it has one** (`docs/fleet.md` §4). A dashboard is one origin: the page its
+/// **Its host, whenever it has one**. A dashboard is one origin: the page its
 /// frontend serves calls the backend at `/api` on that same host, and only the front door routes
 /// that prefix. So `http://127.0.0.1:<frontend port>` yields a page that loads and then 404s every
 /// request it makes — it is the fallback for a dashboard with no routable name, never the default.

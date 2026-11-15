@@ -112,7 +112,7 @@ impl ResolvedBackend {
 
     /// The env-var name whose value decides this row's credential, if any — `None` for a
     /// settings-file backend, whose credential lives in a file the layer cannot reach
-    /// (`docs/byo-credentials.md` §5, §15 Q7). This is the one name §6 means by "a user value
+    /// This is the one name meant by "a user value
     /// supplied the credential": the backend's own `api_key_env` when it names one, or the
     /// runtime's ambient login var when it names neither a settings file nor an `api_key_env`
     /// (the `runtime:<runtime>` form of [`credential()`](LlmBackendManifest::credential)). A row
@@ -130,7 +130,7 @@ impl ResolvedBackend {
     }
 
     /// [`hold_key`](Self::hold_key), qualified with `#user:<u>` when `user` supplied the
-    /// credential for this turn (`docs/byo-credentials.md` §6, P1.9); identical to
+    /// credential for this turn (P1.9); identical to
     /// [`hold_key`](Self::hold_key) for `None`, which is every turn before phase 2.
     #[must_use]
     pub fn hold_key_for(&self, user: Option<&str>) -> HoldKey {
@@ -428,7 +428,7 @@ impl PinnedChain {
     }
 }
 
-/// Append the user qualifier `docs/byo-credentials.md` §6 defines (`#user:<u>`) to a credential
+/// Append the user qualifier (`#user:<u>`) to a credential
 /// string when a user's value supplied it for this turn; unqualified otherwise. `#` appears in no
 /// [`credential()`](LlmBackendManifest::credential) form today, and `holds.db` stores the key as
 /// text, so no schema change is needed for it.
@@ -441,8 +441,7 @@ pub(crate) fn qualify_credential(credential: &str, user: Option<&str>) -> String
 
 /// Expand one backend id into the ordered **single** backends it ultimately answers through —
 /// itself, if it already is one; each of its members, expanded the same way in order, if it is a
-/// group. A group naming another group is composition, not an error: `docs/llm-backends.md`'s
-/// "Groups" section is where that is decided.
+/// group. A group naming another group is composition, not an error.
 ///
 /// `seen` is the chain of group ids from this row's own top-level backend down to here; a cycle
 /// among them is refused at save time ([`LlmBackends::save`](crate::llm::LlmBackends::save)), but

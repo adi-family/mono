@@ -8,7 +8,7 @@
 //! On a node it is fatal, and silently so: creating a dashboard scaffolds its files and derives
 //! its host, `GET /api/dashboards` lists it, and **nothing ever starts it**. The node looks
 //! healthy and serves a dead hostname. Since reaching a remote dashboard is the whole point of
-//! the fleet (`docs/fleet.md` §1, §4), the supervisor has to be something the platform installs,
+//! the fleet, the supervisor has to be something the platform installs,
 //! on every OS, like any other service.
 //!
 //! It is deliberately a *second* hive, not the front door:

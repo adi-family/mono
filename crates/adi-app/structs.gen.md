@@ -4,7 +4,7 @@
 
 > The adi app: a Rust HTTP backend serving a control-panel SPA at / and a JSON API at /api, fronted by adi-hive at app.adi.
 
-27 structs · 1 enum · 2 type aliases across 10 files.
+29 structs · 1 enum · 2 type aliases across 11 files.
 
 ## Index
 
@@ -14,6 +14,7 @@
 - [`src/main.rs`](#srcmainrs) — `App`, `MeshCtl`, `Reads`, `EmbeddedHit`
 - [`src/node.rs`](#srcnoders) — `CallError`, `Payload`
 - [`src/primary_ui.rs`](#srcprimary_uirs) — `PrimaryUi`, `Asset`
+- [`src/relay.rs`](#srcrelayrs) — `PulledRecord`, `SenderRequest`
 - [`src/scan.rs`](#srcscanrs) — `Proc`, `ProcessTable`
 - [`src/shared_assets.rs`](#srcshared_assetsrs) — `SharedAssets`
 - [`src/viewer.rs`](#srcviewerrs) — `Credential`, `Credentials`, `HeldCredentials`
@@ -37,7 +38,7 @@ type Posted = (String, String);
 
 ### struct `LeaseGranted`
 
-`adi.secrets.lease.granted` — a device's unlock installed a live lease (`docs/byo-credentials.md` §10, ADI-MONO-181 P2.8). Nothing in this process subscribes to it: a session parked on this user's lease resumes on the next `advance_queue` poll regardless, the same lazy clock every queued message already waits on — this is purely for the rail and anyone else watching.
+`adi.secrets.lease.granted` — a device's unlock installed a live lease (ADI-MONO-181 P2.8). Nothing in this process subscribes to it: a session parked on this user's lease resumes on the next `advance_queue` poll regardless, the same lazy clock every queued message already waits on — this is purely for the rail and anyone else watching.
 
 ```rust
 #[derive(Debug, Serialize)]
@@ -49,7 +50,7 @@ struct LeaseGranted<'a> {
 
 ### struct `LeaseRevoked`
 
-`adi.secrets.lease.revoked` — `mesh lock` or unpairing a user's last peer (`docs/byo-credentials.md` §10.1, ADI-MONO-181 P2.6).
+`adi.secrets.lease.revoked` — `mesh lock` or unpairing a user's last peer (ADI-MONO-181 P2.6).
 
 ```rust
 #[derive(Debug, Serialize)]
@@ -74,7 +75,7 @@ struct Lease {
 
 ### struct `LeaseTable`
 
-`adi-app`'s whole lease table: one `Lease` per user id (`docs/byo-credentials.md` §9 — "a user is one peer, so a second unlock from the same peer replaces the lease in place").
+`adi-app`'s whole lease table: one `Lease` per user id ("a user is one peer, so a second unlock from the same peer replaces the lease in place").
 
 ```rust
 #[derive(Default)]
@@ -96,7 +97,7 @@ struct LeaseSummary {
 
 ### struct `SessionInfo`
 
-`GET /api/leases/session` (§9 step 1): this boot's session public key and epoch, plus the id the caller's own lease (if they unlock one) will be filed under — so a device building its unlock's AAD (`docs/byo-credentials.md` §9 step 3) never has to already know its own minted id out of band; the server, which just resolved it from the caller's own authenticated identity, hands it over right here.
+`GET /api/leases/session` (§9 step 1): this boot's session public key and epoch, plus the id the caller's own lease (if they unlock one) will be filed under — so a device building its unlock's AAD never has to already know its own minted id out of band; the server, which just resolved it from the caller's own authenticated identity, hands it over right here.
 
 ```rust
 #[derive(Serialize)]
@@ -209,6 +210,7 @@ struct App {
     db: Db,
     tasks: Tasks,
     tools: Tools,
+    mcp: McpServers,
     agents: Agents,
     leases: Arc<leases::LeaseTable>,
     lease_session: adi_mesh::lease_seal::SessionKey,
@@ -303,6 +305,37 @@ pub(crate) struct PrimaryUi {
 pub(crate) struct Asset {
     pub(crate) relative: String,
     pub(crate) bytes: Vec<u8>,
+}
+```
+
+---
+
+## `src/relay.rs`
+
+### struct `PulledRecord`
+
+One record off `GET /v1/pull`, decoded from the wire.
+
+```rust
+#[derive(Debug, Clone)]
+struct PulledRecord {
+    id: i64,
+    endpoint_id: String,
+    sealed: Sealed,
+}
+```
+
+### struct `SenderRequest`
+
+The sealed envelope's own shape: the sender's request exactly as `/h/<endpoint-id>` captured it.
+
+```rust
+#[derive(Debug, serde::Deserialize)]
+struct SenderRequest {
+    method: String,
+    headers: HashMap<String, String>,
+    query: String,
+    body_b64: String,
 }
 ```
 

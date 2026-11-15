@@ -9,7 +9,7 @@
 //! v1 shipped exactly one kind of item, an app, which is a dashboard. Every marketplace item is
 //! now **a bundle** — a named collection of platform elements from one repository — and an app is
 //! the special case of a bundle whose only element is a dashboard, which is exactly what v1
-//! shipped, byte for byte (`docs/marketplace-bundles.md`). The wire shape barely moves: the array
+//! shipped, byte for byte. The wire shape barely moves: the array
 //! is renamed `bundles` (an old manifest's `apps` key is read as an alias for the same array, so
 //! nothing published for v1 needs to change), and one field is added, a preview of what a bundle
 //! carries.
@@ -130,9 +130,8 @@ pub struct BundleEntry {
     /// rather than fetched from the repository. It is advisory, not authoritative: what actually
     /// installs is read off the pinned commit's own tree at install time
     /// (`crate::layout::read_layout`), and a manifest that oversells or undersells what is there
-    /// is a per-element surprise at install, not a validation failure here
-    /// (`docs/marketplace-bundles.md` decision #2). Absent is legal — an old-shape publisher, or
-    /// one who has not written a preview yet — and installs exactly as the tree reads, without one.
+    /// is a per-element surprise at install, not a validation failure here.
+    /// Absent is legal — an old-shape publisher, or one who has not written a preview yet — and installs exactly as the tree reads, without one.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub elements: Vec<Element>,
 }
@@ -141,7 +140,8 @@ pub struct BundleEntry {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Element {
     /// One of `agent` | `tool` | `dashboard` | `llm` | `embedding` | `service` | `trigger` |
-    /// `project` — the manifest's own, singular spelling (`crate::kind::Kind::wire`). A word this
+    /// `project` | `template` | `mcp` — the manifest's own, singular spelling
+    /// (`crate::kind::Kind::wire`). A word this
     /// build does not recognise is not a validation failure: [`Element::kind`] reads back `None`,
     /// and [`BundleEntry::elements`] leaves it out of the preview.
     pub kind: String,
@@ -154,7 +154,7 @@ pub struct Element {
 }
 
 impl Element {
-    /// The kind this build understands `kind` as, or `None` for a word not among the eight.
+    /// The kind this build understands `kind` as, or `None` for a word not among the ten.
     #[must_use]
     pub fn kind(&self) -> Option<Kind> {
         Kind::from_wire(self.kind.trim())
@@ -479,7 +479,7 @@ pub fn parse(bytes: &[u8]) -> Result<MarketplaceManifest> {
         // "missing field `repo`" alone sends its publisher looking in the wrong place.
         let hint = if e.to_string().contains("repo") || e.to_string().contains("commit") {
             " — an app is a git repository at a pinned commit now: give each entry a `repo` and a \
-             full 40-hex `commit` (docs/marketplace.md)"
+             full 40-hex `commit`"
         } else {
             ""
         };

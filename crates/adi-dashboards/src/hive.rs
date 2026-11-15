@@ -134,7 +134,7 @@ pub const API_PATH: &str = "/api";
 const MAX_LABEL: usize = 63;
 
 /// Labels a dashboard may never take, because something else already answers there:
-/// `n` is the reserved mesh zone (`docs/fleet.md` §1, and adi-hive refuses to route `n.adi`),
+/// `n` is the reserved mesh zone (adi-hive refuses to route `n.adi`),
 /// `app` is the control panel, and the rest would shadow infrastructure or read as one.
 const RESERVED_LABELS: &[&str] = &["adi", "api", "app", "dns", "hive", "localhost", "n", "www"];
 
@@ -412,7 +412,7 @@ mod tests {
         dir
     }
 
-    /// The rule from `docs/fleet.md` §2: `^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`. Spelled out here
+    /// The petname rule: `^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`. Spelled out here
     /// rather than reused from the implementation, so the tests check the contract, not the code.
     fn is_dns_label(label: &str) -> bool {
         let bytes = label.as_bytes();

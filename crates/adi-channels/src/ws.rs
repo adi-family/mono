@@ -1,5 +1,5 @@
 //! A minimal RFC 6455 **client**: the opening handshake, and the frames the router protocol
-//! (`docs/channels.md` §2) actually uses — text one way, ping/pong/close both.
+//! actually uses — text one way, ping/pong/close both.
 //!
 //! Hand-rolled rather than pulling in a crate, the same call `adi-app/src/ws.rs` makes for the
 //! panel's live channel: this client speaks exactly the slice of the protocol its one server

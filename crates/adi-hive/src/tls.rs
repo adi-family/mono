@@ -211,7 +211,7 @@ fn san_list(hosts: &[String], mesh: Option<&[String]>) -> Vec<String> {
 /// [`MESH_ZONE_SAN`] is added alongside so a node's own apex is covered even before any service on
 /// it is named.
 ///
-/// **A service name deeper than one label needs an entry of its own.** `docs/fleet.md` §1 allows
+/// **A service name deeper than one label needs an entry of its own.** The fleet allows
 /// `app.nosh.<node>.n.adi`, and the same one-label rule that defeats `*.*.n.adi` defeats
 /// `*.<node>.n.adi` there. An entry may therefore carry dots — `nosh.laptop-b` mints
 /// `*.nosh.laptop-b.n.adi`, covering every service under that name — which is the manual escape

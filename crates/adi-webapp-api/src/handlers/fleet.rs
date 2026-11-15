@@ -2,7 +2,7 @@
 //!
 //! The fleet registry ([`adi_mesh::fleet`]) is the machine's answer to "who am I paired with, and
 //! what may they reach here?". This module is the only way the control panel sees it, which makes
-//! two properties of `docs/fleet.md` this module's job rather than the page's.
+//! two fleet properties this module's job rather than the page's.
 //!
 //! **Three names, never conflated (§2).** Every node goes out with all three: the `petname` this
 //! machine calls it (and routes `<service>.<petname>.n.adi` by), the `nickname` it calls itself,
@@ -25,15 +25,15 @@
 //! the side that can be dialled; [`fleet_join_token`] and [`fleet_joined`] are the two synchronous
 //! ends of spending one, for the side that dials. The dial itself is not here because it needs the
 //! endpoint the mesh daemon has already bound — `adi-app`'s `fleet_join` owns that, and calls
-//! these on either side of it (`docs/fleet.md` §8).
+//! these on either side of it.
 //!
 //! The store is passed in rather than opened here ([`FleetRegistry::load`] would reach for
 //! `~/.adi/mono` directly), which is what lets these run against a temp root under test and never
 //! touch the operator's real registry.
 //!
 //! Not here: the front door's `proxy.mesh_nodes` list, which decides whose `*.<petname>.n.adi`
-//! the next leaf certificate covers. That bookkeeping belongs to the pairing path (`docs/fleet.md`
-//! F2) and lives in `adi-core`, whose entry points read the real store unconditionally. So a
+//! the next leaf certificate covers. That bookkeeping belongs to the pairing path and lives in
+//! `adi-core`, whose entry points read the real store unconditionally. So a
 //! rename here re-points routing immediately and leaves HTTPS for the new name to the next
 //! front-door update — the same split F2 already describes for a fresh pairing.
 //!
@@ -86,7 +86,7 @@ pub fn fleet(store: &Config) -> Response {
 ///
 /// **Anything that can reach this panel can mint an invite, and that is deliberate.** The panel
 /// binds loopback locally; over the mesh it sits behind the node's password *and* an `http:app`
-/// grant, and `docs/fleet.md` §5 already argues the equivalent for grants — a peer that can ask
+/// grant, and the same argument holds for grants — a peer that can ask
 /// for a grant can already create a dashboard here and run a task on this machine, so refusing it
 /// an invite protects nothing it could not reach the long way round. A panel reached over the mesh
 /// may therefore mint; the gate is the grant that let it in, not a second one here.
@@ -326,7 +326,7 @@ pub fn fleet_rename(store: &Config, body: &[u8]) -> Response {
         registry
             .rename(&from, &to)
             .map_err(|e| error(400, &e.to_string()))?;
-        // `connections.toml` (`docs/byo-credentials.md` §4.3) is keyed by the same petname but
+        // `connections.toml` is keyed by the same petname but
         // lives in its own file, so the registry's own rename never moves it — run here, the one
         // coupling between the two files. Best-effort, like `unpair_and_forget_user`'s secrets
         // cleanup below: the rename itself already succeeded.
@@ -356,7 +356,7 @@ pub fn fleet_unpair(store: &Config, body: &[u8]) -> Response {
 }
 
 /// [`fleet_unpair`], calling `on_user_removed(user)` exactly when this unpair deleted a user's
-/// whole scope — the last peer sharing it (`docs/byo-credentials.md` §3.2) — so a caller that
+/// whole scope — the last peer sharing it — so a caller that
 /// actually holds a lease table and a runner (`adi-app`) can revoke it and stop every run on it
 /// (§10.1, ADI-MONO-181 P2.6). The plain [`fleet_unpair`] above is every other caller, including
 /// every existing test, which has nothing to act on that with.
@@ -374,7 +374,7 @@ pub fn fleet_unpair_revoking(store: &Config, body: &[u8], on_user_removed: impl 
 }
 
 /// [`FleetRegistry::unpair`], and — only when that was the **last** peer still carrying a user id
-/// here — delete `secrets/users/<id>/` (`docs/byo-credentials.md` §3, ADI-MONO-179) and call
+/// here — delete `secrets/users/<id>/` and call
 /// `on_user_removed` (ADI-MONO-181 P2.6's own hook; a no-op for every caller with nothing to
 /// revoke). The id is never reissued, so this is the one moment it is safe to delete what it
 /// names; a second peer still sharing the id (the partner sandbox's several devices pinned to one
@@ -397,8 +397,8 @@ fn unpair_and_forget_user(
             notify(user);
         }
     }
-    // This box's own `connections.toml` entry for `petname`, if any (`docs/byo-credentials.md`
-    // §4.3) — the other half of the coupling `move_connection` handles for a rename.
+    // This box's own `connections.toml` entry for `petname`, if any — the other half of the
+    // coupling `move_connection` handles for a rename.
     if let Ok(mut connections) = adi_mesh::connections::Connections::load_from(store) {
         if connections.remove(petname) {
             let _ = connections.save_to(store);
@@ -598,7 +598,7 @@ pub fn fleet_revoke(store: &Config, body: &[u8]) -> Response {
 
 /// `POST /api/fleet/instructions` — set or clear a node's standing agent instructions
 /// (`adi_mesh::fleet::NodeRecord::agent_instructions`), spliced into any conversation *it* opens
-/// here from now on (`docs/fleet.md` §13, ADI-MONO-13). An empty `instructions` clears it.
+/// here from now on. An empty `instructions` clears it.
 ///
 /// Frozen once per conversation, at the moment it is created, and never re-read afterwards (see
 /// `adi_agents::LaunchOptions::owner_instructions`) — so an edit here only ever reaches a

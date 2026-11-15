@@ -1,0 +1,33 @@
+# Fronts both relay containers on this machine, terminating TLS and routing by hostname.
+# __PUBLIC_HOST__/__ENT_HOST__ are filled in by scripts/deploy-webhook-relay-aws.sh at provision
+# time. The DNS A record for each hostname must already resolve to this box's Elastic IP before
+# this file is first loaded — ACME's http-01 challenge is answered on :80 by Caddy itself (same
+# ordering rule scripts/deploy-relay-aws.sh documents for the iroh relay).
+#
+# read_timeout 60s on each proxy transport, and the server-wide read_body/read_header timeouts
+# below, sit comfortably above the relay's own 25s `GET /v1/pull` long-poll — verified at deploy
+# time with a real long-poll round trip.
+{
+	servers {
+		timeouts {
+			read_body   30s
+			read_header 10s
+		}
+	}
+}
+
+__PUBLIC_HOST__ {
+	reverse_proxy relay-public:8080 {
+		transport http {
+			read_timeout 60s
+		}
+	}
+}
+
+__ENT_HOST__ {
+	reverse_proxy relay-enterprise:8080 {
+		transport http {
+			read_timeout 60s
+		}
+	}
+}

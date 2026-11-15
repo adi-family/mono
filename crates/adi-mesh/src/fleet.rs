@@ -1,6 +1,6 @@
 //! The fleet registry: the remote adi nodes this machine has paired with.
 //!
-//! # Three names, never conflated (docs/fleet.md §2)
+//! # Three names, never conflated
 //!
 //! * **key** — the node's [`EndpointId`]. The identity of record, global, unforgeable.
 //! * **nickname** — what the node calls *itself*. Only ever a *suggestion*.
@@ -18,7 +18,7 @@
 //! [`Pairing::NeedsPetname`] carrying a free suggestion (`<name>-2`, `-3`, …) rather than an
 //! `Err` the caller would be tempted to turn into a failed handshake.
 //!
-//! # Default-deny (docs/fleet.md §5)
+//! # Default-deny
 //!
 //! Each record carries the [`Grant`]s the peer holds *on this machine* and the Basic-auth
 //! [`Credential`] its requests must carry. **An empty grant list denies everything.** This is
@@ -147,7 +147,7 @@ impl Scope {
     }
 
     /// A scope over a **service name**, which is one or more labels: a node serves `app.nosh.adi`
-    /// beside `nosh.adi`, and `http:app.nosh` is the grant that names it (`docs/fleet.md` §5).
+    /// beside `nosh.adi`, and `http:app.nosh` is the grant that names it.
     /// A single label still parses, so every grant written before deep names existed still does.
     fn parse_service(raw: &str) -> anyhow::Result<Self> {
         Self::parse_with(
@@ -333,7 +333,7 @@ impl From<Grant> for String {
 /// What a paired peer may do on this machine, beyond what its [`Grant`]s already name.
 ///
 /// **Default [`Self::Admin`]**, so every record paired before this field existed — and every
-/// fresh pairing from an invite that does not say otherwise (`docs/fleet.md`'s existing
+/// fresh pairing from an invite that does not say otherwise (the existing
 /// behaviour, ADI-MONO-171 G1) — reads exactly as unrestricted as a peer always has been here.
 /// [`Self::Member`] is the new, narrower case: a peer `adi-app`'s dispatch refuses on the
 /// system/update/licence/mesh surfaces, on fleet writes other than granting itself an
@@ -421,7 +421,7 @@ pub struct NodeRecord {
     /// (a principal, a cabinet, a display name), not a grant.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub labels: BTreeMap<String, String>,
-    /// The user id this peer's credential belongs to (`docs/byo-credentials.md` §3, ADI-MONO-179)
+    /// The user id this peer's credential belongs to (ADI-MONO-179)
     /// — `Some` for a peer this server has minted or pinned a user for, `None` for the legacy
     /// default `adi` pairing and for a [`crate::join::record_viewer`] filing (the far side chose
     /// the username, so this machine never minted or pinned anything for it). Distinct from
@@ -583,7 +583,7 @@ impl fmt::Display for NicknameChange {
 pub struct FleetRegistry {
     /// Paired nodes by petname.
     pub nodes: BTreeMap<String, NodeRecord>,
-    /// Username → user id (`docs/byo-credentials.md` §3, ADI-MONO-179). The only place a
+    /// Username → user id (ADI-MONO-179). The only place a
     /// username is bound to an id: the mapping outlives any one [`NodeRecord`], so a username
     /// stays unique on this server and the id it names survives a re-pair and a later rename of
     /// the label, neither of which ever touches this map. See [`resolve_user`](Self::resolve_user).
@@ -948,7 +948,7 @@ impl FleetRegistry {
     /// partner sandbox's several devices under one `p<uid>`) shares the id the first one got, and
     /// a later rename of the label never moves it. `None` mints a fresh id and uses it as its own
     /// username too, which is what makes an unpinned peer its own user
-    /// (`docs/byo-credentials.md` §3, ADI-MONO-179).
+    /// (ADI-MONO-179).
     ///
     /// Called only by [`crate::join::decide`], before it touches the record: resolving the
     /// mapping has to happen before the username and id it decided can be written to one.
@@ -977,7 +977,7 @@ impl FleetRegistry {
 
 /// Characters a minted user id is drawn from: lowercase Crockford base32 — no `0`/`o`, `1`/`i`/`l`
 /// ambiguity — because `mesh join` prints this for a person to retype into a browser prompt
-/// (`adi-cli/src/mesh.rs:417`, `docs/byo-credentials.md` §3).
+/// (`adi-cli/src/mesh.rs:417`).
 const USER_ID_ALPHABET: &[u8] = b"0123456789abcdefghjkmnpqrstvwxyz";
 
 /// Characters in a minted user id's random part: 130 bits at 5 bits/char.
@@ -988,7 +988,7 @@ const USER_ID_CHARS: usize = 26;
 const USER_ID_BYTES: usize = 17;
 
 /// A fresh minted user id: `u-` followed by [`USER_ID_CHARS`] lowercase Crockford base32
-/// characters, 130 random bits (`docs/byo-credentials.md` §3).
+/// characters, 130 random bits.
 ///
 /// Random, not derived from the peer's key, its petname, or its username — a key-derived id would
 /// be the same on every server the peer pairs with and so link the user across fleets; a petname-

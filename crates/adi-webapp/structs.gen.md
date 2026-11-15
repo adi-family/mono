@@ -813,7 +813,7 @@ struct StoredRunSettings {
 
 ### struct `PickerOption`
 
-One option `chat_agent_picker` offers: an agent, and which of the rail's currently-selected sources it came from (`docs/fleet.md` §13, multi-select) — `None` for this machine.
+One option `chat_agent_picker` offers: an agent, and which of the rail's currently-selected sources it came from (multi-select) — `None` for this machine.
 
 ```rust
 struct PickerOption {
@@ -824,7 +824,7 @@ struct PickerOption {
 
 ### struct `SessionRow`
 
-One row of the rail. The list spans every agent *and every selected source*, so a row has to carry both which agent it belongs to and which machine that agent is on — there is no group heading above it to say either (`docs/fleet.md` §13, multi-select).
+One row of the rail. The list spans every agent *and every selected source*, so a row has to carry both which agent it belongs to and which machine that agent is on — there is no group heading above it to say either (multi-select).
 
 ```rust
 #[derive(Clone, PartialEq, Eq)]
@@ -2041,7 +2041,7 @@ pub(crate) struct ProjectsForm {
 
 ### struct `TasksForm`
 
-The Tasks page's local signals: the create-form inputs (title, optional project/parent/tag, optional details) and a busy flag. A tag matching an agent name is the future dispatch hook (see docs/adi-agents.md). `Copy` so it threads into the page view and handlers.
+The Tasks page's local signals: the create-form inputs (title, optional project/parent/tag, optional details) and a busy flag. A tag matching an agent name is the future dispatch hook. `Copy` so it threads into the page view and handlers.
 
 ```rust
 #[derive(Clone, Copy)]
@@ -2248,6 +2248,8 @@ pub(crate) struct AgentsForm {
     pub(crate) dispatch: RwSignal<bool>,
     pub(crate) can_spawn: RwSignal<Vec<String>>,
     pub(crate) can_spawn_draft: RwSignal<String>,
+    pub(crate) mcp: RwSignal<Vec<String>>,
+    pub(crate) mcp_draft: RwSignal<String>,
     pub(crate) spawn_grant_draft: RwSignal<String>,
     pub(crate) knowledge_bases: RwSignal<Option<Vec<KnowledgeBaseDto>>>,
     pub(crate) prelude: RwSignal<String>,
@@ -2300,6 +2302,7 @@ pub(crate) struct TriggersForm {
     pub(crate) trigger_on: RwSignal<Vec<String>>,
     pub(crate) editing: RwSignal<Option<String>>,
     pub(crate) busy: RwSignal<bool>,
+    pub(crate) relay_key: RwSignal<Option<String>>,
 }
 ```
 
@@ -2532,7 +2535,7 @@ pub(crate) struct EmbeddingsConsole {
 
 ### struct `ChannelsConsole`
 
-Everything the Channels page holds that isn't on the server: the connection list, the router-connection status pill's own data, and the Connect dialog's form (`docs/channels.md` §7). Page-local, like `EmbeddingsConsole` beside it and for the same reason — nothing here rides the shell's 4s poll, so it is fetched once when the page opens.
+Everything the Channels page holds that isn't on the server: the connection list, the router-connection status pill's own data, and the Connect dialog's form. Page-local, like `EmbeddingsConsole` beside it and for the same reason — nothing here rides the shell's 4s poll, so it is fetched once when the page opens.
 
 ```rust
 #[derive(Clone, Copy)]
@@ -2611,7 +2614,7 @@ pub(crate) struct Flash {
 
 ### struct `LastAgent`
 
-What the picker round-trips through `localStorage`: the agent's own name, and which source it was on (`docs/fleet.md` §13) — `None` for this machine.
+What the picker round-trips through `localStorage`: the agent's own name, and which source it was on — `None` for this machine.
 
 ```rust
 #[derive(serde::Serialize, serde::Deserialize)]

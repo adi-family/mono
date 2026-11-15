@@ -5,7 +5,7 @@
 ROUTER_SECRET="dev-only-change-me"
 
 # Optional operator path for POST /register (ADI-MONO-125: registration is open to any node now,
-# rate-limited and capped instead of gated -- see docs/channels.md §1/§8). A node holding this
+# rate-limited and capped instead of gated). A node holding this
 # skips both limits; it is not browser-facing. `openssl rand -hex 32`.
 ROUTER_ADMIN_SECRET="dev-only-change-me-too"
 

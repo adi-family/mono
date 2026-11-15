@@ -1,0 +1,47 @@
+---
+// Starlight's default Head, plus the JSON-LD this site needs: a site-wide WebSite + Organization
+// (the same `@id`s withadi.dev's own homepage JSON-LD uses, so the two sites describe one
+// Organization rather than two) and a per-page TechArticle. Starlight's static `head` config
+// option can't see per-page data (title, description, lastUpdated), so this has to be a
+// component override rather than a `head` entry — see astro.config.mjs.
+const { head, entry, lastUpdated } = Astro.locals.starlightRoute;
+
+const organization = {
+	'@type': 'Organization',
+	'@id': 'https://withadi.dev/#organization',
+	name: 'ADI',
+	legalName: 'With ADI, Inc.',
+	url: 'https://withadi.dev/',
+	sameAs: ['https://github.com/adi-family'],
+};
+
+const website = {
+	'@type': 'WebSite',
+	'@id': 'https://docs.withadi.dev/#website',
+	name: 'ADI Docs',
+	url: 'https://docs.withadi.dev/',
+	publisher: { '@id': 'https://withadi.dev/#organization' },
+};
+
+const pageUrl = Astro.site ? new URL(Astro.url.pathname, Astro.site).href : undefined;
+
+const article = pageUrl && {
+	'@type': 'TechArticle',
+	headline: entry.data.title,
+	...(entry.data.description ? { description: entry.data.description } : {}),
+	url: pageUrl,
+	...(lastUpdated ? { dateModified: lastUpdated.toISOString() } : {}),
+	publisher: { '@id': 'https://withadi.dev/#organization' },
+};
+
+const jsonLd = {
+	'@context': 'https://schema.org',
+	'@graph': [organization, website, ...(article ? [article] : [])],
+};
+
+// `<` escaped so a description containing `</script>` can't break out of the JSON-LD block.
+const jsonLdHtml = JSON.stringify(jsonLd).replace(/</g, '\\u003c');
+---
+
+{head.map(({ tag: Tag, attrs, content }) => <Tag {...attrs} set:html={content} />)}
+<script type="application/ld+json" set:html={jsonLdHtml} is:inline />

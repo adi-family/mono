@@ -26,7 +26,7 @@
 //! ([`adi_events`](crate::backends::adi_events)). This runner then reads them back exactly as
 //! [`DetachedRunner`](super::detached::DetachedRunner) reads the adi loop's.
 //!
-//! That is the same exception `docs/agent-runner.md` already carves out for the adi loop: every
+//! That is the same exception the runner already carves out for the adi loop: every
 //! other engine answers a turn in a child the runner spawned and watches, while the adi loop *is*
 //! that child. Here the browser is.
 
@@ -244,6 +244,7 @@ mod tests {
             knowledge_note: None,
             spawn_note: None,
             marker_note: None,
+            mcp_servers: Vec::new(),
         }
     }
 

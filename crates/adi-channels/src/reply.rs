@@ -1,5 +1,5 @@
 //! The node's own small local endpoint behind the `channel-reply` tool
-//! (`docs/channels.md` §5): look up the connection a run id maps to, then `POST /send` on the
+//! look up the connection a run id maps to, then `POST /send` on the
 //! router. Mirrors `Report`'s shape — announce something mid-turn — without the harness's
 //! suspend/resume machinery, because a channel post, unlike a question, never blocks the turn.
 

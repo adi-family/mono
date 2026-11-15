@@ -18,7 +18,7 @@
 #
 # ## The invite is single-use
 #
-# Each run mints a new one on `adi-demo` (`docs/fleet.md` §8 — the node mints, the phone spends),
+# Each run mints a new one on `adi-demo` (the node mints, the phone spends),
 # because a spent nonce is refused and the run would then photograph an empty fleet and pass.
 set -euo pipefail
 
@@ -86,7 +86,7 @@ log "running the harness (this drives the app and pairs for real)"
 # In the background, because the pairing needs BOTH sides and this script is the other one: the app
 # mints an invite and copies it, and nothing will spend it unless something outside the test does.
 # `mesh join` then runs on the machine, which dials the phone back — the app's default direction,
-# and `docs/fleet.md` §8's first row.
+# and the first row of the pairing table.
 xcodebuild test \
   -project "$here/AdiFleet.xcodeproj" \
   -scheme AdiFleetShots \
