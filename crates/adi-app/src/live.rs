@@ -64,6 +64,7 @@ fn watchable(method: &str, path: &str) -> Option<Duration> {
             | "/api/hive"
             | "/api/llm/backends"
             | "/api/marketplace"
+            | "/api/mcp"
             | "/api/mesh"
             | "/api/meta"
             | "/api/ports"

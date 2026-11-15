@@ -31,6 +31,7 @@ use adi_agents::Agents;
 use adi_db::Db;
 use adi_events::Events;
 use adi_knowledge::KnowledgeStore;
+use adi_mcp::McpServers;
 use adi_mesh::{Daemon, join};
 use adi_ports_manager::Ports;
 use adi_projects::Projects;
@@ -54,6 +55,7 @@ struct App {
     db: Db,
     tasks: Tasks,
     tools: Tools,
+    mcp: McpServers,
     agents: Agents,
     /// The BYO-credentials lease table and this boot's session key (ADI-MONO-180
     /// P2.3) — the same `Arc` `agents` was opened with via
@@ -219,6 +221,7 @@ async fn main() -> anyhow::Result<()> {
     let secrets = Secrets::open();
     let tasks = Tasks::open();
     let tools = Tools::open();
+    let mcp = McpServers::open();
     // Tool seeding is best-effort so a store error cannot prevent startup.
     if let Err(e) = tools
         .seed_system()
@@ -322,6 +325,7 @@ async fn main() -> anyhow::Result<()> {
         db,
         tasks,
         tools,
+        mcp,
         agents,
         leases,
         lease_session,
@@ -581,6 +585,7 @@ const SHARED_GETS: &[&str] = &[
     "/api/hive",
     "/api/knowledge",
     "/api/llm/backends",
+    "/api/mcp",
     "/api/meta",
     "/api/ports",
     "/api/ports/used",
@@ -767,6 +772,7 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         db,
         tasks,
         tools,
+        mcp,
         agents,
         leases,
         lease_session,
@@ -916,6 +922,10 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/tools/script/read") => handlers::read_tool_script(tools, &req.body),
         ("POST", "/api/tools/script/write") => handlers::write_tool_script(tools, &req.body),
         ("POST", "/api/tools/run") => handlers::run_tool(tools, projects, &req.body),
+
+        ("GET", "/api/mcp") => handlers::mcp_servers(mcp),
+        ("POST", "/api/mcp/save") => handlers::save_mcp_server(mcp, &req.body),
+        ("POST", "/api/mcp/remove") => handlers::remove_mcp_server(mcp, &req.body),
 
         // `query` uses a read-only connection; writes go through `exec`.
         ("GET", "/api/db") => handlers::db_state(db),

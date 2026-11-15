@@ -33,6 +33,7 @@ adi-db = { workspace = true }
 adi-tasks = { workspace = true }
 
 adi-tools = { workspace = true }
+adi-mcp = { workspace = true }
 
 adi-agents = { workspace = true }
 

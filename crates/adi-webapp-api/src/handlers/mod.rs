@@ -36,6 +36,7 @@ mod llm;
 /// The registry of LLM backends an agent may answer on, and the shared record of which are spent.
 mod llm_backends;
 mod marketplace;
+mod mcp;
 mod mesh;
 mod meta;
 mod ports;
@@ -75,6 +76,7 @@ pub use knowledge::*;
 pub use llm::*;
 pub use llm_backends::*;
 pub use marketplace::*;
+pub use mcp::*;
 pub use mesh::*;
 pub use meta::*;
 pub use ports::*;

@@ -1278,6 +1278,91 @@ pub struct ToolRunResult {
     pub state: ToolsState,
 }
 
+// ---- mcp (MCP server definitions under ~/.adi/mono/mcp) -----------------------------
+
+/// One header/env value: written out in full, or naming a secret to resolve at launch instead —
+/// the wire mirror of `adi_mcp::Value`. `#[serde(untagged)]` tells the two apart by shape: a bare
+/// string is a literal, a one-field object naming `secret` is a reference.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum McpValueDto {
+    Literal(String),
+    Secret { secret: String },
+}
+
+/// How an MCP server is reached — the wire mirror of `adi_mcp::Transport`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum McpTransportDto {
+    Http {
+        url: String,
+        #[serde(default)]
+        headers: BTreeMap<String, McpValueDto>,
+    },
+    Stdio {
+        command: String,
+        #[serde(default)]
+        args: Vec<String>,
+        #[serde(default)]
+        env: BTreeMap<String, McpValueDto>,
+    },
+}
+
+/// One registered MCP server definition, as `GET /api/mcp` and every mutation below answer it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpServerDto {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// The project this server is filed under (its id), or `None` for a global server.
+    #[serde(default)]
+    pub project: Option<String>,
+    pub transport: McpTransportDto,
+    /// Every secret name this definition's headers/env declare (never a value) — what
+    /// `agents save --mcp` is really attaching, and what an agent still needs attached for the
+    /// server to actually authenticate.
+    #[serde(default)]
+    pub required_secrets: Vec<String>,
+    /// The subset of `required_secrets` this machine has no value for at all, global or this
+    /// server's own project scope — not whether any particular agent has it *attached*, which is
+    /// a question about the agent, not the server. What the installer/editor tells the operator
+    /// is still missing.
+    #[serde(default)]
+    pub missing_secrets: Vec<String>,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
+/// `GET /api/mcp` — every registered server. Each mutation below returns a fresh one, so the
+/// client refreshes from one round-trip.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpServersState {
+    pub servers: Vec<McpServerDto>,
+}
+
+/// `POST /api/mcp/save` — create or replace a server definition, the whole object at once (the
+/// same shape `SaveEmbeddingBackend` and `llm backends save` already use: a handful of fields,
+/// where an omit-to-keep save would be how a header quietly disappears).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SaveMcpServer {
+    pub id: String,
+    /// Defaults to `id` when blank.
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub project: Option<String>,
+    pub transport: McpTransportDto,
+}
+
+/// Request body naming a server — `POST /api/mcp/remove`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpServerRef {
+    pub id: String,
+}
+
 // ---- agents (AgentDef definitions under ~/.adi/mono/agents) --------------------------
 
 /// UI/schema metadata for the Agents create/edit form. The backend owns this so adding a

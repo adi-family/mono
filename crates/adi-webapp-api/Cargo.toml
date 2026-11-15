@@ -34,6 +34,7 @@ server = [
     "dep:adi-db",
     "dep:adi-tasks",
     "dep:adi-tools",
+    "dep:adi-mcp",
     "dep:adi-agents",
     # The node side of Channels: the connection store, dispatch, and the
     # router client the /api/channels/* handlers operate on.
@@ -112,6 +113,7 @@ adi-secrets = { workspace = true, optional = true }
 adi-db = { workspace = true, optional = true }
 adi-tasks = { workspace = true, optional = true }
 adi-tools = { workspace = true, optional = true }
+adi-mcp = { workspace = true, optional = true }
 adi-agents = { workspace = true, optional = true }
 adi-channels = { workspace = true, optional = true }
 adi-knowledge = { workspace = true, optional = true }

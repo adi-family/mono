@@ -210,6 +210,7 @@ struct App {
     db: Db,
     tasks: Tasks,
     tools: Tools,
+    mcp: McpServers,
     agents: Agents,
     leases: Arc<leases::LeaseTable>,
     lease_session: adi_mesh::lease_seal::SessionKey,
