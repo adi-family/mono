@@ -33,6 +33,7 @@ default-members = [
     "crates/adi-launcher",
     "crates/adi-llm-gateway",
     "crates/adi-marketplace",
+    "crates/adi-mcp",
     "crates/adi-mesh",
     "crates/adi-mesh-ffi",
     "crates/adi-ports-manager",
@@ -79,6 +80,7 @@ adi-channels = { path = "crates/adi-channels" }
 adi-config = { path = "crates/adi-config" }
 adi-dashboards = { path = "crates/adi-dashboards" }
 adi-marketplace = { path = "crates/adi-marketplace" }
+adi-mcp = { path = "crates/adi-mcp" }
 adi-core = { path = "crates/adi-core" }
 adi-css = { path = "crates/adi-css" }
 adi-db = { path = "crates/adi-db" }
