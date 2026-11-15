@@ -41,6 +41,7 @@ base64 = { workspace = true }
 adi-knowledge = { path = "../adi-knowledge", default-features = false }
 # A run inherits its agent's resolved secrets (global + the agent's project) as env vars.
 adi-secrets = { workspace = true }
+adi-mcp = { workspace = true }
 # The `harness:adi` tool loop's Grep runs a real regular expression, and its Glob/Grep walk a tree.
 regex = { workspace = true }
 # Sessions, turns, and queued messages live in `<sessions>/sessions.db` rather than in a file per

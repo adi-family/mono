@@ -1774,6 +1774,8 @@ pub struct AgentDto {
     pub project: Option<String>,
     #[serde(default)]
     pub bin_tools: Vec<String>,
+    #[serde(default)]
+    pub mcp: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub prelude: Vec<String>,
     #[serde(default)]
@@ -1963,6 +1965,8 @@ pub struct SaveAgent {
     pub project: Option<String>,
     #[serde(default)]
     pub bin_tools: Option<Vec<String>>,
+    #[serde(default)]
+    pub mcp: Option<Vec<String>>,
     #[serde(default)]
     pub prelude: Option<Vec<String>>,
     #[serde(default)]

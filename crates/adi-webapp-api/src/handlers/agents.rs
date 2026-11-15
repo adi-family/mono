@@ -2242,6 +2242,16 @@ pub fn save_agent(store: &Agents, body: &[u8], sender: Option<FleetSender<'_>>) 
                 .map(|m| m.bin_tools.clone())
                 .unwrap_or_default(),
         },
+        // The MCP servers given to this agent's runs. Omit-to-keep, for the same reason
+        // `bin_tools` is: a save from a form with no such field must not detach them all.
+        mcp: match req.mcp {
+            Some(ids) => ids
+                .into_iter()
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .collect(),
+            None => stored.as_ref().map(|m| m.mcp.clone()).unwrap_or_default(),
+        },
         // The commands each run pre-executes before its first message. Omit-to-keep, as above —
         // and blank lines are dropped here so an empty line left in a textarea cannot become a
         // command that runs the shell's idea of nothing on every launch.
@@ -2648,6 +2658,7 @@ fn agent_dto(
         starred: m.starred,
         project: m.project,
         bin_tools: m.bin_tools,
+        mcp: m.mcp,
         prelude: m.prelude,
         knowledge: m.knowledge,
         memory: m.memory,

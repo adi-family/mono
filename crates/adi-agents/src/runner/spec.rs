@@ -95,4 +95,10 @@ pub struct RunSpec {
     /// is one it has to infer from an English word, and the one it infers wrongest is the one that
     /// says a message came from somebody other than the person it has been talking to.
     pub marker_note: Option<String>,
+    /// This agent's declared MCP servers ([`crate::AgentManifest::mcp`]), already resolved against
+    /// its own attached secrets — never a reference, a value, because by the time it is in a
+    /// `RunSpec` it is as trusted as anything else in [`env`](Self::env). A backend that speaks
+    /// MCP reads this to build its own `--mcp-config`; one that does not refuses to launch at all
+    /// rather than launch with the servers silently missing (`Runner::check`).
+    pub mcp_servers: Vec<crate::mcp_servers::ResolvedMcpServer>,
 }

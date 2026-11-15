@@ -1493,6 +1493,11 @@ pub struct AgentDto {
     /// `--allowed-tools` in `arguments.tools`.
     #[serde(default)]
     pub bin_tools: Vec<String>,
+    /// The ids of the `adi-mcp` **MCP server** definitions given to this agent's runs, beside
+    /// ADI's own per-conversation server (`adi_agents::backends::mcp`) — see `adi-mcp`'s crate
+    /// docs for the definition's own shape.
+    #[serde(default)]
+    pub mcp: Vec<String>,
     /// Shell commands really run before this agent's first message reaches the model, in order —
     /// its standing orientation read. Same shell, directory, `PATH` and environment as the agent's
     /// own `Bash`; the real output is carried into the opening message, framed as the tool calls
@@ -1747,6 +1752,11 @@ pub struct SaveAgent {
     /// saying nothing. Send an empty list to actually clear.
     #[serde(default)]
     pub bin_tools: Option<Vec<String>>,
+    /// The ids of the `adi-mcp` **MCP server** definitions given to this agent's runs, beside
+    /// ADI's own per-conversation server (see [`AgentDto::mcp`]). **Omit to keep whatever the
+    /// agent already has**, for the same reason as `bin_tools`; send an empty list to clear.
+    #[serde(default)]
+    pub mcp: Option<Vec<String>>,
     /// The commands every run of this agent really runs before its first message reaches the model
     /// (see [`AgentDto::prelude`]). **Omit to keep whatever the agent already has**, for the same
     /// reason as `bin_tools`; send an empty list to clear.

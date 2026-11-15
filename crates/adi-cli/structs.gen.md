@@ -94,6 +94,10 @@ pub(crate) enum AgentsCommand {
         tools: Vec<String>,
         #[arg(long, conflicts_with = "tools")]
         no_tool: bool,
+        #[arg(long = "mcp")]
+        mcp_servers: Vec<String>,
+        #[arg(long, conflicts_with = "mcp_servers")]
+        no_mcp: bool,
         #[arg(long = "secret")]
         secrets: Vec<String>,
         #[arg(long, conflicts_with = "secrets")]

@@ -90,7 +90,37 @@ pub(crate) fn config(spec: &RunSpec, session: &dyn Session) -> String {
     });
     let mut servers = serde_json::Map::new();
     servers.insert(SERVER.to_string(), server);
+    // The agent's own declared servers, each under its own id — resolved already (see
+    // `crate::mcp_servers`), so this is only ever a reshape into the CLI's own JSON, never a
+    // secret lookup. `--strict-mcp-config` (always alongside this, see `push_mcp_config`) is what
+    // keeps the run from also loading whatever else is configured on this machine.
+    for resolved in &spec.mcp_servers {
+        servers.insert(resolved.id.clone(), server_json(resolved));
+    }
     serde_json::json!({ "mcpServers": servers }).to_string()
+}
+
+/// One resolved server, in the shape `claude mcp add` itself writes — confirmed against a real
+/// `claude mcp add --transport http …` / `claude mcp add -- …` run, not guessed from the schema
+/// docs alone: `{"type":"http","url":…,"headers":{…}}` or `{"type":"stdio","command":…,"args":…,
+/// "env":…}`. ADI's own server above omits `"type"` (stdio is the CLI's own default); a server
+/// built from a definition says it anyway, since a reader comparing the two should not have to
+/// know that rule to see they agree.
+fn server_json(resolved: &crate::mcp_servers::ResolvedMcpServer) -> Value {
+    use crate::mcp_servers::ResolvedTransport;
+    match &resolved.transport {
+        ResolvedTransport::Http { url, headers } => json!({
+            "type": "http",
+            "url": url,
+            "headers": headers,
+        }),
+        ResolvedTransport::Stdio { command, args, env } => json!({
+            "type": "stdio",
+            "command": command,
+            "args": args,
+            "env": env,
+        }),
+    }
 }
 
 /// The engine's own shell, which no run ever gets. Ours replaces it — see the module docs for why
@@ -105,6 +135,29 @@ pub(crate) fn config(spec: &RunSpec, session: &dyn Session) -> String {
 /// still gets it ours. It is not a preference: a second shell would be a second conversation state,
 /// and the one thing this whole arrangement exists to guarantee is that there is exactly one.
 pub(crate) const ENGINE_SHELL_TOOLS: &[&str] = &["Bash", "BashOutput", "KillShell"];
+
+/// Refuse a launch outright when an agent declared MCP servers ([`crate::AgentManifest::mcp`])
+/// but `backend` has no way to speak MCP to its engine at all. The field's own promise is that a
+/// backend this crate does not wire up for it never just drops the servers silently — this is
+/// where that promise is kept, for the two backends with no engine-side MCP door at all
+/// (`harness:adi`, whose loop calls its own tools directly and never runs an engine CLI to hand
+/// a config to; `pty:codex`, a live terminal with no headless config flag reachable from here).
+///
+/// # Errors
+/// [`Error::Launch`] naming `backend` and the servers it cannot reach, when `servers` is
+/// non-empty. Never refuses an agent that declared none.
+pub(crate) fn refuse_unless_supported(
+    backend: &crate::backend::Backend,
+    servers: &[crate::mcp_servers::ResolvedMcpServer],
+) -> Result<()> {
+    if servers.is_empty() {
+        return Ok(());
+    }
+    Err(Error::Launch(format!(
+        "{backend} has no MCP support: it cannot be given the MCP server(s) this agent declares          ({}). Run it on harness:claude-sdk, pty:claude, process:claude, or process:codex          instead, or detach the servers with `agents save --no-mcp`",
+        servers.iter().map(|s| s.id.as_str()).collect::<Vec<_>>().join(", "),
+    )))
+}
 
 /// One run's tool surface: what exists, and what it may use without stopping to ask.
 ///
@@ -167,6 +220,31 @@ pub(crate) fn scope_tools(allowed: Option<&str>) -> ToolScope {
     ToolScope {
         builtins: builtins.join(","),
         allowed: grants.join(","),
+    }
+}
+
+/// Extend a run's tool scope with its own declared MCP servers, each granted whole
+/// (`mcp__<id>`) — the same unconditional, ungated grant [`scope_tools`] already gives this run's
+/// own server. Separate from `scope_tools` rather than folded into it, so every test exercising
+/// the built-in scope alone (by far most of them) is untouched by an agent that also happens to
+/// declare MCP servers; a caller that launches an engine actually reaches this.
+///
+/// Granted whole rather than per-tool, on the same reasoning `mcp__adi` already rests on: naming
+/// a server here is naming it as a whole capability, and `tools/list` is how the model learns
+/// what it can call on it — a second, finer-grained allowlist of individual `mcp__<id>__<tool>`
+/// names would be a thing nothing here can derive without first asking the server.
+pub(crate) fn grant_servers(scope: &mut ToolScope, servers: &[crate::mcp_servers::ResolvedMcpServer]) {
+    for resolved in servers {
+        let grant = format!("mcp__{}", resolved.id);
+        if scope.allowed.split(',').any(|g| g == grant) {
+            continue;
+        }
+        if scope.allowed.is_empty() {
+            scope.allowed = grant;
+        } else {
+            scope.allowed.push(',');
+            scope.allowed.push_str(&grant);
+        }
     }
 }
 

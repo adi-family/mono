@@ -455,6 +455,7 @@ fn codex_argv(model: &str, prompt: &str) -> Vec<String> {
         prompt,
         None,
         &crate::backends::process::codex::Continuation::First,
+        &[],
     )
 }
 

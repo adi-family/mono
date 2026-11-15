@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-158 structs · 43 enums · 5 type aliases across 61 files.
+159 structs · 44 enums · 5 type aliases across 62 files.
 
 ## Index
 
@@ -43,6 +43,7 @@
 - [`src/llm/prober.rs`](#srcllmproberrs) — `Verdict`, `Checked`, `Prober`, `Outcome`
 - [`src/llm/settings.rs`](#srcllmsettingsrs) — `LlmSettings`
 - [`src/marker.rs`](#srcmarkerrs) — `Woke`, `Settled`, `Marker`
+- [`src/mcp_servers.rs`](#srcmcp_serversrs) — `ResolvedMcpServer`, `ResolvedTransport`
 - [`src/memo.rs`](#srcmemors) — `Stamp`, `Entry`, `Memo`
 - [`src/migrations.rs`](#srcmigrationsrs) — `Step`, `Pending`, `Plan`, `Applied`
 - [`src/overrides.rs`](#srcoverridesrs) — `RunOverrides`
@@ -123,6 +124,8 @@ pub struct AgentManifest<Args> {
     pub project: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bin_tools: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub prelude: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2236,6 +2239,41 @@ pub enum Marker {
 
 ---
 
+## `src/mcp_servers.rs`
+
+### struct `ResolvedMcpServer`
+
+One declared server, resolved: every header/env value is a plain string now, because the value never has to outlive this run's own config — unlike the definition it came from, which never stores one.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedMcpServer {
+    pub id: String,
+    pub transport: ResolvedTransport,
+}
+```
+
+### enum `ResolvedTransport`
+
+`adi_mcp::Transport`, with every `Value` resolved to the string it stands for.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolvedTransport {
+    Http {
+        url: String,
+        headers: BTreeMap<String, String>,
+    },
+    Stdio {
+        command: String,
+        args: Vec<String>,
+        env: BTreeMap<String, String>,
+    },
+}
+```
+
+---
+
 ## `src/memo.rs`
 
 ### struct `Stamp`
@@ -2991,6 +3029,7 @@ pub struct RunSpec {
     pub knowledge_note: Option<String>,
     pub spawn_note: Option<String>,
     pub marker_note: Option<String>,
+    pub mcp_servers: Vec<crate::mcp_servers::ResolvedMcpServer>,
 }
 ```
 

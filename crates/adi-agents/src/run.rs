@@ -238,6 +238,7 @@ pub fn is_runnable(manifest: &StoredAgentManifest) -> bool {
             knowledge_note: None,
             spawn_note: None,
             marker_note: None,
+            mcp_servers: Vec::new(),
         })
         .is_ok()
 }
@@ -388,6 +389,7 @@ mod tests {
                 knowledge_note: None,
                 spawn_note: None,
                 marker_note: None,
+                mcp_servers: Vec::new(),
             }),
             Err(Error::NotRunnable(backend)) if backend == "harness:adi"
         ));

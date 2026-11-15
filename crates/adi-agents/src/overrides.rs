@@ -159,6 +159,7 @@ mod tests {
                 starred: false,
                 project: None,
                 bin_tools: Vec::new(),
+                mcp: Vec::new(),
                 prelude: Vec::new(),
                 knowledge: Vec::new(),
                 memory: false,

@@ -9,6 +9,7 @@ dependencies = [
  "adi-config",
  "adi-events",
  "adi-knowledge",
+ "adi-mcp",
  "adi-osext",
  "adi-pty",
  "adi-secrets",

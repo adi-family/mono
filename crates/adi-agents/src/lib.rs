@@ -45,6 +45,7 @@ mod lease;
 mod limits;
 pub mod llm;
 pub mod marker;
+mod mcp_servers;
 mod memo;
 pub mod migrations;
 pub mod overrides;
@@ -2891,6 +2892,7 @@ impl Agents {
             Some(knowledge::block(&knowledge)).filter(|note| !note.trim().is_empty());
         let spawn_note =
             Some(spawn::block(&agent.manifest.can_spawn)).filter(|note| !note.trim().is_empty());
+        let mcp_servers = mcp_servers::resolve(&self.config, &agent.manifest.mcp, &agent.manifest.secrets);
         RunSpec {
             credential: None,
             cwd,
@@ -2911,6 +2913,7 @@ impl Agents {
             // Every run, not only the ones that can be woken: a pre-run block is stamped for all of
             // them, and a section naming all five costs less than one run misreading one of them.
             marker_note: Some(crate::marker::block()),
+            mcp_servers,
         }
     }
 
@@ -7530,6 +7533,7 @@ mod tests {
             knowledge_note: None,
             spawn_note: None,
             marker_note: None,
+            mcp_servers: Vec::new(),
         }
     }
 
