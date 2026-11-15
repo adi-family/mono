@@ -444,7 +444,7 @@ mod tests {
         let config: Value = serde_json::from_str(&claude[at + 1]).expect("mcp config is json");
         assert_eq!(
             config["mcpServers"][crate::backends::mcp::SERVER]["args"][0],
-            "mcp"
+            "mcp-serve"
         );
         assert!(
             claude.iter().any(|arg| arg == "--strict-mcp-config"),

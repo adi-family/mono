@@ -166,6 +166,7 @@ dependencies = [
  "adi-hive",
  "adi-hooks",
  "adi-knowledge",
+ "adi-mcp",
  "adi-ports-manager",
  "adi-projects",
  "adi-secrets",

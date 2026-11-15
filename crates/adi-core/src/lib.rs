@@ -110,6 +110,11 @@ pub use adi_tools::{
 
 pub use tools::{ToolRenamed, rename_tool};
 
+pub use adi_mcp::{
+    Error as McpError, Manifest as McpManifest, McpServer, McpServers, Transport as McpTransport,
+    Value as McpValue,
+};
+
 pub use adi_events::{
     ENVELOPE as EVENT_ENVELOPE, Error as EventsError, Event, EventRecord, EventType, Events,
     LoggedEvent, matches as event_matches, outbox as event_outbox,

@@ -3901,7 +3901,7 @@ mod tests {
                 .iter()
                 .map(|a| a.as_str().expect("string"))
                 .collect();
-            assert_eq!(spawn_args[0], "mcp");
+            assert_eq!(spawn_args[0], "mcp-serve");
             assert!(spawn_args.contains(&"solver"), "{spawn_args:?}");
             assert!(spawn_args.contains(&"conv-1"), "{spawn_args:?}");
             let dir = spawn_args

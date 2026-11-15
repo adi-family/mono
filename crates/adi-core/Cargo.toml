@@ -32,6 +32,7 @@ adi-embeddings = { path = "../adi-embeddings", default-features = false }
 adi-events = { workspace = true }
 adi-tasks = { workspace = true }
 adi-tools = { workspace = true }
+adi-mcp = { workspace = true }
 adi-triggers = { workspace = true }
 # For `event_catalog`: `adi.workflows.*` joins the whole-platform catalog here, alongside
 # `adi-channels` — see this crate's own `event_catalog` for why *here* (neither depends on the

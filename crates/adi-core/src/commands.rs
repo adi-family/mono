@@ -127,6 +127,12 @@ impl Adi {
         crate::tools::rename_tool(&adi_config::Config::open(), from, to)
     }
 
+    /// The MCP server registry backed by the standard store — `Adi::new().mcp().list()`.
+    #[must_use]
+    pub fn mcp(self) -> adi_mcp::McpServers {
+        adi_mcp::McpServers::open()
+    }
+
     /// The secrets store backed by the standard store — `Adi::new().secrets().resolve(...)`.
     #[must_use]
     pub fn secrets(self) -> adi_secrets::Secrets {

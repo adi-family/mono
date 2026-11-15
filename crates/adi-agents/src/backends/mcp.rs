@@ -82,7 +82,7 @@ pub(crate) fn config(spec: &RunSpec, session: &dyn Session) -> String {
     let server = serde_json::json!({
         "command": super::harness::adi_loop::adi_mono_program(),
         "args": [
-            "mcp",
+            "mcp-serve",
             "--agent", session.agent(),
             "--session", session.id(),
             "--dir", spec.cwd.to_string_lossy(),

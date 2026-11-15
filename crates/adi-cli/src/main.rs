@@ -16,6 +16,7 @@ mod indexer;
 mod knowledge;
 mod llm;
 mod marketplace;
+mod mcp;
 mod mesh;
 mod projects;
 mod qr;
@@ -44,6 +45,7 @@ use crate::indexer::{IndexerCommand, run_indexer};
 use crate::knowledge::{KnowledgeCommand, run_knowledge};
 use crate::llm::{LlmCommand, run_llm};
 use crate::marketplace::{MarketplaceCommand, run_marketplace};
+use crate::mcp::run_mcp;
 use crate::mesh::{MeshCommand, run_mesh};
 use crate::projects::{ProjectsCommand, run_projects};
 use crate::secrets::{SecretsCommand, run_secrets};
@@ -273,9 +275,10 @@ enum Command {
         json: bool,
     },
     /// Internal: serve one conversation's ADI tools to a Claude engine over MCP on stdio. Spawned
-    /// by that engine's CLI, which the runner points at this command; not for direct use.
+    /// by that engine's CLI, which the runner points at this command; not for direct use. Named
+    /// `mcp-serve` rather than the bare `mcp` the registry group below now owns.
     #[command(hide = true)]
-    Mcp {
+    McpServe {
         /// The agent whose conversation these tools belong to.
         #[arg(long)]
         agent: String,
@@ -286,6 +289,10 @@ enum Command {
         #[arg(long, value_name = "PATH")]
         dir: String,
     },
+    /// Register and read MCP server definitions an agent may be given — `adi-mono agents save
+    /// --mcp <id>` is how one is attached. See `adi_mcp` for the definition's shape.
+    #[command(subcommand)]
+    Mcp(mcp::McpCommand),
     /// Internal: run one turn of a `harness:adi` conversation — read its transcript, call the
     /// provider, and print the answer. Spawned by the app for each `adi` turn; not for direct use.
     #[command(hide = true)]
@@ -504,7 +511,7 @@ fn main() {
         Command::Diagnose { out, json } => run_diagnose(adi, out.as_deref(), json),
         // stdout is the MCP transport, so a failure cannot be reported there — only on stderr,
         // which the engine's CLI surfaces as the server's own log.
-        Command::Mcp {
+        Command::McpServe {
             agent,
             session,
             dir,
@@ -513,6 +520,12 @@ fn main() {
                 .agents()
                 .serve_mcp(&agent, &session, std::path::Path::new(&dir))
             {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
+        Command::Mcp(command) => {
+            if let Err(e) = run_mcp(adi, command) {
                 eprintln!("error: {e}");
                 std::process::exit(1);
             }
