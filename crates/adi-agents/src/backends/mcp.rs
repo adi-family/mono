@@ -669,4 +669,153 @@ mod tests {
         let replies = talk(r#"{"jsonrpc":"2.0","id":5,"method":"resources/list"}"#);
         assert_eq!(replies[0]["error"]["code"], -32601);
     }
+
+    /// A real `python3` process, speaking MCP stdio for real — the point is not to test
+    /// [`crate::mcp_servers::resolve`] or [`config`] against each other's assumptions, but against
+    /// an independent third implementation of the protocol, the same one the Claude CLI would be.
+    ///
+    /// # What it exercises
+    /// A server definition's `command`/`args`/`env` reach [`adi_mcp::McpServers`] on disk, get
+    /// resolved by [`crate::mcp_servers::resolve`] against this run's attached secrets, get folded
+    /// into this module's own `--mcp-config` JSON by [`config`] under the server's own id (next to
+    /// `"adi"`), and *that exact command* — read back out of the JSON, not the one this test wrote
+    /// — launches a process that completes a real `initialize` + `tools/list` round trip.
+    /// A minimal [`Session`] double for the one test below that needs to hand [`config`] a real
+    /// one — not reused from the other test modules' own `FakeSession`s, each of which lives
+    /// behind its own module boundary.
+    struct FakeSession {
+        log: std::path::PathBuf,
+    }
+    impl Session for FakeSession {
+        fn id(&self) -> &'static str {
+            "conv-1"
+        }
+        fn agent(&self) -> &'static str {
+            "watcher"
+        }
+        fn has_started(&self) -> bool {
+            false
+        }
+        fn state(&self) -> Option<Value> {
+            None
+        }
+        fn set_state(&self, _value: Value) -> crate::error::Result<()> {
+            Ok(())
+        }
+        fn log_path(&self) -> &std::path::Path {
+            &self.log
+        }
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // the point is to drive a real subprocess end to end
+    fn a_declared_stdio_server_resolves_lands_in_the_config_and_really_speaks_mcp() {
+        let dir = scratch("stdio-e2e");
+        let script = dir.join("echo_server.py");
+        std::fs::write(
+            &script,
+            "import sys, json\n\
+             for line in sys.stdin:\n\
+             \x20   line = line.strip()\n\
+             \x20   if not line:\n\
+             \x20       continue\n\
+             \x20   req = json.loads(line)\n\
+             \x20   method = req.get('method')\n\
+             \x20   if method == 'initialize':\n\
+             \x20       result = {'protocolVersion': req.get('params', {}).get('protocolVersion', '2025-11-25'),\n\
+             \x20                 'capabilities': {'tools': {}}, 'serverInfo': {'name': 'echo-test', 'version': '0'}}\n\
+             \x20   elif method == 'tools/list':\n\
+             \x20       result = {'tools': [{'name': 'Echo', 'description': 'echoes back', 'inputSchema': {'type': 'object'}}]}\n\
+             \x20   else:\n\
+             \x20       continue\n\
+             \x20   print(json.dumps({'jsonrpc': '2.0', 'id': req['id'], 'result': result}), flush=True)\n",
+        )
+        .expect("write fixture server");
+
+        let store_config = adi_config::Config::with_root(dir.join("store"));
+        adi_mcp::McpServers::with_config(store_config.clone())
+            .save(
+                "echo",
+                adi_mcp::Manifest::new(
+                    "echo",
+                    adi_mcp::Transport::Stdio {
+                        command: "python3".to_string(),
+                        args: vec![script.display().to_string()],
+                        env: std::collections::BTreeMap::new(),
+                    },
+                ),
+            )
+            .expect("save definition");
+
+        let resolved = crate::mcp_servers::resolve(&store_config, &["echo".to_string()], &[]);
+        assert_eq!(resolved.len(), 1, "the definition just saved should resolve with no secrets needed");
+
+        let session = FakeSession { log: dir.join("conv-1.log") };
+        let spec = RunSpec {
+            credential: None,
+            cwd: dir.clone(),
+            path: String::new(),
+            env: Vec::new(),
+            inherited_strip: Vec::new(),
+            arguments: Value::Null,
+            tools: Vec::new(),
+            tool_help: None,
+            system_prompt: None,
+            workspace_note: None,
+            knowledge_note: None,
+            spawn_note: None,
+            marker_note: None,
+            mcp_servers: resolved,
+        };
+
+        let mcp_config_json = config(&spec, &session);
+        let parsed: Value = serde_json::from_str(&mcp_config_json).expect("valid json");
+        // ADI's own server is still there, untouched, right beside the agent's declared one.
+        assert!(parsed["mcpServers"]["adi"].is_object(), "{mcp_config_json}");
+        let echo = &parsed["mcpServers"]["echo"];
+        assert_eq!(echo["type"], "stdio");
+        assert_eq!(echo["command"], "python3");
+        let real_command = echo["command"].as_str().expect("command").to_string();
+        let real_args: Vec<String> = echo["args"]
+            .as_array()
+            .expect("args")
+            .iter()
+            .map(|v| v.as_str().expect("arg string").to_string())
+            .collect();
+
+        // Launch *exactly* what the config says to launch, and speak MCP to it for real.
+        let mut child = std::process::Command::new(&real_command)
+            .args(&real_args)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn the fixture server");
+        {
+            use std::io::Write as _;
+            let stdin = child.stdin.as_mut().expect("stdin");
+            writeln!(
+                stdin,
+                r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"protocolVersion":"2025-11-25"}}}}"#
+            )
+            .expect("write initialize");
+            writeln!(stdin, r#"{{"jsonrpc":"2.0","id":2,"method":"tools/list"}}"#).expect("write tools/list");
+        }
+        let mut lines = {
+            use std::io::{BufRead as _, BufReader};
+            let stdout = child.stdout.take().expect("stdout");
+            BufReader::new(stdout).lines()
+        };
+        let initialize_reply: Value =
+            serde_json::from_str(&lines.next().expect("a reply").expect("read line")).expect("json");
+        assert_eq!(initialize_reply["result"]["protocolVersion"], "2025-11-25");
+        assert_eq!(initialize_reply["result"]["serverInfo"]["name"], "echo-test");
+
+        let list_reply: Value =
+            serde_json::from_str(&lines.next().expect("a reply").expect("read line")).expect("json");
+        assert_eq!(list_reply["result"]["tools"][0]["name"], "Echo");
+
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
