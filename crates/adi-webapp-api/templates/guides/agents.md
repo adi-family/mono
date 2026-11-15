@@ -56,9 +56,12 @@ own `Bash`/`Await`/`Ask`, onto whatever tools that server advertises (an n8n ins
 product's own MCP server, …). Registering a server does not hand it to anybody either, the same
 rule tools follow: create it with `{{cli}} mcp save`, then attach it to the agents that need it.
 
-- Define: `{{cli}} mcp save <id> --url <url> --header "Authorization=secret:TOKEN_NAME"` (http),
+- Define: `{{cli}} mcp save <id> --url <url> --header "Authorization=bearer:TOKEN_NAME"` (http),
   or `--command <cmd> --arg <a> --env KEY=secret:TOKEN_NAME` (stdio). `secret:NAME` names a secret
   to resolve at launch instead of writing a literal value — the definition never stores one.
+  `bearer:NAME` is the same thing with `Bearer ` glued onto the front at launch, the shape almost
+  every bearer-auth API's `Authorization` header wants (n8n's own MCP server included) — the
+  secret itself stores only the raw token, never the word `Bearer`.
   `{{cli}} mcp show <id>` says which secrets it still needs and whether each is set.
 - Attach: `{{cli}} agents save <name> --backend <b> --mcp <id>` (repeatable; `--no-mcp` detaches
   all). API: `POST /api/agents/save` with `"mcp": [...]` — a top-level field, omit-to-keep like

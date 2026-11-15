@@ -102,7 +102,7 @@ fn to_dto(transport: Transport) -> McpTransportDto {
 fn value_to_dto(value: Value) -> McpValueDto {
     match value {
         Value::Literal(text) => McpValueDto::Literal(text),
-        Value::Secret { secret } => McpValueDto::Secret { secret },
+        Value::Secret { secret, prefix } => McpValueDto::Secret { secret, prefix },
     }
 }
 
@@ -123,7 +123,7 @@ fn from_dto(transport: McpTransportDto) -> Transport {
 fn value_from_dto(value: McpValueDto) -> Value {
     match value {
         McpValueDto::Literal(text) => Value::Literal(text),
-        McpValueDto::Secret { secret } => Value::Secret { secret },
+        McpValueDto::Secret { secret, prefix } => Value::Secret { secret, prefix },
     }
 }
 
@@ -177,7 +177,7 @@ mod tests {
         let headers: BTreeMap<String, McpValueDto> = match secret {
             Some(name) => BTreeMap::from([(
                 "Authorization".to_string(),
-                McpValueDto::Secret { secret: name.to_string() },
+                McpValueDto::Secret { secret: name.to_string(), prefix: String::new() },
             )]),
             None => BTreeMap::new(),
         };
@@ -200,6 +200,39 @@ mod tests {
         assert_eq!(state.servers.len(), 1);
         assert_eq!(state.servers[0].id, "n8n");
         assert_eq!(state.servers[0].name, "n8n");
+    }
+
+    #[test]
+    fn a_bearer_prefix_round_trips_through_save_and_list() {
+        let store = scratch("bearer-prefix");
+        let headers = BTreeMap::from([(
+            "Authorization".to_string(),
+            McpValueDto::Secret { secret: "N8N_MCP_ACCESS_TOKEN".to_string(), prefix: "Bearer ".to_string() },
+        )]);
+        let body = serde_json::to_vec(&SaveMcpServer {
+            id: "n8n".to_string(),
+            name: String::new(),
+            description: None,
+            project: None,
+            transport: McpTransportDto::Http { url: "http://n8n.adi/mcp-server/http".to_string(), headers },
+        })
+        .expect("serialize");
+        let saved = save_mcp_server(&store, &body);
+        assert_eq!(saved.status, 200, "{}", saved.body);
+
+        let res = mcp_servers(&store);
+        let state: McpServersState = serde_json::from_str(&res.body).expect("state");
+        let McpTransportDto::Http { headers, .. } = &state.servers[0].transport else {
+            panic!("http");
+        };
+        assert_eq!(
+            headers.get("Authorization"),
+            Some(&McpValueDto::Secret {
+                secret: "N8N_MCP_ACCESS_TOKEN".to_string(),
+                prefix: "Bearer ".to_string()
+            })
+        );
+        assert_eq!(state.servers[0].required_secrets, vec!["N8N_MCP_ACCESS_TOKEN".to_string()]);
     }
 
     #[test]

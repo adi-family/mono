@@ -39,7 +39,7 @@ mod error;
 mod transport;
 
 pub use error::{Error, Result};
-pub use transport::{Transport, Value};
+pub use transport::{BEARER_PREFIX, Transport, Value};
 
 use serde::{Deserialize, Serialize};
 

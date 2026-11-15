@@ -31,18 +31,44 @@ pub struct ResolvedMcpServer {
     pub transport: ResolvedTransport,
 }
 
-/// [`adi_mcp::Transport`], with every [`Value`] resolved to the string it stands for.
+/// [`adi_mcp::Transport`], with every [`Value`] resolved. A header keeps a little more structure
+/// than an env var does ([`ResolvedHeader`]) — Codex's `bearer_token_env_var` knob needs the raw,
+/// unprefixed secret underneath an `Authorization: Bearer …` header, not the rendered string a
+/// Claude engine is handed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolvedTransport {
     Http {
         url: String,
-        headers: BTreeMap<String, String>,
+        headers: BTreeMap<String, ResolvedHeader>,
     },
     Stdio {
         command: String,
         args: Vec<String>,
         env: BTreeMap<String, String>,
     },
+}
+
+/// One resolved header value. A literal or a prefix-less secret is [`Plain`](Self::Plain) — the
+/// whole rendered string, same as before this type existed. A secret resolved with a `prefix`
+/// (see [`adi_mcp::Value::secret_with_prefix`]) keeps the prefix and the raw secret value apart as
+/// [`Prefixed`](Self::Prefixed), so a reader that needs the raw token underneath — Codex's bearer
+/// knob — never has to parse it back out of the rendered string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolvedHeader {
+    Plain(String),
+    Prefixed { prefix: String, raw: String },
+}
+
+impl ResolvedHeader {
+    /// The string this header actually carries on the wire — what every backend but Codex's
+    /// bearer knob wants.
+    #[must_use]
+    pub fn rendered(&self) -> String {
+        match self {
+            Self::Plain(value) => value.clone(),
+            Self::Prefixed { prefix, raw } => format!("{prefix}{raw}"),
+        }
+    }
 }
 
 /// Resolve `ids` into runnable servers, in the order named, silently skipping any id this store
@@ -72,7 +98,7 @@ fn resolve_transport(transport: &Transport, lookup: &impl Fn(&str) -> Option<Str
     Some(match transport {
         Transport::Http { url, headers } => ResolvedTransport::Http {
             url: url.clone(),
-            headers: resolve_map(headers, lookup)?,
+            headers: resolve_headers(headers, lookup)?,
         },
         Transport::Stdio { command, args, env } => ResolvedTransport::Stdio {
             command: command.clone(),
@@ -82,8 +108,30 @@ fn resolve_transport(transport: &Transport, lookup: &impl Fn(&str) -> Option<Str
     })
 }
 
-/// Resolve every value in one header/env map, or `None` the moment one names a secret `lookup`
-/// cannot answer — the whole server is dropped by its caller, never half-resolved.
+/// Resolve every header in one map, or `None` the moment one names a secret `lookup` cannot
+/// answer — the whole server is dropped by its caller, never half-resolved.
+fn resolve_headers(
+    map: &BTreeMap<String, Value>,
+    lookup: &impl Fn(&str) -> Option<String>,
+) -> Option<BTreeMap<String, ResolvedHeader>> {
+    let mut out = BTreeMap::new();
+    for (key, value) in map {
+        let resolved = match value {
+            Value::Literal(text) => ResolvedHeader::Plain(text.clone()),
+            Value::Secret { secret, prefix } if prefix.is_empty() => ResolvedHeader::Plain(lookup(secret)?),
+            Value::Secret { secret, prefix } => {
+                ResolvedHeader::Prefixed { prefix: prefix.clone(), raw: lookup(secret)? }
+            }
+        };
+        out.insert(key.clone(), resolved);
+    }
+    Some(out)
+}
+
+/// Resolve every value in one env map, or `None` the moment one names a secret `lookup` cannot
+/// answer — the whole server is dropped by its caller, never half-resolved. An env var has no
+/// reader that needs its prefix kept apart from its secret the way a header's bearer knob does,
+/// so this renders straight to the final string.
 fn resolve_map(
     map: &BTreeMap<String, Value>,
     lookup: &impl Fn(&str) -> Option<String>,
@@ -92,7 +140,7 @@ fn resolve_map(
     for (key, value) in map {
         let resolved = match value {
             Value::Literal(text) => text.clone(),
-            Value::Secret { secret } => lookup(secret)?,
+            Value::Secret { secret, prefix } => format!("{prefix}{}", lookup(secret)?),
         };
         out.insert(key.clone(), resolved);
     }
@@ -164,7 +212,38 @@ mod tests {
         let ResolvedTransport::Http { headers, .. } = &resolved[0].transport else {
             panic!("http");
         };
-        assert_eq!(headers.get("Authorization"), Some(&"sekret".to_string()));
+        assert_eq!(headers.get("Authorization"), Some(&ResolvedHeader::Plain("sekret".to_string())));
+    }
+
+    #[test]
+    fn a_bearer_secret_header_resolves_to_a_prefixed_header_carrying_the_raw_token() {
+        let config = scratch("bearer-secret");
+        adi_secrets::Secrets::with_config(config.clone())
+            .set(None, "N8N_TOKEN", "tok-123", None)
+            .expect("set secret");
+        McpServers::with_config(config.clone())
+            .save(
+                "n8n",
+                adi_mcp::Manifest::new(
+                    "n8n",
+                    Transport::Http {
+                        url: "http://n8n.adi/mcp/".into(),
+                        headers: BTreeMap::from([("Authorization".to_string(), Value::bearer("N8N_TOKEN"))]),
+                    },
+                ),
+            )
+            .expect("save");
+
+        let resolved = resolve(&config, &["n8n".to_string()], &[attachment("N8N_TOKEN")]);
+        let ResolvedTransport::Http { headers, .. } = &resolved[0].transport else {
+            panic!("http");
+        };
+        let header = headers.get("Authorization").expect("header");
+        assert_eq!(
+            header,
+            &ResolvedHeader::Prefixed { prefix: "Bearer ".to_string(), raw: "tok-123".to_string() }
+        );
+        assert_eq!(header.rendered(), "Bearer tok-123", "a Claude engine sees the rendered header");
     }
 
     #[test]
@@ -177,7 +256,7 @@ mod tests {
                     "n8n",
                     Transport::Http {
                         url: "http://n8n.adi/mcp/".into(),
-                        headers: BTreeMap::from([("Authorization".to_string(), Value::secret("N8N_TOKEN"))]),
+                        headers: BTreeMap::from([("Authorization".to_string(), Value::bearer("N8N_TOKEN"))]),
                     },
                 ),
             )

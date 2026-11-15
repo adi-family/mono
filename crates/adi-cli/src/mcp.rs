@@ -2,9 +2,13 @@
 //! --mcp <id>` attaches to an agent.
 //!
 //! A definition never stores a secret's value, only its name — give a header or env value as
-//! `secret:NAME` to name one, or anything else for a literal. `mcp show` names which secrets a
-//! server still needs and whether each is set anywhere on this machine (not whether it is
-//! *attached* to any particular agent — that is `agents show`'s own business).
+//! `secret:NAME` to name one, or anything else for a literal. `bearer:NAME` is shorthand for a
+//! secret named with the `Bearer ` prefix most APIs' `Authorization` header wants
+//! (`adi_mcp::Value::bearer`): the stored secret is the raw token, and this header renders as
+//! `Bearer <token>` at launch — never write the word `Bearer` into the secret's own value.
+//! `mcp show` names which secrets a server still needs and whether each is set anywhere on this
+//! machine (not whether it is *attached* to any particular agent — that is `agents show`'s own
+//! business).
 
 use std::collections::BTreeMap;
 
@@ -54,9 +58,11 @@ pub(crate) enum McpCommand {
         /// The server's URL, for `--transport http`.
         #[arg(long)]
         url: Option<String>,
-        /// A request header, as `NAME=VALUE` — give `secret:THE_NAME` as the value to resolve a
-        /// secret by name at launch (against whichever agent's run reads it) instead of writing
-        /// one literally. Repeatable; replaces the whole header set on every save.
+        /// A request header, as `NAME=VALUE` — give `secret:THE_NAME` to resolve a secret by name
+        /// at launch (against whichever agent's run reads it) instead of writing one literally,
+        /// or `bearer:THE_NAME` for the common `Authorization: Bearer <token>` case (the secret
+        /// stores the raw token; `Bearer ` is glued on at launch, never stored). Repeatable;
+        /// replaces the whole header set on every save.
         #[arg(long = "header")]
         headers: Vec<String>,
         /// The command to launch, for `--transport stdio`.
@@ -66,8 +72,9 @@ pub(crate) enum McpCommand {
         /// every save.
         #[arg(long = "arg", allow_hyphen_values = true)]
         args: Vec<String>,
-        /// An environment variable for the command, as `KEY=VALUE` (`secret:THE_NAME` resolves a
-        /// secret, the same as `--header`). Repeatable; replaces the whole env on every save.
+        /// An environment variable for the command, as `KEY=VALUE` (`secret:THE_NAME` or
+        /// `bearer:THE_NAME` resolve a secret, the same as `--header`). Repeatable; replaces the
+        /// whole env on every save.
         #[arg(long = "env")]
         env: Vec<String>,
         #[arg(long)]
@@ -202,17 +209,24 @@ fn parse_values(values: Vec<String>) -> Result<BTreeMap<String, McpValue>, Strin
 }
 
 fn parse_value(raw: &str) -> McpValue {
+    if let Some(name) = raw.strip_prefix("bearer:") {
+        return McpValue::bearer(name);
+    }
     match raw.strip_prefix("secret:") {
         Some(name) => McpValue::secret(name),
         None => McpValue::literal(raw),
     }
 }
 
-/// The reverse of [`parse_value`], for printing a value back the way it was given.
+/// The reverse of [`parse_value`], for printing a value back the way it was given. A prefix other
+/// than the `bearer:` shorthand recognizes (there is currently no flag syntax for one) still
+/// prints something readable rather than silently dropping it.
 fn render_value(value: &McpValue) -> String {
     match value {
         McpValue::Literal(text) => text.clone(),
-        McpValue::Secret { secret } => format!("secret:{secret}"),
+        McpValue::Secret { secret, prefix } if prefix.is_empty() => format!("secret:{secret}"),
+        McpValue::Secret { secret, prefix } if prefix == adi_core::MCP_BEARER_PREFIX => format!("bearer:{secret}"),
+        McpValue::Secret { secret, prefix } => format!("secret:{secret} (prefix {prefix:?})"),
     }
 }
 
@@ -314,6 +328,17 @@ mod tests {
         assert_eq!(parse_value("application/json"), McpValue::literal("application/json"));
         assert_eq!(render_value(&McpValue::secret("X")), "secret:X");
         assert_eq!(render_value(&McpValue::literal("y")), "y");
+    }
+
+    #[test]
+    fn a_header_value_prefixed_bearer_colon_is_a_secret_with_the_bearer_prefix() {
+        assert_eq!(parse_value("bearer:N8N_MCP_ACCESS_TOKEN"), McpValue::bearer("N8N_MCP_ACCESS_TOKEN"));
+        assert_eq!(render_value(&McpValue::bearer("X")), "bearer:X");
+        // The raw token is never stored with 'Bearer ' baked in — that's the whole point.
+        assert_eq!(
+            McpValue::bearer("X"),
+            McpValue::secret_with_prefix("X", adi_core::MCP_BEARER_PREFIX)
+        );
     }
 
     #[test]
