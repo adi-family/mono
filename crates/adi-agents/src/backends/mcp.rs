@@ -109,11 +109,13 @@ pub(crate) fn config(spec: &RunSpec, session: &dyn Session) -> String {
 fn server_json(resolved: &crate::mcp_servers::ResolvedMcpServer) -> Value {
     use crate::mcp_servers::ResolvedTransport;
     match &resolved.transport {
-        ResolvedTransport::Http { url, headers } => json!({
-            "type": "http",
-            "url": url,
-            "headers": headers,
-        }),
+        ResolvedTransport::Http { url, headers } => {
+            // Rendered, not the resolved struct itself: a Claude engine wants the wire string
+            // (`Bearer <token>`), never the prefix/raw split Codex's bearer knob alone needs.
+            let headers: std::collections::BTreeMap<&String, String> =
+                headers.iter().map(|(name, value)| (name, value.rendered())).collect();
+            json!({ "type": "http", "url": url, "headers": headers })
+        }
         ResolvedTransport::Stdio { command, args, env } => json!({
             "type": "stdio",
             "command": command,
@@ -817,5 +819,30 @@ mod tests {
         let _ = child.kill();
         let _ = child.wait();
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An http server's `config()` output carries the *rendered* header — `Bearer <token>`, not
+    /// the prefix/raw split [`crate::mcp_servers::ResolvedHeader`] keeps internally for Codex's
+    /// own bearer knob (see `backends::process::codex_mcp`). A Claude engine never sees that
+    /// split; it sees exactly the header string it would send over the wire.
+    #[test]
+    fn a_declared_http_server_with_a_bearer_secret_renders_the_full_header() {
+        let resolved = crate::mcp_servers::ResolvedMcpServer {
+            id: "n8n".to_string(),
+            transport: crate::mcp_servers::ResolvedTransport::Http {
+                url: "http://n8n.adi/mcp-server/http".to_string(),
+                headers: std::collections::BTreeMap::from([(
+                    "Authorization".to_string(),
+                    crate::mcp_servers::ResolvedHeader::Prefixed {
+                        prefix: "Bearer ".to_string(),
+                        raw: "tok-123".to_string(),
+                    },
+                )]),
+            },
+        };
+        let json = server_json(&resolved);
+        assert_eq!(json["type"], "http");
+        assert_eq!(json["url"], "http://n8n.adi/mcp-server/http");
+        assert_eq!(json["headers"]["Authorization"], "Bearer tok-123");
     }
 }

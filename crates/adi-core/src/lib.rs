@@ -111,8 +111,8 @@ pub use adi_tools::{
 pub use tools::{ToolRenamed, rename_tool};
 
 pub use adi_mcp::{
-    Error as McpError, Manifest as McpManifest, McpServer, McpServers, Transport as McpTransport,
-    Value as McpValue,
+    BEARER_PREFIX as MCP_BEARER_PREFIX, Error as McpError, Manifest as McpManifest, McpServer,
+    McpServers, Transport as McpTransport, Value as McpValue,
 };
 
 pub use adi_events::{

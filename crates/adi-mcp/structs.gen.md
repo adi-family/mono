@@ -91,7 +91,7 @@ pub struct McpServers {
 
 ### enum `Value`
 
-One header or environment value: either written out in full, or a secret's name to resolve at launch time. `#[serde(untagged)]` tells the two apart by shape alone — a bare TOML/JSON string is `Value::Literal`, a one-field table naming `secret` is `Value::Secret` — so a definition reads exactly as a publisher would write it by hand, no tag to remember.
+One header or environment value: either written out in full, or a secret's name to resolve at launch time, optionally with a fixed prefix glued onto the front of it. `#[serde(untagged)]` tells the two apart by shape alone — a bare TOML/JSON string is `Value::Literal`, a table naming `secret` is `Value::Secret` — so a definition reads exactly as a publisher would write it by hand, no tag to remember.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -100,6 +100,8 @@ pub enum Value {
     Literal(String),
     Secret {
         secret: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        prefix: String,
     },
 }
 ```

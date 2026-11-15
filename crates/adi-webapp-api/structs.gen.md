@@ -1588,7 +1588,7 @@ pub struct ToolRunResult {
 
 ### enum `McpValueDto`
 
-One header/env value: written out in full, or naming a secret to resolve at launch instead — the wire mirror of `adi_mcp::Value`. `#[serde(untagged)]` tells the two apart by shape: a bare string is a literal, a one-field object naming `secret` is a reference.
+One header/env value: written out in full, or naming a secret to resolve at launch instead — the wire mirror of `adi_mcp::Value`. `#[serde(untagged)]` tells the two apart by shape: a bare string is a literal, an object naming `secret` is a reference, optionally with a `prefix` glued onto the resolved value (`"Bearer "` being the usual reason one is needed at all).
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1597,6 +1597,8 @@ pub enum McpValueDto {
     Literal(String),
     Secret {
         secret: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        prefix: String,
     },
 }
 ```

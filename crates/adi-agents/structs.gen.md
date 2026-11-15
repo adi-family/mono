@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-159 structs · 44 enums · 5 type aliases across 62 files.
+159 structs · 45 enums · 5 type aliases across 62 files.
 
 ## Index
 
@@ -43,7 +43,7 @@
 - [`src/llm/prober.rs`](#srcllmproberrs) — `Verdict`, `Checked`, `Prober`, `Outcome`
 - [`src/llm/settings.rs`](#srcllmsettingsrs) — `LlmSettings`
 - [`src/marker.rs`](#srcmarkerrs) — `Woke`, `Settled`, `Marker`
-- [`src/mcp_servers.rs`](#srcmcp_serversrs) — `ResolvedMcpServer`, `ResolvedTransport`
+- [`src/mcp_servers.rs`](#srcmcp_serversrs) — `ResolvedMcpServer`, `ResolvedTransport`, `ResolvedHeader`
 - [`src/memo.rs`](#srcmemors) — `Stamp`, `Entry`, `Memo`
 - [`src/migrations.rs`](#srcmigrationsrs) — `Step`, `Pending`, `Plan`, `Applied`
 - [`src/overrides.rs`](#srcoverridesrs) — `RunOverrides`
@@ -2255,19 +2255,34 @@ pub struct ResolvedMcpServer {
 
 ### enum `ResolvedTransport`
 
-`adi_mcp::Transport`, with every `Value` resolved to the string it stands for.
+`adi_mcp::Transport`, with every `Value` resolved. A header keeps a little more structure than an env var does (`ResolvedHeader`) — Codex's `bearer_token_env_var` knob needs the raw, unprefixed secret underneath an `Authorization: Bearer …` header, not the rendered string a Claude engine is handed.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolvedTransport {
     Http {
         url: String,
-        headers: BTreeMap<String, String>,
+        headers: BTreeMap<String, ResolvedHeader>,
     },
     Stdio {
         command: String,
         args: Vec<String>,
         env: BTreeMap<String, String>,
+    },
+}
+```
+
+### enum `ResolvedHeader`
+
+One resolved header value. A literal or a prefix-less secret is `Plain` — the whole rendered string, same as before this type existed. A secret resolved with a `prefix` (see `adi_mcp::Value::secret_with_prefix`) keeps the prefix and the raw secret value apart as `Prefixed`, so a reader that needs the raw token underneath — Codex's bearer knob — never has to parse it back out of the rendered string.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolvedHeader {
+    Plain(String),
+    Prefixed {
+        prefix: String,
+        raw: String,
     },
 }
 ```
