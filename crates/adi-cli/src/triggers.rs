@@ -1,7 +1,9 @@
 //! The `triggers` command group: the trigger-definition subcommand surface and its
 //! dispatch over the shared trigger-definition store.
 
-use adi_core::{Adi, RUNTIME_SH, Trigger, TriggerManifest, clean_trigger_on, trigger_presets};
+use adi_core::{
+    Adi, HOOK_SECRET_EXTRA, RUNTIME_SH, Trigger, TriggerManifest, clean_trigger_on, trigger_presets,
+};
 use clap::Subcommand;
 
 use crate::format::{clean, clean_required, parse_extra, print_json};
@@ -49,15 +51,25 @@ pub(crate) enum TriggersCommand {
         /// Save the trigger disabled (its external source won't fire it).
         #[arg(long)]
         disabled: bool,
-        /// Repeatable key=value setting, reaching the code block as `ADI_<KEY>` (`secret`,
-        /// `token_env`, `chat_id`, …). Which keys matter is the preset's business, except
-        /// `relay` (`public-eu` | `public-us` | `enterprise-eu` | `enterprise-us` |
-        /// `custom:<url>`), which this save itself acts on: it registers a fresh
-        /// `relay_endpoint` against the named relay before the save lands (a failed registration
-        /// fails this save), prints the resulting public `/h/<id>` URL, and best-effort
-        /// deregisters the old endpoint on a later save that changes or clears it.
+        /// Repeatable key=value setting, reaching the code block as `ADI_<KEY>` (`token_env`,
+        /// `chat_id`, …). Which keys matter is the preset's business, except `relay`
+        /// (`public-eu` | `public-us` | `enterprise-eu` | `enterprise-us` | `custom:<url>`),
+        /// which this save itself acts on: it registers a fresh `relay_endpoint` against the
+        /// named relay before the save lands (a failed registration fails this save), prints the
+        /// resulting public `/h/<id>` URL, and best-effort deregisters the old endpoint on a
+        /// later save that changes or clears it. A webhook's own hook secret is `--hook-secret`
+        /// below, not an `--extra`; passing `secret=`/`secret_ref=` here still works (this is
+        /// the same manifest field) but its value then prints in this command's own confirmation
+        /// line and in later `show`/`list` output, which `--hook-secret` never does.
         #[arg(long = "extra")]
         extra: Vec<String>,
+        /// For `--kind webhook`: the name of an `adi-secrets` secret to gate the hook with,
+        /// resolved fresh on every request (project-scoped first, then global) rather than
+        /// stored on the manifest. Set the secret itself first (`adi-mono secrets set`); this
+        /// only names it. Equivalent to `--extra secret_ref=<name>`, offered separately so the
+        /// common case never has to spell out the reserved key.
+        #[arg(long)]
+        hook_secret: Option<String>,
         /// For `--kind event`: an event-name pattern to subscribe to, matched segment-by-segment
         /// (`adi.tasks.*` = one segment, `adi.tasks.**` = the tail). Repeatable. Falls back to the
         /// preset's patterns when omitted.
@@ -87,6 +99,18 @@ pub(crate) enum TriggersCommand {
     /// into a self-host relay's `authorized_keys` file. One key for the whole node, shared by
     /// every relay-backed trigger; generated on first use.
     RelayKey,
+    /// Move a webhook trigger's inline hook secret into a real `adi-secrets` secret, in the
+    /// same scope the trigger already resolves from, and switch it to a reference
+    /// (`secret_ref`) — ADI-MONO-242's one-shot cleanup for a trigger saved before that existed.
+    /// Never prints the value, before or after.
+    MigrateHookSecret {
+        name: String,
+        /// The name to give the new secret. Defaults to `HOOK_SECRET_<TRIGGER NAME>` (the
+        /// trigger's own name, uppercased, folded to a valid secret key). Refused if a secret of
+        /// that name already exists in the trigger's scope.
+        #[arg(long)]
+        secret_name: Option<String>,
+    },
 }
 
 /// Dispatch a `triggers` subcommand over the shared trigger-definition store.
@@ -96,7 +120,7 @@ pub(crate) fn run_triggers(adi: Adi, command: TriggersCommand) -> Result<(), Str
         TriggersCommand::List { json } => {
             let triggers = store.list().map_err(|e| e.to_string())?;
             if json {
-                print_json(&triggers);
+                print_json(&triggers.into_iter().map(redacted).collect::<Vec<_>>());
             } else if triggers.is_empty() {
                 println!("No triggers registered.");
             } else {
@@ -111,7 +135,7 @@ pub(crate) fn run_triggers(adi: Adi, command: TriggersCommand) -> Result<(), Str
                 .map_err(|e| e.to_string())?
                 .ok_or_else(|| format!("no such trigger: {name}"))?;
             if json {
-                print_json(&trigger);
+                print_json(&redacted(trigger));
             } else {
                 print_trigger(&store, &trigger);
                 if !trigger.manifest.code.trim().is_empty() {
@@ -153,6 +177,7 @@ pub(crate) fn run_triggers(adi: Adi, command: TriggersCommand) -> Result<(), Str
             project,
             disabled,
             extra,
+            hook_secret,
             events,
             trigger_on,
             json,
@@ -167,6 +192,10 @@ pub(crate) fn run_triggers(adi: Adi, command: TriggersCommand) -> Result<(), Str
                 ),
                 None => None,
             };
+            let mut extra = preset_defaults(preset, parse_extra(extra)?);
+            if let Some(secret_name) = clean(hook_secret) {
+                extra.insert(adi_core::HOOK_SECRET_REF_EXTRA.to_string(), secret_name);
+            }
             let mut manifest = TriggerManifest {
                 kind,
                 runtime: clean(runtime)
@@ -181,7 +210,7 @@ pub(crate) fn run_triggers(adi: Adi, command: TriggersCommand) -> Result<(), Str
                     .unwrap_or_default(),
                 enabled: !disabled,
                 project: clean(project),
-                extra: preset_defaults(preset, parse_extra(extra)?),
+                extra,
                 // Explicit --event patterns win; otherwise inherit the preset's (an event preset
                 // ships a sensible default like `adi.tasks.*`).
                 events: preset_events(preset, events),
@@ -192,7 +221,7 @@ pub(crate) fn run_triggers(adi: Adi, command: TriggersCommand) -> Result<(), Str
             register_relay_if_needed(&store, &name, &mut manifest.extra)?;
             let trigger = store.save(&name, manifest).map_err(|e| e.to_string())?;
             if json {
-                print_json(&trigger);
+                print_json(&redacted(trigger));
             } else {
                 println!("Saved trigger {}.", trigger.name);
                 print_trigger(&store, &trigger);
@@ -235,8 +264,33 @@ pub(crate) fn run_triggers(adi: Adi, command: TriggersCommand) -> Result<(), Str
             let identity = adi_relay::keys::load_or_create().map_err(|e| e.to_string())?;
             println!("{}", identity.public_key_line());
         }
+        TriggersCommand::MigrateHookSecret { name, secret_name } => {
+            let migrated = store
+                .migrate_hook_secret(&name, clean(secret_name).as_deref())
+                .map_err(|e| e.to_string())?;
+            println!(
+                "Moved trigger {name}'s inline hook secret to {} ({}). The manifest now holds only the reference.",
+                migrated.secret_name,
+                migrated.project.as_deref().map_or_else(|| "global".to_string(), |p| format!("project {p}")),
+            );
+        }
     }
     Ok(())
+}
+
+/// A trigger's `extra`, with the inline hook secret redacted — every output path (`--json`
+/// included) goes through this rather than the raw [`adi_core::Trigger`], so a value already on
+/// an old manifest never prints again. `secret_ref` is left alone: it's a name, not the value.
+fn redacted(mut trigger: Trigger) -> Trigger {
+    if trigger.manifest.extra.get(HOOK_SECRET_EXTRA).is_some_and(|v| !v.is_empty()) {
+        trigger.manifest.extra.insert(HOOK_SECRET_EXTRA.to_string(), redaction_note(&trigger.name));
+    }
+    trigger
+}
+
+/// The placeholder an inline hook secret prints as, naming the fix rather than the value.
+fn redaction_note(trigger_name: &str) -> String {
+    format!("••• (inline — migrate with `adi-mono triggers migrate-hook-secret {trigger_name}`)")
 }
 
 /// Register (or re-register, or deregister) `manifest_extra`'s relay against the relay it names,
@@ -405,7 +459,13 @@ fn print_trigger(store: &adi_core::Triggers, trigger: &Trigger) {
             .manifest
             .extra
             .iter()
-            .map(|(k, v)| format!("{k}={v}"))
+            .map(|(k, v)| {
+                if k == HOOK_SECRET_EXTRA && !v.is_empty() {
+                    format!("{k}={}", redaction_note(&trigger.name))
+                } else {
+                    format!("{k}={v}")
+                }
+            })
             .collect();
         println!("  extra: {}", extras.join(" · "));
     }
@@ -543,5 +603,57 @@ mod tests {
         };
         assert_eq!(relay_public_url(&no_relay), None);
         assert_eq!(relay_public_url(&no_endpoint), None);
+    }
+
+    /// `redacted` replaces an inline hook secret's value with a note naming the fix, and leaves
+    /// a reference (just a name, not a value) alone.
+    #[test]
+    fn redacted_hides_the_inline_value_but_not_a_ref() {
+        let inline = redacted(Trigger {
+            name: "hook".to_string(),
+            manifest: manifest_with(&[(HOOK_SECRET_EXTRA, "s3cr3t")]),
+        });
+        let note = inline.manifest.extra.get(HOOK_SECRET_EXTRA).unwrap();
+        assert!(!note.contains("s3cr3t"), "{note}");
+        assert!(note.contains("migrate-hook-secret hook"), "{note}");
+
+        let referenced = redacted(Trigger {
+            name: "hook".to_string(),
+            manifest: manifest_with(&[("secret_ref", "MY_SECRET")]),
+        });
+        assert_eq!(referenced.manifest.extra.get("secret_ref").map(String::as_str), Some("MY_SECRET"));
+    }
+
+    /// `triggers migrate-hook-secret` moves the plaintext into `adi-secrets` and switches the
+    /// manifest to a reference, without ever handing the value back to the caller.
+    #[test]
+    fn migrate_hook_secret_moves_the_value_and_switches_to_a_ref() {
+        let store = scratch_store("migrate");
+        store
+            .save("hook", manifest_with(&[(HOOK_SECRET_EXTRA, "s3cr3t")]))
+            .expect("seed");
+
+        let migrated = store.migrate_hook_secret("hook", None).expect("migrate");
+        assert_eq!(migrated.secret_name, "HOOK_SECRET_HOOK");
+        assert_eq!(migrated.project, None);
+
+        let trigger = store.get("hook").unwrap().unwrap();
+        assert!(!trigger.manifest.extra.contains_key(HOOK_SECRET_EXTRA));
+        assert_eq!(
+            trigger.manifest.extra.get("secret_ref").map(String::as_str),
+            Some("HOOK_SECRET_HOOK")
+        );
+        assert_eq!(
+            adi_core::Secrets::with_config(store.config().clone())
+                .reveal(None, "HOOK_SECRET_HOOK")
+                .unwrap(),
+            Some("s3cr3t".to_string())
+        );
+
+        // A trigger with no inline secret has nothing to migrate.
+        assert!(matches!(
+            store.migrate_hook_secret("hook", None).unwrap_err(),
+            adi_core::HookSecretMigrateError::NothingToMigrate
+        ));
     }
 }
