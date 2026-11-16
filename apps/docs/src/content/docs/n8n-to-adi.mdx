@@ -39,6 +39,14 @@ paused execution: ADI posts to `$execution.resumeUrl`, and n8n resumes exactly w
   command below does it — registers one itself starting in 1.41.0; on 1.40.0, register from the
   panel once and manage the trigger with the CLI after. Enterprise: **2026.21.0** has the relay
   with panel registration, **2026.22.0** and later also register from the CLI.
+- **`--hook-secret` and the `X-ADI-Hook-Secret` header need ADI ≥1.43.0** — this guide's
+  webhook trigger uses it below, naming the hook secret by reference instead of carrying its
+  value. On 1.42.0 or older, use the inline form instead (`--extra secret=$(adi-mono secrets read
+  N8N_HOOK_SECRET --project n8n)`, and the `?secret=...` query param rather than the header on
+  the "Call ADI" node) — and redact that `triggers save` command's own output before keeping it
+  anywhere, since on that version it echoes the value back. `adi-mono triggers
+  migrate-hook-secret n8n-to-adi` moves an existing inline secret onto the reference form once
+  you've updated.
 - **An n8n instance** — the [[marketplace#Do it|n8n marketplace package]] (self-hosted, installs
   into its own project), or an n8n Cloud account. Nothing below is specific to either; only the
   URL the "Call ADI" node points at differs.
@@ -53,27 +61,19 @@ Set three secrets per project, named here and read by name everywhere below:
 
 | Secret | Used for |
 | --- | --- |
-| `N8N_HOOK_SECRET` | The webhook trigger's own `?secret=` query param — platform-enforced, checked before the trigger's own code ever runs. |
+| `N8N_HOOK_SECRET` | The webhook trigger's own hook secret — platform-enforced, checked before the trigger's own code ever runs. Named by reference (`--hook-secret`), never carried in the trigger's definition. |
 | `N8N_HMAC_SECRET` | The shared HMAC-SHA256 key. n8n's Crypto node signs the exact request body with it; the trigger recomputes the same HMAC and rejects a mismatch. |
 | `N8N_RESUME_SECRET` | The value ADI sends back as a header on the resume call. n8n's Wait node requires it to match before resuming. |
 
 ```bash
-adi-mono secrets set N8N_HOOK_SECRET   --project n8n --description "ADI webhook trigger's ?secret= gate"
+adi-mono secrets set N8N_HOOK_SECRET   --project n8n --description "ADI webhook trigger's hook secret"
 adi-mono secrets set N8N_HMAC_SECRET   --project n8n --description "HMAC key n8n signs the request body with"
 adi-mono secrets set N8N_RESUME_SECRET --project n8n --description "header value ADI sends on resume"
 ```
 
-**Keep secrets out of transcripts and logs.** `triggers save --extra secret=...` (below) echoes
-whatever you pass it, in its own confirmation line and later in `triggers show`/`list` — redirect
-that command's output and redact the value if you keep it:
-
-```bash
-adi-mono triggers save n8n-to-adi --kind webhook --runtime sh --project n8n \
-  --extra secret="$(adi-mono secrets read N8N_HOOK_SECRET --project n8n)" \
-  --extra relay=public-eu --code "$(cat trigger.sh)" \
-  >/tmp/out.txt 2>&1
-sed "s/$(adi-mono secrets read N8N_HOOK_SECRET --project n8n)/<redacted>/" /tmp/out.txt
-```
+`--hook-secret` below only names `N8N_HOOK_SECRET`; it's resolved fresh on every request and
+never written into the trigger's own definition, so there's nothing to redact out of
+`triggers save`'s confirmation line or later `triggers show`/`list` output.
 
 ### The processor agent
 
@@ -147,7 +147,7 @@ echo "resumed $resume_url -> HTTP $http_code"
 
 ```bash
 adi-mono triggers save n8n-to-adi --kind webhook --runtime sh --project n8n \
-  --extra secret="$(adi-mono secrets read N8N_HOOK_SECRET --project n8n)" \
+  --hook-secret N8N_HOOK_SECRET \
   --extra relay=public-eu \
   --code "$(cat trigger.sh)"
 ```
@@ -191,10 +191,11 @@ output field `signature`. Point its credential at a `Hmac Secret` field holding 
 ```json
 {
   "method": "POST",
-  "url": "http://127.0.0.1:8000/api/hooks/n8n-to-adi?secret=__ADI_HOOK_SECRET__",
+  "url": "http://127.0.0.1:8000/api/hooks/n8n-to-adi",
   "sendHeaders": true,
   "headerParameters": { "parameters": [
-    { "name": "x-adi-signature", "value": "={{ $json.signature }}" }
+    { "name": "x-adi-signature", "value": "={{ $json.signature }}" },
+    { "name": "x-adi-hook-secret", "value": "__ADI_HOOK_SECRET__" }
   ]},
   "sendBody": true,
   "contentType": "raw",
@@ -204,8 +205,12 @@ output field `signature`. Point its credential at a `Hmac Secret` field holding 
 ```
 
 **Body type must be Raw, not JSON** — send the exact bytes signed in step 1; letting this node
-re-encode the body breaks that. For the relay-routed variant, swap
-the `url` for the `/h/<id>` URL `triggers save` printed, same `?secret=` query param.
+re-encode the body breaks that. The `X-ADI-Hook-Secret` header is checked ahead of the
+query-param form (`?secret=...`, still accepted); either works, but a header is less likely than
+a query string to end up in a proxy's or load balancer's own access log on the way in — n8n's own
+node storage keeps the value either way, so this isn't about what n8n itself logs. For the
+relay-routed variant, swap the `url` for the `/h/<id>` URL `triggers save` printed; the header
+rides along unchanged.
 
 ### 4. Wait — "On Webhook Call", method POST, with a timeout
 
@@ -229,9 +234,9 @@ real result from a timed-out Wait — see [Gotchas](#gotchas).
 ### The workflow, as one importable piece
 
 Paste into n8n with **Import from File / Clipboard**, then: fill in `__ADI_HOOK_SECRET__` in the
-"Call ADI" node's URL with the real secret value, and repoint the two credential references
-("ADI HMAC", "ADI resume auth") at credentials holding `N8N_HMAC_SECRET` / `N8N_RESUME_SECRET`'s
-real values — n8n never exports a credential's value, only its reference.
+"Call ADI" node's `X-ADI-Hook-Secret` header with the real secret value, and repoint the two
+credential references ("ADI HMAC", "ADI resume auth") at credentials holding `N8N_HMAC_SECRET` /
+`N8N_RESUME_SECRET`'s real values — n8n never exports a credential's value, only its reference.
 
 ```json
 {
@@ -257,10 +262,11 @@ real values — n8n never exports a credential's value, only its reference.
     { "id": "call-adi", "name": "Call ADI", "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.5, "position": [880, 300],
       "parameters": { "method": "POST",
-        "url": "http://127.0.0.1:8000/api/hooks/n8n-to-adi?secret=__ADI_HOOK_SECRET__",
+        "url": "http://127.0.0.1:8000/api/hooks/n8n-to-adi",
         "sendHeaders": true, "specifyHeaders": "keypair",
         "headerParameters": { "parameters": [
-          { "name": "x-adi-signature", "value": "={{ $json.signature }}" } ] },
+          { "name": "x-adi-signature", "value": "={{ $json.signature }}" },
+          { "name": "x-adi-hook-secret", "value": "__ADI_HOOK_SECRET__" } ] },
         "sendBody": true, "contentType": "raw", "rawContentType": "application/json",
         "body": "={{ $json.body }}", "options": {} } },
     { "id": "wait-for-adi", "name": "Wait for ADI result", "type": "n8n-nodes-base.wait",
@@ -290,9 +296,11 @@ real values — n8n never exports a credential's value, only its reference.
 
 ## Same machine, or through the relay
 
-**Same machine** — n8n's HTTP Request node calls ADI directly: `http://127.0.0.1:<port>/api/hooks/n8n-to-adi?secret=...`.
-Use the actual loopback port your ADI front door binds, not a `.adi` hostname — a caller outside
-ADI's own front door, which a plain n8n process is, can't resolve one.
+**Same machine** — n8n's HTTP Request node calls ADI directly:
+`http://127.0.0.1:<port>/api/hooks/n8n-to-adi`, with the hook secret as an `X-ADI-Hook-Secret`
+header (or a `?secret=...` query param, still accepted). Use the actual loopback port your ADI
+front door binds, not a `.adi` hostname — a caller outside ADI's own front door, which a plain
+n8n process is, can't resolve one.
 
 **n8n Cloud, or n8n on a different box** — point the same node at the `/h/<id>` URL the trigger
 save printed instead. ADI never needs an inbound port, a firewall rule, or a DNS record for this:
@@ -317,8 +325,9 @@ default this relay exists to route around.
 
 Two independent layers protect this round trip, neither of which depends on the other:
 
-- **The `?secret=` query param** is checked by the platform itself, before the trigger's own
-  script runs at all — a wrong or missing value never reaches your code.
+- **The hook secret** (`X-ADI-Hook-Secret` header or `?secret=` query param) is checked by the
+  platform itself, before the trigger's own script runs at all — a wrong, missing, or
+  unresolvable value never reaches your code.
 - **The HMAC header**, checked inside the trigger script against `ADI_PAYLOAD_FILE` and
   `ADI_HEADERS_FILE`, proves the *exact bytes* n8n sent weren't altered or replayed from a
   different request — the query param only proves "knew the URL."
@@ -354,10 +363,10 @@ delivery of some size happened at some time.
   fails to connect or 404s on arrival, and the Wait node just times out with no error on either
   side to point at. Resolve the real address yourself inside the trigger script and send the
   original hostname back as a `Host` header if n8n's own webhook routing checks it.
-- **Redact `triggers save --extra secret=...`'s own output.** It's a generic passthrough, not
-  specifically the secrets system, so it echoes whatever value you pass in its confirmation line
-  and in later `triggers show`/`list` calls — pipe to a file and redact, as shown above, rather
-  than letting it land in a terminal scrollback or a transcript.
+- **On ADI 1.42.0 or older, `triggers save --extra secret=...` echoes the value** in its own
+  confirmation line and in later `triggers show`/`list` calls — pipe to a file and redact it
+  rather than letting it land in a terminal scrollback or a transcript. `--hook-secret` (1.43.0+,
+  used above) never has this problem: the trigger's definition never carries the value at all.
 - **n8n's Public API can't run a workflow at all**, not even a Manual Trigger one — only the UI's
   own internal endpoint can, and that needs a session cookie, not an API key. Fine for a person
   clicking the button; if you're testing this headlessly, a Schedule or Webhook trigger node is

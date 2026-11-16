@@ -54,6 +54,34 @@ the `github-push` preset is the one to start from — it parses a GitHub push de
 the commits that landed, and `webhook-echo` just logs whatever arrives, for wiring up a source
 you haven't used yet.
 
+### Securing a webhook
+
+A webhook can require the caller to present a shared secret — the platform checks it itself,
+before the trigger's own code ever runs, so an unauthenticated caller never reaches the code
+block at all. Store the secret as a real [[Secrets|secret]] and name it by reference, so the
+value never has to sit in the trigger's own definition:
+
+```bash
+adi-mono secrets set GITHUB_WEBHOOK_SECRET --project my-repo
+adi-mono triggers save github-hook --kind webhook --preset github-push   --project my-repo --hook-secret GITHUB_WEBHOOK_SECRET
+```
+
+`--hook-secret` names the secret; it's resolved fresh on every request (that project's secret
+first, falling back to global) and never written into the trigger's own manifest, printed by
+`triggers show`/`list`, or shown by the panel's editor — only whether one is set. A caller
+presents it as either an `X-ADI-Hook-Secret` header or the `?secret=…` query parameter the URL
+you hand the sender already carries; the header is worth preferring where the sender allows it,
+since a query string is far more likely to end up in a proxy or access log than a header is. A
+secret that names a reference this machine doesn't have refuses every request rather than
+falling open — fix the name or set the secret, there's no way around it.
+
+<Flags>Needs ADI v1.43.0 or later</Flags> On an older build, the only form is an inline value —
+`--extra secret=<value>` — which *does* print in this command's own confirmation line and in
+later `show`/`list` output, so redact it from anything you keep (`sed` over a captured log, say).
+Update, then run `adi-mono triggers migrate-hook-secret <name>` to move an existing inline
+secret into `adi-secrets` and switch it to the reference form above, without ever printing the
+value.
+
 ## Events
 
 An `event` trigger is a different shape again: it reacts to something that already happened
