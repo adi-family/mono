@@ -110,12 +110,15 @@ const HOP_BY_HOP: &[&str] = &["host", "content-length", "connection", "transfer-
 /// Open `record` with this node's sealing secret and replay it into the local loopback listener
 /// — never an in-process call straight into `handlers::hook_trigger`, so a relay-delivered
 /// hook and a directly-received one are guaranteed to pass through *exactly* the same gating
-/// (`enabled`, `secret`, `trigger_on`), with no second copy of that logic to keep in step.
+/// (`enabled`, hook secret, `trigger_on`), with no second copy of that logic to keep in step.
 ///
-/// `trigger.extra["secret"]` rides as a query param on the replay — the node's own answer to the
-/// local gate a direct caller would otherwise have had to supply, never sent by the external
-/// sender (a sender can't sign with our key, so the sender side stays open in every mode).
-async fn replay(loopback_base: &str, identity: &RelayIdentity, trigger: &Trigger, record: &PulledRecord) {
+/// `hook_secret`, already resolved by the caller ([`Triggers::hook_secret`] — by reference or
+/// inline, whichever the trigger has), rides as a query param on the replay — the node's own
+/// answer to the local gate a direct caller would otherwise have had to supply, never sent by
+/// the external sender (a sender can't sign with our key, so the sender side stays open in every
+/// mode). Resolved by the caller rather than read from `trigger.manifest.extra` here because a
+/// reference needs this node's own `adi-secrets` store — [`poll_loop`] already has it to hand.
+async fn replay(loopback_base: &str, identity: &RelayIdentity, trigger: &Trigger, hook_secret: Option<&str>, record: &PulledRecord) {
     let Ok(opened) = adi_relay::seal::open(&identity.sealing, &record.endpoint_id, record.id, &record.sealed) else {
         warn!(trigger = %trigger.name, endpoint_id = %record.endpoint_id, "a pulled record did not open with this node's sealing key — dropped");
         return;
@@ -132,7 +135,7 @@ async fn replay(loopback_base: &str, identity: &RelayIdentity, trigger: &Trigger
         .unwrap_or_default();
 
     let mut query = sender.query.clone();
-    if let Some(secret) = trigger.manifest.extra.get("secret").filter(|s| !s.is_empty()) {
+    if let Some(secret) = hook_secret {
         if !query.is_empty() {
             query.push('&');
         }
@@ -230,7 +233,20 @@ async fn poll_loop(url: String, triggers: Triggers, loopback_base: String, ident
                         debug!(endpoint_id = %record.endpoint_id, "pulled a record for an endpoint no local trigger names any more — dropped");
                         continue;
                     };
-                    replay(&loopback_base, &identity, trigger, record).await;
+                    // Resolved once here (this node's own `adi-secrets` store), not inside
+                    // `replay` — a reference that doesn't currently resolve must drop the
+                    // delivery rather than replay with no secret at all, which the loopback
+                    // `hook_trigger` would otherwise refuse anyway, just a round trip later.
+                    match triggers.hook_secret(trigger) {
+                        adi_triggers::HookSecret::Missing => {
+                            warn!(trigger = %trigger.name, "its hook secret names a reference that doesn't resolve — dropping this relay delivery rather than replaying it unauthenticated");
+                            continue;
+                        }
+                        adi_triggers::HookSecret::Open => replay(&loopback_base, &identity, trigger, None, record).await,
+                        adi_triggers::HookSecret::Value(secret) => {
+                            replay(&loopback_base, &identity, trigger, Some(&secret), record).await;
+                        }
+                    }
                 }
             }
             Err(error) => {
@@ -251,12 +267,16 @@ async fn poll_loop(url: String, triggers: Triggers, loopback_base: String, ident
 /// shared with `adi-mono triggers save`'s own save (ADI-MONO-227) — this is only the HTTP half:
 /// loading this node's keypair and turning a registration failure into a 502.
 pub async fn save_trigger(triggers: &Triggers, supervisor: &Supervisor, body: &[u8]) -> Response {
-    let (name, mut manifest) = match handlers::parse_save_trigger(body) {
+    let (name, mut manifest, clear_hook_secret) = match handlers::parse_save_trigger(body) {
         Ok(parsed) => parsed,
         Err(resp) => return resp,
     };
     let previous = triggers.get(&name).ok().flatten();
     let previous_extra = previous.as_ref().map(|t| &t.manifest.extra);
+
+    // ADI-MONO-242: the panel never receives the real inline hook secret to round-trip, so a
+    // save that didn't touch the secret section keeps whatever the trigger already had.
+    adi_triggers::reconcile_hook_secret(previous_extra, clear_hook_secret, &mut manifest.extra);
 
     if let adi_relay::register::Plan::Unchanged = adi_relay::register::plan(previous_extra, &manifest.extra) {
         adi_relay::register::keep_unchanged_endpoint(previous_extra, &mut manifest.extra);
@@ -380,7 +400,7 @@ mod tests {
             String::from_utf8_lossy(&buf[..n]).to_string()
         });
 
-        replay(&format!("http://{addr}"), &identity, &trigger, &record).await;
+        replay(&format!("http://{addr}"), &identity, &trigger, Some("shh"), &record).await;
 
         let request = captured.await.unwrap();
         let request_line = request.lines().next().unwrap();
