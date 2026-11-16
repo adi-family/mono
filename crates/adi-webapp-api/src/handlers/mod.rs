@@ -1358,7 +1358,14 @@ mod tests {
         assert_eq!(t["enabled"], true);
         assert_eq!(t["project"], "demo");
         assert_eq!(t["description"], "redeploy on push");
-        assert_eq!(t["extra"]["secret"], "s3cr3t");
+        // ADI-MONO-242: the inline secret is trimmed and stored, same as any other `extra`, but
+        // never reaches the wire DTO — only its status does.
+        assert!(t["extra"].get("secret").is_none());
+        assert_eq!(t["hook_secret_status"], "inline");
+        assert_eq!(
+            store.get("deploy-hook").unwrap().unwrap().manifest.extra.get("secret").map(String::as_str),
+            Some("s3cr3t")
+        );
         assert!(t["extra"]["bad key"].is_null());
         assert!(t["extra"]["empty"].is_null());
         assert!(t["last_fired_at"].is_null());
@@ -1461,6 +1468,191 @@ mod tests {
         let v: Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["ok"], true);
         assert_eq!(v["trigger"], "locked");
+    }
+
+    /// ADI-MONO-242: a webhook's hook secret can name an `adi-secrets` secret by reference
+    /// (`extra.secret_ref`) instead of carrying the value inline. Resolved fresh on every
+    /// request, project-scoped first then global — the same precedence `run_env` uses.
+    #[test]
+    fn hook_gates_on_a_secret_ref_resolved_from_adi_secrets() {
+        let store = temp_triggers();
+        adi_secrets::Secrets::with_config(store.config().clone())
+            .set(None, "MY_HOOK_SECRET", "s3", None)
+            .expect("set secret");
+        let _ = save_trigger(
+            &store,
+            &inert_supervisor(&store),
+            br#"{"name":"refd","kind":"webhook","code":"true","extra":{"secret_ref":"MY_HOOK_SECRET"}}"#,
+        );
+
+        assert_eq!(
+            hook_trigger(&store, "refd", "secret=wrong", &no_headers(), b"").status,
+            403
+        );
+        let Response { status, .. } = hook_trigger(&store, "refd", "secret=s3", &no_headers(), b"{}");
+        assert_eq!(status, 200);
+    }
+
+    /// A reference naming a secret this node doesn't have must refuse every request — never
+    /// fall open just because the name didn't resolve.
+    #[test]
+    fn hook_with_a_ref_to_a_missing_secret_refuses_every_request() {
+        let store = temp_triggers();
+        let _ = save_trigger(
+            &store,
+            &inert_supervisor(&store),
+            br#"{"name":"dangling","kind":"webhook","code":"true","extra":{"secret_ref":"NO_SUCH_SECRET"}}"#,
+        );
+        assert_eq!(
+            hook_trigger(&store, "dangling", "", &no_headers(), b"").status,
+            403
+        );
+        assert_eq!(
+            hook_trigger(&store, "dangling", "secret=anything", &no_headers(), b"").status,
+            403
+        );
+    }
+
+    /// The hook secret may also ride as a header — less likely than a query string to end up in
+    /// a proxy or access log — and the query form keeps working.
+    #[test]
+    fn hook_secret_accepts_the_header_form_as_well_as_the_query() {
+        let store = temp_triggers();
+        let _ = save_trigger(
+            &store,
+            &inert_supervisor(&store),
+            br#"{"name":"headered","kind":"webhook","code":"true","extra":{"secret":"s3"}}"#,
+        );
+        let mut headers = HashMap::new();
+        headers.insert("x-adi-hook-secret".to_string(), "s3".to_string());
+        assert_eq!(
+            hook_trigger(&store, "headered", "", &headers, b"{}").status,
+            200
+        );
+        headers.insert("x-adi-hook-secret".to_string(), "wrong".to_string());
+        assert_eq!(
+            hook_trigger(&store, "headered", "", &headers, b"{}").status,
+            403
+        );
+    }
+
+    /// The wire DTO never carries the inline secret's value — not even redacted to a
+    /// placeholder, since a placeholder would round-trip back as the literal secret on the
+    /// panel's next unrelated save. `hook_secret_status` says what's configured instead.
+    #[test]
+    fn trigger_dto_never_carries_the_inline_secret_value() {
+        let store = temp_triggers();
+        let _ = save_trigger(
+            &store,
+            &inert_supervisor(&store),
+            br#"{"name":"inliner","kind":"webhook","code":"true","extra":{"secret":"s3cr3t"}}"#,
+        );
+        let Response { body, .. } = triggers(&store);
+        assert!(!body.contains("s3cr3t"), "the inline value must never reach the wire: {body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        let t = &v["triggers"][0];
+        assert_eq!(t["hook_secret_status"], "inline");
+        assert!(t["extra"].get("secret").is_none());
+    }
+
+    /// A reference, unlike the inline value, is just a name — not sensitive — so it round-trips
+    /// through the wire DTO as-is, and the status reports it distinctly from an inline value.
+    #[test]
+    fn trigger_dto_reports_a_ref_s_name_and_status() {
+        let store = temp_triggers();
+        let _ = save_trigger(
+            &store,
+            &inert_supervisor(&store),
+            br#"{"name":"refd","kind":"webhook","code":"true","extra":{"secret_ref":"MY_HOOK_SECRET"}}"#,
+        );
+        let Response { body, .. } = triggers(&store);
+        let v: Value = serde_json::from_str(&body).unwrap();
+        let t = &v["triggers"][0];
+        assert_eq!(t["extra"]["secret_ref"], "MY_HOOK_SECRET");
+        // Not yet set in adi-secrets, so this is "names a secret that isn't there" — not "ref".
+        assert_eq!(t["hook_secret_status"], "ref_missing");
+    }
+
+    /// A save that never touched the secret section (no `secret`/`secret_ref` in `extra`, no
+    /// `clear_hook_secret`) must keep whatever the trigger already had — the panel's own save
+    /// path, since it was never given the real inline value to send back.
+    #[test]
+    fn resaving_without_touching_the_secret_keeps_the_previous_inline_value() {
+        let store = temp_triggers();
+        let supervisor = inert_supervisor(&store);
+        let _ = save_trigger(
+            &store,
+            &supervisor,
+            br#"{"name":"untouched","kind":"webhook","code":"true","extra":{"secret":"s3"}}"#,
+        );
+        // Resave with a different description, no `extra` at all — exactly what the panel's
+        // form submits when the Hook secret field was never touched.
+        let _ = save_trigger(
+            &store,
+            &supervisor,
+            br#"{"name":"untouched","kind":"webhook","code":"true","description":"renamed"}"#,
+        );
+        assert_eq!(
+            hook_trigger(&store, "untouched", "secret=wrong", &no_headers(), b"").status,
+            403
+        );
+        assert_eq!(
+            hook_trigger(&store, "untouched", "secret=s3", &no_headers(), b"{}").status,
+            200
+        );
+    }
+
+    /// `clear_hook_secret` is the one explicit way to remove it — opening the hook up.
+    #[test]
+    fn clear_hook_secret_removes_it_and_opens_the_hook() {
+        let store = temp_triggers();
+        let supervisor = inert_supervisor(&store);
+        let _ = save_trigger(
+            &store,
+            &supervisor,
+            br#"{"name":"cleared","kind":"webhook","code":"true","extra":{"secret":"s3"}}"#,
+        );
+        let _ = save_trigger(
+            &store,
+            &supervisor,
+            br#"{"name":"cleared","kind":"webhook","code":"true","clear_hook_secret":true}"#,
+        );
+        assert_eq!(
+            hook_trigger(&store, "cleared", "", &no_headers(), b"{}").status,
+            200
+        );
+    }
+
+    /// Explicitly setting a reference retires a stale inline value from the same save — the
+    /// trigger ends up gated on the new secret only, with the plaintext gone from the manifest.
+    #[test]
+    fn setting_a_ref_retires_a_previous_inline_value() {
+        let store = temp_triggers();
+        let supervisor = inert_supervisor(&store);
+        adi_secrets::Secrets::with_config(store.config().clone())
+            .set(None, "NEW_HOOK_SECRET", "new", None)
+            .expect("set secret");
+        let _ = save_trigger(
+            &store,
+            &supervisor,
+            br#"{"name":"switching","kind":"webhook","code":"true","extra":{"secret":"old"}}"#,
+        );
+        let _ = save_trigger(
+            &store,
+            &supervisor,
+            br#"{"name":"switching","kind":"webhook","code":"true","extra":{"secret_ref":"NEW_HOOK_SECRET"}}"#,
+        );
+        assert_eq!(
+            hook_trigger(&store, "switching", "secret=old", &no_headers(), b"").status,
+            403,
+            "the retired inline value must no longer gate anything"
+        );
+        assert_eq!(
+            hook_trigger(&store, "switching", "secret=new", &no_headers(), b"{}").status,
+            200
+        );
+        let trigger = store.get("switching").unwrap().unwrap();
+        assert!(!trigger.manifest.extra.contains_key("secret"));
     }
 
     /// A hook's request headers reach its code block via `ADI_HEADERS_FILE`, so a trigger can

@@ -1,16 +1,18 @@
 use std::collections::{BTreeMap, HashMap};
 
 use adi_triggers::Error as TriggerStoreError;
+use adi_triggers::HookSecret;
 use adi_triggers::RunState;
 use adi_triggers::Supervisor;
 use adi_triggers::TriggerManifest;
 use adi_triggers::Triggers;
 use adi_triggers::clean_trigger_on;
+use subtle::ConstantTimeEq as _;
 
 use crate::types::{
-    EmitAck, EmitEvent, EventTypeDto, HookAck, SaveTrigger, TriggerDto, TriggerFireResult,
-    TriggerKindOption, TriggerLog, TriggerPreset, TriggerPresetField, TriggerRef,
-    TriggerRuntimeOption, TriggersState,
+    EmitAck, EmitEvent, EventTypeDto, HookAck, HookSecretStatus, SaveTrigger, TriggerDto,
+    TriggerFireResult, TriggerKindOption, TriggerLog, TriggerPreset, TriggerPresetField,
+    TriggerRef, TriggerRuntimeOption, TriggersState,
 };
 
 use super::response::{FromBody, Response, clean, error, ok_json, require};
@@ -82,14 +84,16 @@ fn event_types() -> Vec<EventTypeDto> {
         .collect()
 }
 
-/// Decode a `/api/triggers/save` body into the `(name, TriggerManifest)` it describes, without
-/// writing anything. Split out of [`save_trigger`] so a caller who needs to act *before* the
-/// write lands can inspect the manifest first — ADI-MONO-223's relay register-on-save, which
-/// must not persist a trigger whose registration it just failed.
+/// Decode a `/api/triggers/save` body into the `(name, TriggerManifest, clear_hook_secret)` it
+/// describes, without writing anything. Split out of [`save_trigger`] so a caller who needs to
+/// act *before* the write lands can inspect the manifest first — ADI-MONO-223's relay
+/// register-on-save, which must not persist a trigger whose registration it just failed, and
+/// ADI-MONO-242's hook-secret reconciliation, which needs the *previous* manifest this function
+/// has no way to see.
 ///
 /// # Errors
 /// The 400 [`Response`] `name`/`kind` being absent or a malformed body would produce.
-pub fn parse_save_trigger(body: &[u8]) -> Result<(String, TriggerManifest), Response> {
+pub fn parse_save_trigger(body: &[u8]) -> Result<(String, TriggerManifest, bool), Response> {
     let req = require::<SaveTrigger>(body)?;
     let manifest = TriggerManifest {
         // The store normalizes both onto the kinds/runtimes this build understands.
@@ -107,7 +111,7 @@ pub fn parse_save_trigger(body: &[u8]) -> Result<(String, TriggerManifest), Resp
         created_at: 0,
         updated_at: 0,
     };
-    Ok((req.name.trim().to_string(), manifest))
+    Ok((req.name.trim().to_string(), manifest, req.clear_hook_secret))
 }
 
 /// Write `manifest` under `name` and report the fresh list — the tail half of
@@ -129,10 +133,19 @@ pub fn commit_trigger(store: &Triggers, supervisor: &Supervisor, name: &str, man
 
 /// `POST /api/triggers/save` — create or update a trigger definition (an upsert keyed by
 /// `name`), then report the fresh list. `name` and `kind` are required.
+///
+/// Reconciles the hook secret against whatever the trigger previously had
+/// ([`adi_triggers::reconcile_hook_secret`]) before writing — the panel never receives the real
+/// inline value to round-trip, so a save that doesn't touch the secret section must not be read
+/// as clearing it.
 #[must_use]
 pub fn save_trigger(store: &Triggers, supervisor: &Supervisor, body: &[u8]) -> Response {
     match parse_save_trigger(body) {
-        Ok((name, manifest)) => commit_trigger(store, supervisor, &name, manifest),
+        Ok((name, mut manifest, clear_hook_secret)) => {
+            let previous_extra = store.get(&name).ok().flatten().map(|t| t.manifest.extra);
+            adi_triggers::reconcile_hook_secret(previous_extra.as_ref(), clear_hook_secret, &mut manifest.extra);
+            commit_trigger(store, supervisor, &name, manifest)
+        }
         Err(resp) => resp,
     }
 }
@@ -241,9 +254,13 @@ pub fn trigger_log(store: &Triggers, body: &[u8]) -> Response {
 /// request body as its payload and the request's headers (`headers`, lowercase names) handed to
 /// the code block via `ADI_HEADERS_FILE` — the only way a trigger can check a provider's HMAC
 /// signature header (`X-Hub-Signature-256`, `Stripe-Signature`, …). Only an **enabled** trigger
-/// of the `webhook` kind launches; when its `secret` extra is set, the caller must match it with
-/// a `?secret=` query parameter. An unknown name and a background trigger answer the same 404,
-/// so the endpoint doesn't reveal which internal names exist.
+/// of the `webhook` kind launches; when it has a hook secret configured
+/// ([`adi_triggers::Triggers::hook_secret`] — by reference or, for an older trigger, inline), the
+/// caller must present the same value, as either an `X-ADI-Hook-Secret` header or a `?secret=`
+/// query parameter (the header is checked first; either alone is enough). A secret that names a
+/// reference which doesn't currently resolve refuses every request rather than falling open. An
+/// unknown name and a background trigger answer the same 404, so the endpoint doesn't reveal
+/// which internal names exist.
 #[must_use]
 pub fn hook_trigger(
     store: &Triggers,
@@ -266,14 +283,17 @@ pub fn hook_trigger(
     if !trigger.manifest.enabled {
         return error(403, &format!("hook {name} is disabled"));
     }
-    if let Some(secret) = trigger
-        .manifest
-        .extra
-        .get("secret")
-        .filter(|s| !s.is_empty())
-        && query_param(query, "secret") != Some(secret.as_str())
-    {
-        return error(403, "bad or missing secret");
+    match store.hook_secret(&trigger) {
+        HookSecret::Open => {}
+        // Refuse rather than fall open: the trigger names a secret this node doesn't currently
+        // have, which is a misconfiguration to fix, never a reason to let every caller through.
+        HookSecret::Missing => return error(403, "bad or missing secret"),
+        HookSecret::Value(expected) => {
+            let presented = headers.get(HOOK_SECRET_HEADER).map(String::as_str).or_else(|| query_param(query, "secret"));
+            if !presented.is_some_and(|p| constant_time_eq(p, &expected)) {
+                return error(403, "bad or missing secret");
+            }
+        }
     }
     // A project-restricted hook (`trigger_on`) only fires for a request body that names an allowed
     // project — read from the body's top-level `project` field, the same gate the event dispatcher
@@ -293,6 +313,11 @@ pub fn hook_trigger(
     }
 }
 
+/// The header a hook secret may ride as, instead of the `?secret=` query parameter — a proxy or
+/// an access log is far less likely to capture a header than a URL. Lowercase: `headers` arrives
+/// with every name already folded to lowercase (see [`hook_trigger`]'s own doc).
+const HOOK_SECRET_HEADER: &str = "x-adi-hook-secret";
+
 /// The value of `key` in a raw query string (`a=1&b=2`), undecoded. Webhook secrets are plain
 /// tokens (letters/digits/dashes), so URL-decoding is deliberately skipped.
 fn query_param<'q>(query: &'q str, key: &str) -> Option<&'q str> {
@@ -301,6 +326,15 @@ fn query_param<'q>(query: &'q str, key: &str) -> Option<&'q str> {
         .filter_map(|pair| pair.split_once('='))
         .find(|(k, _)| *k == key)
         .map(|(_, v)| v)
+}
+
+/// Constant-time string comparison for the hook secret — a webhook endpoint is exactly the kind
+/// of unauthenticated-until-proven-otherwise input `adi-mesh`/`adi-relay-server`'s own auth
+/// checks already use `subtle` for. Lengths differing is checked up front (not secret, and
+/// `ConstantTimeEq` on slices requires equal length), so only the byte comparison itself runs
+/// in constant time.
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    a.len() == b.len() && a.as_bytes().ct_eq(b.as_bytes()).into()
 }
 
 /// The two trigger kinds — a kind answers only "how does this launch?". What a trigger *does*
@@ -370,12 +404,22 @@ fn trigger_presets() -> Vec<TriggerPreset> {
 
 /// Flatten a stored trigger into its wire [`TriggerDto`], decorated with its last-run time and
 /// — for a background trigger — the live process the supervisor publishes.
+///
+/// `extra`'s inline hook-secret value, when one is set, never makes it into the DTO at all —
+/// dropped here, not redacted to a placeholder, because a placeholder would round-trip back as
+/// the literal secret on the panel's next unrelated save (see [`save_trigger`]'s own reconcile
+/// step, which exists for exactly the key this drops). `hook_secret_status` carries everything
+/// the client is allowed to know about it instead.
 fn trigger_dto(store: &Triggers, trigger: adi_triggers::Trigger) -> TriggerDto {
     let last_fired_at = store.last_fired(&trigger.name);
     let status = store.status(&trigger.name);
+    let hook_secret_status = hook_secret_status(store, &trigger);
+    let name = trigger.name;
     let m = trigger.manifest;
+    let mut extra = m.extra;
+    extra.remove(adi_triggers::HOOK_SECRET_EXTRA);
     TriggerDto {
-        name: trigger.name,
+        name,
         kind: m.kind,
         runtime: m.runtime,
         code: m.code,
@@ -383,7 +427,7 @@ fn trigger_dto(store: &Triggers, trigger: adi_triggers::Trigger) -> TriggerDto {
         description: m.description,
         enabled: m.enabled,
         project: m.project,
-        extra: m.extra,
+        extra,
         events: m.events,
         trigger_on: m.trigger_on,
         created_at: m.created_at,
@@ -393,6 +437,22 @@ fn trigger_dto(store: &Triggers, trigger: adi_triggers::Trigger) -> TriggerDto {
         pid: status.as_ref().map(|s| s.pid),
         uptime_secs: status.as_ref().and_then(RunState::uptime_secs),
         restarts: status.as_ref().map_or(0, |s| s.restarts),
+        hook_secret_status,
+    }
+}
+
+/// What kind of hook secret currently gates `trigger`, for the wire — never the value.
+fn hook_secret_status(store: &Triggers, trigger: &adi_triggers::Trigger) -> HookSecretStatus {
+    let has_ref = trigger
+        .manifest
+        .extra
+        .get(adi_triggers::HOOK_SECRET_REF_EXTRA)
+        .is_some_and(|s| !s.is_empty());
+    match store.hook_secret(trigger) {
+        HookSecret::Open => HookSecretStatus::None,
+        HookSecret::Missing => HookSecretStatus::RefMissing,
+        HookSecret::Value(_) if has_ref => HookSecretStatus::Ref,
+        HookSecret::Value(_) => HookSecretStatus::Inline,
     }
 }
 

@@ -3823,6 +3823,28 @@ pub struct TriggerPreset {
     pub events: Vec<String>,
 }
 
+/// A webhook trigger's hook secret, as far as the wire ever says — never the value itself (not
+/// here, and not anywhere `extra` reaches the client: the server drops the literal
+/// `secret`/`secret_ref` out of a [`TriggerDto`]'s own `extra` before it ever serializes, see
+/// `adi-webapp-api::handlers::triggers::trigger_dto`). `None`/`Inline`/`Ref` only say what *kind*
+/// of gate is configured; `RefMissing` is the one state that means "refuses every request" —
+/// `secret_ref` names a secret that doesn't currently resolve.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HookSecretStatus {
+    /// No secret configured at all — the hook is open.
+    #[default]
+    None,
+    /// A plaintext value is still stored inline on the manifest (`extra.secret`) — the legacy
+    /// form kept working, but due to migrate off with `adi-mono triggers migrate-hook-secret`.
+    Inline,
+    /// `extra.secret_ref` names an `adi-secrets` secret that resolves right now.
+    Ref,
+    /// `extra.secret_ref` names a secret that isn't set in either of the trigger's scopes — the
+    /// hook refuses every request until that's fixed.
+    RefMissing,
+}
+
 /// One trigger definition, flattened for the wire. `kind` is how it launches, `runtime` is the
 /// language of `code`. `last_fired_at` comes from the log's mtime; the `running`/`pid`/
 /// `restarts` group describes a *background* trigger's supervised process and is inert for a
@@ -3873,6 +3895,10 @@ pub struct TriggerDto {
     /// block keeps dying.
     #[serde(default)]
     pub restarts: u32,
+    /// For a webhook trigger: what kind of hook secret (if any) currently gates it. Always
+    /// `None` for the other kinds, which have no hook to gate.
+    #[serde(default)]
+    pub hook_secret_status: HookSecretStatus,
 }
 
 /// `GET /api/triggers` — every registered trigger, sorted by name, plus the editor's
@@ -3943,6 +3969,13 @@ pub struct SaveTrigger {
     /// trigger (fires for every project).
     #[serde(default)]
     pub trigger_on: Vec<String>,
+    /// An explicit "remove the hook secret" action, distinct from simply not mentioning one:
+    /// `extra` carrying neither `secret` nor `secret_ref` means "this save never touched the
+    /// secret" (the panel can't round-trip a value it was never given) and keeps whatever the
+    /// trigger already had; this flag is the one way to actually clear it. Ignored by anything
+    /// that isn't a webhook.
+    #[serde(default)]
+    pub clear_hook_secret: bool,
 }
 
 /// serde default for [`SaveTrigger::enabled`] — an omitted flag saves an enabled trigger.
