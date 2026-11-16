@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 
 use adi_ui::Lang;
 use adi_ui::{Row as TableRow, Table};
-use adi_webapp_api::types::{SaveTrigger, TriggerDto, TriggerPreset, TriggersState};
+use adi_webapp_api::types::{HookSecretStatus, SaveTrigger, TriggerDto, TriggerPreset, TriggersState};
 use leptos::html::Input;
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
@@ -34,16 +34,18 @@ pub(crate) const COLS: &[&str] = &["Name", "Launches", "Project", "Status", "Las
 /// is filed under the open project, so it would say the same thing all the way down.
 pub(crate) const PROJECT_COLS: &[&str] = &["Name", "Launches", "Status", "Last run", ""];
 
-/// The settings input every webhook offers regardless of preset — the platform itself reads it
-/// to guard the endpoint, so it isn't any preset's business.
-const WEBHOOK_SECRET: (&str, &str, &str) =
-    ("secret", "Secret", "optional — callers must pass ?secret=…");
-
 /// The `extra` keys the relay section owns, rendered through its
 /// own dedicated fields below rather than the generic freeform list — `relay_endpoint` is
 /// server-written and must never be a hand-editable text box, and the other three deserve a
 /// select/number input and a licence field rather than a bare `<input>`.
 const RELAY_EXTRA_KEYS: &[&str] = &["relay", "relay_retention", "relay_endpoint", "licence_code"];
+
+/// The reserved hook-secret `extra` key [`hook_secret_field`] renders through its own dedicated
+/// input — never the generic freeform list, and never (for `secret`, the legacy inline form) a
+/// value the server even hands the client. `secret_ref` is listed here purely so it's excluded
+/// from the generic list too; it isn't sensitive and round-trips through `extra` like any other
+/// key, see [`current_extras`].
+const HOOK_SECRET_REF_KEY: &str = "secret_ref";
 
 /// The four hosted relays the task names, plus `custom:<url>` for a self-host
 /// operator's own instance — must mirror `adi-app/src/relay.rs::resolve_url` exactly. Duplicated
@@ -77,14 +79,17 @@ pub(crate) fn triggers_view(state: State, form: TriggersForm, log: TriggersLogVi
         description,
         code,
         enabled,
-        // The settings inputs are derived from the whole form (kind + preset), so they read
-        // `extra` through it rather than from a loose signal here.
+        // The settings inputs (including the hook secret) are derived from the whole form
+        // (kind + preset), so they read `extra`/`hook_secret_status`/`clear_hook_secret` through
+        // it rather than from a loose signal here.
         extra: _,
         events,
         trigger_on,
         editing,
         busy,
         relay_key,
+        hook_secret_status: _,
+        clear_hook_secret: _,
     } = form;
     let projects = state.projects;
 
@@ -159,7 +164,9 @@ pub(crate) fn triggers_view(state: State, form: TriggersForm, log: TriggersLogVi
                     extra: current_extras(state, form),
                     events: parse_event_patterns(&events.get()),
                     trigger_on: trigger_on.get(),
+                    clear_hook_secret: form.clear_hook_secret.get(),
                 };
+                form.clear_hook_secret.set(false);
                 editing.set(Some(nm.clone()));
                 apply_triggers(state, Some(busy), fetch::save_trigger(body));
             }>
@@ -216,6 +223,7 @@ pub(crate) fn triggers_view(state: State, form: TriggersForm, log: TriggersLogVi
                         on:change=move |ev| enabled.set(event_target_checked(&ev)) />
                     <span class="adi-field__label">"Enabled"</span>
                 </label>
+                {move || (kind.get() == "webhook").then(|| hook_secret_field(form))}
                 {move || extra_fields(state, form)}
                 {move || (kind.get() == "webhook").then(|| relay_fields(form))}
                 {move || (kind.get() == "event").then(|| view! {
@@ -246,10 +254,13 @@ pub(crate) fn triggers_view(state: State, form: TriggersForm, log: TriggersLogVi
             {flash_view(flash)}
             <div class="adi-hint">
                 "A webhook trigger is live at " <code>"/api/hooks/<name>"</code>
-                " (POST or GET; add " <code>"?secret=…"</code> " when one is set). A background
-                 trigger runs for as long as it is enabled — the app restarts it if it exits,
-                 and editing its code restarts it. Every setting above reaches the code block as "
-                <code>"$ADI_<KEY>"</code> "."
+                " (POST or GET; present the hook secret, when one is set, as either an "
+                <code>"X-ADI-Hook-Secret"</code> " header or " <code>"?secret=…"</code> " — the
+                 header doesn't end up in a proxy or access log the way a query string can). A
+                 background trigger runs for as long as it is enabled — the app restarts it if
+                 it exits, and editing its code restarts it. Every setting above reaches the
+                 code block as " <code>"$ADI_<KEY>"</code> " — except the hook secret itself,
+                 which the code block never sees."
             </div>
         </section>
     }
@@ -480,9 +491,10 @@ fn code_hint(kind: &str, runtime: &str) -> String {
     format!("{how}; {payload}; settings arrive as $ADI_<KEY>")
 }
 
-/// The settings inputs for the form as it stands: whatever the applied preset declares, plus a
-/// webhook's `secret`. A trigger with no preset still shows any settings it already carries, so
-/// editing an old definition never silently drops them.
+/// The settings inputs for the form as it stands: whatever the applied preset declares. A
+/// trigger with no preset still shows any settings it already carries, so editing an old
+/// definition never silently drops them. A webhook's hook secret is excluded — rendered through
+/// [`hook_secret_field`]'s own dedicated input, never this generic freeform one.
 fn settings_fields(state: State, form: TriggersForm) -> Vec<(String, String, String)> {
     let mut fields: Vec<(String, String, String)> = Vec::new();
     let mut push = |key: String, label: String, hint: String| {
@@ -491,10 +503,6 @@ fn settings_fields(state: State, form: TriggersForm) -> Vec<(String, String, Str
         }
     };
 
-    if form.kind.get() == "webhook" {
-        let (key, label, hint) = WEBHOOK_SECRET;
-        push(key.to_string(), label.to_string(), hint.to_string());
-    }
     if let Some(id) = form.preset.get()
         && let Some(st) = state.triggers.get()
         && let Some(preset) = st.presets.iter().find(|p| p.id == id)
@@ -504,10 +512,11 @@ fn settings_fields(state: State, form: TriggersForm) -> Vec<(String, String, Str
         }
     }
     // Anything already set that no preset claims — an old definition, or a key added by hand.
-    // The relay keys are excluded: `relay_fields` below renders them through its own dedicated
-    // inputs, never this generic freeform one (`relay_endpoint` especially must stay read-only).
+    // The relay keys and the hook-secret reference are excluded: each renders through its own
+    // dedicated input below, never this generic freeform one (`relay_endpoint` especially must
+    // stay read-only, and the hook secret has its own status line a bare `<input>` can't show).
     for key in form.extra.get().keys() {
-        if RELAY_EXTRA_KEYS.contains(&key.as_str()) {
+        if RELAY_EXTRA_KEYS.contains(&key.as_str()) || key == HOOK_SECRET_REF_KEY {
             continue;
         }
         push(key.clone(), key.clone(), "custom setting".to_string());
@@ -552,6 +561,61 @@ fn set_extra(extra: RwSignal<BTreeMap<String, String>>, key: &str, value: String
 /// has registered this trigger and written back `relay_endpoint` — the public URL to hand the
 /// sender and this node's own public key for a self-host operator's `authorized_keys`. Shown for
 /// webhook triggers only: a background/event trigger has no inbound endpoint for a relay to front.
+/// The webhook's own hook secret: a reference to an `adi-secrets` secret by name, resolved
+/// fresh on every request — never a plaintext value, which the server never even sends to this
+/// client (see `handlers::triggers::trigger_dto`'s own doc). An inline, legacy secret shows only
+/// as a status line with no input bound to it, since there's no value here to bind one to; the
+/// trigger keeps working until it's migrated (`adi-mono triggers migrate-hook-secret`).
+fn hook_secret_field(form: TriggersForm) -> AnyView {
+    let extra = form.extra;
+    let status = form.hook_secret_status;
+    let secret_ref = move || extra.get().get(HOOK_SECRET_REF_KEY).cloned().unwrap_or_default();
+
+    view! {
+        <div class="adi-field">
+            <label class="adi-field__label" for="trigger-hook-secret">"Hook secret"</label>
+            <input class="adi-input adi-mono" id="trigger-hook-secret" autocomplete="off"
+                placeholder="name of a secret in adi-secrets"
+                prop:value=secret_ref
+                on:input=move |ev| {
+                    form.clear_hook_secret.set(false);
+                    let v = event_target_value(&ev);
+                    let now_set = !v.trim().is_empty();
+                    set_extra(extra, HOOK_SECRET_REF_KEY, v);
+                    if now_set {
+                        status.set(HookSecretStatus::Ref);
+                    }
+                } />
+            {move || hook_secret_hint(status.get())}
+            {move || (status.get() != HookSecretStatus::None).then(|| view! {
+                <button class="adi-btn adi-btn--quiet" type="button" on:click=move |_| {
+                    form.clear_hook_secret.set(true);
+                    set_extra(extra, HOOK_SECRET_REF_KEY, String::new());
+                    status.set(HookSecretStatus::None);
+                }>"Remove secret"</button>
+            })}
+        </div>
+    }
+    .into_any()
+}
+
+/// The explanatory line beside the Hook secret field, one per [`HookSecretStatus`] the server
+/// could possibly report.
+fn hook_secret_hint(status: HookSecretStatus) -> AnyView {
+    field_hint(match status {
+        HookSecretStatus::None => {
+            "optional — callers must present ?secret=… or an X-ADI-Hook-Secret header when one is set"
+        }
+        HookSecretStatus::Ref => "set — resolved from adi-secrets on every request",
+        HookSecretStatus::Inline => {
+            "set (inline, legacy) — migrate with `adi-mono triggers migrate-hook-secret <name>` to move it into adi-secrets"
+        }
+        HookSecretStatus::RefMissing => {
+            "names a secret that isn't set in adi-secrets — every call to this hook is refused until it is"
+        }
+    })
+}
+
 fn relay_fields(form: TriggersForm) -> AnyView {
     let extra = form.extra;
     let relay_value = move || extra.get().get("relay").cloned().unwrap_or_default();
@@ -645,7 +709,10 @@ fn current_extras(state: State, form: TriggersForm) -> BTreeMap<String, String> 
         .into_iter()
         .map(|(k, v)| (k, v.trim().to_string()))
         .filter(|(k, v)| {
-            !v.is_empty() && (RELAY_EXTRA_KEYS.contains(&k.as_str()) || offered.iter().any(|(key, _, _)| key == k))
+            !v.is_empty()
+                && (RELAY_EXTRA_KEYS.contains(&k.as_str())
+                    || k == HOOK_SECRET_REF_KEY
+                    || offered.iter().any(|(key, _, _)| key == k))
         })
         .collect()
 }
@@ -871,6 +938,9 @@ fn toggle_trigger(state: State, t: &TriggerDto) {
         extra: t.extra.clone(),
         events: t.events.clone(),
         trigger_on: t.trigger_on.clone(),
+        // A toggle never touches the hook secret; `extra` already carries a reference verbatim
+        // (just a name) and the server carries an untouched inline value forward on its own.
+        clear_hook_secret: false,
     };
     apply_triggers(
         state,
@@ -956,7 +1026,11 @@ fn load_trigger_into_form(form: TriggersForm, t: &TriggerDto) {
     form.description.set(t.description.clone());
     form.code.set(t.code.clone());
     form.enabled.set(t.enabled);
+    // `t.extra` never carries the inline hook secret's value (the server drops it entirely) —
+    // `secret_ref`, not being sensitive, rides along as-is when that's how this trigger is gated.
     form.extra.set(t.extra.clone());
+    form.hook_secret_status.set(t.hook_secret_status);
+    form.clear_hook_secret.set(false);
     form.events.set(t.events.join("\n"));
     form.trigger_on.set(t.trigger_on.clone());
     form.editing.set(Some(t.name.clone()));
@@ -974,6 +1048,8 @@ fn clear_trigger_form(form: TriggersForm) {
     form.code.set(String::new());
     form.enabled.set(true);
     form.extra.set(BTreeMap::new());
+    form.hook_secret_status.set(HookSecretStatus::None);
+    form.clear_hook_secret.set(false);
     form.events.set(String::new());
     form.trigger_on.set(Vec::new());
     form.editing.set(None);

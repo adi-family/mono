@@ -1549,6 +1549,14 @@ pub(crate) struct TriggersForm {
     /// This node's webhook-relay public signing key, fetched once
     /// the relay section is shown and cached here — it's a per-node constant, not per-trigger.
     pub(crate) relay_key: RwSignal<Option<String>>,
+    /// What kind of hook secret the loaded trigger has (never the value — the server drops
+    /// that out of the wire DTO entirely). Shown beside the Hook secret field so an inline,
+    /// legacy secret's status is visible without ever receiving it.
+    pub(crate) hook_secret_status: RwSignal<adi_webapp_api::types::HookSecretStatus>,
+    /// Set by the Hook secret field's "Remove" action for the next save only — the one explicit
+    /// way to clear a hook secret, since a save that merely didn't touch the field (every other
+    /// edit) must keep whatever was already there.
+    pub(crate) clear_hook_secret: RwSignal<bool>,
 }
 
 /// The Triggers page's log view: which trigger's fire log is open (`None` = closed) and the

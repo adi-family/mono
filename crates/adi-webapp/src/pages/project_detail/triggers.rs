@@ -75,6 +75,7 @@ pub(crate) fn triggers_panel(
                     events: Vec::new(),
                     // No project restriction from the quick form — set it on the Triggers page.
                     trigger_on: Vec::new(),
+                    clear_hook_secret: false,
                 };
                 name.set(String::new());
                 code.set(String::new());

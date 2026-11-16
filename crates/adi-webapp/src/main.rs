@@ -1085,6 +1085,8 @@ fn App() -> impl IntoView {
         editing: RwSignal::new(None::<String>),
         busy: RwSignal::new(false),
         relay_key: RwSignal::new(None::<String>),
+        hook_secret_status: RwSignal::new(adi_webapp_api::types::HookSecretStatus::default()),
+        clear_hook_secret: RwSignal::new(false),
     };
 
     let triggers_log = TriggersLogView::new();
