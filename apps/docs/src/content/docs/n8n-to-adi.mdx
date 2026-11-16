@@ -5,9 +5,8 @@ description: "Have n8n hand a message to an ADI agent and pick the result back u
 
 import Flags from '../../components/Flags.astro';
 
-An n8n workflow can hand data to an ADI agent — classify a message, draft a reply, summarize a
-document — and pick the answer back up without polling for it: n8n pauses, ADI calls back, n8n
-resumes.
+n8n pauses at a Wait node while ADI processes the message — classify it, draft a reply, summarize
+a document — then resumes when ADI posts the result back.
 
 It needs the [[marketplace#Do it|n8n marketplace package]], or n8n Cloud, plus the
 [[marketplace#Do it|n8n-toolbox package]] if you also want an ADI agent to drive n8n in the other
@@ -32,11 +31,14 @@ paused execution: ADI posts to `$execution.resumeUrl`, and n8n resumes exactly w
 
 ## Prerequisites
 
-- **ADI 1.40.0 or later** for the relay-routed variant (`--extra relay=...` on a webhook trigger).
-  To follow this guide as written — the trigger reading the request's headers, and the relay
-  actually registering an endpoint rather than only saving the setting — use open-source ADI
-  ≥1.42.0 or Enterprise ≥2026.24.0; an older Enterprise build sets the field but doesn't call the
-  relay, and the panel is the only way to register one there.
+- **ADI ≥1.40.0** for the same-machine variant — that's when a webhook trigger started getting
+  the request's headers in `ADI_HEADERS_FILE`, which the HMAC check below reads.
+- **Relay registration requires ADI 1.40.0 through the panel or 1.41.0 through the CLI.** 1.40.0
+  shipped the relay and the panel's trigger editor, which registers an endpoint when you pick a
+  relay there. `adi-mono triggers save --extra relay=...` — the way this guide's `triggers save`
+  command below does it — registers one itself starting in 1.41.0; on 1.40.0, register from the
+  panel once and manage the trigger with the CLI after. Enterprise: **2026.21.0** has the relay
+  with panel registration, **2026.22.0** and later also register from the CLI.
 - **An n8n instance** — the [[marketplace#Do it|n8n marketplace package]] (self-hosted, installs
   into its own project), or an n8n Cloud account. Nothing below is specific to either; only the
   URL the "Call ADI" node points at differs.
@@ -61,9 +63,9 @@ adi-mono secrets set N8N_HMAC_SECRET   --project n8n --description "HMAC key n8n
 adi-mono secrets set N8N_RESUME_SECRET --project n8n --description "header value ADI sends on resume"
 ```
 
-**Never let a secret's value land in a transcript or a log.** `triggers save --extra
-secret=...` (below) echoes whatever you pass it, in its own confirmation line and later in
-`triggers show`/`list` — redirect that command's output and redact the value if you keep it:
+**Keep secrets out of transcripts and logs.** `triggers save --extra secret=...` (below) echoes
+whatever you pass it, in its own confirmation line and later in `triggers show`/`list` — redirect
+that command's output and redact the value if you keep it:
 
 ```bash
 adi-mono triggers save n8n-to-adi --kind webhook --runtime sh --project n8n \
@@ -130,7 +132,7 @@ printf '%s' "$result" | jq -e . >/dev/null 2>&1 || result=$(jq -n --arg r "$resu
 # If n8n's own WEBHOOK_URL names a host this script can't resolve or reach directly — true of
 # the n8n marketplace package, reachable only at the .adi hostname its own hive service proxies —
 # resolve the real address yourself and keep the original hostname as a Host header, since n8n's
-# webhook routing validates it against what it configured. See "Make sure ADI can reach n8n" below.
+# webhook routing validates it against what it configured. See the WEBHOOK_URL bullet under Gotchas below.
 resume_secret=$("$ADI" secrets read N8N_RESUME_SECRET --project "$PROJECT")
 callback_body=$(jq -nc --argjson result "$result" '{result: $result}')
 
@@ -201,8 +203,8 @@ output field `signature`. Point its credential at a `Hmac Secret` field holding 
 }
 ```
 
-**Body type must be Raw, not JSON** — the whole point of step 1 was sending the exact bytes that
-got signed; letting this node re-encode the body breaks that. For the relay-routed variant, swap
+**Body type must be Raw, not JSON** — send the exact bytes signed in step 1; letting this node
+re-encode the body breaks that. For the relay-routed variant, swap
 the `url` for the `/h/<id>` URL `triggers save` printed, same `?secret=` query param.
 
 ### 4. Wait — "On Webhook Call", method POST, with a timeout
@@ -365,5 +367,4 @@ delivery of some size happened at some time.
 
 [[triggers|Triggers]] for the webhook/background/event trigger shapes this builds on,
 [[secrets|Secrets]] for how the three secrets above are stored, [[agents|Agents]] for backends and
-run caps, [[marketplace|Marketplace]] for the n8n and n8n-toolbox packages this guide follows up
-on.
+run caps, [[marketplace|Marketplace]] for the n8n and n8n-toolbox packages.
