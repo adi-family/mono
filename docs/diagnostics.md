@@ -51,8 +51,13 @@ HTTP producers can `POST /api/diagnostics/report` with the same fields:
 It returns `{ "records": [...] }`, newest first. Search includes source, area, message, and
 JSON context. Reading never acknowledges events on the workflow bus or deletes history.
 
-The dashboard polls the local store every ten seconds for its unread indicator. Open Event
-log to search stored history, filter severity, inspect context, or load older pages. Refresh
+The dashboard defaults to this machine. Event log's Machine selector can switch to any
+paired node, using the existing authenticated node proxy. Selection is remembered per tab;
+record ids, caches and unread state are scoped to their owning machine. Each row names the
+machine separately from its source process. Only the selected node is polled every ten
+seconds. Locked nodes need unlocking/admin access, and nodes must run a build that provides
+the diagnostics API. Unavailable nodes show a retrieval error, not another node's records.
+Open Event log to search stored history, filter severity, inspect context, or load older pages. Refresh
 reloads the current query. Read/unread state is per browser tab. Errors reading the store
 are shown in the panel while cached entries remain available.
 

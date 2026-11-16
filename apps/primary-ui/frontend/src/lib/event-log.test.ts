@@ -2,9 +2,46 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { appendEvent, emptyEventLog, eventCollapseMs, eventLogLimit, mergeDiagnostics, parseEventLog, queryDiagnostics, unreadEvents, type AppEventInput } from "./event-log";
+import { appendEvent, emptyEventLog, eventCollapseMs, eventLogLimit, machineLog, mergeDiagnostics, parseEventLog, queryDiagnostics, unreadEvents, type AppEventInput } from "./event-log";
 
 const failure: AppEventInput = { level: "error", area: "Chats", source: "hetzner-nosh", message: "The app returned an invalid response." };
+
+test("equal record ids on separate machines never collide or cross filters", () => {
+  const row = { id: 42, recorded_at: 1500, level: "error" as const, source: "claude", area: "MCP", message: "Failed" };
+  let log = mergeDiagnostics(emptyEventLog, [row]);
+  log = mergeDiagnostics(log, [row], "claude");
+  log = mergeDiagnostics(log, [row], "hetzner-nosh");
+  assert.equal(log.events.length, 3);
+  assert.deepEqual(machineLog(log).events.map((e) => e.id), ["stored:42"]);
+  assert.deepEqual(machineLog(log, "claude").events.map((e) => e.id), ["stored:claude:42"]);
+  const readLocal = { ...log, seenAt: 2000, seenByMachine: { claude: 2000 } };
+  assert.equal(unreadEvents(machineLog(readLocal, "claude")).length, 0);
+  assert.equal(unreadEvents(machineLog(readLocal, "hetzner-nosh")).length, 1);
+  assert.equal(parseEventLog(JSON.stringify(readLocal)).seenByMachine?.claude, 2000);
+});
+
+test("remote browser records cannot remove a local browser fallback", () => {
+  const local = appendEvent(emptyEventLog, failure, 1000, "local-browser");
+  const remote = { id: 1, recorded_at: 1500, level: "error" as const, source: "browser", area: "Chat", message: "Failed", context: { browser_event_id: "local-browser" } };
+  assert.equal(machineLog(mergeDiagnostics(local, [remote], "node")).events.length, 1);
+});
+
+test("node routing preserves filters and pagination without sending machine as process source", async () => {
+  const original = globalThis.fetch;
+  try {
+    globalThis.fetch = (async (url, options) => {
+      assert.equal(String(url), "/api/app/node/hetzner-nosh/api/diagnostics/query");
+      assert.deepEqual(JSON.parse(String(options?.body)), { before: 42, search: "MCP", limit: 100 });
+      return new Response(JSON.stringify({ records: [] }));
+    }) as typeof fetch;
+    assert.deepEqual(await queryDiagnostics({ before: 42, search: "MCP" }, "hetzner-nosh"), []);
+    await assert.rejects(queryDiagnostics({}, "../bad"), /valid paired machine/);
+    globalThis.fetch = (async () => new Response("", { status: 404 })) as typeof fetch;
+    await assert.rejects(queryDiagnostics({}, "node"), /node:.*Update ADI/);
+    globalThis.fetch = (async () => new Response(JSON.stringify({ error: "The node runs an older ADI. Update it first." }), { status: 502 })) as typeof fetch;
+    await assert.rejects(queryDiagnostics({}, "node"), /older ADI.*Update it first/);
+  } finally { globalThis.fetch = original; }
+});
 
 test("server polls preserve identity and unread state, and replace a submitted browser fallback", () => {
   const local = appendEvent(emptyEventLog, failure, 1000, "browser-1");

@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { APP_API_BASE } from "./app-api";
+import { APP_API_BASE, appApiBase } from "./app-api";
 
 /*
  * Background failures — a machine that stopped answering a poll, a transcript refresh that
@@ -25,6 +25,8 @@ export interface AppEventInput {
 
 export interface AppEvent extends AppEventInput {
   id: string;
+  /** Owning log store; separate from the source process. Undefined is this machine. */
+  machine?: string;
   firstSeen: number;
   lastSeen: number;
   /** How many times the same event was reported while it stayed collapsed into this row. */
@@ -36,6 +38,7 @@ export interface EventLogState {
   events: AppEvent[];
   /** When the log was last opened; anything newer counts as unread. */
   seenAt: number;
+  seenByMachine?: Record<string, number>;
 }
 
 export const eventLogStorageKey = "adi.event-log.v1";
@@ -69,7 +72,8 @@ function isEvent(value: unknown): value is AppEvent {
   const event = value as Record<string, unknown>;
   return typeof event.id === "string" && (event.level === "error" || event.level === "warning" || event.level === "info") && typeof event.area === "string"
     && typeof event.message === "string" && typeof event.firstSeen === "number" && typeof event.lastSeen === "number"
-    && typeof event.count === "number" && (event.source === undefined || typeof event.source === "string");
+    && typeof event.count === "number" && (event.source === undefined || typeof event.source === "string")
+    && (event.machine === undefined || (typeof event.machine === "string" && validMachine(event.machine)));
 }
 
 export function parseEventLog(stored: string | null): EventLogState {
@@ -78,7 +82,9 @@ export function parseEventLog(stored: string | null): EventLogState {
     const value: unknown = JSON.parse(stored);
     if (!value || typeof value !== "object" || !Array.isArray((value as EventLogState).events)) return emptyEventLog;
     const seenAt = (value as EventLogState).seenAt;
-    return { events: (value as EventLogState).events.filter(isEvent).slice(0, eventLogLimit), seenAt: typeof seenAt === "number" ? seenAt : 0 };
+    const seen = (value as EventLogState).seenByMachine;
+    const seenByMachine = seen && typeof seen === "object" ? Object.fromEntries(Object.entries(seen).filter(([key, time]) => validMachine(key) && typeof time === "number" && Number.isFinite(time))) : undefined;
+    return { events: (value as EventLogState).events.filter(isEvent).slice(0, eventLogLimit), seenAt: typeof seenAt === "number" ? seenAt : 0, ...(seenByMachine ? { seenByMachine } : {}) };
   } catch {
     return emptyEventLog;
   }
@@ -127,26 +133,37 @@ export interface DiagnosticRecord {
 }
 
 /** Import by durable id, never incrementing counts because a poll saw the same row again. */
-export function mergeDiagnostics(log: EventLogState, records: DiagnosticRecord[]): EventLogState {
+export function mergeDiagnostics(log: EventLogState, records: DiagnosticRecord[], machine?: string): EventLogState {
   const events = new Map(log.events.map((event) => [event.id, event]));
   for (const record of records) {
-    if (record.source === "browser" && record.context && typeof record.context === "object") {
+    if (!machine && record.source === "browser" && record.context && typeof record.context === "object") {
       const localId = (record.context as Record<string, unknown>).browser_event_id;
       if (typeof localId === "string") events.delete(localId);
     }
-    const id = `stored:${record.id}`;
-    events.set(id, { id, level: record.level, source: record.source, area: record.area, message: record.message,
+    const id = machine ? `stored:${machine}:${record.id}` : `stored:${record.id}`;
+    events.set(id, { id, ...(machine ? { machine } : {}), level: record.level, source: record.source, area: record.area, message: record.message,
       context: record.context, firstSeen: record.recorded_at, lastSeen: record.recorded_at, count: 1 });
   }
   return { ...log, events: [...events.values()].sort((a, b) => b.lastSeen - a.lastSeen) };
 }
 
-export async function queryDiagnostics(query: { before?: number; source?: string; level?: AppEventLevel; search?: string } = {}): Promise<DiagnosticRecord[]> {
-  const response = await fetch(`${APP_API_BASE}/diagnostics/query`, {
+export async function queryDiagnostics(query: { before?: number; source?: string; level?: AppEventLevel; search?: string } = {}, machine?: string): Promise<DiagnosticRecord[]> {
+  const response = await fetch(`${appApiBase(machine)}/diagnostics/query`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...query, limit: 100 }),
     signal: AbortSignal.timeout(8000),
   });
-  if (!response.ok) throw new Error(`Could not load stored logs (HTTP ${response.status}).`);
+  if (!response.ok) {
+    const where = machine || "This machine";
+    // The node proxy can translate a remote 404/connection failure into a 502 with an
+    // actionable explanation. Preserve it instead of reducing every case to "Bad Gateway".
+    const detail: unknown = await response.json().catch(() => null);
+    if (detail && typeof detail === "object" && "error" in detail && typeof detail.error === "string" && detail.error.trim()) {
+      throw new Error(`${where}: ${detail.error.slice(0, 1500)}`);
+    }
+    if (response.status === 404) throw new Error(`${where}: stored logs are unavailable. Update ADI on this machine.`);
+    if (response.status === 403 || response.status === 401) throw new Error(`${where}: unlock this node and use an administrator connection to read its logs.`);
+    throw new Error(`${where}: could not load stored logs (HTTP ${response.status}).`);
+  }
   const data = await response.json() as { records?: DiagnosticRecord[] };
   if (!Array.isArray(data.records) || !data.records.every((r) => r && Number.isSafeInteger(r.id)
     && typeof r.recorded_at === "number" && Number.isFinite(r.recorded_at) && r.recorded_at >= 0 && r.recorded_at < 8.64e15
@@ -155,12 +172,17 @@ export async function queryDiagnostics(query: { before?: number; source?: string
   return data.records;
 }
 
-export async function refreshDiagnostics() {
-  const merged = mergeDiagnostics(current(), await queryDiagnostics());
+export async function refreshDiagnostics(machine?: string) {
+  const merged = mergeDiagnostics(current(), await queryDiagnostics({}, machine), machine);
   update({ ...merged, events: merged.events.slice(0, 1000) });
 }
 
-export function markEventsSeen() {
+export function markEventsSeen(machine?: string) {
+  if (machine) {
+    const log = current();
+    update({ ...log, seenByMachine: { ...log.seenByMachine, [machine]: Date.now() } });
+    return;
+  }
   const log = current();
   if (log.events.length === 0 || log.events[0]!.lastSeen <= log.seenAt) return;
   update({ ...log, seenAt: Date.now() });
@@ -196,4 +218,23 @@ export function useEventLogOpen(): boolean {
     panelListeners.add(listener);
     return () => { panelListeners.delete(listener); };
   }, () => panelOpen, () => false);
+}
+
+const machinePreferenceKey = "adi.event-log.machine.v1";
+const validMachine = (value: string) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(value);
+
+export function readLogMachine(): string {
+  try { const value = window.sessionStorage.getItem(machinePreferenceKey); return value && validMachine(value) ? value : ""; }
+  catch { return ""; }
+}
+
+export function saveLogMachine(machine: string) {
+  try { window.sessionStorage.setItem(machinePreferenceKey, machine); } catch { /* In-memory selection still works. */ }
+}
+
+/** Only entries owned by this store. Process names and browser reports about another node
+ * are never treated as ownership, so a node named "claude" cannot select local Claude errors. */
+export function machineLog(log: EventLogState, machine?: string): EventLogState {
+  return { ...log, events: log.events.filter((event) => (event.machine ?? "") === (machine ?? "")),
+    seenAt: machine ? log.seenByMachine?.[machine] ?? 0 : log.seenAt };
 }

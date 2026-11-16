@@ -17,7 +17,7 @@ const menuItemClass = "focus:bg-accent hover:bg-accent flex min-h-8 w-full items
 /** What the machine choice drives on the current page. The chat list merges sessions from any
  * number of machines, and Home lists the apps of that same set; a marketplace, with its sources
  * and installs, is one machine's at a time, and so are a machine's settings. */
-type Selection = {
+export type NodeSelection = {
   heading: string;
   label: string;
   multiple: boolean;
@@ -26,7 +26,7 @@ type Selection = {
   choose: (source?: string) => void;
 };
 
-function useSelection(): Selection {
+function useSelection(): NodeSelection {
   const { pathname } = useLocation();
   const { sources, toggleSource } = useChatSelection();
   const [marketplaceSource, setMarketplaceSource] = useMarketplaceSource();
@@ -55,7 +55,7 @@ function useSelection(): Selection {
   };
 }
 
-function NodeSelectorMenu({ anchor, selection, onClose }: { anchor: RefObject<HTMLButtonElement | null>; selection: Selection; onClose: (restoreFocus?: boolean) => void }) {
+function NodeSelectorMenu({ anchor, selection, onClose, owner }: { anchor: RefObject<HTMLButtonElement | null>; selection: NodeSelection; onClose: (restoreFocus?: boolean) => void; owner?: string }) {
   const { fleetNodes, fleetLoading, fleetError } = useChatSelection();
   const element = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ left: 0, top: 0 });
@@ -70,7 +70,10 @@ function NodeSelectorMenu({ anchor, selection, onClose }: { anchor: RefObject<HT
 
   useLayoutEffect(() => {
     const bounds = anchor.current?.getBoundingClientRect();
-    if (bounds) setPosition({ left: Math.max(8, Math.min(bounds.left, window.innerWidth - 248)), top: bounds.bottom + 5 });
+    if (bounds) {
+      const height = element.current?.getBoundingClientRect().height ?? 0;
+      setPosition({ left: Math.max(8, Math.min(bounds.left, window.innerWidth - 248)), top: Math.max(8, Math.min(bounds.bottom + 5, window.innerHeight - height - 8)) });
+    }
     const selected = element.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]:not(:disabled)')
       ?? element.current?.querySelector<HTMLButtonElement>('[role^="menuitem"]:not(:disabled)');
     selected?.focus();
@@ -93,6 +96,7 @@ function NodeSelectorMenu({ anchor, selection, onClose }: { anchor: RefObject<HT
     <div
       ref={element}
       data-slot="node-selector-menu"
+      data-node-selector-owner={owner}
       role="menu"
       aria-label={selection.label}
       className="bg-popover text-popover-foreground border-border fixed z-50 max-h-[70svh] w-60 overflow-y-auto rounded-md border p-1 shadow-md"
@@ -147,9 +151,10 @@ function NodeSelectorMenu({ anchor, selection, onClose }: { anchor: RefObject<HT
  * browsed. The topbar is hidden below the mobile breakpoint on the chat page (see index.css), so
  * `hideOnMobile` drops that copy there and `mobileOnly` renders the same control inside the chat
  * sidebar's own header. */
-export function NodeSelector({ mobileOnly = false, hideOnMobile = false }: { mobileOnly?: boolean; hideOnMobile?: boolean }) {
+export function NodeSelector({ mobileOnly = false, hideOnMobile = false, selection: override, owner }: { mobileOnly?: boolean; hideOnMobile?: boolean; selection?: NodeSelection; owner?: string }) {
   const isMobile = useIsMobile();
-  const selection = useSelection();
+  const pageSelection = useSelection();
+  const selection = override ?? pageSelection;
   const [open, setOpen] = useState(false);
   const anchor = useRef<HTMLButtonElement>(null);
   if (mobileOnly ? !isMobile : isMobile && hideOnMobile) return null;
@@ -174,7 +179,7 @@ export function NodeSelector({ mobileOnly = false, hideOnMobile = false }: { mob
           <span className="max-w-32 truncate">{count === 1 ? names[0] : `${count} machines`}</span>
         </Button>
       )}
-      {open && <NodeSelectorMenu anchor={anchor} selection={selection} onClose={(restoreFocus = true) => {
+      {open && <NodeSelectorMenu anchor={anchor} selection={selection} owner={owner} onClose={(restoreFocus = true) => {
         if (restoreFocus) anchor.current?.focus();
         setOpen(false);
       }}/>}

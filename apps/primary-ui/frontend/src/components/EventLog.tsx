@@ -4,8 +4,9 @@ import { ScrollText, X } from "lucide-react";
 
 import { Button, cn } from "@design-system/ui";
 
+import { NodeSelector } from "./NodeSelector";
 import { conversationAge } from "../lib/app-chat-sidebar";
-import { markEventsSeen, mergeDiagnostics, queryDiagnostics, refreshDiagnostics, setEventLogOpen, unreadEvents, useEventLog, useEventLogOpen, type AppEvent, type AppEventLevel, type DiagnosticRecord } from "../lib/event-log";
+import { machineLog, readLogMachine, saveLogMachine, markEventsSeen, mergeDiagnostics, queryDiagnostics, refreshDiagnostics, setEventLogOpen, unreadEvents, useEventLog, useEventLogOpen, type AppEvent, type AppEventLevel, type DiagnosticRecord } from "../lib/event-log";
 import { useIsMobile } from "../lib/use-is-mobile";
 
 const panelWidth = 480;
@@ -25,7 +26,7 @@ function EventRow({ event, isNew, now }: { event: AppEvent; isNew: boolean; now:
           <pre className="bg-muted mt-1 max-h-48 overflow-auto rounded p-2 whitespace-pre-wrap [overflow-wrap:anywhere]">{JSON.stringify(event.context, null, 2)}</pre>
         </details>}
         <p className="text-muted-foreground flex min-w-0 flex-wrap items-center gap-x-1.5 text-[11px] leading-4">
-          <span className="truncate">{event.source ?? "This machine"} · {event.area}</span>
+          <span className="truncate">{event.machine ?? "This machine"} · {event.source ?? "Browser"} · {event.area}</span>
           <time dateTime={when.toISOString()} title={`Last seen: ${when.toLocaleString()}`}>{conversationAge(event.lastSeen, now) ?? ""}</time>
           {event.count > 1 && <span title={`Repeated ${event.count} times since ${new Date(event.firstSeen).toLocaleString()}`}>×{event.count}</span>}
           {isNew && <span data-slot="event-log-new" className="text-foreground">New</span>}
@@ -35,8 +36,8 @@ function EventRow({ event, isNew, now }: { event: AppEvent; isNew: boolean; now:
   );
 }
 
-function EventLogPanel({ anchor, seenBefore, onClose }: { anchor: RefObject<HTMLButtonElement | null>; seenBefore: number; onClose: (restoreFocus?: boolean) => void }) {
-  const log = useEventLog();
+function EventLogPanel({ anchor, seenBefore, onClose, machine, onMachineChange }: { anchor: RefObject<HTMLButtonElement | null>; seenBefore: number; onClose: (restoreFocus?: boolean) => void; machine: string; onMachineChange: (machine: string) => void }) {
+  const log = machineLog(useEventLog(), machine || undefined);
   const isMobile = useIsMobile();
   const element = useRef<HTMLDivElement>(null);
   const [style, setStyle] = useState<CSSProperties>({});
@@ -53,7 +54,7 @@ function EventLogPanel({ anchor, seenBefore, onClose }: { anchor: RefObject<HTML
     const version = ++queryVersion.current;
     setRecords(null); setLoading(true); setError("");
     const timer = window.setTimeout(() => {
-      void queryDiagnostics({ search: search || undefined, level: level || undefined }).then((rows) => {
+      void queryDiagnostics({ search: search || undefined, level: level || undefined }, machine || undefined).then((rows) => {
         if (version !== queryVersion.current) return;
         setRecords(rows); setMore(rows.length === 100);
       }).catch((reason: unknown) => {
@@ -61,18 +62,18 @@ function EventLogPanel({ anchor, seenBefore, onClose }: { anchor: RefObject<HTML
       }).finally(() => { if (version === queryVersion.current) setLoading(false); });
     }, 200);
     return () => { window.clearTimeout(timer); queryVersion.current++; };
-  }, [search, level, revision]);
+  }, [search, level, revision, machine]);
   const matches = (event: AppEvent) => (!level || event.level === level)
     && (!search || `${event.message} ${event.area} ${event.source} ${JSON.stringify(event.context)}`.toLowerCase().includes(search.toLowerCase()));
   const cached = !search && !level ? log.events : log.events.filter((e) => !e.id.startsWith("stored:"));
-  const events = (records === null ? log.events : mergeDiagnostics({ ...log, events: cached }, records).events).filter(matches);
+  const events = (records === null ? log.events : mergeDiagnostics({ ...log, events: cached }, records, machine || undefined).events).filter(matches);
   const loadMore = async () => {
     const before = records?.at(-1)?.id;
     if (!before) return;
     const version = queryVersion.current;
     setLoading(true);
     try {
-      const rows = await queryDiagnostics({ before, search: search || undefined, level: level || undefined });
+      const rows = await queryDiagnostics({ before, search: search || undefined, level: level || undefined }, machine || undefined);
       if (version !== queryVersion.current) return;
       setRecords((old) => [...(old ?? []), ...rows]); setMore(rows.length === 100); setError("");
     } catch (reason) { if (version === queryVersion.current) setError(String(reason)); }
@@ -96,6 +97,7 @@ function EventLogPanel({ anchor, seenBefore, onClose }: { anchor: RefObject<HTML
 
   useEffect(() => {
     const outside = (event: PointerEvent) => {
+      if (event.target instanceof Element && event.target.closest('[data-node-selector-owner="event-log"]')) return;
       if (event.target instanceof Node && !element.current?.contains(event.target) && !anchor.current?.contains(event.target)) onClose(false);
     };
     // Escape is read at the document so it still closes the panel when focus has drifted, for
@@ -125,7 +127,12 @@ function EventLogPanel({ anchor, seenBefore, onClose }: { anchor: RefObject<HTML
       style={style}
     >
       <div className="flex shrink-0 items-center gap-1 border-b px-3 py-2">
-        <h2 className="mr-auto text-sm font-semibold">Event log</h2>
+        <h2 className="mr-auto shrink-0 text-sm font-semibold">Event log</h2>
+        <NodeSelector owner="event-log" selection={{
+          heading: "Event logs from", label: "Log machine", multiple: false,
+          chosen: [machine || undefined], isChosen: (source) => (source ?? "") === machine,
+          choose: (source) => onMachineChange(source ?? ""),
+        }} />
         <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => setRevision((v) => v + 1)}>Refresh</Button>
         <Button type="button" size="icon" variant="ghost" className="size-7" aria-label="Close event log" onClick={() => onClose()}>
           <X aria-hidden="true" className="size-3.5" />
@@ -142,7 +149,7 @@ function EventLogPanel({ anchor, seenBefore, onClose }: { anchor: RefObject<HTML
       {events.length === 0 ? (
         <div className="px-4 py-6 text-center">
           <p className="text-sm font-medium">Nothing to report</p>
-          <p className="text-muted-foreground mt-1 text-xs leading-relaxed">No matching entries. Process and browser diagnostics are stored on this machine for up to 30 days.</p>
+          <p className="text-muted-foreground mt-1 text-xs leading-relaxed">No matching entries. Process and browser diagnostics are stored on the selected machine for up to 30 days.</p>
         </div>
       ) : (
         <ul aria-label="Events" className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1">
@@ -150,7 +157,7 @@ function EventLogPanel({ anchor, seenBefore, onClose }: { anchor: RefObject<HTML
         </ul>
       )}
       <div className="flex shrink-0 items-center border-t px-3 py-2 text-xs text-muted-foreground">
-        <span className="mr-auto">Stored logs · up to 30 days</span>
+        <span className="mr-auto">{machine || "This machine"} · up to 30 days</span>
         {more && <Button size="sm" variant="ghost" disabled={loading} disabledReason="Loading logs" onClick={() => void loadMore()}>Load older</Button>}
       </div>
     </div>,
@@ -163,7 +170,8 @@ function EventLogPanel({ anchor, seenBefore, onClose }: { anchor: RefObject<HTML
  * sits with the other tabs on every width; the dot marks unread events (red when any is an error).
  */
 export function EventLogButton({ tabClass }: { tabClass: (active: boolean) => string }) {
-  const log = useEventLog();
+  const [machine, setMachine] = useState(readLogMachine);
+  const log = machineLog(useEventLog(), machine || undefined);
   const open = useEventLogOpen();
   const anchor = useRef<HTMLButtonElement>(null);
   const [seenBefore, setSeenBefore] = useState(log.seenAt);
@@ -174,12 +182,12 @@ export function EventLogButton({ tabClass }: { tabClass: (active: boolean) => st
     let disposed = false;
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
-      try { await refreshDiagnostics(); } catch { /* Opening the panel shows retrieval errors. */ }
+      try { await refreshDiagnostics(machine || undefined); } catch { /* Opening the panel shows retrieval errors. */ }
       if (!disposed) timer = setTimeout(() => void poll(), 10_000);
     };
     void poll();
     return () => { disposed = true; clearTimeout(timer); };
-  }, []);
+  }, [machine]);
 
   // Opening marks the log read, but the panel still points out what arrived since the last look;
   // closing marks read again, for anything that arrived while it was open.
@@ -187,10 +195,10 @@ export function EventLogButton({ tabClass }: { tabClass: (active: boolean) => st
   useEffect(() => {
     if (!open) return;
     setSeenBefore(seenAt);
-    markEventsSeen();
-    return () => markEventsSeen();
+    markEventsSeen(machine || undefined);
+    return () => markEventsSeen(machine || undefined);
     // Depends on `open` alone: the snapshot is taken when the panel opens, not on every change.
-  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open, machine]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const close = (restoreFocus = true) => {
     if (restoreFocus) anchor.current?.focus();
@@ -224,7 +232,7 @@ export function EventLogButton({ tabClass }: { tabClass: (active: boolean) => st
         )}
         <span className="md:sr-only">Events</span>
       </button>
-      {open && <EventLogPanel anchor={anchor} seenBefore={seenBefore} onClose={close} />}
+      {open && <EventLogPanel key={machine} anchor={anchor} seenBefore={seenBefore} onClose={close} machine={machine} onMachineChange={(next) => { saveLogMachine(next); setMachine(next); }} />}
     </>
   );
 }
