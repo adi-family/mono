@@ -103,6 +103,12 @@ export default defineConfig({
 					],
 				},
 				{
+					label: 'Guides',
+					items: [
+						{ label: 'n8n → ADI → n8n', link: '/n8n-to-adi/' },
+					],
+				},
+				{
 					label: 'Reference',
 					items: [
 						{ label: 'The adi-mono CLI', link: '/cli/' },
