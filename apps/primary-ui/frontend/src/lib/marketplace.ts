@@ -6,6 +6,9 @@ export type BundleInstall = { project?: string | null; project_name?: string | n
 export type MarketplaceApp = {
   marketplace: string; slug: string; name: string; description?: string | null; summary?: string | null; version?: string | null;
   repo: string; commit: string; branch?: string | null; icon?: string | null; readme?: string | null;
+  // Set when the publisher declared this bundle only installs into a project (ADI-MONO-237) —
+  // the install dialog drops "Globally" from its destination choices when this is true.
+  require_project: boolean;
   keywords: string[]; gallery: MarketplaceMedia[]; elements: MarketplaceElement[];
   installs: { id: string; name: string; host?: string | null; started: boolean; outdated: boolean; commit: string }[];
   bundle?: { declared: number; elements: MarketplaceElement[]; installs: BundleInstall[] } | null;

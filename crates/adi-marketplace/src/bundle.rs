@@ -59,7 +59,7 @@ use crate::error::{Error, Result};
 use crate::git;
 use crate::install::{self, entry_of};
 use crate::kind::Kind;
-use crate::layout::{self, LayoutElement};
+use crate::layout::{self, Layout, LayoutElement};
 use crate::manifest::BundleEntry;
 use crate::scope::Scope;
 use crate::Marketplace;
@@ -387,6 +387,31 @@ pub fn install(
     let mut ledger = read_ledger(market, &addr.marketplace, &addr.slug, scope)
         .unwrap_or_else(|| Ledger::fresh(&addr.marketplace, &addr.slug, &entry, &pin));
 
+    // decision (ADI-MONO-237): a publisher's `project/config.toml` may set `require_project`,
+    // enforced here — the one place every install call, whole-bundle or one element, passes
+    // through before anything lands. `has_project` is true exactly when this call's elements will
+    // be filed under a real project: the operator chose one (`scope.is_project()`), or an earlier
+    // call already landed this bundle's own scaffold under this same scope. `landing_project_now`
+    // is true when *this* call is about to attempt the scaffold itself — the whole bundle, or the
+    // scaffold addressed on its own — which is the only other way a call can end this gate-free.
+    // Neither, and there is no project for anything selected to land under: refused before
+    // anything is touched, rather than filing a service (or anything else) with nowhere to be.
+    let bundle_requires_project = requires_project_flag(&clone_dir, &tree);
+    if bundle_requires_project {
+        let has_project = scope.is_project() || ledger.project_id().is_some();
+        let landing_project_now = selected.iter().any(|el| el.kind == Kind::Project);
+        if !has_project && !landing_project_now {
+            return Err(Error::ProjectRequired(addr.slug.clone()));
+        }
+    }
+    // Still true after the check above when this call is the one expected to land the scaffold
+    // under no operator-chosen project: if that landing fails (a stray collision, a bad
+    // `project/config.toml`), every element ranked after it in this same call must not be filed
+    // without one either — the loop below reads this to turn "continue landing anyway" into "stop
+    // here and say why", one element short of the whole-transaction rollback the design otherwise
+    // deliberately does not do.
+    let project_gate = bundle_requires_project && scope.project().is_none() && ledger.project_id().is_none();
+
     // Landing order, not layout order: every kind whose id a sibling's structured field names —
     // the project, the tools, the two backend kinds — lands first, so that by the time an agent is
     // written, `bin_tools` and `backends[].backend` can be rewritten to the ids that really
@@ -413,6 +438,27 @@ pub fn install(
         // The project scaffold is the one singleton — it carries no published name of its own, so
         // the bundle's own slug stands for it, the same way the address spells it with none.
         let name = el.name.clone().unwrap_or_else(|| addr.slug.clone());
+
+        // The scaffold ranks first (`landing_rank`), so by the time a later element reaches this
+        // point `project_id` already says whether it actually landed. It did not: nothing else in
+        // this call gets filed with no project either, however `require_project` talked this call
+        // into starting in the first place.
+        if project_gate && el.kind != Kind::Project && project_id.is_none() {
+            outcomes.push(ElementOutcome {
+                kind: el.kind,
+                name,
+                id: None,
+                renamed: false,
+                note: Some(format!(
+                    "not installed: {} requires a project, and its own scaffold did not land this \
+                     call — see the project outcome above, then install with --new-project or \
+                     --project <id>",
+                    addr.slug
+                )),
+                started: None,
+            });
+            continue;
+        }
 
         // An operator who named a destination has already answered the question the scaffold
         // exists to answer, and two projects for one install is not what they asked for.
@@ -666,6 +712,15 @@ pub fn update(
     }
 
     let tree = layout::read_layout(&clone_dir, slug)?;
+    // [`install`]'s own gate (ADI-MONO-237) never lets a bundle whose *current* pin requires a
+    // project reach this call with no project filed for it — so reaching here with one anyway
+    // means either the ledger predates the publisher adding the flag, or this update just moved
+    // onto the first commit that sets it. Refused rather than quietly fast-forwarded in place:
+    // there is no project to move it into without an operator's own choice, and silently
+    // perpetuating (or newly creating) the violation is not this call's to do.
+    if requires_project_flag(&clone_dir, &tree) && scope.project().is_none() && ledger.project_id().is_none() {
+        return Err(Error::ProjectRequired(slug.to_string()));
+    }
     let stores = Stores::open(market, config, marketplace, slug, scope);
     // The operator's own choice wins over the bundle's scaffold, exactly as it did at install.
     let project = scope.project().map(str::to_string).or_else(|| ledger.project_id());
@@ -2707,6 +2762,58 @@ fn land_project(
     }
 }
 
+/// A bundle-wide declaration (ADI-MONO-237): `require_project = true` beside `name`/`description`
+/// in the bundle's own `project/config.toml` — a publisher's project scaffold is always optional
+/// *unless* this says otherwise, the way n8n's does (its service needs the project's own
+/// directory, not just a filing convenience).
+///
+/// Read straight off the file rather than through [`adi_projects::Manifest`] (parsed separately,
+/// here — `land_project` keeps using that type for the fields it actually lands, and a stray key
+/// neither type recognises is simply ignored by both): that type models the *real*, already-landed
+/// project's own stored file, and has no business carrying a publish-time-only flag the installer
+/// erases from every project it actually creates (`adi_projects::Projects::create_with_id` never
+/// writes it back out). A bundle with no `project/config.toml` at all has nowhere to carry this,
+/// so it answers `false` — nothing can require a project it does not also offer.
+///
+/// Lives in the tree rather than in the manifest entry (`crate::manifest::BundleEntry`) for the
+/// same reason `elements` is read off the tree at install time rather than trusted from the
+/// listing (decision #2): it is the bundle's own fact, true wherever the manifest that happens to
+/// list it. An older ADI build that has never heard of this key reads `project/config.toml`'s
+/// `name`/`description` exactly as before and silently ignores the rest — `toml`'s own `from_str`
+/// drops an unrecognised key rather than refusing the document, the same tolerance `serde_json`
+/// already gives every other field here — so a bundle published with it still installs on a
+/// pre-ADI-MONO-237 client, just without the refusal this build adds.
+fn requires_project_flag(clone_dir: &Path, tree: &Layout) -> bool {
+    #[derive(Deserialize, Default)]
+    struct Flag {
+        #[serde(default)]
+        require_project: bool,
+    }
+    let Some(project_el) = tree.elements.iter().find(|el| el.kind == Kind::Project) else {
+        return false;
+    };
+    std::fs::read_to_string(clone_dir.join(&project_el.path))
+        .ok()
+        .and_then(|text| toml::from_str::<Flag>(&text).ok())
+        .is_some_and(|flag| flag.require_project)
+}
+
+/// The listing's own best-effort echo of [`requires_project_flag`] — for the install dialog to
+/// decide whether "Globally" is worth offering *before* the operator has tried installing at all.
+/// Opportunistic rather than authoritative: nothing is cloned to answer this (a listing read must
+/// stay cheap and never reach the network), so it reads whatever clone already sits at the global
+/// scope's own path, left over from an earlier call — including one that refused — and answers
+/// `false` when there is none yet. `install`'s own gate re-derives the real answer fresh, off the
+/// pin that is actually live, every time; this can lag behind it by exactly one clone.
+#[must_use]
+pub fn requires_project(market: &Marketplace, marketplace: &str, slug: &str) -> bool {
+    let clone_dir = bundle_dir(market, marketplace, slug, &Scope::Global);
+    let Ok(tree) = layout::read_layout(&clone_dir, slug) else {
+        return false;
+    };
+    requires_project_flag(&clone_dir, &tree)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2811,6 +2918,16 @@ mod tests {
         std::fs::create_dir_all(root.join("project")).expect("dir");
         std::fs::write(root.join("project").join("config.toml"), format!("name = \"{name}\"\n"))
             .expect("project");
+    }
+
+    /// [`write_project`]'s own twin: the scaffold also sets `require_project` (ADI-MONO-237).
+    fn write_project_requiring(root: &Path, name: &str) {
+        std::fs::create_dir_all(root.join("project")).expect("dir");
+        std::fs::write(
+            root.join("project").join("config.toml"),
+            format!("name = \"{name}\"\nrequire_project = true\n"),
+        )
+        .expect("project");
     }
 
     /// A template directory, `templates/<name>/`, carrying `template.toml` plus one file under
@@ -3028,6 +3145,174 @@ mod tests {
             .expect("get")
             .expect("present");
         assert_eq!(agent.manifest.project, None);
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    // MARK: require_project (ADI-MONO-237) — `project/config.toml`'s own `require_project = true`
+    // declares this bundle's elements never land with no project, enforced wherever `install` or
+    // `update` would otherwise file one that way.
+
+    #[test]
+    fn require_project_refuses_an_element_level_install_with_no_destination() {
+        let (market, ..) = fixture("req-element", "n8n", |root| {
+            write_project_requiring(root, "n8n");
+            write_service(root, "web");
+        });
+        let err = install(&market, "adi/n8n/services/web", "", false, &Scope::Global)
+            .expect_err("no destination, and this call never touches the scaffold");
+        assert!(matches!(err, Error::ProjectRequired(ref s) if s == "n8n"), "{err}");
+        assert!(err.to_string().contains("--new-project") && err.to_string().contains("--project"));
+
+        // Nothing landed — not even the project, which this call never asked for.
+        assert!(read_ledger(&market, "adi", "n8n", &Scope::Global).is_none());
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    #[test]
+    fn require_project_lets_a_whole_bundle_install_use_its_own_scaffold() {
+        let (market, ..) = fixture("req-scaffold", "n8n", |root| {
+            write_project_requiring(root, "n8n");
+            write_service(root, "web");
+        });
+        // No `--project`/`--new-project` at all — exactly today's "install plain" path — still
+        // lands a project, because the bundle's own scaffold is what answers the gate.
+        let installed =
+            unwrap_bundle(install(&market, "adi/n8n", "", false, &Scope::Global).expect("install"));
+        assert_eq!(installed.project.as_deref(), Some("n8n"));
+        assert!(outcome_of(&installed, Kind::Service, "web").id.is_some());
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    #[test]
+    fn require_project_lets_an_element_level_install_follow_an_explicit_project() {
+        let (market, ..) = fixture("req-explicit", "n8n", |root| {
+            write_project_requiring(root, "n8n");
+            write_service(root, "web");
+        });
+        adi_projects::Projects::with_config(market.config().clone())
+            .create_with_id("ops", Some("Ops".to_string()), None, None)
+            .expect("project");
+        // The scaffold is never selected (an element-only address), but `--project ops` already
+        // answers the question it exists to answer.
+        let installed = unwrap_bundle(
+            install(&market, "adi/n8n/services/web", "", false, &Scope::Project("ops".to_string()))
+                .expect("install"),
+        );
+        assert!(outcome_of(&installed, Kind::Service, "web").id.is_some());
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    #[test]
+    fn a_bundle_with_no_scaffold_at_all_has_nowhere_to_require_a_project() {
+        // There is no `project/config.toml` for `require_project` to live in, so there is nothing
+        // for this bundle to assert — an element-level, no-destination install keeps working
+        // exactly as every bundle without the declaration already does.
+        let (market, ..) = fixture("req-no-scaffold", "redis-only", |root| {
+            write_service(root, "redis");
+        });
+        let installed = unwrap_bundle(
+            install(&market, "adi/redis-only/services/redis", "", false, &Scope::Global)
+                .expect("install"),
+        );
+        assert!(outcome_of(&installed, Kind::Service, "redis").id.is_some());
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    #[test]
+    fn require_project_stops_the_rest_of_the_call_when_the_scaffold_itself_is_blocked() {
+        // A stranger project already sits at the id the scaffold would land under, so `land_project`
+        // blocks it (the project kind's own refuse-on-collision rule) — the service ranked after it
+        // in the same call must not be filed with no project either.
+        let (market, ..) = fixture("req-blocked-scaffold", "n8n", |root| {
+            write_project_requiring(root, "n8n");
+            write_service(root, "web");
+        });
+        adi_projects::Projects::with_config(market.config().clone())
+            .create_with_id("n8n", Some("Somebody else's".to_string()), None, None)
+            .expect("seed a stranger at the scaffold's own id");
+
+        let installed =
+            unwrap_bundle(install(&market, "adi/n8n", "", false, &Scope::Global).expect("install"));
+        let project_outcome = outcome_of(&installed, Kind::Project, "n8n");
+        assert!(project_outcome.id.is_none(), "{project_outcome:?}");
+        let service_outcome = outcome_of(&installed, Kind::Service, "web");
+        assert!(service_outcome.id.is_none(), "{service_outcome:?}");
+        assert!(
+            service_outcome.note.as_deref().is_some_and(|n| n.contains("requires a project")),
+            "{service_outcome:?}"
+        );
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    #[test]
+    fn require_project_refuses_to_update_a_ledger_that_never_got_one() {
+        // Written by hand rather than through `install` — the only way such a ledger could exist
+        // is data older than the publisher adding the declaration (`install`'s own gate never
+        // produces one), so this stands in for that history.
+        let (market, repo, _commit) = fixture("req-update", "n8n", |root| {
+            write_project_requiring(root, "n8n");
+            write_service(root, "web");
+        });
+        // `update` fast-forwards an existing permanent clone — seed one the same way a real first
+        // install would, without going through `install` itself (which would refuse this exact
+        // ledger shape, per the test above).
+        let entry = entry_of_adi(&market, "n8n");
+        ensure_clone(&market, "adi", "n8n", &Scope::Global, &bundle_dir_of(&market, "n8n"), &entry)
+            .expect("clone");
+        let ledger = Ledger {
+            marketplace: "adi".to_string(),
+            slug: "n8n".to_string(),
+            repo: repo.clone(),
+            // Different from the real pin, on purpose: `update` short-circuits with no tree read
+            // at all when nothing moved, and this test is about the branch that does read it.
+            commit: "0".repeat(40),
+            branch: None,
+            installed_at: adi_config::now_unix(),
+            updated_at: None,
+            elements: vec![LedgerElement {
+                kind: Kind::Service,
+                name: "web".to_string(),
+                id: "web".to_string(),
+                fingerprint: String::new(),
+            }],
+        };
+        write_ledger(&market, "adi", "n8n", &Scope::Global, &ledger).expect("seed ledger");
+
+        let err = update(&market, "adi", "n8n", &Scope::Global, &[])
+            .expect_err("no project, and the pin's own scaffold requires one");
+        assert!(matches!(err, Error::ProjectRequired(_)), "{err}");
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    #[test]
+    fn a_bundle_with_no_require_project_keeps_landing_a_service_with_no_project() {
+        // Today's behaviour, unchanged: the declaration is opt-in, and a bundle that never set it
+        // still lets an element-level install land with nothing to file it under.
+        let (market, ..) = fixture("req-unset", "n8n-like", |root| {
+            write_project(root, "n8n-like");
+            write_service(root, "web");
+        });
+        let installed = unwrap_bundle(
+            install(&market, "adi/n8n-like/services/web", "", false, &Scope::Global).expect("install"),
+        );
+        assert!(outcome_of(&installed, Kind::Service, "web").id.is_some());
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    #[test]
+    fn requires_project_reads_the_scaffold_of_whatever_clone_already_sits_on_disk() {
+        let (market, ..) = fixture("req-listing", "n8n", |root| {
+            write_project_requiring(root, "n8n");
+            write_service(root, "web");
+        });
+        // Nothing cloned yet — the listing has nothing to read, so it answers `false` rather than
+        // guessing.
+        assert!(!requires_project(&market, "adi", "n8n"));
+
+        // A refused call still clones (the gate runs after `ensure_clone`) — so even though this
+        // one install call did not land anything, the *next* listing read already knows better.
+        let _ = install(&market, "adi/n8n/services/web", "", false, &Scope::Global);
+        assert!(requires_project(&market, "adi", "n8n"));
         let _ = std::fs::remove_dir_all(market.config().root());
     }
 

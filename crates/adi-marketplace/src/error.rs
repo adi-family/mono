@@ -161,6 +161,14 @@ pub enum Error {
     /// own deliberate act (`--new-project`, or the panel's own "a new project" choice).
     #[error("no project named {0} on this machine — create it first, or install globally")]
     UnknownProject(String),
+    /// `{0}` set `require_project` and this call would leave something landed with no project —
+    /// an element-level install naming neither the scaffold nor a destination, a whole-bundle
+    /// install whose own scaffold failed to land, or an update of an install that never got one.
+    #[error(
+        "{0} only installs into a project — install it plain (its own scaffold lands with it), \
+         or name a destination: --new-project <name> or --project <id>"
+    )]
+    ProjectRequired(String),
 }
 
 /// The outcome alias every fallible operation answers with.

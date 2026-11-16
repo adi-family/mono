@@ -289,6 +289,42 @@ manifest spells kinds **singular** (`agent`, `dashboard`) where an *address* spe
 (`agents/researcher`, `dashboards/research-board`) — two different vocabularies that happen to
 agree on everything except this.
 
+### A bundle that only installs into a project <Flags>Expert area</Flags>
+
+By default a project is always optional — a bundle with no scaffold at all installs globally, and
+one that carries `project/config.toml` treats it as nothing stronger than the destination an
+operator gets by not asking for anything else (the previous section's own decision #4). Add
+`require_project = true` to that same scaffold — a sibling key beside `name`/`description`, not a
+fourth field on the manifest entry — when that is not good enough: when the bundle's own service
+genuinely needs its project's directory, the way n8n's does (`N8N_USER_FOLDER`, its
+`node_modules`, its own copy of `start.sh`, all living under the project root `install.sh` copies
+them into):
+
+```toml
+# project/config.toml
+name = "n8n"
+description = "Self-hosted n8n."
+require_project = true
+```
+
+With it set, every install call that would leave something landed with no project at all is
+refused — one element on its own, with no `--project`/`--new-project` named, the clearest case,
+since an element-level address never touches the scaffold. Installing the whole bundle plain
+still works exactly as it always has: the scaffold lands in the same call and answers the
+question before anything else does. So does naming an existing project or a new one, for either
+shape of install. What stops working is only the one combination that used to leave a service
+with nowhere to run: an element of this bundle, asked for on its own, with no destination at all.
+
+It lives in the repository tree, read off the pinned commit the same way `elements` is — not the
+manifest entry — because it is this bundle's own fact wherever it is listed from, and because a
+bundle with no scaffold at all has nothing to carry it in regardless (nothing can require a
+project it does not also offer). It is `false` by default and silently ignored by a build that
+predates it: `project/config.toml` is parsed as `name`/`description`/`parent` only, and an
+unrecognised key is dropped rather than refusing the document — true of every ADI build so far,
+open-source 1.41.0 and Enterprise 2026.23.0 included — so publishing it costs nothing on an
+operator's older client, which simply never gains the refusal. A bundle that never sets it
+behaves exactly as it always has.
+
 ## Package it
 
 ```bash

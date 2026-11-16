@@ -67,6 +67,8 @@ pub fn state(market: &Marketplace) -> MarketplaceState {
                         adi_marketplace::bundle::status(market, &a.marketplace, &a.slug, e)
                     })
                     .map(|s| bundle_status(s, projects));
+                let require_project =
+                    adi_marketplace::bundle::requires_project(market, &a.marketplace, &a.slug);
                 MarketplaceApp {
                     marketplace: a.marketplace,
                     slug: a.slug,
@@ -81,6 +83,7 @@ pub fn state(market: &Marketplace) -> MarketplaceState {
                     repo: a.repo,
                     commit: a.commit,
                     branch: a.branch,
+                    require_project,
                     installs: a
                         .installs
                         .into_iter()
@@ -591,12 +594,15 @@ fn refusal(e: &adi_marketplace::Error) -> Response {
         // refusal (`E::Store`), carried verbatim: every reason it can fire (a hive.yaml that is
         // not a mapping, a service already parked under this key, a project rename with no API to
         // call) is this ask's own fault, not somebody else's server.
+        // A bundle that requires a project and a destination that names none: the same class of
+        // malformed ask as `E::BadScope` — what is missing is on this request to supply.
         E::InvalidName(_)
         | E::NotHttps(_)
         | E::BadSpec(_)
         | E::BadAddress(_)
         | E::EmptyName
         | E::BadScope(_)
+        | E::ProjectRequired(_)
         | E::Store(_) => 400,
         // Everything a publisher got wrong, and everything git or the network refused: the ask
         // was fine, the far end was not.
@@ -946,6 +952,7 @@ mod tests {
             status(&E::EmbeddingInUse("e5 is still assigned".into())),
             409
         );
+        assert_eq!(status(&E::ProjectRequired("n8n".into())), 400);
     }
 
     // MARK: the general bundle path — installing, uninstalling, updating and starting an element
@@ -994,6 +1001,115 @@ mod tests {
             format!("file://{}", dir.display()),
             String::from_utf8_lossy(&out.stdout).trim().to_string(),
         )
+    }
+
+    /// [`bundle_upstream`]'s own twin: the same agent, tool and service, plus a `project/config.toml`
+    /// scaffold — the shape a `require_project` bundle (ADI-MONO-237) actually publishes.
+    fn bundle_upstream_requiring_project(root: &Path) -> (String, String) {
+        let dir = root.join("upstream");
+        std::fs::create_dir_all(dir.join("agents")).expect("agents");
+        std::fs::create_dir_all(dir.join("services")).expect("services");
+        std::fs::create_dir_all(dir.join("project")).expect("project");
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .current_dir(&dir)
+                .args(args)
+                .output()
+                .expect("git runs");
+            assert!(out.status.success(), "git {args:?}: {out:?}");
+        };
+        git(&["init", "--quiet", "-b", "main"]);
+        git(&["config", "user.email", "publisher@example"]);
+        git(&["config", "user.name", "The Publisher"]);
+        std::fs::write(
+            dir.join("agents").join("n8n-operator.toml"),
+            "backend = \"harness:adi\"\n",
+        )
+        .expect("agent");
+        std::fs::write(
+            dir.join("services").join("web.yaml"),
+            "proxy:\n  host: n8n.adi\n",
+        )
+        .expect("service");
+        std::fs::write(
+            dir.join("project").join("config.toml"),
+            "name = \"n8n\"\nrequire_project = true\n",
+        )
+        .expect("project");
+        git(&["add", "."]);
+        git(&["commit", "--quiet", "-m", "v1"]);
+        let out = std::process::Command::new("git")
+            .current_dir(&dir)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .expect("rev-parse");
+        (
+            format!("file://{}", dir.display()),
+            String::from_utf8_lossy(&out.stdout).trim().to_string(),
+        )
+    }
+
+    /// [`seeded_bundle`]'s own twin: the fixture repository's own `project/config.toml` sets
+    /// `require_project` (ADI-MONO-237's own declaration lives in the tree, not the manifest).
+    fn seeded_bundle_requiring_project(tag: &str) -> (Config, String) {
+        let cfg = store(tag);
+        let (repo, commit) = bundle_upstream_requiring_project(&cfg.root().join("publisher"));
+        adi_marketplace::sources::add(&cfg, "adi", "https://example/m.json").expect("add");
+        cfg.module("marketplace")
+            .write_raw(
+                "cache/adi.json",
+                format!(
+                    "{{\"url\":\"https://example/m.json\",\"fetched_at\":1788288916,\
+                     \"manifest\":{{\"name\":\"ADI starter apps\",\"bundles\":[\
+                       {{\"slug\":\"n8n\",\"name\":\"n8n\",\
+                        \"repo\":{repo:?},\"commit\":{commit:?},\"elements\":[\
+                          {{\"kind\":\"agent\",\"name\":\"n8n-operator\"}},\
+                          {{\"kind\":\"service\",\"name\":\"web\"}}]}}]}}}}"
+                )
+                .as_bytes(),
+            )
+            .expect("cache");
+        (cfg, commit)
+    }
+
+    #[test]
+    fn require_project_shows_up_on_the_listing_and_refuses_a_global_element_install() {
+        let (cfg, _commit) = seeded_bundle_requiring_project("api-req-project");
+
+        // Nothing cloned yet, so the listing cannot know — it answers `false` rather than guess.
+        let v: serde_json::Value = serde_json::from_str(&marketplace(&cfg).body).expect("json");
+        assert_eq!(v["apps"][0]["require_project"], false);
+
+        let res = install_marketplace_app(
+            &cfg,
+            br#"{"marketplace":"adi","slug":"n8n","element":"services/web"}"#,
+        );
+        assert_eq!(res.status, 400, "{}", res.body);
+        assert!(res.body.contains("project"), "{}", res.body);
+
+        // Refused, but it cloned on the way there — so the *next* listing read already knows.
+        let v: serde_json::Value = serde_json::from_str(&marketplace(&cfg).body).expect("json");
+        assert_eq!(v["apps"][0]["require_project"], true);
+
+        // The whole bundle, with no destination at all, still lands — the scaffold answers it.
+        let res = install_marketplace_app(&cfg, br#"{"marketplace":"adi","slug":"n8n"}"#);
+        assert_eq!(res.status, 200, "{}", res.body);
+        let done: MarketplaceDone = serde_json::from_str(&res.body).expect("done");
+        // `installs[0].project` names the scope this install is filed *under* — still `None` for
+        // a plain install, since nobody passed `--project`. The scaffold landing its own real
+        // project is a fact about the elements list, not the scope coordinate.
+        assert!(
+            done.state.apps[0]
+                .bundle
+                .as_ref()
+                .is_some_and(|b| b.installs[0]
+                    .elements
+                    .iter()
+                    .any(|e| e.kind == "project" && e.id.is_some())),
+            "{:?}",
+            done.state.apps[0].bundle
+        );
+        let _ = std::fs::remove_dir_all(cfg.root());
     }
 
     /// A source added and its cache seeded with a one-bundle manifest, previewing all three

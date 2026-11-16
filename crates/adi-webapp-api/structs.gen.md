@@ -4400,6 +4400,8 @@ pub struct MarketplaceApp {
     #[serde(default)]
     pub branch: Option<String>,
     #[serde(default)]
+    pub require_project: bool,
+    #[serde(default)]
     pub installs: Vec<MarketplaceInstall>,
     #[serde(default)]
     pub elements: Vec<MarketplaceElementPreview>,

@@ -20,6 +20,10 @@ extraction script cares about.
 
 ## Unreleased
 
+### Added
+
+- **A marketplace bundle's `project/config.toml` can set `require_project = true`**, so a publisher whose service needs its own project's directory (n8n's `N8N_USER_FOLDER`, say) can refuse an install that would otherwise leave it with none. A sibling key beside `name`/`description` in the scaffold every bundle already optionally ships, so an older client reads the rest of that file exactly as before and silently ignores the one key it has never heard of — no new manifest field, nothing for an old client to choke on. With it set, installing one element on its own with no `--project`/`--new-project` is refused rather than filed with nothing to run against; installing the whole bundle plain still works, because the bundle's own scaffold lands in the same call and answers the question. A bundle with no `project/config.toml` at all has nothing to set it in, so it behaves exactly as before. The panel's install dialog drops "Globally" from its destination choices once it knows.
+
 ## 1.41.0 — 2026-11-15
 
 ### Added

@@ -4842,6 +4842,13 @@ pub struct MarketplaceApp {
     /// The branch that commit sits on, when the entry names one.
     #[serde(default)]
     pub branch: Option<String>,
+    /// Whether this bundle's own `project/config.toml` declares it only installs into a project
+    /// (`adi_marketplace::bundle::requires_project`) — best-effort, read off whatever clone
+    /// already sits on disk, so a bundle nothing has ever been tried against answers `false`
+    /// until the first attempt. The install dialog reads this to decide whether "Globally" is a
+    /// destination worth offering at all.
+    #[serde(default)]
+    pub require_project: bool,
     /// Every copy of this app installed here. Empty is "not installed"; more than one is
     /// ordinary, since each copy is named by whoever installed it.
     #[serde(default)]

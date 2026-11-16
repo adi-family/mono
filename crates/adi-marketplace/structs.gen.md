@@ -411,6 +411,8 @@ pub enum Error {
     BadScope(String),
     #[error("no project named {0} on this machine — create it first, or install globally")]
     UnknownProject(String),
+    #[error( "{0} only installs into a project — install it plain (its own scaffold lands with it), \ or name a destination: --new-project <name> or --project <id>" )]
+    ProjectRequired(String),
 }
 ```
 
