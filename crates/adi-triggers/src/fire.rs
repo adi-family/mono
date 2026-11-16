@@ -153,10 +153,15 @@ pub(crate) fn launch(
 
 /// Export a trigger's settings into its code block as `ADI_<KEY>`, uppercased with `-` folded
 /// to `_` — this is the contract every [preset](crate::presets) field is written against. A key
-/// that isn't a usable environment-variable name is dropped rather than mangled.
+/// that isn't a usable environment-variable name is dropped rather than mangled; so are
+/// [`crate::HOOK_SECRET_EXTRA`]/[`crate::HOOK_SECRET_REF_EXTRA`] — the platform's own gate on
+/// this trigger, never a business setting its code has any reason to read, and no preset ever
+/// reads either (ADI-MONO-242: closes the one path that put the hook secret into the fired
+/// process's own environment, and so its log, for no reason it was ever used).
 fn extra_env(extra: &BTreeMap<String, String>) -> Vec<(String, String)> {
     extra
         .iter()
+        .filter(|(k, _)| k.as_str() != crate::HOOK_SECRET_EXTRA && k.as_str() != crate::HOOK_SECRET_REF_EXTRA)
         .filter(|(k, _)| {
             !k.is_empty()
                 && !k.starts_with(|c: char| c.is_ascii_digit())
@@ -281,6 +286,7 @@ pub(crate) fn read_log(module_dir: &Path, name: &str) -> Option<String> {
 mod tests {
     use super::*;
     use crate::trigger::{KIND_BACKGROUND, RUNTIME_SH, TriggerManifest};
+    use crate::{HOOK_SECRET_EXTRA, HOOK_SECRET_REF_EXTRA};
 
     fn scratch_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -442,6 +448,23 @@ mod tests {
             "4242/MY_TOKEN"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ADI-MONO-242: the hook secret (inline or by reference) is the platform's own gate on this
+    /// trigger, not a business setting — it must never reach the fired code block's environment,
+    /// and so never its log either.
+    #[test]
+    fn the_hook_secret_extras_never_reach_the_code_block() {
+        let extra = BTreeMap::from([
+            (HOOK_SECRET_EXTRA.to_string(), "s3cr3t".to_string()),
+            (HOOK_SECRET_REF_EXTRA.to_string(), "SOME_SECRET".to_string()),
+            ("chat_id".to_string(), "42".to_string()),
+        ]);
+        assert_eq!(
+            extra_env(&extra),
+            vec![("ADI_CHAT_ID".to_string(), "42".to_string())],
+            "only the ordinary setting survives"
+        );
     }
 
     #[test]

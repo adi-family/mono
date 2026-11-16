@@ -1928,6 +1928,8 @@ pub(crate) enum TriggersCommand {
         disabled: bool,
         #[arg(long = "extra")]
         extra: Vec<String>,
+        #[arg(long)]
+        hook_secret: Option<String>,
         #[arg(long = "event")]
         events: Vec<String>,
         #[arg(long = "on")]
@@ -1954,6 +1956,11 @@ pub(crate) enum TriggersCommand {
         name: String,
     },
     RelayKey,
+    MigrateHookSecret {
+        name: String,
+        #[arg(long)]
+        secret_name: Option<String>,
+    },
 }
 ```
 

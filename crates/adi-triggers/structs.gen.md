@@ -4,13 +4,14 @@
 
 > Triggers for the adi platform: named code blocks that launch one of two ways — as a webhook, or as a supervised long-lived background process. Each trigger is one TOML file (kind, runtime, code block, enabled flag, settings) under ~/.adi/mono/triggers, prefillable from a preset catalog. Code blocks run as shell or TypeScript, with settings exported as ADI_<KEY> and any event payload handed over via ADI_PAYLOAD_FILE; the optional `supervisor` feature keeps background triggers alive.
 
-12 structs · 1 enum · 3 type aliases across 8 files.
+13 structs · 3 enums · 3 type aliases across 9 files.
 
 ## Index
 
 - [`src/dispatch.rs`](#srcdispatchrs) — `EventObserver`, `EventDispatcher`
 - [`src/error.rs`](#srcerrorrs) — `Result`, `Error`
 - [`src/fire.rs`](#srcfirers) — `Firing`, `Launch`
+- [`src/hook_secret.rs`](#srchook_secretrs) — `HookSecret`, `Migrated`, `MigrateError`
 - [`src/lib.rs`](#srclibrs) — `Triggers`
 - [`src/presets.rs`](#srcpresetsrs) — `PresetField`, `Preset`
 - [`src/run.rs`](#srcrunrs) — `RunState`, `Status`
@@ -97,6 +98,50 @@ pub(crate) struct Launch {
     pub(crate) program: &'static str,
     pub(crate) args: Vec<String>,
     pub(crate) env: Vec<(String, String)>,
+}
+```
+
+---
+
+## `src/hook_secret.rs`
+
+### enum `HookSecret`
+
+What a webhook trigger's hook secret resolves to, right before a request is gated on it.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HookSecret {
+    Open,
+    Value(String),
+    Missing,
+}
+```
+
+### struct `Migrated`
+
+What `migrate_hook_secret` moved — the secret's own name and scope, never its value, so a caller (the CLI) can report success without ever having the plaintext to accidentally print.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Migrated {
+    pub secret_name: String,
+    pub project: Option<String>,
+}
+```
+
+### enum `MigrateError`
+
+What this crate's own name sanitizer can't fix, or a decision the caller has to make for itself: `migrate_hook_secret`'s own refusals.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MigrateError {
+    NotFound,
+    NothingToMigrate,
+    NameTaken(String),
+    Secrets(String),
+    Store(String),
 }
 ```
 

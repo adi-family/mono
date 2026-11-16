@@ -42,6 +42,7 @@
 mod dispatch;
 mod error;
 mod fire;
+mod hook_secret;
 pub mod presets;
 mod run;
 #[cfg(feature = "supervisor")]
@@ -57,6 +58,10 @@ use adi_config::{Config, ConfigFile, now_unix};
 pub use dispatch::{EventDispatcher, EventObserver};
 pub use error::{Error, Result};
 pub use fire::Firing;
+pub use hook_secret::{
+    HOOK_SECRET_EXTRA, HOOK_SECRET_REF_EXTRA, HookSecret, MigrateError, Migrated, default_secret_name,
+    reconcile_hook_secret,
+};
 pub use presets::{Preset, PresetField};
 pub use run::{RunState, Status};
 #[cfg(feature = "supervisor")]

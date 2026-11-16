@@ -2303,6 +2303,8 @@ pub(crate) struct TriggersForm {
     pub(crate) editing: RwSignal<Option<String>>,
     pub(crate) busy: RwSignal<bool>,
     pub(crate) relay_key: RwSignal<Option<String>>,
+    pub(crate) hook_secret_status: RwSignal<adi_webapp_api::types::HookSecretStatus>,
+    pub(crate) clear_hook_secret: RwSignal<bool>,
 }
 ```
 

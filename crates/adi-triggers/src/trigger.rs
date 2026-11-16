@@ -11,8 +11,13 @@ use crate::error::{Error, Result};
 /// launched** — so there are only three:
 ///
 /// * [`KIND_WEBHOOK`] — launched by an inbound HTTP call to `/api/hooks/<name>`; the request
-///   body becomes the payload. Extra: `secret` (optional shared secret the caller must pass as
-///   `?secret=`).
+///   body becomes the payload. Optionally gated by a shared secret the caller must present as
+///   `?secret=` or an `X-ADI-Hook-Secret` header — named by reference
+///   ([`crate::HOOK_SECRET_REF_EXTRA`], an [`adi_secrets`] secret, resolved fresh on every
+///   request) or, for a trigger saved before that existed, inline
+///   ([`crate::HOOK_SECRET_EXTRA`], a plaintext value kept in the manifest — see
+///   [`crate::hook_secret`] for the gate itself and `adi-mono triggers migrate-hook-secret` for
+///   moving one off this form).
 /// * [`KIND_BACKGROUND`] — a long-lived independent process. While the trigger is enabled the
 ///   supervisor keeps it running, restarting it with backoff if it exits; disabling stops it.
 /// * [`KIND_EVENT`] — launched whenever a platform event ([`adi_events`]) whose name matches one
@@ -100,8 +105,9 @@ pub struct TriggerManifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
     /// Named settings the code block reads, exported into its environment as `ADI_<KEY>`
-    /// (uppercased). Which keys matter is the preset's business — `secret` is the one the
-    /// platform itself reads, to guard a webhook.
+    /// (uppercased). Which keys matter is the preset's business, except the two the platform
+    /// itself reads to guard a webhook — `secret`/`secret_ref` (see [`crate::hook_secret`]) —
+    /// which are reserved and never reach the code block's own environment.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extra: BTreeMap<String, String>,
     /// For an [event](KIND_EVENT) trigger only: the event-name patterns it subscribes to, matched
