@@ -23,6 +23,7 @@ mod agents;
 mod channels;
 mod dashboards;
 mod db;
+mod diagnostics;
 /// The registry of embedding backends the indexer, knowledge and facts stores resolve through.
 mod embedding_backends;
 mod files;
@@ -67,6 +68,7 @@ pub use agents::*;
 pub use channels::*;
 pub use dashboards::*;
 pub use db::*;
+pub use diagnostics::*;
 pub use embedding_backends::*;
 pub use files::*;
 pub use fleet::*;

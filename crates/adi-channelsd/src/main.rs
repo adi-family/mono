@@ -196,12 +196,20 @@ async fn serve(mut stream: TcpStream, service: Arc<Service>) -> anyhow::Result<(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+    use tracing_subscriber::prelude::*;
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_target(false)
+                .with_filter(
+                    tracing_subscriber::EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+                ),
         )
-        .with_target(false)
+        .with(adi_events::diagnostics::DiagnosticLayer::new(
+            adi_events::Events::open(),
+            "adi-channelsd",
+        ))
         .init();
     let addr = listen_addr(std::env::var("PORT").ok().as_deref())?;
     // Bind before starting sockets: a second accidental process cannot steal the provider

@@ -4,11 +4,12 @@
 
 > The adi platform's reliable event log: publishers `emit(name, payload)` a named event (e.g. `adi.tasks.created`) as one row in an append-only SQLite log under ~/.adi/mono/events/log.db, under a monotonic seq. A consumer picks a stable subscriber name and `catch_up`/`ack`s its own cursor, so it replays exactly what it missed after downtime, at-least-once. The `outbox` module is the other half: a producer with its own database writes an event in the same transaction as the state change it describes, then relays it into the log. Event names are dotted topics matched with segment-aware glob patterns (`*` = one segment, `**` = the tail).
 
-4 structs · 1 enum · 1 type alias across 2 files.
+9 structs · 2 enums · 1 type alias across 3 files.
 
 ## Index
 
 - [`src/catalog.rs`](#srccatalogrs) — `EventType`
+- [`src/diagnostics.rs`](#srcdiagnosticsrs) — `Level`, `Diagnostic`, `Record`, `Query`, `DiagnosticLayer`, `Fields`
 - [`src/lib.rs`](#srclibrs) — `Result`, `Error`, `EventRecord`, `LoggedEvent`, `Events`
 
 ---
@@ -31,6 +32,87 @@ pub struct EventType {
 
 ---
 
+## `src/diagnostics.rs`
+
+### enum `Level`
+
+```rust
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Level {
+    Info,
+    Warning,
+    #[default]
+    Error,
+}
+```
+
+### struct `Diagnostic`
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Diagnostic {
+    #[serde(default)]
+    pub level: Level,
+    pub source: String,
+    pub area: String,
+    pub message: String,
+    #[serde(default)]
+    pub context: Value,
+    #[serde(default)]
+    pub event_key: Option<String>,
+}
+```
+
+### struct `Record`
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Record {
+    pub id: u64,
+    pub recorded_at: u64,
+    #[serde(flatten)]
+    pub diagnostic: Diagnostic,
+}
+```
+
+### struct `Query`
+
+```rust
+#[derive(Debug, Default, Deserialize)]
+pub struct Query {
+    pub before: Option<u64>,
+    pub limit: Option<usize>,
+    pub source: Option<String>,
+    pub level: Option<Level>,
+    pub search: Option<String>,
+}
+```
+
+### struct `DiagnosticLayer`
+
+Add to a tracing registry to persist warnings and errors from a service and its libraries. Formatting still goes to the normal process log. Store failures go to stderr, never back through tracing (which would recurse). No tracing output is ever written to MCP stdout.
+
+```rust
+#[derive(Debug)]
+pub struct DiagnosticLayer {
+    store: Events,
+    source: String,
+}
+```
+
+### struct `Fields`
+
+```rust
+#[derive(Default)]
+struct Fields {
+    message: String,
+    error: String,
+}
+```
+
+---
+
 ## `src/lib.rs`
 
 ### type `Result`
@@ -48,6 +130,7 @@ Everything that can go wrong emitting, logging, or consuming events.
 ```rust
 #[derive(Debug)]
 pub enum Error {
+    InvalidDiagnostic(String),
     InvalidName(String),
     Config(adi_config::Error),
     Sqlite(rusqlite::Error),

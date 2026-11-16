@@ -4,7 +4,7 @@
 
 > The adi platform CLI — a thin argv adapter over adi-core's command surface.
 
-5 structs · 30 enums across 24 files.
+5 structs · 31 enums across 25 files.
 
 ## Index
 
@@ -20,6 +20,7 @@
 - [`src/indexer.rs`](#srcindexerrs) — `IndexerCommand`
 - [`src/knowledge.rs`](#srcknowledgers) — `KnowledgeCommand`, `BaseCommand`
 - [`src/llm.rs`](#srcllmrs) — `LlmCommand`
+- [`src/logs.rs`](#srclogsrs) — `LogsCommand`
 - [`src/main.rs`](#srcmainrs) — `Cli`, `Command`
 - [`src/marketplace.rs`](#srcmarketplacers) — `MarketplaceCommand`
 - [`src/mcp.rs`](#srcmcprs) — `McpCommand`
@@ -1026,6 +1027,45 @@ pub(crate) enum LlmCommand {
 
 ---
 
+## `src/logs.rs`
+
+### enum `LogsCommand`
+
+```rust
+#[derive(Debug, Subcommand)]
+pub(crate) enum LogsCommand {
+    List {
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+        #[arg(long)]
+        before: Option<u64>,
+        #[arg(long)]
+        source: Option<String>,
+        #[arg(long, value_parser = ["error", "warning", "info"])]
+        level: Option<String>,
+        #[arg(long)]
+        search: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    Report {
+        #[arg(long)]
+        source: String,
+        #[arg(long)]
+        area: String,
+        #[arg(long, default_value = "error", value_parser = ["error", "warning", "info"])]
+        level: String,
+        #[arg(long, default_value = "{}")]
+        context: String,
+        #[arg(long)]
+        event_key: Option<String>,
+        message: String,
+    },
+}
+```
+
+---
+
 ## `src/main.rs`
 
 ### struct `Cli`
@@ -1156,6 +1196,10 @@ enum Command {
     Events {
         #[command(subcommand)]
         command: EventsCommand,
+    },
+    Logs {
+        #[command(subcommand)]
+        command: logs::LogsCommand,
     },
     Update {
         #[command(subcommand)]

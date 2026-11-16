@@ -1,15 +1,17 @@
 import { useSyncExternalStore } from "react";
+import { APP_API_BASE } from "./app-api";
 
 /*
  * Background failures — a machine that stopped answering a poll, a transcript refresh that
  * came back malformed — are collected here instead of being pushed into the page as banners.
  * The rail's Event log button shows what arrived; the page keeps showing its content.
  *
- * The log belongs to the tab (sessionStorage), so a reload keeps it and a second tab starts
- * its own rather than two tabs fighting over one list.
+ * Browser failures have a tab-local fallback and are also submitted to the shared diagnostic
+ * store. The rail polls that store for service/agent failures. Seen state belongs to this tab;
+ * reading or dismissing a row never deletes the shared history.
  */
 
-export type AppEventLevel = "error" | "info";
+export type AppEventLevel = "error" | "warning" | "info";
 
 export interface AppEventInput {
   level: AppEventLevel;
@@ -18,6 +20,7 @@ export interface AppEventInput {
   /** The part of the app that raised it: "Chats", "Fleet", … */
   area: string;
   message: string;
+  context?: unknown;
 }
 
 export interface AppEvent extends AppEventInput {
@@ -64,7 +67,7 @@ export function unreadEvents(state: EventLogState): AppEvent[] {
 function isEvent(value: unknown): value is AppEvent {
   if (!value || typeof value !== "object") return false;
   const event = value as Record<string, unknown>;
-  return typeof event.id === "string" && (event.level === "error" || event.level === "info") && typeof event.area === "string"
+  return typeof event.id === "string" && (event.level === "error" || event.level === "warning" || event.level === "info") && typeof event.area === "string"
     && typeof event.message === "string" && typeof event.firstSeen === "number" && typeof event.lastSeen === "number"
     && typeof event.count === "number" && (event.source === undefined || typeof event.source === "string");
 }
@@ -107,7 +110,54 @@ function update(next: EventLogState) {
 /** Record a background failure (or a recovery) without touching the page. Safe outside React. */
 export function reportEvent(input: AppEventInput) {
   const now = Date.now();
-  update(appendEvent(current(), input, now, `${now}-${++sequence}`));
+  const id = `${now}-${++sequence}`;
+  update(appendEvent(current(), input, now, id));
+  // Keep the local fallback even if the server is down. Never report a reporting failure back
+  // through this function: that would create an unbounded request/error loop.
+  if (typeof window !== "undefined") void fetch(`${APP_API_BASE}/diagnostics/report`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...input, source: "browser", context: { machine: input.source, details: input.context, browser_event_id: id },
+      event_key: `browser:${globalThis.crypto?.randomUUID?.() ?? id}` }),
+    signal: AbortSignal.timeout(5000),
+  }).catch(() => {});
+}
+
+export interface DiagnosticRecord {
+  id: number; recorded_at: number; level: AppEventLevel; source: string; area: string; message: string; context?: unknown;
+}
+
+/** Import by durable id, never incrementing counts because a poll saw the same row again. */
+export function mergeDiagnostics(log: EventLogState, records: DiagnosticRecord[]): EventLogState {
+  const events = new Map(log.events.map((event) => [event.id, event]));
+  for (const record of records) {
+    if (record.source === "browser" && record.context && typeof record.context === "object") {
+      const localId = (record.context as Record<string, unknown>).browser_event_id;
+      if (typeof localId === "string") events.delete(localId);
+    }
+    const id = `stored:${record.id}`;
+    events.set(id, { id, level: record.level, source: record.source, area: record.area, message: record.message,
+      context: record.context, firstSeen: record.recorded_at, lastSeen: record.recorded_at, count: 1 });
+  }
+  return { ...log, events: [...events.values()].sort((a, b) => b.lastSeen - a.lastSeen) };
+}
+
+export async function queryDiagnostics(query: { before?: number; source?: string; level?: AppEventLevel; search?: string } = {}): Promise<DiagnosticRecord[]> {
+  const response = await fetch(`${APP_API_BASE}/diagnostics/query`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...query, limit: 100 }),
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!response.ok) throw new Error(`Could not load stored logs (HTTP ${response.status}).`);
+  const data = await response.json() as { records?: DiagnosticRecord[] };
+  if (!Array.isArray(data.records) || !data.records.every((r) => r && Number.isSafeInteger(r.id)
+    && typeof r.recorded_at === "number" && Number.isFinite(r.recorded_at) && r.recorded_at >= 0 && r.recorded_at < 8.64e15
+    && ["error", "warning", "info"].includes(r.level) && typeof r.source === "string" && typeof r.area === "string"
+    && typeof r.message === "string")) throw new Error("The log service returned an invalid response.");
+  return data.records;
+}
+
+export async function refreshDiagnostics() {
+  const merged = mergeDiagnostics(current(), await queryDiagnostics());
+  update({ ...merged, events: merged.events.slice(0, 1000) });
 }
 
 export function markEventsSeen() {

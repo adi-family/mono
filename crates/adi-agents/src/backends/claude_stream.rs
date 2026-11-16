@@ -28,6 +28,123 @@ use serde_json::Value;
 
 use crate::progress::{Step, ToolStatus, TurnContent, TurnMetrics, text_of};
 
+/// Preserve failures that are independent of Claude's final `result.is_error`: a model can
+/// finish successfully even when its MCP servers never connected or a tool returned an error.
+pub(crate) fn diagnostics(event: &Value) -> Vec<adi_events::diagnostics::Diagnostic> {
+    use adi_events::diagnostics::{Diagnostic, Level};
+    let mut failures = Vec::new();
+    let mut add = |suffix: &str, message: String, level: Level| {
+        let identity = event.get("uuid").and_then(Value::as_str);
+        failures.push(Diagnostic {
+            level,
+            source: "claude".into(),
+            area: "Agent tools".into(),
+            message,
+            context: serde_json::json!({"engine_session":event.get("session_id")}),
+            event_key: identity.map(|id| format!("claude:{id}:{suffix}")),
+        });
+    };
+    if event.get("type").and_then(Value::as_str) == Some("system")
+        && event.get("subtype").and_then(Value::as_str) == Some("init")
+    {
+        for server in event
+            .get("mcp_servers")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let name = server
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            match server.get("status").and_then(Value::as_str) {
+                Some("failed") => add(
+                    name,
+                    format!(
+                        "MCP server '{name}' failed to connect. Its tools are unavailable. Check the server command and process log."
+                    ),
+                    Level::Error,
+                ),
+                Some("needs-auth") => add(
+                    name,
+                    format!("MCP server '{name}' needs authentication."),
+                    Level::Warning,
+                ),
+                _ => {}
+            }
+        }
+    }
+    for block in event
+        .pointer("/message/content")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if block.get("type").and_then(Value::as_str) == Some("tool_result")
+            && block.get("is_error").and_then(Value::as_bool) == Some(true)
+        {
+            let id = block
+                .get("tool_use_id")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let output = block
+                .get("content")
+                .map(|v| {
+                    v.as_str()
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| v.to_string())
+                })
+                .unwrap_or_default();
+            add(
+                id,
+                format!(
+                    "Tool {id} failed: {}",
+                    output.chars().take(4000).collect::<String>()
+                ),
+                Level::Error,
+            );
+        }
+    }
+    if event.get("type").and_then(Value::as_str) == Some("result")
+        && event.get("is_error").and_then(Value::as_bool) == Some(true)
+    {
+        let message = event
+            .get("result")
+            .and_then(Value::as_str)
+            .unwrap_or("Claude turn failed");
+        add("result", message.chars().take(4000).collect(), Level::Error);
+    }
+    failures
+}
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::*;
+    #[test]
+    fn startup_failure_survives_a_successful_model_result() {
+        let init = serde_json::json!({"type":"system","subtype":"init","uuid":"init-1","session_id":"s1",
+            "tools":[],"mcp_servers":[{"name":"adi","status":"failed"},{"name":"other","status":"needs-auth"},{"name":"good","status":"connected"}]});
+        let records = diagnostics(&init);
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].event_key.as_deref(), Some("claude:init-1:adi"));
+        assert!(records[0].message.contains("failed to connect"));
+        assert!(
+            diagnostics(&serde_json::json!({"type":"result","is_error":false,"subtype":"success"}))
+                .is_empty()
+        );
+    }
+    #[test]
+    fn tool_errors_are_captured_without_successful_output_or_thinking() {
+        let event = serde_json::json!({"type":"user","uuid":"u1","message":{"content":[
+            {"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"command exited 2"},
+            {"type":"tool_result","tool_use_id":"t2","content":"private success output"}]}});
+        let records = diagnostics(&event);
+        assert_eq!(records.len(), 1);
+        assert!(records[0].message.contains("command exited 2"));
+        assert!(!records[0].message.contains("private success output"));
+    }
+}
+
 pub(crate) fn parse(log: &[u8]) -> TurnContent {
     let text = String::from_utf8_lossy(log);
     let mut steps: Vec<Step> = Vec::new();

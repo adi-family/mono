@@ -5,10 +5,10 @@ import { ScrollText, X } from "lucide-react";
 import { Button, cn } from "@design-system/ui";
 
 import { conversationAge } from "../lib/app-chat-sidebar";
-import { clearEvents, markEventsSeen, setEventLogOpen, unreadEvents, useEventLog, useEventLogOpen, type AppEvent } from "../lib/event-log";
+import { markEventsSeen, mergeDiagnostics, queryDiagnostics, refreshDiagnostics, setEventLogOpen, unreadEvents, useEventLog, useEventLogOpen, type AppEvent, type AppEventLevel, type DiagnosticRecord } from "../lib/event-log";
 import { useIsMobile } from "../lib/use-is-mobile";
 
-const panelWidth = 352;
+const panelWidth = 480;
 
 function EventRow({ event, isNew, now }: { event: AppEvent; isNew: boolean; now: number }) {
   const when = new Date(event.lastSeen);
@@ -17,9 +17,13 @@ function EventRow({ event, isNew, now }: { event: AppEvent; isNew: boolean; now:
       <span aria-hidden="true" className={cn("mt-[7px] size-1.5 shrink-0 rounded-full", event.level === "error" ? "bg-destructive" : "bg-foreground/40")} />
       <div className="min-w-0 flex-1">
         <p className="text-xs leading-5 [overflow-wrap:anywhere]">
-          <span className="sr-only">{event.level === "error" ? "Error: " : "Note: "}</span>
+          <span className="sr-only">{event.level}: </span>
           {event.message}
         </p>
+        {event.context != null && <details className="mt-1 text-xs">
+          <summary className="text-muted-foreground cursor-pointer">Details</summary>
+          <pre className="bg-muted mt-1 max-h-48 overflow-auto rounded p-2 whitespace-pre-wrap [overflow-wrap:anywhere]">{JSON.stringify(event.context, null, 2)}</pre>
+        </details>}
         <p className="text-muted-foreground flex min-w-0 flex-wrap items-center gap-x-1.5 text-[11px] leading-4">
           <span className="truncate">{event.source ?? "This machine"} · {event.area}</span>
           <time dateTime={when.toISOString()} title={`Last seen: ${when.toLocaleString()}`}>{conversationAge(event.lastSeen, now) ?? ""}</time>
@@ -32,11 +36,48 @@ function EventRow({ event, isNew, now }: { event: AppEvent; isNew: boolean; now:
 }
 
 function EventLogPanel({ anchor, seenBefore, onClose }: { anchor: RefObject<HTMLButtonElement | null>; seenBefore: number; onClose: (restoreFocus?: boolean) => void }) {
-  const { events } = useEventLog();
+  const log = useEventLog();
   const isMobile = useIsMobile();
   const element = useRef<HTMLDivElement>(null);
   const [style, setStyle] = useState<CSSProperties>({});
   const [now, setNow] = useState(Date.now);
+  const [search, setSearch] = useState("");
+  const [level, setLevel] = useState<AppEventLevel | "">("");
+  const [records, setRecords] = useState<DiagnosticRecord[] | null>(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [more, setMore] = useState(false);
+  const [revision, setRevision] = useState(0);
+  const queryVersion = useRef(0);
+  useEffect(() => {
+    const version = ++queryVersion.current;
+    setRecords(null); setLoading(true); setError("");
+    const timer = window.setTimeout(() => {
+      void queryDiagnostics({ search: search || undefined, level: level || undefined }).then((rows) => {
+        if (version !== queryVersion.current) return;
+        setRecords(rows); setMore(rows.length === 100);
+      }).catch((reason: unknown) => {
+        if (version === queryVersion.current) setError(reason instanceof Error ? reason.message : "Could not load stored logs.");
+      }).finally(() => { if (version === queryVersion.current) setLoading(false); });
+    }, 200);
+    return () => { window.clearTimeout(timer); queryVersion.current++; };
+  }, [search, level, revision]);
+  const matches = (event: AppEvent) => (!level || event.level === level)
+    && (!search || `${event.message} ${event.area} ${event.source} ${JSON.stringify(event.context)}`.toLowerCase().includes(search.toLowerCase()));
+  const cached = !search && !level ? log.events : log.events.filter((e) => !e.id.startsWith("stored:"));
+  const events = (records === null ? log.events : mergeDiagnostics({ ...log, events: cached }, records).events).filter(matches);
+  const loadMore = async () => {
+    const before = records?.at(-1)?.id;
+    if (!before) return;
+    const version = queryVersion.current;
+    setLoading(true);
+    try {
+      const rows = await queryDiagnostics({ before, search: search || undefined, level: level || undefined });
+      if (version !== queryVersion.current) return;
+      setRecords((old) => [...(old ?? []), ...rows]); setMore(rows.length === 100); setError("");
+    } catch (reason) { if (version === queryVersion.current) setError(String(reason)); }
+    finally { if (version === queryVersion.current) setLoading(false); }
+  };
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 30_000);
@@ -73,11 +114,6 @@ function EventLogPanel({ anchor, seenBefore, onClose }: { anchor: RefObject<HTML
     };
   }, [anchor, onClose]);
 
-  const clear = () => {
-    clearEvents();
-    element.current?.focus({ preventScroll: true });
-  };
-
   return createPortal(
     <div
       ref={element}
@@ -90,21 +126,33 @@ function EventLogPanel({ anchor, seenBefore, onClose }: { anchor: RefObject<HTML
     >
       <div className="flex shrink-0 items-center gap-1 border-b px-3 py-2">
         <h2 className="mr-auto text-sm font-semibold">Event log</h2>
-        {events.length > 0 && <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={clear}>Clear</Button>}
+        <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => setRevision((v) => v + 1)}>Refresh</Button>
         <Button type="button" size="icon" variant="ghost" className="size-7" aria-label="Close event log" onClick={() => onClose()}>
           <X aria-hidden="true" className="size-3.5" />
         </Button>
       </div>
+      <div className="flex shrink-0 gap-2 border-b p-2">
+        <input aria-label="Search stored logs" placeholder="Search messages and context…" value={search} onChange={(e) => setSearch(e.target.value)} className="min-w-0 flex-1 rounded border bg-transparent px-2 py-1 text-xs" />
+        <select aria-label="Log severity" value={level} onChange={(e) => setLevel(e.target.value as AppEventLevel | "")} className="rounded border bg-popover px-2 text-xs">
+          <option value="">All levels</option><option value="error">Errors</option><option value="warning">Warnings</option><option value="info">Info</option>
+        </select>
+      </div>
+      {error && <p role="alert" className="text-destructive px-3 py-2 text-xs">{error} Showing available cached entries.</p>}
+      {loading && <p role="status" className="text-muted-foreground px-3 py-1 text-xs">Loading logs…</p>}
       {events.length === 0 ? (
         <div className="px-4 py-6 text-center">
           <p className="text-sm font-medium">Nothing to report</p>
-          <p className="text-muted-foreground mt-1 text-xs leading-relaxed">Background failures, such as a machine that stops answering, are collected here instead of interrupting the page.</p>
+          <p className="text-muted-foreground mt-1 text-xs leading-relaxed">No matching entries. Process and browser diagnostics are stored on this machine for up to 30 days.</p>
         </div>
       ) : (
         <ul aria-label="Events" className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1">
           {events.map((event) => <EventRow key={event.id} event={event} isNew={event.lastSeen > seenBefore} now={now} />)}
         </ul>
       )}
+      <div className="flex shrink-0 items-center border-t px-3 py-2 text-xs text-muted-foreground">
+        <span className="mr-auto">Stored logs · up to 30 days</span>
+        {more && <Button size="sm" variant="ghost" disabled={loading} disabledReason="Loading logs" onClick={() => void loadMore()}>Load older</Button>}
+      </div>
     </div>,
     document.body,
   );
@@ -122,6 +170,16 @@ export function EventLogButton({ tabClass }: { tabClass: (active: boolean) => st
   const unread = unreadEvents(log);
   const unreadErrors = unread.some((event) => event.level === "error");
   const label = unread.length ? `Event log, ${unread.length} new` : "Event log";
+  useEffect(() => {
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      try { await refreshDiagnostics(); } catch { /* Opening the panel shows retrieval errors. */ }
+      if (!disposed) timer = setTimeout(() => void poll(), 10_000);
+    };
+    void poll();
+    return () => { disposed = true; clearTimeout(timer); };
+  }, []);
 
   // Opening marks the log read, but the panel still points out what arrived since the last look;
   // closing marks read again, for anything that arrived while it was open.

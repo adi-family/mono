@@ -15,6 +15,7 @@ mod goals;
 mod indexer;
 mod knowledge;
 mod llm;
+mod logs;
 mod marketplace;
 mod mcp;
 mod mesh;
@@ -247,6 +248,11 @@ enum Command {
         #[command(subcommand)]
         command: EventsCommand,
     },
+    /// Read or append durable diagnostics shared by services and the dashboard Event log.
+    Logs {
+        #[command(subcommand)]
+        command: logs::LogsCommand,
+    },
     /// Auto-update commands: one update swaps the whole app bundle (every binary).
     Update {
         #[command(subcommand)]
@@ -313,7 +319,7 @@ fn print_flavor(json: bool, env: bool) {
         match serde_json::to_string_pretty(flavour) {
             Ok(text) => println!("{text}"),
             Err(e) => {
-                eprintln!("error: {e}");
+                logs::report_error(&e.to_string());
                 std::process::exit(1);
             }
         }
@@ -338,7 +344,12 @@ fn print_flavor(json: bool, env: bool) {
 }
 
 fn main() {
-    let cli = Cli::parse();
+    let cli = Cli::try_parse().unwrap_or_else(|error| {
+        if error.exit_code() != 0 {
+            logs::report_error(&error.to_string());
+        }
+        error.exit()
+    });
     // Before anything else: every path, label, port and hostname below is derived from the
     // flavour, and it resolves itself from the environment the first time it is asked. Pinning
     // has to happen while nothing has asked yet.
@@ -375,67 +386,67 @@ fn main() {
         },
         Command::Projects { command } => {
             if let Err(e) = run_projects(adi, command) {
-                eprintln!("error: {e}");
+                logs::report_error(&e.to_string());
                 std::process::exit(1);
             }
         }
         Command::Tasks { command } => {
             if let Err(e) = run_tasks(adi, command) {
-                eprintln!("error: {e}");
+                logs::report_error(&e.to_string());
                 std::process::exit(1);
             }
         }
         Command::Tools { command } => {
             if let Err(e) = run_tools(adi, command) {
-                eprintln!("error: {e}");
+                logs::report_error(&e.to_string());
                 std::process::exit(1);
             }
         }
         Command::Secrets { command } => {
             if let Err(e) = run_secrets(adi, command) {
-                eprintln!("error: {e}");
+                logs::report_error(&e.to_string());
                 std::process::exit(1);
             }
         }
         Command::Db { command } => {
             if let Err(e) = run_db(adi, command) {
-                eprintln!("error: {e}");
+                logs::report_error(&e.to_string());
                 std::process::exit(1);
             }
         }
         Command::Agents { command } => {
             if let Err(e) = run_agents(adi, command) {
-                eprintln!("error: {e}");
+                logs::report_error(&e.to_string());
                 std::process::exit(1);
             }
         }
         Command::Llm { command } => {
             if let Err(e) = run_llm(adi, command) {
-                eprintln!("error: {e}");
+                logs::report_error(&e.to_string());
                 std::process::exit(1);
             }
         }
         Command::Embeddings { command } => {
             if let Err(e) = run_embeddings(adi, command) {
-                eprintln!("error: {e}");
+                logs::report_error(&e.to_string());
                 std::process::exit(1);
             }
         }
         Command::Goals { command } => {
             if let Err(e) = run_goals(adi, command) {
-                eprintln!("error: {e}");
+                logs::report_error(&e.to_string());
                 std::process::exit(1);
             }
         }
         Command::Triggers { command } => {
             if let Err(e) = run_triggers(adi, command) {
-                eprintln!("error: {e}");
+                logs::report_error(&e.to_string());
                 std::process::exit(1);
             }
         }
         Command::Workflows { command } => {
             if let Err(e) = run_workflows(adi, command) {
-                eprintln!("error: {e}");
+                logs::report_error(&e.to_string());
                 std::process::exit(1);
             }
         }
@@ -446,7 +457,7 @@ fn main() {
             command,
         } => {
             if let Err(e) = run_knowledge(adi, as_agent, as_project, root, command) {
-                eprintln!("error: {e}");
+                logs::report_error(&e.to_string());
                 std::process::exit(1);
             }
         }
@@ -461,28 +472,28 @@ fn main() {
             command,
         } => {
             if let Err(e) = run_facts(base, as_agent, as_project, root, command) {
-                eprintln!("error: {e}");
+                logs::report_error(&e.to_string());
                 std::process::exit(1);
             }
         }
         // Like `mesh`, no `adi` facade: an index is state under the project, not the platform.
         Command::Indexer { command } => {
             if let Err(e) = run_indexer(command) {
-                eprintln!("error: {e}");
+                logs::report_error(&e.to_string());
                 std::process::exit(1);
             }
         }
         // The one group that does not take the `adi` facade: its state is the mesh module's own.
         Command::Mesh { command } => {
             if let Err(e) = run_mesh(command) {
-                eprintln!("error: {e}");
+                logs::report_error(&e.to_string());
                 std::process::exit(1);
             }
         }
         // Like `mesh`: the marketplace's state is its own module under the store.
         Command::Marketplace { command } => {
             if let Err(e) = run_marketplace(command) {
-                eprintln!("error: {e}");
+                logs::report_error(&e.to_string());
                 std::process::exit(1);
             }
         }
@@ -490,13 +501,19 @@ fn main() {
         // `/api/channels/*` rather than touching platform state directly.
         Command::Channels { command } => {
             if let Err(e) = run_channels(command) {
-                eprintln!("error: {e}");
+                logs::report_error(&e.to_string());
                 std::process::exit(1);
             }
         }
         Command::Events { command } => {
             if let Err(e) = run_events(adi, command) {
-                eprintln!("error: {e}");
+                logs::report_error(&e.to_string());
+                std::process::exit(1);
+            }
+        }
+        Command::Logs { command } => {
+            if let Err(e) = logs::run(adi.events(), command) {
+                logs::report_error(&e.to_string());
                 std::process::exit(1);
             }
         }
@@ -504,7 +521,7 @@ fn main() {
         // Like `mesh`/`marketplace`: no `adi` facade — this is `adi-usage`'s own settings/state.
         Command::Analytics { command } => {
             if let Err(e) = run_analytics(command) {
-                eprintln!("error: {e}");
+                logs::report_error(&e.to_string());
                 std::process::exit(1);
             }
         }
@@ -520,13 +537,13 @@ fn main() {
                 .agents()
                 .serve_mcp(&agent, &session, std::path::Path::new(&dir))
             {
-                eprintln!("error: {e}");
+                logs::report_error(&e.to_string());
                 std::process::exit(1);
             }
         }
         Command::Mcp(command) => {
             if let Err(e) = run_mcp(adi, command) {
-                eprintln!("error: {e}");
+                logs::report_error(&e.to_string());
                 std::process::exit(1);
             }
         }
@@ -581,7 +598,7 @@ fn run_diagnose(adi: Adi, out: Option<&std::path::Path>, json: bool) {
             }
         }
         Err(e) => {
-            eprintln!("error: {e}");
+            logs::report_error(&e.to_string());
             std::process::exit(1);
         }
     }

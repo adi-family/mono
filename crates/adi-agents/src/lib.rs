@@ -34,6 +34,7 @@ mod auto_title;
 pub mod awaits;
 mod backend;
 mod backends;
+mod diagnostics;
 pub mod dispatch;
 mod error;
 mod events;
@@ -2129,7 +2130,7 @@ impl Agents {
         // The opening question can land before the runner records its pid. Like a run listing,
         // a transcript must keep that launch pending rather than commit an empty answer forever.
         let running = Self::still_launching(&record) || runner.is_alive(&session);
-        let live = live_content(runner.as_ref(), &session, running);
+        let live = live_content(&self.config, runner.as_ref(), &session, running);
         if !running {
             settle(&store, &agent.name, conv_id, &live);
         }
@@ -2164,7 +2165,7 @@ impl Agents {
         if before.is_some() {
             return store.transcript_page(&agent.name, conv_id, before, limit, None, running);
         }
-        let live = live_content(runner.as_ref(), &session, running);
+        let live = live_content(&self.config, runner.as_ref(), &session, running);
         if !running {
             settle(&store, &agent.name, conv_id, &live);
         }
@@ -2198,7 +2199,7 @@ impl Agents {
         let runner = runner_of(&record)?;
         let session = store.session(&agent.name, conv_id);
         let running = Self::still_launching(&record) || runner.is_alive(&session);
-        let mut live = live_content(runner.as_ref(), &session, running);
+        let mut live = live_content(&self.config, runner.as_ref(), &session, running);
         if !running {
             progress::close_open_calls(&mut live.steps);
         }
@@ -2442,7 +2443,7 @@ impl Agents {
             store,
             &agent.name,
             &record.id,
-            &live_content(runner, &session, false),
+            &live_content(&self.config, runner, &session, false),
         );
 
         // The agent as *this conversation* runs it: the definition is re-read every turn, so a run
@@ -3083,7 +3084,7 @@ impl Agents {
                 continue;
             };
             let session = store.session(&agent.name, &run.run_id);
-            let content = live_content(runner.as_ref(), &session, false);
+            let content = live_content(&self.config, runner.as_ref(), &session, false);
             let outcome = store::RunOutcome::of(
                 content.metrics.as_ref(),
                 &content.text,
@@ -4188,8 +4189,9 @@ fn launch_lost_outcome(started_at: u64) -> store::RunOutcome {
 ///
 /// `running` only keys the memo — a runner reads a live log differently from a finished one, and
 /// the two answers must not be served for each other.
-fn live_content(runner: &dyn Runner, session: &SessionRef<'_>, running: bool) -> TurnContent {
+fn live_content(config: &adi_config::Config, runner: &dyn Runner, session: &SessionRef<'_>, running: bool) -> TurnContent {
     let content = memo::folded_events(session.log_path(), !running, || {
+        diagnostics::capture(config, session);
         let Ok(batch) = runner.events(session, None) else {
             return TurnContent::default();
         };

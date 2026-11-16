@@ -208,9 +208,17 @@ pub(crate) fn ensure_tls_provider() {
 async fn main() -> anyhow::Result<()> {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_target(false)
+    use tracing_subscriber::prelude::*;
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_target(false)
+                .with_filter(filter),
+        )
+        .with(adi_events::diagnostics::DiagnosticLayer::new(
+            Events::open(),
+            "adi-app",
+        ))
         .init();
 
     let addr = listen_addr();
@@ -557,7 +565,37 @@ impl App {
     async fn answer(self: &Arc<Self>, req: http::Request) -> Arc<Response> {
         let key = shared_read_key(&req);
         let app = Arc::clone(self);
-        let work = move || dispatch(&app, &req);
+        let work = move || {
+            let response = dispatch(&app, &req);
+            if response.status >= 400 && !req.route_path().starts_with("/api/diagnostics") {
+                let detail = serde_json::from_str::<serde_json::Value>(&response.body)
+                    .ok()
+                    .and_then(|v| {
+                        v.get("error")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_owned)
+                    })
+                    .unwrap_or_default();
+                let record = adi_events::diagnostics::Diagnostic {
+                    level: adi_events::diagnostics::Level::Error,
+                    source: "adi-app".into(),
+                    area: "HTTP API".into(),
+                    message: format!(
+                        "{} {} returned {}: {}",
+                        req.method,
+                        req.route_path(),
+                        response.status,
+                        detail.chars().take(4000).collect::<String>()
+                    ),
+                    context: serde_json::json!({"status": response.status, "method": req.method, "path": req.route_path()}),
+                    event_key: None,
+                };
+                if let Err(error) = app.events.report(&record) {
+                    eprintln!("could not store API error: {error}");
+                }
+            }
+            response
+        };
         match key {
             Some(key) => self.reads.shared(key, work).await,
             None => Arc::new(blocking(work).await),
@@ -730,6 +768,8 @@ fn member_refusal(projects: &Projects, req: &http::Request) -> Option<Response> 
 /// a hive service. Everything else (including every `GET`) is unrestricted.
 fn member_blocked(method: &str, path: &str, body: &[u8], petname: &str) -> Option<Response> {
     let blocked = path.starts_with("/api/system")
+        // Shared diagnostics can include other users' session context and process errors.
+        || path.starts_with("/api/diagnostics")
         || path.starts_with("/api/update")
         || path.starts_with("/api/licence")
         || path.starts_with("/api/mesh")
@@ -1119,6 +1159,9 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         }
         ("POST", "/api/triggers/log") => handlers::trigger_log(triggers, &req.body),
         ("POST", "/api/events/emit") => handlers::emit_event(events, &req.body),
+        ("GET", "/api/diagnostics") => handlers::diagnostics(events, &[]),
+        ("POST", "/api/diagnostics/query") => handlers::diagnostics(events, &req.body),
+        ("POST", "/api/diagnostics/report") => handlers::report_diagnostic(events, &req.body),
         ("GET", "/api/workflows") => handlers::workflows(workflows),
         ("POST", "/api/workflows/enable") => handlers::enable_workflow(workflows, &req.body),
         ("POST", "/api/workflows/disable") => handlers::disable_workflow(workflows, &req.body),
@@ -1885,6 +1928,9 @@ mod tests {
             ("GET", "/api/update"),
             ("POST", "/api/update/run"),
             ("GET", "/api/licence"),
+            ("GET", "/api/diagnostics"),
+            ("POST", "/api/diagnostics/query"),
+            ("POST", "/api/diagnostics/report"),
             ("GET", "/api/mesh"),
             ("POST", "/api/mesh/start"),
             ("POST", "/api/secrets/reveal"),

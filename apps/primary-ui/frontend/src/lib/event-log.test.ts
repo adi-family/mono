@@ -2,9 +2,32 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { appendEvent, emptyEventLog, eventCollapseMs, eventLogLimit, parseEventLog, unreadEvents, type AppEventInput } from "./event-log";
+import { appendEvent, emptyEventLog, eventCollapseMs, eventLogLimit, mergeDiagnostics, parseEventLog, queryDiagnostics, unreadEvents, type AppEventInput } from "./event-log";
 
 const failure: AppEventInput = { level: "error", area: "Chats", source: "hetzner-nosh", message: "The app returned an invalid response." };
+
+test("server polls preserve identity and unread state, and replace a submitted browser fallback", () => {
+  const local = appendEvent(emptyEventLog, failure, 1000, "browser-1");
+  const row = { id: 42, recorded_at: 1500, level: "error" as const, source: "browser", area: "Chats", message: failure.message,
+    context: { browser_event_id: "browser-1" } };
+  const once = mergeDiagnostics(local, [row]);
+  assert.equal(once.events.length, 1);
+  assert.equal(once.events[0]!.id, "stored:42");
+  const seen = { ...once, seenAt: 2000 };
+  assert.deepEqual(mergeDiagnostics(seen, [row]), seen);
+  assert.equal(unreadEvents(mergeDiagnostics(seen, [row])).length, 0);
+});
+
+test("retrieval sends cursor and filters and rejects malformed server rows", async () => {
+  const original = globalThis.fetch;
+  try {
+    globalThis.fetch = (async (_url, options) => {
+      assert.deepEqual(JSON.parse(String(options?.body)), { before: 42, level: "error", search: "MCP", limit: 100 });
+      return new Response(JSON.stringify({ records: [{ id: 1, recorded_at: "invalid" }] }));
+    }) as typeof fetch;
+    await assert.rejects(queryDiagnostics({ before: 42, level: "error", search: "MCP" }), /invalid response/);
+  } finally { globalThis.fetch = original; }
+});
 
 test("a repeat within the collapse window bumps the existing row to the top instead of adding one", () => {
   let log = appendEvent(emptyEventLog, failure, 1_000, "a");

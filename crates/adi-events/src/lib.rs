@@ -61,6 +61,7 @@
 //! ```
 
 mod catalog;
+pub mod diagnostics;
 pub mod outbox;
 
 use std::path::PathBuf;
@@ -79,6 +80,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// Everything that can go wrong emitting, logging, or consuming events.
 #[derive(Debug)]
 pub enum Error {
+    InvalidDiagnostic(String),
     /// An event name is empty or carries a character outside `[A-Za-z0-9._-]`.
     InvalidName(String),
     /// The underlying config store failed (creating the module directory).
@@ -92,6 +94,7 @@ pub enum Error {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidDiagnostic(message) => write!(f, "invalid diagnostic: {message}"),
             Self::InvalidName(name) => write!(
                 f,
                 "invalid event name {name:?}: use dotted segments of letters, digits, '.', '-', '_'"
@@ -109,7 +112,7 @@ impl std::error::Error for Error {
             Self::Config(e) => Some(e),
             Self::Sqlite(e) => Some(e),
             Self::Encode(e) => Some(e),
-            Self::InvalidName(_) => None,
+            Self::InvalidName(_) | Self::InvalidDiagnostic(_) => None,
         }
     }
 }
