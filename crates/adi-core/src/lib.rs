@@ -121,9 +121,11 @@ pub use adi_events::{
 };
 
 pub use adi_triggers::{
-    Error as TriggersError, Firing, KIND_BACKGROUND, KIND_EVENT, KIND_WEBHOOK, RUNTIME_SH,
-    RUNTIME_TS, RunState, SUBSCRIBER as EVENT_DISPATCH_SUBSCRIBER, Trigger, TriggerManifest,
-    Triggers, clean_trigger_on, presets as trigger_presets,
+    Error as TriggersError, Firing, HOOK_SECRET_EXTRA, HOOK_SECRET_REF_EXTRA, HookSecret,
+    KIND_BACKGROUND, KIND_EVENT, KIND_WEBHOOK, MigrateError as HookSecretMigrateError,
+    Migrated as HookSecretMigrated, RUNTIME_SH, RUNTIME_TS, RunState,
+    SUBSCRIBER as EVENT_DISPATCH_SUBSCRIBER, Trigger, TriggerManifest, Triggers,
+    clean_trigger_on, default_secret_name as default_hook_secret_name, presets as trigger_presets,
 };
 
 pub use adi_workflows::{
