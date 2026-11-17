@@ -130,8 +130,8 @@ pub struct EmbeddingBackendManifest {
     /// The host (`ollama`) or endpoint base (`openai`). Unused by `candle` and `hash`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
-    /// The environment variable an `openai` backend's key is read from. A name, not a secret —
-    /// mirrors `LlmBackendManifest::api_key_env` exactly.
+    /// The environment variable an `openai` backend's key is read from, or — when no such
+    /// variable is set — the global secret of the same name. A name, not a secret.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_key_env: Option<String>,
     /// Other backend ids, tried in order if this one's runtime fails to build or fails to
@@ -354,7 +354,7 @@ impl EmbeddingBackends {
         let primary = self.get(id)?.ok_or_else(|| Error::NotFound(id.to_string()))?;
         let mut chain: Vec<Arc<dyn Embedder>> = Vec::new();
         let mut built_primary = None;
-        match build_embedder(&primary.manifest) {
+        match build_embedder(&self.config, &primary.manifest) {
             Ok(embedder) => {
                 built_primary = Some((embedder.dimensions(), embedder.model_name().to_string()));
                 chain.push(embedder);
@@ -375,7 +375,7 @@ impl EmbeddingBackends {
             {
                 continue; // edited out of alignment since the primary named it — drop it, not the chain
             }
-            if let Ok(embedder) = build_embedder(&fallback.manifest) {
+            if let Ok(embedder) = build_embedder(&self.config, &fallback.manifest) {
                 chain.push(embedder);
             }
         }
@@ -405,7 +405,10 @@ impl EmbeddingBackends {
 /// [`Error::Embed`] — [`EmbedError::Unavailable`] for a `candle` backend in a build without the
 /// `candle` feature, [`EmbedError::Config`]/[`EmbedError::Embedding`] for a runtime that failed to
 /// construct (a candle model download failure, say).
-pub(crate) fn build_embedder(manifest: &EmbeddingBackendManifest) -> Result<Arc<dyn Embedder>> {
+pub(crate) fn build_embedder(
+    config: &Config,
+    manifest: &EmbeddingBackendManifest,
+) -> Result<Arc<dyn Embedder>> {
     match manifest.runtime {
         Runtime::Candle => build_candle(),
         Runtime::Ollama => {
@@ -418,12 +421,15 @@ pub(crate) fn build_embedder(manifest: &EmbeddingBackendManifest) -> Result<Arc<
         }
         Runtime::OpenAi => {
             let base_url = manifest.base_url.clone().unwrap_or_default();
-            Ok(Arc::new(OpenAiEmbedder::new(
-                base_url,
-                manifest.model.clone(),
-                manifest.dimensions,
-                manifest.api_key_env.clone(),
-            )))
+            Ok(Arc::new(
+                OpenAiEmbedder::new(
+                    base_url,
+                    manifest.model.clone(),
+                    manifest.dimensions,
+                    manifest.api_key_env.clone(),
+                )
+                .with_secrets(adi_secrets::Secrets::with_config(config.clone())),
+            ))
         }
         Runtime::Hash => Ok(Arc::new(HashEmbedder)),
     }

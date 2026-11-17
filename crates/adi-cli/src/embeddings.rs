@@ -65,8 +65,9 @@ pub(crate) enum EmbeddingsCommand {
         /// The `ollama` host or `openai` endpoint base. Unused by `candle` and `hash`.
         #[arg(long = "base-url")]
         base_url: Option<String>,
-        /// The environment variable an `openai` backend's key is read from — a name, never the
-        /// key itself; this command never accepts a raw key value.
+        /// The environment variable an `openai` backend's key is read from, falling back to the
+        /// global secret of the same name — a name, never the key itself; this command never
+        /// accepts a raw key value.
         #[arg(long = "api-key-env")]
         api_key_env: Option<String>,
         /// Repeatable: another backend id to fail over to if this one fails to build or answer.

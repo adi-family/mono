@@ -173,7 +173,7 @@ pub fn test_embedding_backend(store: &Agents, body: &[u8]) -> Response {
             Err(e) => return Response::from(&e),
         }
     };
-    ok_json(&test_result_dto(&adi_embeddings::test_manifest(&manifest)))
+    ok_json(&test_result_dto(&adi_embeddings::test_manifest(store.config(), &manifest)))
 }
 
 // ------------------------------------------------------------------ mapping

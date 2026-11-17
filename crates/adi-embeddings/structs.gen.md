@@ -206,6 +206,7 @@ pub struct OpenAiEmbedder {
     model: String,
     dimensions: u32,
     api_key_env: Option<String>,
+    secrets: Option<Secrets>,
 }
 ```
 

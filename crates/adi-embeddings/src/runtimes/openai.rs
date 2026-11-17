@@ -8,6 +8,7 @@
 use std::time::Duration;
 
 use adi_indexer::embed::{EmbedError, Embedder};
+use adi_secrets::Secrets;
 use serde_json::json;
 
 /// Long enough for a large batch against a cold-started endpoint; short enough that a genuinely
@@ -25,6 +26,10 @@ pub struct OpenAiEmbedder {
     /// at construction, so a key rotated by editing the environment takes effect without a
     /// restart.
     api_key_env: Option<String>,
+    /// Where the key is looked up when the environment does not carry it. Agent runs get every
+    /// global secret injected as a variable, but the control panel and a plain shell do not —
+    /// without this, a backend that worked inside a run failed everywhere else.
+    secrets: Option<Secrets>,
 }
 
 impl OpenAiEmbedder {
@@ -42,15 +47,36 @@ impl OpenAiEmbedder {
             model: model.into(),
             dimensions,
             api_key_env,
+            secrets: None,
         }
+    }
+
+    /// Also accept the key from this store's global secret named by `api_key_env`, when the
+    /// environment variable itself is unset.
+    #[must_use]
+    pub fn with_secrets(mut self, secrets: Secrets) -> Self {
+        self.secrets = Some(secrets);
+        self
     }
 
     fn api_key(&self) -> Result<String, EmbedError> {
         let var = self.api_key_env.as_deref().ok_or_else(|| {
             EmbedError::Config("this backend names no `api_key_env` to read a key from".into())
         })?;
-        std::env::var(var).map_err(|_| {
-            EmbedError::Config(format!("`{var}` is not set — this backend has no key to send"))
+        if let Ok(key) = std::env::var(var) {
+            return Ok(key);
+        }
+        let stored = match &self.secrets {
+            Some(secrets) => secrets.reveal(None, var).map_err(|e| {
+                EmbedError::Config(format!("reading the global secret `{var}`: {e}"))
+            })?,
+            None => None,
+        };
+        stored.ok_or_else(|| {
+            EmbedError::Config(format!(
+                "`{var}` is neither set in the environment nor a global secret — this backend \
+                 has no key to send"
+            ))
         })
     }
 }
@@ -148,5 +174,25 @@ mod tests {
             err.to_string().contains("ADI_EMBEDDINGS_TEST_UNSET_KEY"),
             "{err}"
         );
+    }
+
+    /// Stops at the HTTP call rather than at the key lookup: the `.test` host never resolves, so
+    /// an error naming the URL proves the key was found in the store.
+    #[test]
+    fn a_key_absent_from_the_environment_is_read_from_the_global_secret_of_that_name() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let secrets = Secrets::with_config(adi_config::Config::with_root(root.path()));
+        secrets
+            .set(None, "ADI_EMBEDDINGS_TEST_STORED_KEY", "sk-test", None)
+            .expect("set");
+        let embedder = OpenAiEmbedder::new(
+            "https://api.openai.test",
+            "text-embed-3",
+            1536,
+            Some("ADI_EMBEDDINGS_TEST_STORED_KEY".into()),
+        )
+        .with_secrets(secrets);
+        let err = embedder.embed(&["hello"]).expect_err("no such host");
+        assert!(err.to_string().contains("/v1/embeddings"), "{err}");
     }
 }

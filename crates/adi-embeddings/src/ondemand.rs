@@ -77,7 +77,7 @@ pub fn test_backend(config: &Config, id: &str) -> Result<TestResult> {
     let backend = EmbeddingBackends::with_config(config.clone())
         .get(id)?
         .ok_or_else(|| Error::NotFound(id.to_string()))?;
-    Ok(test_manifest(&backend.manifest))
+    Ok(test_manifest(config, &backend.manifest))
 }
 
 /// Test a backend that may not be saved at all — a draft an operator is still typing into the
@@ -85,9 +85,9 @@ pub fn test_backend(config: &Config, id: &str) -> Result<TestResult> {
 /// (see `adi_agents::llm::ondemand`): the point of a "Test" button beside a form is to test the form
 /// as it stands.
 #[must_use]
-pub fn test_manifest(manifest: &EmbeddingBackendManifest) -> TestResult {
+pub fn test_manifest(config: &Config, manifest: &EmbeddingBackendManifest) -> TestResult {
     let start = Instant::now();
-    let outcome = ask(manifest);
+    let outcome = ask(config, manifest);
     let elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
     let verdict = match outcome {
         Ok(dimensions) => TestVerdict::Answered { dimensions },
@@ -98,8 +98,8 @@ pub fn test_manifest(manifest: &EmbeddingBackendManifest) -> TestResult {
 
 /// Build the manifest's own runtime, embed [`TEST_TEXT`] once, and check the width it came back at
 /// against what the manifest declares.
-fn ask(manifest: &EmbeddingBackendManifest) -> std::result::Result<u32, String> {
-    let embedder = build_embedder(manifest).map_err(|e| e.to_string())?;
+fn ask(config: &Config, manifest: &EmbeddingBackendManifest) -> std::result::Result<u32, String> {
+    let embedder = build_embedder(config, manifest).map_err(|e| e.to_string())?;
     let vectors = embedder.embed(&[TEST_TEXT]).map_err(|e| e.to_string())?;
     let vector = vectors
         .into_iter()
@@ -121,6 +121,10 @@ mod tests {
     use super::*;
     use crate::backend::Runtime;
 
+    fn scratch() -> Config {
+        Config::with_root(std::env::temp_dir().join("adi-embeddings-ondemand-test"))
+    }
+
     fn hash_manifest() -> EmbeddingBackendManifest {
         EmbeddingBackendManifest {
             runtime: Runtime::Hash,
@@ -134,7 +138,7 @@ mod tests {
     /// without a network, so it is what proves the whole path end to end.
     #[test]
     fn a_hash_backend_answers_at_its_declared_width() {
-        let result = test_manifest(&hash_manifest());
+        let result = test_manifest(&scratch(), &hash_manifest());
         assert_eq!(
             result.verdict,
             TestVerdict::Answered { dimensions: crate::runtimes::hash::HASH_DIMENSIONS },
@@ -149,7 +153,7 @@ mod tests {
             dimensions: crate::runtimes::hash::HASH_DIMENSIONS + 1,
             ..hash_manifest()
         };
-        let result = test_manifest(&manifest);
+        let result = test_manifest(&scratch(), &manifest);
         assert!(
             matches!(&result.verdict, TestVerdict::Failed { error } if error.contains("wrong width")),
             "{result:?}"
@@ -161,7 +165,7 @@ mod tests {
     #[test]
     fn an_undeclared_width_is_not_checked_against() {
         let manifest = EmbeddingBackendManifest { dimensions: 0, ..hash_manifest() };
-        let result = test_manifest(&manifest);
+        let result = test_manifest(&scratch(), &manifest);
         assert!(matches!(result.verdict, TestVerdict::Answered { .. }), "{result:?}");
     }
 

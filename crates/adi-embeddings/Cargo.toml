@@ -18,6 +18,8 @@ default = ["candle"]
 [dependencies]
 # Where backends live: the `embeddings` module of the mono store.
 adi-config = { workspace = true }
+# Where an `openai` backend finds its key when no process environment carries it.
+adi-secrets = { workspace = true }
 
 # The `Embedder` trait, `EmbedError`, and — with the `candle` feature — `CandleEmbedder`.
 # `default-features = false` for the same reason `adi-knowledge` takes it that way: this crate
