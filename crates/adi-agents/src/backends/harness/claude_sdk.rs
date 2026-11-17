@@ -16,8 +16,13 @@ use crate::launch::expand_home;
 pub(crate) enum Continuation<'a> {
     /// The conversation's first turn — establish the session under this id.
     First { session_id: &'a str },
-    /// A follow-up — resume the established session.
-    Resume { session_id: &'a str },
+    /// A follow-up — resume the established session. `at` is set for the one turn after a rewind:
+    /// the chain entry to resume at, dropping everything said after it (see
+    /// [`super::claude_rewind`]).
+    Resume {
+        session_id: &'a str,
+        at: Option<&'a str>,
+    },
 }
 
 pub(crate) fn argv(
@@ -40,8 +45,9 @@ pub(crate) fn argv(
         Continuation::First { session_id } => {
             push_option(&mut argv, "--session-id", Some(session_id));
         }
-        Continuation::Resume { session_id } => {
+        Continuation::Resume { session_id, at } => {
             push_option(&mut argv, "--resume", Some(session_id));
+            push_option(&mut argv, "--resume-session-at", *at);
         }
     }
     push_option(&mut argv, "--settings", settings(config).as_deref());
@@ -201,6 +207,7 @@ mod tests {
             "and now write a test",
             &Continuation::Resume {
                 session_id: "sid-1",
+                at: None,
             },
             None,
             &scope_tools(None),
@@ -222,6 +229,24 @@ mod tests {
                 "--",
                 "and now write a test",
             ]
+        );
+    }
+
+    #[test]
+    fn the_turn_after_a_rewind_resumes_at_the_kept_entry() {
+        let argv = argv(
+            &HarnessClaudeSdkArguments::default(),
+            "ask it differently",
+            &Continuation::Resume {
+                session_id: "sid-1",
+                at: Some("entry-7"),
+            },
+            None,
+            &scope_tools(None),
+        );
+        assert_eq!(
+            argv[5..9],
+            ["--resume", "sid-1", "--resume-session-at", "entry-7"]
         );
     }
 

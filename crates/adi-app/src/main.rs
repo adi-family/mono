@@ -1135,6 +1135,7 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/agents/simulate/turn") => handlers::simulate_turn(agents, &req.body),
         ("POST", "/api/agents/simulate/reply") => handlers::simulate_reply(agents, &req.body),
         ("POST", "/api/agents/run/unqueue") => handlers::unqueue_run(agents, &req.body),
+        ("POST", "/api/agents/run/rewind") => handlers::rewind_conversation(agents, &req.body),
         ("POST", "/api/agents/run/stop") => {
             handlers::stop_run(agents, &req.body, fleet_sender(req))
         }

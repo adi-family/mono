@@ -24,7 +24,7 @@ use crate::types::{
     ReplyToRun, ReviewRun, RunAgent, RunGroup, RunRef, RunState, RunSteps, SaveAgent,
     SecretRef, SetAutoTitle, SetGoal, SetRunLimit, SetSpawnPolicy, SimulateAgent, SimulateTurn,
     SpawnRefusalDto, SpawnRuleEdit, SpawnedByDto, StarRun, TranscriptView, TurnMarker,
-    UnqueueFromRun,
+    RewindConversation, UnqueueFromRun,
 };
 
 use super::response::{FromBody, Response, clean, error, ok_json, parse_body};
@@ -1050,6 +1050,23 @@ pub fn unqueue_run(store: &Agents, body: &[u8]) -> Response {
     conversation_snapshot(store, &agent, run_id, &req.view)
 }
 
+/// `POST /api/agents/run/rewind` — cut a conversation back to just before one of its user messages
+/// and reply with a fresh snapshot. The client already holds the message it is about to edit, so
+/// the snapshot is the whole answer.
+#[must_use]
+pub fn rewind_conversation(store: &Agents, body: &[u8]) -> Response {
+    let req = require!(body, RewindConversation);
+    let agent = match get_agent(store, req.name.trim()) {
+        Ok(agent) => agent,
+        Err(e) => return Response::from(&e),
+    };
+    let run_id = req.run_id.trim();
+    if let Err(e) = store.rewind(&agent.name, run_id, req.seq) {
+        return Response::from(&e);
+    }
+    conversation_snapshot(store, &agent, run_id, &req.view)
+}
+
 /// A conversation's fresh snapshot — the answer to every write into it, so the sender sees their
 /// message (and the answer already streaming under it) without waiting for the next poll.
 ///
@@ -1965,6 +1982,7 @@ fn wire_caps(c: adi_agents::BackendCapabilities) -> AgentCapabilities {
         // deliver an answer into, so there is nothing to derive separately.
         asks: c.answerable,
         images: c.images,
+        rewind: c.rewind,
     }
 }
 
@@ -3724,6 +3742,14 @@ impl FromBody for UnqueueFromRun {
     }
 }
 
+impl FromBody for RewindConversation {
+    const EXPECTED: &'static str = "expected JSON body { \"name\": \"…\", \"run_id\": \"…\", \"seq\": 0 } with a non-empty name and run_id";
+
+    fn is_complete(&self) -> bool {
+        !self.name.trim().is_empty() && !self.run_id.trim().is_empty()
+    }
+}
+
 impl FromBody for AnswerRun {
     const EXPECTED: &'static str = "expected JSON body { \"name\": \"…\", \"run_id\": \"…\", \"ask\"?: \"…\", \"replies\": [\"…\"] }";
 }
@@ -4698,6 +4724,7 @@ mod tests {
                 metrics: true,
                 asks: true,
                 images: true,
+                rewind: true,
             },
             runs: when
                 .iter()

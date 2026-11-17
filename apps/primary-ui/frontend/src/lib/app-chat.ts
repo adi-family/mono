@@ -16,6 +16,8 @@ export interface AgentCapabilities {
   answerable?: boolean;
   interactive?: boolean;
   images?: boolean;
+  /** The conversation can be cut back to an earlier message and continued from there. */
+  rewind?: boolean;
   [key: string]: unknown;
 }
 
@@ -539,6 +541,16 @@ export async function cancelQueuedMessage(
   if (index === null) return current;
   return peekOf(await request("/agents/run/unqueue", signal, {
     ...runBody(ref), index, limit: snapshotPageSize, fold: true,
+  }, ref.source));
+}
+
+/**
+ * Cuts the conversation back to just before the user message numbered `seq`.
+ * That message and everything after it are dropped, in the transcript and in the agent's memory.
+ */
+export async function rewindConversation(ref: ConversationRef, seq: number, signal?: AbortSignal): Promise<AgentPeek> {
+  return peekOf(await request("/agents/run/rewind", signal, {
+    ...runBody(ref), seq, limit: snapshotPageSize, fold: true,
   }, ref.source));
 }
 

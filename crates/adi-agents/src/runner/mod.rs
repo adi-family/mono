@@ -155,6 +155,31 @@ pub trait Runner: Send + Sync {
         false
     }
 
+    /// Whether [`rewind`](Runner::rewind) works here. Data for the same reason
+    /// [`resumes`](Runner::resumes) is: a reader decides whether to draw an edit button before
+    /// anybody clicks it.
+    fn rewinds(&self) -> bool {
+        false
+    }
+
+    /// Make the engine forget everything it was told from `from` (unix millis) onwards, so the
+    /// next [`send`](Runner::send) continues from what came before.
+    ///
+    /// Called on an idle session only, and **before** the store drops the turns themselves — a
+    /// runner that cannot find its cut fails here with the transcript still whole. A moment in
+    /// time rather than a turn number because that is the one thing a runner and the store both
+    /// have: the store's turns and an engine's own history share no ids.
+    ///
+    /// # Errors
+    /// Returns [`Error::Unsupported`](crate::Error::Unsupported), ready to show, when this engine
+    /// keeps a history it cannot cut.
+    fn rewind(&self, _session: &dyn Session, _from: u64) -> Result<()> {
+        Err(crate::Error::Unsupported(format!(
+            "a {} conversation can't be rewound",
+            self.kind()
+        )))
+    }
+
     /// How a message's images reach this engine.
     ///
     /// Data for the same reason [`resumes`](Runner::resumes) is: a composer has to decide whether to

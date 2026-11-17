@@ -217,8 +217,12 @@ impl DetachedRunner {
                         with_knowledge(spec, with_workspace(spec, config.append_system_prompt)),
                     ),
                 );
-                let cont = if session.has_started() {
-                    ClaudeContinuation::Resume { session_id }
+                let state = State::read(session);
+                let cont = if session.has_started() && !state.reopen {
+                    ClaudeContinuation::Resume {
+                        session_id,
+                        at: state.resume_at.as_deref(),
+                    }
                 } else {
                     ClaudeContinuation::First { session_id }
                 };
@@ -395,6 +399,10 @@ impl Runner for DetachedRunner {
         match self.backend {
             Backend::HarnessClaudeSdk if !session_id.is_empty() => {
                 state.session_id = Some(session_id);
+                // A rewind is spent by the turn that carried it: the CLI has branched, and a plain
+                // resume now continues that branch.
+                state.resume_at = None;
+                state.reopen = false;
             }
             Backend::ProcessCodex => {
                 let identity = codex_identity.expect("the Codex runner computes its identity");
@@ -504,6 +512,44 @@ impl Runner for DetachedRunner {
         )
     }
 
+    /// The two harness engines. The adi loop replays the store's transcript every turn, so it has
+    /// nothing of its own to cut; Claude's CLI can resume at an earlier entry of its session. Codex
+    /// keeps its thread behind an app-server this runner has no truncating resume for.
+    fn rewinds(&self) -> bool {
+        matches!(
+            self.backend,
+            Backend::HarnessClaudeSdk | Backend::HarnessAdi
+        )
+    }
+
+    fn rewind(&self, session: &dyn Session, from: u64) -> Result<()> {
+        match self.backend {
+            Backend::HarnessAdi => Ok(()),
+            Backend::HarnessClaudeSdk => {
+                let mut state = State::read(session);
+                let established = state
+                    .session_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty());
+                let anchor = match established {
+                    Some(id) => harness::claude_rewind::anchor(id, from)?,
+                    None => None,
+                };
+                if anchor.is_none() {
+                    state.session_id = None;
+                }
+                state.reopen = anchor.is_none();
+                state.resume_at = anchor;
+                session.set_state(state.into_value())
+            }
+            _ => Err(Error::Unsupported(format!(
+                "a {} conversation can't be rewound",
+                self.backend
+            ))),
+        }
+    }
+
     /// The adi loop puts the bytes in the request body, because it is the one engine here whose
     /// request body this crate writes. The other three are handed their message as a command-line
     /// argument (`claude --print -- <text>`, `codex exec <text>`) where a picture has no
@@ -608,6 +654,13 @@ struct State {
     /// Claude's client-minted session id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     session_id: Option<String>,
+    /// Set by a rewind, spent by the next turn: the entry of Claude's session to resume at.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resume_at: Option<String>,
+    /// Set by a rewind that kept nothing of Claude's session, spent by the next turn: establish a
+    /// new session although this one [has started](Session::has_started).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    reopen: bool,
     /// Codex's generated thread id. Deliberately not shared with Claude's client-minted id: the
     /// backend pinned to a conversation can change during failover, while this state slot remains.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3690,6 +3743,36 @@ mod tests {
             runner.argv(&run, &session, "again", "", Some(&identity)),
             Err(Error::Launch(message)) if message.contains("thread id is missing")
         ));
+    }
+
+    #[test]
+    fn a_claude_turn_after_a_rewind_resumes_at_the_recorded_entry() {
+        let session = FakeSession::new("claude-rewound")
+            .started()
+            .with_state(json!({ "resume_at": "entry-7" }));
+
+        let argv = argv_of(Backend::HarnessClaudeSdk, &spec(json!({})), &session, "again");
+        assert!(
+            argv.windows(3)
+                .any(|w| w[0] == "--resume" && w[2] == "--resume-session-at")
+                && argv.iter().any(|arg| arg == "entry-7"),
+            "{argv:?}"
+        );
+    }
+
+    /// Nothing of Claude's session is older than the cut (here: none was ever established), so
+    /// there is no entry to resume at. The log still exists, and without the flag the next turn
+    /// would `--resume` an id the CLI has never heard of.
+    #[test]
+    fn a_rewind_that_keeps_nothing_opens_a_new_claude_session() {
+        let session = FakeSession::new("claude-reopened").started();
+        DetachedRunner::new(Backend::HarnessClaudeSdk)
+            .rewind(&session, 0)
+            .expect("rewind");
+
+        let argv = argv_of(Backend::HarnessClaudeSdk, &spec(json!({})), &session, "again");
+        assert!(argv.iter().any(|arg| arg == "--session-id"), "{argv:?}");
+        assert!(!argv.iter().any(|arg| arg == "--resume"), "{argv:?}");
     }
 
     #[test]

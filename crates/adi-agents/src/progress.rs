@@ -152,6 +152,9 @@ pub struct BackendCapabilities {
     /// A message to it may carry images — what decides whether a composer offers to attach one.
     #[serde(default)]
     pub images: bool,
+    /// The conversation can be cut back to one of its earlier messages and continued from there.
+    #[serde(default)]
+    pub rewind: bool,
 }
 
 /// What a backend can surface, **asked of the runner that runs it** rather than kept as a matrix
@@ -175,6 +178,7 @@ pub fn capabilities(backend: &Backend) -> BackendCapabilities {
             thinking: false,
             metrics: false,
             images: false,
+            rewind: false,
         };
     };
     runner_capabilities(runner.as_ref())
@@ -200,6 +204,7 @@ pub(crate) fn runner_capabilities(runner: &dyn crate::runner::Runner) -> Backend
         thinking: kinds.thinking,
         metrics: kinds.metrics,
         images: runner.takes_images(),
+        rewind: runner.resumes() && !interactive && runner.rewinds(),
     }
 }
 

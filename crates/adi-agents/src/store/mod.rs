@@ -1433,6 +1433,15 @@ impl SessionStore {
         transcript::append(&conn, agent, id, turn)
     }
 
+    /// Drop the turn numbered `from` and everything after it. See [`transcript::truncate`].
+    ///
+    /// # Errors
+    /// Returns database errors.
+    pub fn truncate_turns(&self, agent: &str, id: &str, from: usize) -> Result<usize> {
+        let conn = self.conn()?;
+        transcript::truncate(&conn, agent, id, from)
+    }
+
     /// The recorded turns, oldest first — what was actually said, with nothing synthesized.
     ///
     /// This is what an engine that reconstructs its own history replays, and it is deliberately the

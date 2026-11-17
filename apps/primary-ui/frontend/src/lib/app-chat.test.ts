@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import {
   AppChatError, answerQuestion, getAgents, getConversation, getConversationIndex, getConversations, getFleetNodes, getSteps,
   replyToConversation, startConversation, stopConversation, uploadImage, attachmentUrl, renameConversation, starConversation, hideConversation, getVoice, transcribeAudio,
-  cancelAwait, cancelQueuedMessage, queuedPosition, queuedTurns, type AgentPeek, type AgentTurn,
+  cancelAwait, cancelQueuedMessage, queuedPosition, queuedTurns, rewindConversation, type AgentPeek, type AgentTurn,
 } from "./app-chat";
 import { groupErrorCount } from "./app-chat-activity";
 
@@ -408,6 +408,15 @@ test("cancelling a queued message re-reads the queue and drops it by its current
   ]);
   assert.deepEqual(body(1), { name: ref.agent, run_id: ref.runId, index: 0, limit: 20, fold: true });
   assert.deepEqual(queuedTurns(after).map((turn) => turn.text), ["Third"]);
+});
+
+test("rewinding addresses the message by its turn number on the conversation's own machine", async () => {
+  mockResponse({ caps: { rewind: true }, turns: [{ role: "user", text: "First", seq: 0 }, { role: "assistant", text: "Answer", seq: 1 }] });
+  const after = await rewindConversation({ ...ref, source: "studio" }, 2);
+  assert.deepEqual(calls.map((call) => call.url), ["/api/app/node/studio/api/agents/run/rewind"]);
+  assert.deepEqual(body(0), { name: ref.agent, run_id: ref.runId, seq: 2, limit: 20, fold: true });
+  assert.deepEqual(after.turns.map((turn) => turn.text), ["First", "Answer"]);
+  assert.equal(after.caps.rewind, true);
 });
 
 test("a queued message that already started is not cancelled, and no other message is dropped in its place", async () => {

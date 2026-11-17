@@ -62,6 +62,7 @@ pub struct DashboardInfo {
     pub id: String,
     pub name: String,
     pub description: Option<String>,
+    pub icon: Option<String>,
     pub service: Option<String>,
     pub running: bool,
     pub allowed: bool,
@@ -90,6 +91,8 @@ struct RawDashboard {
     name: Option<String>,
     #[serde(default)]
     description: Option<String>,
+    #[serde(default)]
+    icon: Option<String>,
     #[serde(default)]
     host: Option<String>,
     #[serde(default)]

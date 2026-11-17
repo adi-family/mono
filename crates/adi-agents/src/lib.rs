@@ -2337,6 +2337,64 @@ impl Agents {
         self.sessions().unqueue(name, conv_id, index)
     }
 
+    /// Cut a conversation back to just before one of its user messages, returning that message so
+    /// its sender can say it again differently.
+    ///
+    /// The turn numbered `seq` and everything after it leave the transcript, the engine is told to
+    /// forget the same stretch ([`Runner::rewind`]), and whatever was queued behind them goes too —
+    /// it was written expecting answers that no longer exist. Refused while an answer is in flight:
+    /// stop it first.
+    ///
+    /// # Errors
+    /// Returns [`Error::NotFound`] for an unknown agent, conversation or turn, [`Error::Busy`]
+    /// while a turn is running, and [`Error::Unsupported`] for a turn that is not a user message or
+    /// an engine that cannot be rewound.
+    pub fn rewind(&self, name: &str, conv_id: &str, seq: usize) -> Result<Turn> {
+        validate_name(name)?;
+        if self.get(name)?.is_none() {
+            return Err(Error::NotFound(name.to_string()));
+        }
+        let store = self.sessions();
+        // Gated like every other write a starting turn could race: the check for a live turn and
+        // the cut it permits have to be one step.
+        let _gate = turn_gate(&self.config)?;
+        let record = store
+            .get(name, conv_id)
+            .ok_or_else(|| Error::NotFound(format!("{name}: no conversation {conv_id}")))?;
+        let runner =
+            runner_of(&record).ok_or_else(|| Error::NotRunnable(record.backend.to_string()))?;
+        if !progress::runner_capabilities(runner.as_ref()).rewind {
+            return Err(Error::Unsupported(format!(
+                "a {} conversation can't be rewound",
+                record.backend
+            )));
+        }
+        let session = store.session(name, conv_id);
+        if Self::still_launching(&record) || runner.is_alive(&session) {
+            return Err(Error::Busy(
+                "the agent is still answering — stop it before editing an earlier message".into(),
+            ));
+        }
+        // An answer that finished unread is still only in the log. Committed now, it is dropped
+        // with its question; left for later, the next read would file it under whichever question
+        // the cut leaves last.
+        let live = live_content(&self.config, runner.as_ref(), &session, false);
+        settle(&store, name, conv_id, &live);
+
+        let target = store
+            .turn(name, conv_id, seq)
+            .ok_or_else(|| Error::NotFound(format!("{name}: conversation {conv_id} has no turn {seq}")))?;
+        if target.role != store::ROLE_USER {
+            return Err(Error::Unsupported(
+                "only a message you sent can be edited".into(),
+            ));
+        }
+        runner.rewind(&session, target.at)?;
+        store.truncate_turns(name, conv_id, seq)?;
+        store.clear_queue(name, conv_id)?;
+        Ok(target)
+    }
+
     /// Start a conversation's next queued message, if it is idle and one is waiting; reports whether
     /// a turn started. The cheap gate comes first so an idle poll — which is nearly every poll —
     /// costs one `exists` rather than the tool sync a launch context pays for.
@@ -9942,5 +10000,41 @@ mod tests {
                 "a real run refuses the seat: {outcome:?}",
             );
         }
+    }
+
+    #[test]
+    fn rewinding_drops_the_message_everything_after_it_and_the_queue() {
+        let agents = scratch("rewind");
+        agents.save("chat", spec("harness:adi")).expect("save");
+        let sessions = agents.sessions();
+        let id = sessions
+            .create("chat", Backend::HarnessAdi, "/tmp", "one")
+            .expect("create")
+            .id;
+        for turn in [
+            store::user_turn("one"),
+            store::assistant_turn(&TurnContent { text: "first answer".into(), ..TurnContent::default() }),
+            store::user_turn("two"),
+            store::assistant_turn(&TurnContent { text: "second answer".into(), ..TurnContent::default() }),
+        ] {
+            sessions.append_turn("chat", &id, turn).expect("append");
+        }
+        sessions
+            .enqueue("chat", &id, "and then", &[], &[], store::QueueMode::Regular)
+            .expect("enqueue");
+
+        let refused = agents.rewind("chat", &id, 1).expect_err("an answer is not editable");
+        assert!(matches!(refused, Error::Unsupported(_)), "{refused}");
+        assert_eq!(sessions.turn_count("chat", &id), 4, "a refusal drops nothing");
+
+        let edited = agents.rewind("chat", &id, 2).expect("rewind");
+        assert_eq!(edited.text, "two");
+        let kept: Vec<String> = sessions.turns("chat", &id).into_iter().map(|t| t.text).collect();
+        assert_eq!(kept, ["one", "first answer"]);
+        assert_eq!(sessions.queue_len("chat", &id), 0);
+
+        // The numbers above the cut are minted again by what is said next.
+        sessions.append_turn("chat", &id, store::user_turn("two, reworded")).expect("append");
+        assert_eq!(sessions.turn("chat", &id, 2).map(|t| t.text).as_deref(), Some("two, reworded"));
     }
 }

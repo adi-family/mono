@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useRef, useState, type ReactNode 
 import { partialMatchKey, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
-  answerQuestion, cancelAwait, cancelQueuedMessage, getConversation, snapshotPageSize, stopConversation,
+  answerQuestion, cancelAwait, cancelQueuedMessage, getConversation, rewindConversation, snapshotPageSize, stopConversation,
   type AgentPeek, type AgentTurn,
 } from "./app-chat";
 import { errorText, useScopedErrors } from "./app-chat-errors";
@@ -17,6 +17,7 @@ function useThreadState() {
   const [limits, setLimits] = useState<Record<string, number>>({});
   const [stopping, setStopping] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState<readonly string[]>([]);
+  const [rewinding, setRewinding] = useState<string | null>(null);
   const queueWrites = useRef<Promise<void>>(Promise.resolve());
   const actionErrors = useScopedErrors();
 
@@ -72,6 +73,25 @@ function useThreadState() {
     void refresh();
   }
 
+  /** Cuts the conversation back to just before `turn`. Resolves to whether it was cut. */
+  async function rewindTo(turn: AgentTurn): Promise<boolean> {
+    if (!active || rewinding !== null) return false;
+    const [target, key, adopt] = [active, selectionKey, adoptResponse];
+    setRewinding(key);
+    actionErrors.dismiss(key);
+    try {
+      adopt(await rewindConversation(target, turn.seq));
+      // Longer pages of this thread still hold the dropped turns.
+      void client.invalidateQueries({ queryKey: chatQueryKeys.thread(target) });
+      return true;
+    } catch (error) {
+      actionErrors.report(key, errorText(error));
+      return false;
+    } finally {
+      setRewinding(null);
+    }
+  }
+
   const queuedToken = (turn: AgentTurn) => `${selectionKey}:queued:${turn.seq}`;
   const awaitToken = (id: string) => `${selectionKey}:await:${id}`;
   const settleCancel = (token: string) => setCancelling((current) => current.filter((item) => item !== token));
@@ -123,7 +143,8 @@ function useThreadState() {
   }
 
   return {
-    snapshot, adoptResponse, refresh, stopResponse, submitAnswer, cancelQueued, cancelWaiting,
+    snapshot, adoptResponse, refresh, stopResponse, submitAnswer, cancelQueued, cancelWaiting, rewindTo,
+    isRewinding: rewinding === selectionKey,
     isCancellingQueued: (turn: AgentTurn) => cancelling.includes(queuedToken(turn)),
     cancellingWaits: (snapshot?.awaits ?? []).flatMap((item) => cancelling.includes(awaitToken(item.id)) ? [item.id] : []),
     isLoadingConversation: active !== null && !invalidSource && snapshotQuery.isPending,

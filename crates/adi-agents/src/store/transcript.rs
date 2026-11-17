@@ -4,8 +4,11 @@
 //! it; what the session *is* — the sequence of questions and answers a reader scrolls through — is
 //! durable, so it belongs here with the record and the queue.
 //!
-//! Append-only. A turn that has landed is final, and two writers appending never collide because
-//! the sequence number is taken inside the same transaction as the insert.
+//! Append-only, with one exception. A turn that has landed is final, and two writers appending
+//! never collide because the sequence number is taken inside the same transaction as the insert.
+//! The exception is [`truncate`]: a reader rewinding the conversation to one of their own messages
+//! drops that turn and everything after it, and the numbers above the cut are minted again by
+//! whatever is said next.
 //!
 //! # Three kinds of turn, only one of them recorded
 //!
@@ -238,6 +241,47 @@ pub(super) fn insert(tx: &Connection, agent: &str, id: &str, mut turn: Turn) -> 
     let ids: Vec<String> = turn.images.iter().map(|image| image.id.clone()).collect();
     super::attachments::claim(tx, agent, id, &ids);
     Ok(())
+}
+
+/// Drop the turn numbered `from` and every turn after it, returning how many went.
+///
+/// A question still open that was asked in those turns goes with them: the agent that asked it no
+/// longer remembers asking, and an open question is what holds a chat's composer shut. One asked
+/// earlier stays — it is still what the kept conversation is waiting on.
+///
+/// The two notification marks are cleared with them. Each remembers the turn *count* it last fired
+/// at, and a conversation regrown to that same count is at a different turn — left set, its next
+/// idle would be taken for one already announced.
+///
+/// # Errors
+/// Returns database errors.
+pub(super) fn truncate(conn: &Connection, agent: &str, id: &str, from: usize) -> Result<usize> {
+    let from = i64::try_from(from)
+        .map_err(|_| Error::Session(format!("turn {from} of session {id} is out of range")))?;
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| sql_err("rewind", e))?;
+    tx.execute(
+        "DELETE FROM questions
+         WHERE agent = ?1 AND session = ?2 AND answer IS NULL AND asked_at >=
+               (SELECT at FROM turns WHERE agent = ?1 AND session = ?2 AND seq = ?3)",
+        rusqlite::params![agent, id, from],
+    )
+    .map_err(|e| sql_err("rewind", e))?;
+    let dropped = tx
+        .execute(
+            "DELETE FROM turns WHERE agent = ?1 AND session = ?2 AND seq >= ?3",
+            rusqlite::params![agent, id, from],
+        )
+        .map_err(|e| sql_err("rewind", e))?;
+    tx.execute(
+        "UPDATE sessions SET idle_notified_turn = NULL, lease_wait_notified_turn = NULL
+         WHERE agent = ?1 AND id = ?2",
+        [agent, id],
+    )
+    .map_err(|e| sql_err("rewind", e))?;
+    tx.commit().map_err(|e| sql_err("rewind", e))?;
+    Ok(dropped)
 }
 
 /// The recorded turns, oldest first.

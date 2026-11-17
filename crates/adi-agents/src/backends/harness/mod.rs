@@ -25,6 +25,7 @@
 //! not a child a runner spawns and watches, it *is* that child, so it keeps a direct call.
 
 pub(crate) mod adi_loop;
+pub(crate) mod claude_rewind;
 pub(crate) mod claude_sdk;
 // `pub(crate)` for one helper: an await's check is a shell command with a deadline, which is the
 // same thing `Bash` already runs, so [`crate::awaits`] borrows the timed wait rather than keeping a

@@ -2449,6 +2449,19 @@ pub struct UnqueueFromRun {
     pub view: TranscriptView,
 }
 
+/// `POST /api/agents/run/rewind` request — cut a conversation back to just before the user message
+/// numbered `seq` ([`AgentTurn::seq`]), so it can be said again differently. That turn and every
+/// turn after it are dropped, here and in the engine's own history.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RewindConversation {
+    pub name: String,
+    pub run_id: String,
+    pub seq: usize,
+    /// Which page of the conversation to answer with — see [`ReplyToRun::view`].
+    #[serde(default, flatten)]
+    pub view: TranscriptView,
+}
+
 /// One message in a harness conversation's transcript: a `user` question or an `assistant` answer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentTurn {
@@ -2839,6 +2852,10 @@ pub struct AgentCapabilities {
     /// where a picture has no representation.
     #[serde(default)]
     pub images: bool,
+    /// Whether a conversation of this backend can be cut back to an earlier message and continued
+    /// from there — what decides whether a sent message offers to be edited.
+    #[serde(default)]
+    pub rewind: bool,
 }
 
 /// The richer lifecycle behind a plain `running` flag (ADI-MONO-101). Mirrors
@@ -3124,6 +3141,7 @@ fn default_caps() -> AgentCapabilities {
         metrics: false,
         asks: false,
         images: false,
+        rewind: false,
     }
 }
 

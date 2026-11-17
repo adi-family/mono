@@ -2,7 +2,8 @@ import { createContext, useContext, useEffect, useRef, useState, type ReactNode 
 import { useNavigate } from "react-router-dom";
 
 import {
-  attachmentUrl, getConversation, replyToConversation, startConversation, uploadImage, type AgentPeek, type ConversationRef, type ReplyOptions,
+  attachmentUrl, getConversation, replyToConversation, startConversation, uploadImage,
+  type AgentPeek, type AgentTurn, type ConversationRef, type ReplyOptions,
 } from "./app-chat";
 import { errorText, useScopedErrors } from "./app-chat-errors";
 import { useChatList } from "./app-chat-list";
@@ -39,7 +40,7 @@ async function deliverReply(target: ConversationRef, message: string, options: R
 
 function useComposerState() {
   const { enabled, invalidSource, active, agent, activeSource, selectionKey, routeNamesConversation, isCurrentSelection, openConversation, recordLaunch } = useChatSelection();
-  const { snapshot, adoptResponse, refresh } = useChatThread();
+  const { snapshot, adoptResponse, refresh, rewindTo } = useChatThread();
   const { conversations } = useChatList();
   const navigate = useNavigate();
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -109,6 +110,23 @@ function useComposerState() {
     }
   }
 
+  /**
+   * Resets the conversation to just before a sent message and puts that message, with its
+   * attachments, back in the composer. Resolves to whether the conversation was reset.
+   */
+  async function editMessage(turn: AgentTurn): Promise<boolean> {
+    const [key, source] = [selectionKey, activeSource];
+    if (sending.current.has(key) || !(await rewindTo(turn))) return false;
+    setDrafts((current) => ({ ...current, [key]: turn.text }));
+    // The attachments are already stored, so they return as finished uploads.
+    updateImages(key, () => turn.images.map((image) => ({
+      id: `draft-image-${++nextImageId.current}`, name: image.name, status: "ready" as const,
+      attachmentId: image.id, mediaType: image.media_type, url: attachmentUrl(image.id, source),
+    })));
+    imageErrors.dismiss(key);
+    return true;
+  }
+
   const recent = conversations.find((conversation) => conversation.source === activeSource);
   const recentHref = recent ? conversationHref(recent) : null;
   const isComposing = Boolean(drafts[selectionKey]) || Boolean(imageDrafts[selectionKey]?.length);
@@ -127,6 +145,7 @@ function useComposerState() {
     addImages,
     removeImage: (id: string) => updateImages(selectionKey, (images) => images.filter((image) => image.id !== id)),
     sendMessage,
+    editMessage,
   };
 }
 

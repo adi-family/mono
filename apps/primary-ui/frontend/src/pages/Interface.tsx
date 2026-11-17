@@ -8,7 +8,7 @@ import { NewChatSetup } from "../components/NewChatSetup";
 import { ChatTitle } from "../components/ChatTitle";
 
 import { AppChatAttachments, appChatTranscriptEntries } from "../components/AppChatTranscript";
-import { queuedTurns, type AgentAsk } from "../lib/app-chat";
+import { queuedTurns, type AgentAsk, type AgentTurn } from "../lib/app-chat";
 import { useChatComposer } from "../lib/app-chat-composer";
 import { useChatList } from "../lib/app-chat-list";
 import { useChatSelection } from "../lib/app-chat-selection";
@@ -106,10 +106,11 @@ export function Interface() {
   const { agents, active, agent, selectionKey, activeSource, openConversation } = useChatSelection();
   const {
     snapshot, isLoadingConversation, conversationError, actionError, isStopping, refresh, stopResponse, submitAnswer, loadEarlier, isLoadingEarlier,
-    cancelQueued, isCancellingQueued, cancelWaiting, cancellingWaits,
+    cancelQueued, isCancellingQueued, cancelWaiting, cancellingWaits, isRewinding,
   } = useChatThread();
   const { conversations, isLoading, renameChat, starChat } = useChatList();
-  const { draft, setDraft, appendDraft, images, addImages, removeImage, imageError, sendMessage } = useChatComposer();
+  const { draft, setDraft, appendDraft, images, addImages, removeImage, imageError, sendMessage, editMessage } = useChatComposer();
+  const composerArea = useRef<HTMLDivElement>(null);
   const [voiceBusy, setVoiceBusy] = useState(false);
   const selected = agents.find((item) => item.name === agent);
   const conversation = active && conversations.find((item) => sameConversation(item, active));
@@ -129,6 +130,13 @@ export function Interface() {
   useEffect(() => { document.title = `${title} — ADI`; }, [title]);
 
   function retry() { void refresh().catch(() => {}); }
+
+  async function edit(turn: AgentTurn) {
+    if (!(await editMessage(turn))) return;
+    const input = composerArea.current?.querySelector("textarea");
+    input?.focus();
+    input?.setSelectionRange(input.value.length, input.value.length);
+  }
 
   return (
     <main data-slot="app-chat" aria-label="ADI chat" className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
@@ -165,7 +173,11 @@ export function Interface() {
             {isLoadingEarlier ? "Loading earlier messages…" : "Load earlier messages"}
           </Button>
         </div>}
-        {appChatTranscriptEntries({ conversation: active, snapshot, conversations, onOpenConversation: openConversation })}
+        {appChatTranscriptEntries({
+          conversation: active, snapshot, conversations, onOpenConversation: openConversation,
+          onEditMessage: (turn) => { void edit(turn); },
+          editDisabledReason: isRewinding ? "The chat is being reset to an earlier message." : undefined,
+        })}
         {ask && <PendingQuestion key={`${selectionKey}:${ask.id}`} ask={ask} onAnswer={submitAnswer} />}
       </ChatThread> : <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 overflow-y-auto px-6 py-8 text-center">
         {loading ? <p role="status" className="text-muted-foreground text-sm">{active ? "Loading conversation…" : "Loading agents…"}</p>
@@ -178,7 +190,7 @@ export function Interface() {
             : <NewChatSetup />}
       </div>}
 
-      <div className="mx-auto w-full max-w-4xl shrink-0 px-3 pb-3 pt-2 sm:px-4 sm:pb-4">
+      <div ref={composerArea} className="mx-auto w-full max-w-4xl shrink-0 px-3 pb-3 pt-2 sm:px-4 sm:pb-4">
         <ChatWaitingStatus
           className="mb-2"
           items={(snapshot?.awaits ?? []).map((item) => ({

@@ -20,6 +20,11 @@ extraction script cares about.
 
 ## Unreleased
 
+### Added
+
+- **adi Fleet on iPhone and iPad is now your apps and your chats, natively.** The app opens on **Apps** — the control panel's home grid, every app on every paired machine with its own icon, one tap to open. The second tab, **Chats**, is every conversation on every paired machine, newest first, with the running ones marked; a chat opens as a native transcript with markdown (code blocks, tables, lists), tool calls folded into one-line receipts you can open, and a composer that sends, queues behind an answer in flight, or stops it. An agent's question is answered in place, and a link an agent writes to one of the machine's own apps (`http://shop.adi/…`) opens that app over the mesh. Pairing moved to the third tab, Fleet. Attachments and voice are not in the native chat yet — **Open in the control panel** in a chat's menu opens the same conversation in the web UI.
+- **Edit a message you already sent.** Hovering one of your messages in a chat shows an edit button; clicking it resets the conversation to just before that message and puts the message, with its attachments, back in the composer to reword and send again. Everything after that point is dropped — from the transcript and from the agent's own memory, so it answers as if the later turns never happened. Works for `harness:claude-sdk` and `harness:adi` conversations; the button appears once the agent has stopped answering. Files the agent changed in the dropped turns are not restored.
+
 ## 1.43.0 — 2026-11-17
 
 ### Security

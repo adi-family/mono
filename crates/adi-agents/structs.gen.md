@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-159 structs · 45 enums · 5 type aliases across 62 files.
+160 structs · 45 enums · 5 type aliases across 63 files.
 
 ## Index
 
@@ -19,6 +19,7 @@
 - [`src/backends/codex_stream.rs`](#srcbackendscodex_streamrs) — `Failure`
 - [`src/backends/detached.rs`](#srcbackendsdetachedrs) — `Spawned`
 - [`src/backends/harness/adi_loop.rs`](#srcbackendsharnessadi_looprs) — `ToolCall`, `ToolResult`, `Reply`, `Calls`, `RunCtx`, `Wire`, `Said`, `Encoded`, `ImageStore`, `OpenAiDialect`, `HttpCtx`, `ContextLimit`, `FailureReport`
+- [`src/backends/harness/claude_rewind.rs`](#srcbackendsharnessclaude_rewindrs) — `Entry`
 - [`src/backends/harness/claude_sdk.rs`](#srcbackendsharnessclaude_sdkrs) — `Continuation`
 - [`src/backends/harness/tools.rs`](#srcbackendsharnesstoolsrs) — `ToolSpec`, `Ctx`, `ToolDeclaration`, `Drain`
 - [`src/backends/jobs.rs`](#srcbackendsjobsrs) — `Job`
@@ -1000,6 +1001,28 @@ struct FailureReport {
 
 ---
 
+## `src/backends/harness/claude_rewind.rs`
+
+### struct `Entry`
+
+The fields of a session entry that place it in the chain. Everything else on the line — whole API requests among it — is skipped by serde without being built.
+
+```rust
+#[derive(Deserialize)]
+struct Entry {
+    uuid: Option<String>,
+    #[serde(rename = "parentUuid")]
+    parent: Option<String>,
+    #[serde(rename = "logicalParentUuid")]
+    logical_parent: Option<String>,
+    timestamp: Option<String>,
+    #[serde(default, rename = "isSidechain")]
+    sidechain: bool,
+}
+```
+
+---
+
 ## `src/backends/harness/claude_sdk.rs`
 
 ### enum `Continuation`
@@ -1013,6 +1036,7 @@ pub(crate) enum Continuation<'a> {
     },
     Resume {
         session_id: &'a str,
+        at: Option<&'a str>,
     },
 }
 ```
@@ -2512,6 +2536,8 @@ pub struct BackendCapabilities {
     pub metrics: bool,
     #[serde(default)]
     pub images: bool,
+    #[serde(default)]
+    pub rewind: bool,
 }
 ```
 
@@ -2771,6 +2797,10 @@ struct State {
     started: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resume_at: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    reopen: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     codex_thread_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

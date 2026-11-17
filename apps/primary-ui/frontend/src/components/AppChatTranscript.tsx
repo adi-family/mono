@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Pencil } from "lucide-react";
 import {
+  Button,
   ChatMessage,
   ChatMessageContent,
   ChatMessageMeta,
@@ -18,9 +20,13 @@ export interface AppChatTranscriptProps {
   snapshot: AgentPeek;
   conversations: Conversation[];
   onOpenConversation: (ref: ConversationRef) => void;
+  /** Offers an edit button on sent messages; the handler resets the chat to that message. */
+  onEditMessage?: (turn: AgentTurn) => void;
+  /** Set while a reset is in flight, when no other message can be edited. */
+  editDisabledReason?: string;
 }
 
-type ActivityProps = Omit<AppChatTranscriptProps, "snapshot"> & { turn: number; stats?: AgentPeek["stats"] };
+type ActivityProps = Pick<AppChatTranscriptProps, "conversation" | "conversations" | "onOpenConversation"> & { turn: number; stats?: AgentPeek["stats"] };
 type ToolStep = Extract<AgentStep, { kind: "tool" }>;
 type FoldedStep = Extract<AgentStep, { kind: "calls" }>;
 
@@ -185,8 +191,10 @@ function userNote(turn: AgentTurn): string | null {
 }
 
 /** Pass these entries directly to ChatThread to let it control message direction. */
-export function appChatTranscriptEntries({ conversation, snapshot, conversations, onOpenConversation }: AppChatTranscriptProps): ReactNode[] {
+export function appChatTranscriptEntries({ conversation, snapshot, conversations, onOpenConversation, onEditMessage, editDisabledReason }: AppChatTranscriptProps): ReactNode[] {
   const entries: ReactNode[] = [];
+  // An answer in flight belongs to the newest message, so nothing can be cut out from under it.
+  const editable = onEditMessage && snapshot.caps.rewind === true && !snapshot.running && !snapshot.turns.some((turn) => turn.pending);
   snapshot.turns.forEach((turn) => {
     if (turn.queued) return;
     const key = JSON.stringify([conversation.agent, conversation.runId, turn.seq]);
@@ -199,6 +207,15 @@ export function appChatTranscriptEntries({ conversation, snapshot, conversations
             {turn.text && <ChatMessageContent className="whitespace-normal"><ChatMarkdown>{turn.text}</ChatMarkdown></ChatMessageContent>}
             <AppChatAttachments turn={turn} source={conversation.source} />
           </div>
+          {editable && !note && <Button
+            type="button" size="icon" variant="ghost" aria-label="Edit message" title="Edit message"
+            data-slot="chat-message-edit"
+            className="text-muted-foreground shrink-0 self-end opacity-0 transition-opacity group-focus-within/chat-message:opacity-100 group-hover/chat-message:opacity-100 pointer-coarse:opacity-100"
+            disabled={Boolean(editDisabledReason)} disabledReason={editDisabledReason ?? ""}
+            onClick={() => onEditMessage(turn)}
+          >
+            <Pencil aria-hidden="true" className="size-3.5" />
+          </Button>}
         </ChatMessage>,
       );
       return;
