@@ -20,6 +20,8 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.43.0 — 2026-11-17
+
 ### Security
 
 - **A webhook trigger's hook secret no longer prints, or round-trips, anywhere.** `adi-mono triggers save --hook-secret <NAME>` names a real [[secrets|secret]] by reference instead of carrying the value in the trigger's own definition — resolved fresh on every request (that trigger's project first, then global), and refused rather than opened if the name doesn't resolve. Every output that used to echo it — `triggers save`'s confirmation line, `triggers show`/`list`, `GET /api/triggers`, and the panel's trigger editor — now shows only whether a secret is set, never the value; the panel's Hook secret field is bound to the reference's name, which isn't sensitive. The secret is also no longer exported into the fired code block's own environment, closing the one path that put it in a trigger's own log. A trigger saved before this still works with its secret inline; `adi-mono triggers migrate-hook-secret <name>` moves it into a real secret and switches the reference, without ever printing the value. A hook secret may now also be presented as an `X-ADI-Hook-Secret` header instead of a `?secret=` query parameter — a proxy or access log is far less likely to capture a header than a URL; the query form keeps working.
