@@ -19,7 +19,7 @@ struct AdiFleetApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            RootView()
                 // The app is dark (design/DESIGN.md §3), and every tinted control — the back
                 // chevron, a link's disclosure, a toggle — takes ink rather than the accent (§3:
                 // orange is never a selected state or a link).

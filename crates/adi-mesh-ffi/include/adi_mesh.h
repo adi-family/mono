@@ -48,7 +48,7 @@ char *adi_mesh_open(const char *node, const char *service);
 // this device holds for it. `allowed` says whether this device's grants already cover the row;
 // `service` is NULL for a dashboard that declares no <label>.adi host and so cannot be opened.
 // value: {"me": "<what the node calls this device>" | null,
-//         "dashboards": [{"id", "name", "description", "service", "running", "allowed"}]}
+//         "dashboards": [{"id", "name", "description", "icon", "service", "running", "allowed"}]}
 char *adi_mesh_dashboards(const char *node, const char *username, const char *password);
 
 // Ask `node` to grant this device `http:<service>` — how a dashboard with "allowed": false

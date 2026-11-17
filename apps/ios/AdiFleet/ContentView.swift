@@ -6,15 +6,14 @@ import SwiftUI
 /// (`design/DESIGN.md` §2.5): a node is a header row — its name, and its key in mono — and the
 /// rows under it are what it runs. The one filled orange on the screen is the pairing action.
 struct ContentView: View {
-    @State private var model = FleetModel()
+    let model: FleetModel
+    /// A Home Screen shortcut's target, set by the root when one is opened.
+    @Binding var pending: PendingLink?
     @State private var pairing = false
     /// The pushed screens, owned here so a Home Screen shortcut can push one.
     @State private var path: [Route] = []
-    /// A link that arrived before the fleet was loaded. A shortcut tapped from a cold start beats
-    /// `model.start()` to it every time, and dropping it then would make the icon work only when
-    /// the app happened to be warm — the one case its owner will never be testing.
-    @State private var pending: (node: String, service: String)?
     @State private var sharing: ShareTarget?
+    @State private var showingLog = false
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -28,6 +27,17 @@ struct ContentView: View {
             .background(ADI.bg)
             .navigationTitle("Fleet")
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        showingLog = true
+                    } label: {
+                        Label {
+                            Text("Event log")
+                        } icon: {
+                            LucideIcon(icon: .circleAlert)
+                        }
+                    }
+                }
                 ToolbarItem(placement: .primaryAction) {
                     Button {
                         pairing = true
@@ -43,6 +53,7 @@ struct ContentView: View {
             }
             .refreshable { await model.refresh() }
             .sheet(isPresented: $pairing) { PairView(model: model) }
+            .sheet(isPresented: $showingLog) { EventLogView() }
             .sheet(item: $sharing) { target in
                 HomeScreenLinkSheet(node: target.node, service: target.service, title: target.title)
             }
@@ -55,14 +66,15 @@ struct ContentView: View {
                 Text(model.failure ?? "")
             }
         }
-        .task { await model.start() }
-        .onOpenURL { url in
-            guard let link = HomeScreenLink.parse(url) else { return }
-            pending = link
-            open(link)
+        // A link can arrive before the fleet has loaded — a shortcut tapped from a cold start beats
+        // `model.start()` to it every time, and dropping it then would make the icon work only when
+        // the app happened to be warm, the one case its owner will never be testing. So it is held
+        // by the root and tried at each moment it could first succeed: when it arrives, when this
+        // screen appears, and when the fleet does.
+        .onAppear { if let link = pending { open(link) } }
+        .onChange(of: pending) { _, link in
+            if let link { open(link) }
         }
-        // The fleet arriving is the other half of a cold start: the link was filed above because
-        // there was no node to match it to, and this is the moment there is one.
         .onChange(of: model.nodes) { _, _ in
             if let link = pending { open(link) }
         }
@@ -72,18 +84,10 @@ struct ContentView: View {
     /// phone is not paired with is simply left pending: the fleet is refreshed on foreground, and a
     /// shortcut kept from an unpaired machine starting to work again after re-pairing is kinder
     /// than an alert about a name the person did not type.
-    private func open(_ link: (node: String, service: String)) {
+    private func open(_ link: PendingLink) {
         guard let node = model.nodes.first(where: { $0.petname == link.node }) else { return }
         pending = nil
-        path = [Route(node: node, service: link.service, share: !granted(link.service, on: node))]
-    }
-
-    /// Whether the node has already shared this label with us — the same question the row asks, so
-    /// a shortcut to a dashboard that was never granted still asks for it instead of 502ing.
-    private func granted(_ service: String, on node: Node) -> Bool {
-        if node.any_service || node.services.contains(service) { return true }
-        return (model.dashboards[node.petname] ?? [])
-            .contains { $0.service == service && $0.allowed }
+        path = [Route(node: node, service: link.service, share: !model.granted(link.service, on: node))]
     }
 
     /// Nothing paired yet: the one icon size reserved for an empty state (§9), a section title,
@@ -199,8 +203,9 @@ struct ContentView: View {
                 .adiRow()
                 .listRowSeparator(.hidden)
         }
-        if let problem = model.listingFailure[node.petname] {
-            Note(icon: .triangleAlert, text: problem)
+        if model.listingFailure[node.petname] != nil {
+            // One line here; the mesh's own sentence for it runs to a paragraph and is in the log.
+            Note(icon: .triangleAlert, text: "Its apps could not be listed. The event log says why.")
                 .adiRow()
                 .listRowSeparator(.hidden)
         }

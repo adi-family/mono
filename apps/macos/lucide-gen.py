@@ -28,8 +28,14 @@ OUT = [
 
 # The nouns the two apps have. `design/DESIGN.md` §9 is the noun → icon map.
 ICONS = [
-    "arrow-up",          # update available
+    "activity",          # an app's icon
+    "archive",           # hide a chat
+    "arrow-up",          # update available, send
     "arrow-up-right",    # opens elsewhere: the dashboard, an issue
+    "blocks",            # an app's icon
+    "book-open",         # an app's icon
+    "bot",               # an agent
+    "braces",            # an app's icon
     "bug",               # something not working
     "camera",            # scan
     "check",             # copied
@@ -41,14 +47,20 @@ ICONS = [
     "code",              # an api service
     "copy",
     "ellipsis",          # another service, row actions
+    "flask-conical",     # an app's icon
     "globe",             # a plain service
+    "heart-pulse",       # an app's icon
     "info",
     "key-round",
     "layout-dashboard",  # a dashboard
     "layout-grid",       # the control panel (`app`)
     "link",              # pair
+    "list-filter",       # which chats the list shows
+    "message-circle-question",# an app's icon
+    "message-square",    # chats
     "monitor",           # a node
     "network",           # the fleet / the mesh
+    "pencil",            # rename
     "pin",               # a tab the operator kept
     "plus",
     "power",
@@ -58,8 +70,15 @@ ICONS = [
     "search",            # find in page
     "settings-2",
     "share",
+    "shield-check",      # an app's icon
+    "square",            # stop a run
+    "star",              # a starred chat
+    "terminal",          # an app's icon
     "triangle-alert",
+    "video",             # an app's icon
+    "wallet",            # an app's icon
     "x",
+    "zap",               # an app's icon
 ]
 
 VERSION_RE = re.compile(r"lucide-static v([\d.]+)")
@@ -104,6 +123,51 @@ def check_path(name: str, d: str) -> None:
         sys.exit(f"{name}: empty path")
 
 
+def spell_out(name: str, d: str) -> str:
+    """Rewrite path data with every number separated, arc flags included.
+
+    SVG lets an arc's two flags sit against each other and against the next number —
+    `a1.5 1.5 0 00-2.474-1.561` is two flags and then a coordinate — and newer Lucide files are
+    minified that way. A tokenizer that reads numbers greedily takes `00` as one number and is
+    then a parameter short, so the arc and everything after it in the path is drawn wrong or not
+    at all: `zap` came out blank and `book-open` as its spine alone. The flags are only
+    recognisable by position, so this is the one place they are read by position, and what the
+    Swift side gets is the unambiguous spelling.
+    """
+    out: list[str] = []
+    pos = 0
+    cmd = None
+    index = 0
+    while pos < len(d):
+        ch = d[pos]
+        if ch.isspace() or ch == ",":
+            pos += 1
+            continue
+        if ch.isalpha():
+            cmd = ch.upper()
+            if cmd not in ARGS:
+                sys.exit(f"{name}: unsupported path command {ch!r}")
+            out.append(ch)
+            index = 0
+            pos += 1
+            continue
+        if cmd is None:
+            sys.exit(f"{name}: number before any command in {d[:20]!r}")
+        if cmd == "A" and index % 7 in (3, 4):
+            if ch not in "01":
+                sys.exit(f"{name}: arc flag is {ch!r}")
+            out.append(ch)
+            pos += 1
+        else:
+            m = NUMBER_RE.match(d, pos)
+            if not m:
+                sys.exit(f"{name}: cannot tokenize {d[pos:pos+12]!r}")
+            out.append(m.group())
+            pos = m.end()
+        index += 1
+    return " ".join(out)
+
+
 def variant(name: str) -> str:
     parts = name.split("-")
     return parts[0] + "".join(p[:1].upper() + p[1:] for p in parts[1:])
@@ -119,7 +183,11 @@ def main() -> None:
         svg = path.read_text()
         m = VERSION_RE.search(svg)
         version = version or (m.group(1) if m else "?")
-        markup = inner(svg)
+        markup = re.sub(
+            r'\bd="([^"]*)"',
+            lambda found: f'd="{spell_out(name, found.group(1))}"',
+            inner(svg),
+        )
         for element, attrs in ELEMENT_RE.findall(markup):
             attributes = dict(ATTR_RE.findall(attrs))
             if element == "path":

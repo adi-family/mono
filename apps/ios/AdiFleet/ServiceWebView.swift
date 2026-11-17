@@ -15,20 +15,28 @@ struct ServiceView: View {
     /// bound. Doing it in this order matters: a listener bound to a service the node refuses would
     /// answer every request with the same refusal page, and reloading would never clear it.
     var share = false
+    /// Where on the service to land. A path and query, never an address: the origin is whatever
+    /// port the mesh bound.
+    var path = "/"
     let model: FleetModel
 
     @State private var port: UInt16?
+    /// Set instead of `port` for the debug panel, whose services are not behind the mesh.
+    @State private var direct: URL?
     @State private var failure: String?
     @State private var asking = false
     @State private var challenge = AuthChallenge()
 
     var body: some View {
         Group {
-            if let port {
+            if failure == nil, let url = direct ?? port.flatMap({ URL(string: "http://127.0.0.1:\($0)\(path)") ?? URL(string: "http://127.0.0.1:\($0)/") }) {
                 WebView(
-                    url: URL(string: "http://127.0.0.1:\(port)/")!,
+                    url: url,
                     node: node.petname,
-                    challenge: challenge
+                    challenge: challenge,
+                    // A page that never arrived is a dark, empty screen with nothing to say why —
+                    // which reads as the app being broken rather than the service being down.
+                    failed: { failure = $0 }
                 )
             } else if let failure {
                 VStack(spacing: 12) {
@@ -61,6 +69,8 @@ struct ServiceView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ADI.bg)
         .ignoresSafeArea(edges: .bottom)
+        // A page gets the whole screen under the bar; the tabs come back with the list.
+        .toolbar(.hidden, for: .tabBar)
         .colorScheme(.dark)
         .navigationTitle("\(service) · \(node.petname)")
         .navigationBarTitleDisplayMode(.inline)
@@ -75,6 +85,14 @@ struct ServiceView: View {
         // drags can swallow, and that nothing on screen suggests. Whatever is behind that bar, the
         // app has to remain obviously escapable from it.
         .task {
+            #if DEBUG
+            if let panel = DevPanel.current, panel.node.petname == node.petname {
+                await panel.wake(service)
+                direct = panel.address(of: service, path: path)
+                if direct == nil { failure = "\(service) has no port on the debug panel." }
+                return
+            }
+            #endif
             if share {
                 asking = true
                 let refusal = await model.share(service, on: node)
@@ -170,8 +188,10 @@ private struct WebView: UIViewRepresentable {
     /// the URL is a loopback port and says nothing about whose service is behind it.
     let node: String
     let challenge: AuthChallenge
+    /// Called with the reason when the page itself could not be loaded.
+    let failed: (String) -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator(node: node, challenge: challenge) }
+    func makeCoordinator() -> Coordinator { Coordinator(node: node, challenge: challenge, failed: failed) }
 
     func makeUIView(context: Context) -> WKWebView {
         // The default, persistent data store: the port a service is served on is stable across
@@ -202,10 +222,24 @@ private struct WebView: UIViewRepresentable {
     final class Coordinator: NSObject, WKNavigationDelegate {
         private let node: String
         private let challenge: AuthChallenge
+        private let failed: (String) -> Void
 
-        init(node: String, challenge: AuthChallenge) {
+        init(node: String, challenge: AuthChallenge, failed: @escaping (String) -> Void) {
             self.node = node
             self.challenge = challenge
+            self.failed = failed
+        }
+
+        /// The first load failing: nothing answered on the port, or the connection dropped before
+        /// a page came back. A failure *inside* a loaded page is the page's own business.
+        func webView(
+            _ webView: WKWebView,
+            didFailProvisionalNavigation navigation: WKNavigation!,
+            withError error: Error
+        ) {
+            // Cancelled is what a redirect or a second load looks like, not a failure.
+            guard (error as NSError).code != NSURLErrorCancelled else { return }
+            failed(error.localizedDescription)
         }
 
         func webView(

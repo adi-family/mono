@@ -41,9 +41,10 @@ targets:
         # not submittable. 3 is the first build that has it, and is the one App Review rejected on
         # 2026-09-02: the reviewer's token was refused by a paste parser that only accepted the
         # exact string it was minted as. 4 carries the fix for that. `Info.plist` reads both of
-        # these through $(...) rather than repeating them.
-        CURRENT_PROJECT_VERSION: 5
-        MARKETING_VERSION: 0.1.0
+        # these through $(...) rather than repeating them. 5 was the last 0.1.0 upload; 6 is the
+        # first 0.2.0 — the apps grid and the native chat — and 7 orders the chats as the panel does.
+        CURRENT_PROJECT_VERSION: 7
+        MARKETING_VERSION: 0.2.0
         TARGETED_DEVICE_FAMILY: "1,2"
 
         # App Store Connect refuses a build with no icon, so this is not decoration. One

@@ -44,6 +44,10 @@ final class ScreenshotTests: XCTestCase {
         app.launchEnvironment["ADI_UITEST"] = "1"
         app.launch()
 
+        // The app opens on its chats; everything photographed here is on the fleet tab.
+        XCTAssertTrue(app.tabBars.buttons["Fleet"].waitForExistence(timeout: 30))
+        app.tabBars.buttons["Fleet"].tap()
+
         // 1 — the empty state. Not a store screenshot, but it is what App Review meets first, and
         // having it captured is how we can tell whether the "no nodes" copy still reads well.
         XCTAssertTrue(app.staticTexts["No nodes yet"].waitForExistence(timeout: 30),

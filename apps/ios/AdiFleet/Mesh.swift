@@ -262,6 +262,8 @@ struct NodeDashboard: Codable, Sendable, Hashable, Identifiable {
     let id: String
     let name: String
     let description: String?
+    /// The Lucide icon its manifest names, if it names one.
+    var icon: String? = nil
     /// The service label to open. `nil` for a dashboard that declares no `<label>.adi` host —
     /// it exists, but there is no address the mesh could carry a request to.
     let service: String?
@@ -273,7 +275,7 @@ struct NodeDashboard: Codable, Sendable, Hashable, Identifiable {
     /// The same dashboard, now shared with this phone. Used after a grant so the row stops saying
     /// otherwise without waiting for the node to be asked again.
     func shared() -> Self {
-        .init(id: id, name: name, description: description, service: service, running: running, allowed: true)
+        .init(id: id, name: name, description: description, icon: icon, service: service, running: running, allowed: true)
     }
 }
 

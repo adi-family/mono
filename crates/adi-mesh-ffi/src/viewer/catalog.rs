@@ -74,6 +74,10 @@ pub struct DashboardInfo {
     /// Its display name from the manifest.
     pub name: String,
     pub description: Option<String>,
+    /// The Lucide icon the dashboard's manifest names for itself, as the panel's own apps screen
+    /// draws it. `None` when it names none; a name the client has no glyph for is the client's to
+    /// fall back from.
+    pub icon: Option<String>,
     /// The service label to open, taken from the single host the dashboard declares (§4):
     /// `nosh.adi` → `nosh`. `None` when it declares none, or declares a name outside the local
     /// zone — either way there is nothing the mesh could route to, and the UI must say so rather
@@ -107,6 +111,8 @@ struct RawDashboard {
     name: Option<String>,
     #[serde(default)]
     description: Option<String>,
+    #[serde(default)]
+    icon: Option<String>,
     #[serde(default)]
     host: Option<String>,
     #[serde(default)]
@@ -415,6 +421,7 @@ fn assemble(dashboards: Vec<RawDashboard>, grants: &[Grant]) -> Vec<DashboardInf
                 name: dashboard.name.unwrap_or_else(|| dashboard.id.clone()),
                 id: dashboard.id,
                 description: dashboard.description,
+                icon: dashboard.icon.filter(|icon| !icon.trim().is_empty()),
                 service,
                 running: dashboard.frontend_running,
                 allowed,
@@ -449,6 +456,7 @@ mod tests {
             id: id.to_string(),
             name: Some(id.to_uppercase()),
             description: None,
+            icon: None,
             host: host.map(ToString::to_string),
             frontend_running: true,
             archived_at: None,

@@ -17,6 +17,72 @@ WKWebView → 127.0.0.1:<port>  (a listener inside this app)
           → the node's local service
 ```
 
+## Apps
+
+The app opens on **Apps**: the control panel's home grid, natively — every dashboard on every
+paired machine as a tile, with the icon its manifest names (else the panel's stock one for that
+app, else its initials). A tap opens it exactly as a row on the Fleet tab does, asking the node
+for the grant first when this phone does not hold it.
+
+The list is the mesh catalog (`viewer::catalog`, see *Dashboards* below), which carries each
+dashboard's `icon` for this screen. The glyphs are Lucide; one the app has no drawing for falls
+back to initials, so a new icon name on a node never breaks a tile — add it to `ICONS` in
+`apps/macos/lucide-gen.py` to draw it.
+
+## Chats
+
+**Chats**, the second tab: every conversation on every paired machine in one list, and each one
+as a native transcript. It is the control panel's own chat page, spoken natively rather than
+shown in a web view — the same `/api` the panel's web UI calls, reached the same way a
+dashboard is:
+
+```
+URLSession → 127.0.0.1:<port>   (the `app` service's loopback listener, as above)
+           → the node's control panel, behind the node's password (Keychain → Basic)
+```
+
+So there is no chat protocol in the mesh and nothing new on the node. `NodeAPI.swift` is the whole
+client; `ChatModel.swift` holds the list and one open thread; `Markdown.swift` draws what an agent
+writes.
+
+Things worth knowing before changing it:
+
+- **It polls; nothing streams.** The panel has no token stream. An answer in flight is a turn with
+  `pending: true` whose text grows between reads, so an open chat is read once a second while the
+  agent works and every five seconds otherwise, and the list every five seconds while it is on
+  screen. The panel's own web client keeps the same paces.
+- **The list is filtered by the node.** The four choices are the panel's own (`?filter=`), and
+  the default is *Only started by any user*: on a machine whose agents launch each other, the runs
+  nobody typed bury the conversations. A chat whose agent is waiting on an answer is listed
+  whatever the choice.
+- **A message has no id.** A turn is `(agent, run, seq)`. A chat is a run of an agent on a node.
+- **Tool calls arrive folded** (`fold: true`): one `calls` step per run of calls, drawn as a
+  one-line receipt, and fetched (`/api/agents/run/steps`) only when opened.
+- **The transcript is a plain `VStack`, not a lazy one.** With the scroll anchored to the bottom, a
+  lazy stack's height estimates never settled when scrolling up through a long answer and the main
+  thread spun. A read holds one page of turns (`NodeAPI.page`); *Earlier messages* asks for more.
+- **Links to the machine's own apps open in the app.** `http://<label>.adi/…` in a message is a
+  host only that machine resolves; tapped here it becomes that service over the mesh, asking the
+  node for the grant first if this phone does not hold it. Everything else goes to the browser.
+
+Not in the native chat: attachments (a message that carries some says how many), voice, editing a
+sent message, and choosing a model per launch. **Open in the control panel**, in a chat's menu,
+opens the same conversation in the web UI for those.
+
+### Working on it without pairing
+
+A debug build takes `ADI_DEV_PANEL=<name>=<url>` and lists that panel as a node, reached directly
+instead of over the mesh. The simulator shares its Mac's loopback, so:
+
+```bash
+SIMCTL_CHILD_ADI_DEV_PANEL=mac=http://127.0.0.1:8000 xcrun simctl launch booted family.adi.fleet
+```
+
+shows the chats of the machine it was built on. It replaces the transport and nothing above it,
+and it is compiled out of a release build. `AdiFleetUITests/ChatTests` drives the chat screens the
+same way (its header has the command); it only reads, unless `ADI_CHAT_AGENT` names an agent to
+send one message to.
+
 ## Build and run
 
 ```bash
@@ -65,7 +131,7 @@ the same files as `apps/macos/Sources`, so a fix lands in both by copying.
 - **Icons** are Lucide, drawn as SwiftUI paths by the generated `Lucide.swift`
   (`python3 apps/macos/lucide-gen.py`). The one system-drawn control is the `PasteButton`,
   which keeps its own glyph because the tap on it *is* the pasteboard consent.
-- **One orange per screen**: *Pair a node* on the empty fleet, *Pair* / *Copy command* on the
+- **One orange per screen**: the send button in a chat, *Pair a node* on the empty fleet, *Pair* / *Copy command* on the
   two pairing paths, *Open* on the name-a-service form. Everything tinted takes ink.
 
 ## Pairing

@@ -66,7 +66,11 @@ final class FleetModel {
     /// Just the node list — the part that is a file read and always answers.
     private func reloadNodes() async {
         do {
-            nodes = try await Mesh.shared.nodes()
+            var nodes = try await Mesh.shared.nodes()
+            #if DEBUG
+            if let panel = DevPanel.current { nodes.append(panel.node) }
+            #endif
+            self.nodes = nodes
         } catch {
             failure = error.localizedDescription
         }
@@ -114,9 +118,17 @@ final class FleetModel {
     /// nothing asks again on its own. So the refusals inside the window are not the node's answer
     /// and are not shown; only the last one is.
     func list(_ node: Node, attempts: Int = 1) async {
+        #if DEBUG
+        // Not on the mesh, so the panel is asked directly.
+        if let panel = DevPanel.current, node.petname == panel.node.petname {
+            dashboards[node.petname] = await panel.dashboards()
+            return
+        }
+        #endif
         guard let credential = Keychain.credential(for: node.petname) else {
             listingFailure[node.petname] =
                 "No password for \(node.petname) on this phone yet — open its control panel once and sign in."
+            EventLog.shared.failed(node.petname, "Apps", listingFailure[node.petname] ?? "")
             return
         }
         listing.insert(node.petname)
@@ -126,10 +138,12 @@ final class FleetModel {
                 let catalog = try await Mesh.shared.dashboards(node: node.petname, credential: credential)
                 dashboards[node.petname] = catalog.dashboards
                 listingFailure[node.petname] = nil
+                EventLog.shared.succeeded(node.petname, "Apps")
                 return
             } catch {
                 guard attempt < attempts else {
                     listingFailure[node.petname] = error.localizedDescription
+                    EventLog.shared.failed(node.petname, "Apps", error.localizedDescription)
                     return
                 }
                 try? await Task.sleep(for: .seconds(1))
@@ -160,6 +174,15 @@ final class FleetModel {
         // has changed too.
         await reloadNodes()
         return nil
+    }
+
+    /// Whether `node` has already shared this label with us — the question a dashboard's row asks,
+    /// and the one a link from elsewhere (a Home Screen shortcut, a link in a chat) has to ask too,
+    /// so that a service never granted is asked for instead of 502ing.
+    func granted(_ service: String, on node: Node) -> Bool {
+        if node.any_service || node.services.contains(service) { return true }
+        return (dashboards[node.petname] ?? [])
+            .contains { $0.service == service && $0.allowed }
     }
 
     /// Called when the app returns to the foreground: the OS froze the process, so every pooled
