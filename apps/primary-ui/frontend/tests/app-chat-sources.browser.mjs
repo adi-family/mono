@@ -227,6 +227,8 @@ async function intercept({ requestId, request }) {
       snapshot.total_turns = snapshot.turns.length;
       return await fulfill(requestId, copy(snapshot));
     }
+    // The rail's event log keeps its rows on the chosen machine; these fixtures have none stored.
+    if (request.method === "POST" && /^\/diagnostics\/(query|report)$/.test(path)) return await fulfill(requestId, path.endsWith("/query") ? { records: [] } : { ok: true });
     throw new Error(`Unimplemented intercepted API route: ${localName(source)} ${request.method} ${path}`);
   } catch (error) {
     mockErrors.push(error.message);
@@ -366,7 +368,9 @@ try {
     await screenshot('new-chat-starred');
     const localCard = '[data-slot="new-chat-starred-agent"][data-source=""]';
     const remoteCard = '[data-slot="new-chat-starred-agent"][data-source="' + remote + '"]';
-    const mutations = requests.filter((request) => request.method === "POST").length;
+    // The event log's own poll and filing are POSTs too; they are not edits made by this page.
+    const posts = () => requests.filter((request) => request.method === "POST" && !request.path.startsWith("/diagnostics/")).length;
+    const mutations = posts();
     await evaluate(`${q(localCard)}.dispatchEvent(new MouseEvent('contextmenu', {bubbles:true, cancelable:true, clientX:200, clientY:200}))`);
     await until(() => evaluate(`!!document.querySelector('[data-slot="agent-context-menu"]')`), 'agent context menu');
     await click('[data-slot="agent-context-menu"] button');
@@ -379,7 +383,7 @@ try {
     await until(() => evaluate(`!!document.querySelector('[data-slot="agent-context-menu"]')`), 'restore action available');
     await click('[data-slot="agent-context-menu"] button');
     await until(() => evaluate(`!!${q(localCard)}`), 'restore inherits shared star');
-    assert.equal(requests.filter((request) => request.method === "POST").length, mutations);
+    assert.equal(posts(), mutations);
 
     async function renamePersonal(value) {
       await evaluate(`${q(localCard)}.dispatchEvent(new MouseEvent('contextmenu', {bubbles:true, cancelable:true, clientX:200, clientY:200}))`);
@@ -392,7 +396,7 @@ try {
     await reloadWhen(`${q(localCard)}?.textContent.includes('My personal helper')`, 'personal name survives reload');
     await renamePersonal('');
     await until(() => evaluate(`!${q(localCard)}.textContent.includes('My personal helper')`), 'empty name restores shared name');
-    assert.equal(requests.filter((request) => request.method === "POST").length, mutations);
+    assert.equal(posts(), mutations);
 
     const launches = requests.filter((request) => request.path === '/agents/run').length;
     await click('[data-slot="new-chat-starred-agent"][data-source="' + remote + '"]');

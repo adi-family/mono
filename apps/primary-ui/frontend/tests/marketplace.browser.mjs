@@ -68,6 +68,7 @@ async function intercept({requestId,request}) {
   else if (request.method === "GET" && path === "/api/marketplace") data=state;
   else if (request.method === "GET" && path === "/api/projects") data={projects:[{id:"project-one",name:"One"},{id:"project-two",name:"Two"}]};
   else if (request.method === "GET" && path === "/api/dashboards") data=source?{dashboards:[]}:dashboards();
+  else if(request.method === "POST" && /^\/api\/diagnostics\/(query|report)$/.test(path)) data=path.endsWith("/query")?{records:[]}:{ok:true}; // the rail's event log
   else if(request.method === "POST" && path.startsWith("/api/marketplace/")) {
     const body=JSON.parse(request.postData??"null");
     mutations.push({path,body,...tag});

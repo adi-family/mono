@@ -154,6 +154,7 @@ async function intercept({ requestId, request }) {
     // This machine's app knows webhook relays; the paired machine's predates them.
     if (source) { status = 404; data = { ok: false, error: "not found" }; } else data = { public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixtureRelayKey node@this-machine" };
   } else if (request.method === "GET" && path === "/api/projects") data = { projects: [{ id: "project-one", name: "One" }, { id: "project-two", name: "Two" }, { id: "old", name: "Archived", archived_at: 1 }] };
+  else if (request.method === "POST" && /^\/api\/diagnostics\/(query|report)$/.test(path)) data = path.endsWith("/query") ? { records: [] } : { ok: true }; // the rail's event log
   else if (request.method === "POST" && path === "/api/triggers/log") {
     const { name } = JSON.parse(request.postData ?? "null");
     logReads += 1;

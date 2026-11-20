@@ -42,8 +42,10 @@ const requests = [];
 const errors = [];
 const mockErrors = [];
 const checks = [];
+const diagnosticsPath = /^\/api\/app\/diagnostics\/(query|report)$/;
 let failLocal = false;
 let failFleet = false;
+let held = null;
 let socket;
 let send;
 let evaluate;
@@ -80,9 +82,18 @@ async function fulfill(requestId, data) {
   }
 }
 
+/** Keeps both catalog reads unanswered until the returned function is called, so a test can look at Home mid-refresh. */
+function holdCatalogs() {
+  let release;
+  held = new Promise((resolve) => { release = resolve; });
+  return () => { held = null; release(); };
+}
+
 async function intercept({ requestId, request }) {
   const url = new URL(request.url);
   requests.push({ method: request.method, path: fixturePath(url.pathname) });
+  // A held read is answered with whatever the fixtures say once it is released.
+  if (held && /^\/api\/app\/(fleet\/)?dashboards$/.test(fixturePath(url.pathname))) await held;
   if (request.method === "GET" && fixturePath(url.pathname) === "/api/app/dashboards") {
     // Malformed catalogs exercise the query error path without adding expected HTTP console errors.
     await fulfill(requestId, failLocal ? { error: "Fixture local listing failure" } : local);
@@ -91,6 +102,9 @@ async function intercept({ requestId, request }) {
   } else if (request.method === "GET" && fixturePath(url.pathname) === "/api/app/fleet/nodes") {
     // The topbar machine selector lists the paired fleet on every page, Home included.
     await fulfill(requestId, { nodes: fleet.nodes.map(({ node, locked }) => ({ node, locked })) });
+  } else if (request.method === "POST" && diagnosticsPath.test(fixturePath(url.pathname))) {
+    // The rail's event log keeps its rows on the machine: it asks for the stored ones and files each new one.
+    await fulfill(requestId, url.pathname.endsWith("/query") ? { records: [] } : { ok: true });
   } else {
     mockErrors.push(`Unexpected API request: ${request.method} ${url.pathname}`);
     await fulfill(requestId, { error: "Only Home catalog reads are allowed." });
@@ -191,6 +205,20 @@ try {
     { urlPattern: "*://app.adi/api/*", requestStage: "Request" },
   ] });
   await send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 1000, deviceScaleFactor: 1, mobile: false });
+  // Every document notes each distinct state its app grid was painted in, from the first frame on.
+  await send("Page.addScriptToEvaluateOnNewDocument", { source: `
+    window.homeFrames = [];
+    (function sample() {
+      const list = document.querySelector(${JSON.stringify(grid)});
+      if (list) {
+        const frame = { apps: list.children.length, busy: list.getAttribute('aria-busy'), status: document.querySelector('main[aria-label="Home"] [role="status"]')?.textContent ?? '' };
+        const last = window.homeFrames[window.homeFrames.length - 1];
+        if (!last || last.apps !== frame.apps || last.busy !== frame.busy || last.status !== frame.status) window.homeFrames.push(frame);
+      }
+      requestAnimationFrame(sample);
+    })();` });
+  const catalogReads = (since) => requests.slice(since).filter((request) => /^\/api\/app\/(fleet\/)?dashboards$/.test(request.path)).length;
+  const forgetSaved = (kind) => evaluate(`localStorage.removeItem('adi.home-apps.${kind}.v1')`);
   await send("Page.navigate", { url: `${origin}/` });
   await ready();
 
@@ -307,8 +335,70 @@ try {
     assert.equal(await evaluate(`document.querySelectorAll('${grid} > li').length`), 7);
   });
 
+  await check("a return visit opens with the saved apps and refreshes them in the background", async () => {
+    assert.deepEqual(await evaluate(`Object.keys(localStorage).filter(key=>key.startsWith('adi.home-apps.')).sort()`), ["adi.home-apps.fleet.v1", "adi.home-apps.local.v1"]);
+    assert.equal(await evaluate(`/"dir"|"routes"|"service"|"running"/.test(localStorage.getItem('adi.home-apps.local.v1') + localStorage.getItem('adi.home-apps.fleet.v1'))`), false);
+    const release = holdCatalogs();
+    const before = requests.length;
+    await reload();
+    await until(() => catalogReads(before) >= 2, "both catalogs are being read again");
+    await pause(150);
+    assert.deepEqual(await evaluate("window.homeFrames"), [{ apps: 7, busy: "false", status: "7 apps." }], "the saved apps are the first and only thing painted while the reads are out");
+    assert.equal(await evaluate(`${q(app("", "Design System"))}.getAttribute('href')`), "/library");
+    assert.equal(await evaluate(`${q(app("server-beta", "CRM"))}.getAttribute('href')`), "http://crm.server-beta.n.adi/");
+    assert.equal(await evaluate(`${q(app("server-alpha", "Restricted app"))}.textContent.includes('Access required')`), true);
+    assert.equal(await evaluate(`!!${q(app("", "Design System"))}.querySelector('svg')`), true, "a saved app keeps its icon");
+    // The server's answer wins as soon as it arrives: one app is new, another is gone.
+    local.dashboards.push({ id: "new-app", name: "New app", host: "new-app.adi", frontend_running: true, archived_at: null });
+    const [gone] = fleet.nodes[1].dashboards.splice(0, 1);
+    release();
+    await until(() => evaluate(`!!${q(app("", "New app"))} && !${q(app("server-beta", "CRM"))}`), "the refresh replaces the saved apps");
+    await ready(7);
+    const frames = await evaluate("window.homeFrames");
+    assert.ok(frames.every((frame) => frame.apps >= 6 && frame.busy === "false" && !frame.status.startsWith("Loading")), `the grid is never emptied or marked loading: ${JSON.stringify(frames)}`);
+    local.dashboards.pop();
+    fleet.nodes[1].dashboards.push(gone);
+    await reload();
+    await until(() => evaluate(`!${q(app("", "New app"))} && !!${q(app("server-beta", "CRM"))}`), "the next visit follows the server again");
+    await ready(7);
+  });
+
+  await check("a refresh that fails keeps the saved apps listed beside the notice", async () => {
+    failLocal = true;
+    failFleet = true;
+    await reload();
+    await until(() => evaluate(`document.querySelectorAll('main[aria-label="Home"] [role="alert"]').length===2`), "both failures are visible");
+    assert.equal(await evaluate(`document.querySelectorAll('${grid} > li').length`), 7);
+    assert.deepEqual(await evaluate("window.homeFrames"), [{ apps: 7, busy: "false", status: "7 apps." }]);
+    failLocal = false;
+    failFleet = false;
+    await click('[role="alert"] button');
+    await until(() => evaluate(`document.querySelectorAll('[role="alert"]').length===1`), "the first Retry recovers");
+    await click('[role="alert"] button');
+    await until(() => evaluate(`document.querySelectorAll('[role="alert"]').length===0`), "the second Retry recovers");
+    assert.equal(await evaluate(`document.querySelectorAll('${grid} > li').length`), 7);
+  });
+
+  await check("a machine failure in the saved catalog is logged only once this visit has read it", async () => {
+    const logged = `${eventLog}.some(event=>event.area==='Apps' && event.source==='failed-machine')`;
+    await toggleMachines("failed-machine");
+    await until(() => evaluate(logged), "the failure is logged while the machine is chosen");
+    const release = holdCatalogs();
+    const before = requests.length;
+    await evaluate("sessionStorage.removeItem('adi.event-log.v1')");
+    await reload();
+    await until(() => catalogReads(before) >= 2, "both catalogs are being read again");
+    await pause(150);
+    assert.equal(await evaluate(`document.querySelectorAll('${grid} > li').length`), 7);
+    assert.equal(await evaluate(logged), false, "what the last visit saw is not reported as news");
+    release();
+    await until(() => evaluate(logged), "the failure is logged once the machine has answered");
+    await toggleMachines("failed-machine");
+  });
+
   await check("a local catalog failure preserves remote apps and Retry recovers independently", async () => {
     failLocal = true;
+    await forgetSaved("local");
     await reload();
     await ready(5);
     await until(() => evaluate(`Array.from(document.querySelectorAll('[role="alert"]')).some(el=>el.textContent.startsWith('This machine:'))`), "local failure is visible");
@@ -322,6 +412,7 @@ try {
 
   await check("a fleet catalog failure preserves local apps and Retry restores remote machines", async () => {
     failFleet = true;
+    await forgetSaved("fleet");
     await reload();
     await ready(2);
     await until(() => evaluate(`Array.from(document.querySelectorAll('[role="alert"]')).some(el=>el.textContent.startsWith('Other machines:'))`), "fleet failure is visible");
@@ -382,7 +473,7 @@ try {
 
   assert.deepEqual(mockErrors, [], "all API requests stayed within the Home fixture contract");
   assert.deepEqual(errors, [], "zero browser exceptions or console errors");
-  assert.deepEqual(requests.filter((request) => request.method !== "GET"), [], "Home only reads");
+  assert.deepEqual(requests.filter((request) => request.method !== "GET" && !diagnosticsPath.test(request.path)), [], "Home only reads; the event log's own stored rows aside");
   console.log(`\n${checks.length} Home browser scenarios passed; all API requests intercepted; zero real mutations, exceptions or console errors.`);
 } catch (error) {
   console.error(`Home browser check failed after ${checks.length} completed scenarios.`);

@@ -3,8 +3,9 @@
  * Run: bun frontend/tests/primary-app.browser.mjs
  * Optional: SHOWCASE_URL (default http://app.adi), CHROME_BIN, BROWSER_SCREENSHOTS_DIR,
  * MARKETPLACE_ONLY=1 to check just the catalog (also works against the dashboard).
- * API GETs and the read-only POSTs (two transcript reads, a trigger's log tail) reach the real
- * backend; every other API write is blocked before it leaves Chrome and fails this check.
+ * API GETs and the read-only POSTs (two transcript reads, a trigger's log tail, the event log's
+ * stored rows) reach the real backend; every other API write is blocked before it leaves Chrome
+ * and fails this check.
  */
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -20,7 +21,11 @@ const chrome = Bun.spawn([
   "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "about:blank",
 ], { stdout: "ignore", stderr: "ignore" });
 
-const readPosts = new Set(["/api/agents/run/peek", "/api/agents/run/steps", "/api/triggers/log"]);
+const readPosts = new Set(["/api/agents/run/peek", "/api/agents/run/steps", "/api/triggers/log", "/api/diagnostics/query"]);
+// The rail's event log files each event the page reports with `POST /api/diagnostics/report`,
+// which adds a row to the machine's stored log. A read-only smoke must not, so it is acknowledged
+// here without leaving Chrome. Listed in the summary like the stubbed requests.
+const acknowledgedPosts = new Set(["/api/diagnostics/report"]);
 // The native Settings page refreshes the updater's record with `POST /api/update/check` whenever
 // that record has gone stale (about half a day). That request leaves the machine and rewrites
 // ~/.adi/mono/update/state.json, which a read-only smoke must not do — and which could flip the
@@ -60,6 +65,13 @@ async function intercept({ requestId, request }) {
   if (url.origin === origin && (request.method === "GET" || request.method === "HEAD"
     || (request.method === "POST" && readPosts.has(nativePath)))) {
     await send("Fetch.continueRequest", { requestId });
+  } else if (url.origin === origin && request.method === "POST" && acknowledgedPosts.has(nativePath)) {
+    stubbed.push(label);
+    await send("Fetch.fulfillRequest", {
+      requestId, responseCode: 200,
+      responseHeaders: [{ name: "Content-Type", value: "application/json" }],
+      body: Buffer.from(JSON.stringify({ ok: true })).toString("base64"),
+    });
   } else if (url.origin === origin && request.method === "POST" && stubbedPosts.has(nativePath)) {
     stubbed.push(label);
     const record = await fetch(`${url.origin}${path.replace(/\/check$/, "")}`);
@@ -323,7 +335,7 @@ try {
       await tokenColor('[data-slot="secret-new"]');
       await navigate("/settings/secrets?new=1", '[data-slot="secret-form"] [name="value"]');
       assert.equal(await evaluate(`${q('[data-slot="secret-form"] [name="value"]')}.dataset.masked`), "true", "a value being typed is masked");
-      assert.deepEqual(requests.filter((request) => request.stage === stage && request.method === "POST"), [], "listing secrets and opening the form sent nothing and asked for no value");
+      assert.deepEqual(requests.filter((request) => request.stage === stage && request.method === "POST" && !request.path.endsWith("/diagnostics/query")), [], "listing secrets and opening the form sent nothing and asked for no value");
     });
 
     await check("native Settings still loads the original control panel", async () => {

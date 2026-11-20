@@ -350,6 +350,12 @@ async function intercept({ requestId, request }) {
       await fulfill(requestId, copy(snapshot));
       return;
     }
+    // The rail's event log keeps its rows on the machine; this fixture has none stored, so the
+    // panel shows exactly what the page reported.
+    if (request.method === "POST" && /^\/api\/app\/diagnostics\/(query|report)$/.test(path)) {
+      await fulfill(requestId, path.endsWith("/query") ? { records: [] } : { ok: true });
+      return;
+    }
     mockErrors.push(`Unimplemented intercepted API route: ${request.method} ${path}`);
     await fulfill(requestId, { ok: false, error: "This API route is unavailable in the browser fixture." });
   } catch (error) {
@@ -1248,15 +1254,17 @@ try {
     const button = '[data-slot="event-log-button"]';
     const panel = '[data-slot="event-log"]';
     const item = `${panel} [data-slot="event-log-item"]`;
-    // Earlier scenarios refused edits on purpose; those are mirrored into the log, so empty it first.
+    const rows = () => evaluate(`document.querySelectorAll('${item}').length`);
+    const closed = (description) => until(() => evaluate(`document.querySelector('${panel}') === null`), description);
+    // Earlier scenarios refused edits on purpose and those are mirrored into the log. The log
+    // cannot be emptied, so opening it once marks them read and gives the count to start from.
     await click(button);
     await until(() => evaluate(`!!document.querySelector('${panel}')`), "the panel opens");
     assert.ok(await evaluate(`${q(panel)}.textContent.includes('Fixture hide refused')`), "a refused edit was recorded alongside its toast");
-    await click(`${panel} button:not([aria-label])`);
-    await until(() => evaluate(`${q(panel)}?.textContent.includes('Nothing to report')`), "Clear empties the log");
+    const before = await rows();
     await key("Escape");
-    await until(() => evaluate(`document.querySelector('${panel}') === null`), "the panel closes");
-    assert.equal(await evaluate(`${q(button)}.dataset.unread`), undefined, "a cleared log has nothing unread");
+    await closed("the panel closes");
+    assert.equal(await evaluate(`${q(button)}.dataset.unread`), undefined, "a log that was just read has nothing unread");
     failNextIndex = true;
     await until(() => evaluate(`${q(button)}.dataset.unread === '1'`), "the rail button shows one unread event", 9000);
     assert.equal(await evaluate(`!!document.querySelector('[data-slot="app-chat-sidebar"] [role="alert"]')`), false, "the sidebar shows no banner");
@@ -1264,21 +1272,31 @@ try {
     assert.ok(await contains("Mock main answer"), "the transcript is untouched");
     assert.ok(await evaluate(`document.querySelectorAll('[data-slot="app-conversation-link"]').length > 0`), "the list keeps its rows");
     await click(button);
-    await until(() => evaluate(`${q(item)}?.textContent.includes('Fixture index refused')`), "the panel lists the failure");
+    await until(() => evaluate(`${q(item)}?.textContent.includes('Fixture index refused')`), "the panel lists the failure first");
     assert.equal(await evaluate(`${q(item)}.dataset.level`), "error");
-    assert.ok(await evaluate(`${q(item)}.textContent.includes('This machine · Chats')`), "the row names the machine and the area");
+    assert.ok(await evaluate(`${q(item)}.textContent.includes('This machine · Browser · Chats')`), "the row names the machine, where it was noticed and the area");
     assert.ok(await evaluate(`!!${q(`${item} [data-slot="event-log-new"]`)}`), "the fresh row is marked new");
-    await until(() => evaluate(`document.querySelectorAll('${item}').length === 2 && ${q(item)}.dataset.level === 'info' && ${q(item)}.textContent.includes('Responding again')`), "the next good poll logs a recovery", 9000);
+    await until(async () => await rows() === before + 2 && await evaluate(`${q(item)}.dataset.level === 'info' && ${q(item)}.textContent.includes('Responding again')`), "the next good poll logs a recovery above it", 9000);
+    assert.equal(await evaluate(`document.querySelectorAll('${item} [data-slot="event-log-new"]').length`), 2, "only the two rows that arrived since the last look are marked new");
+    // Search narrows what is listed, across messages and areas.
+    await type(`${panel} [aria-label="Search stored logs"]`, "index refused");
+    await until(async () => await rows() === 1 && await evaluate(`${q(item)}.textContent.includes('Fixture index refused')`), "search keeps the matching row");
+    await type(`${panel} [aria-label="Search stored logs"]`, "no such entry anywhere");
+    await until(() => evaluate(`${q(panel)}?.textContent.includes('Nothing to report')`), "a search with no match says so");
+    await type(`${panel} [aria-label="Search stored logs"]`, "");
+    await until(async () => await rows() === before + 2, "clearing the search lists everything again");
+    await evaluate(`${q(panel)}.focus()`);
     await key("Escape");
-    await until(() => evaluate(`document.querySelector('${panel}') === null`), "Escape closes the panel");
+    await closed("Escape closes the panel");
     assert.equal(await evaluate(`document.activeElement === ${q(button)}`), true, "focus returns to the rail button");
     assert.equal(await evaluate(`${q(button)}.dataset.unread`), undefined, "closing marks everything read");
     await click(button);
-    await until(() => evaluate(`document.querySelectorAll('${item}').length === 2`), "the panel reopens with both rows");
-    await click(`${panel} button:not([aria-label])`);
-    await until(() => evaluate(`${q(panel)}?.textContent.includes('Nothing to report')`), "Clear empties the log");
+    await until(async () => await rows() === before + 2, "the panel reopens with every row");
+    assert.equal(await evaluate(`document.querySelectorAll('${item} [data-slot="event-log-new"]').length`), 0, "nothing is new on a second look");
     await key("Escape");
-    await until(() => evaluate(`document.querySelector('${panel}') === null`), "the panel closes again");
+    await closed("the panel closes again");
+    const filed = requests.filter((request) => request.method === "POST" && request.path === "/api/app/diagnostics/report");
+    assert.ok(filed.length >= 2, "each reported event is also filed with the machine's stored log");
   });
 
   await check("mobile navigation, keyboard dismissal and both themes keep chat within the viewport", async () => {

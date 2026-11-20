@@ -24,6 +24,8 @@ export type HomeMachine = {
   apps: HomeApp[];
   issue?: string;
   href?: string;
+  /** Restored from this browser's saved catalog, not read from the machine on this visit. */
+  saved?: boolean;
 };
 
 const icons: Record<string, LucideIcon> = {
@@ -113,5 +115,61 @@ async function request(path: string, signal?: AbortSignal): Promise<unknown> {
   return payload;
 }
 
-export async function getLocalApps(signal?: AbortSignal) { return localApps(await request("/dashboards", signal)); }
-export async function getFleetMachines(signal?: AbortSignal) { return fleetMachines(await request("/fleet/dashboards", signal)); }
+/*
+ * The last catalogs this browser read. Home opens with them and refreshes in the background, so
+ * a visit starts with its apps instead of an empty grid that fills in as each read answers.
+ *
+ * What is kept is the server's own rows, cut down to the fields the parsers above read, and a
+ * saved catalog goes through the same parser as a live one. Nothing in storage can therefore
+ * become a link the server could not have sent, and a machine that was locked or unreachable
+ * when it was last read comes back exactly that way, without apps.
+ */
+export const homeCatalogKeys = { local: "adi.home-apps.local.v1", fleet: "adi.home-apps.fleet.v1" } as const;
+type CatalogKind = keyof typeof homeCatalogKeys;
+/** A catalog as it was last read, and when: the query starts from it and still refreshes. */
+export type SavedCatalog<T> = { data: T; savedAt: number };
+
+const localFields = ["id", "name", "description", "icon", "host", "archived_at", "frontend_running", "frontend_port"];
+const remoteFields = ["id", "name", "description", "icon", "url", "allowed"];
+const keep = (value: unknown, fields: string[]) => object(value)
+  ? Object.fromEntries(fields.filter((field) => Object.hasOwn(value, field)).map((field) => [field, value[field]])) : null;
+const keepRows = (rows: unknown, fields: string[]) => Array.isArray(rows) ? rows.map((row) => keep(row, fields)) : null;
+
+function browserStorage(): Storage | undefined {
+  try { return window.localStorage; } catch { return undefined; }
+}
+
+function saveCatalog(kind: CatalogKind, payload: JsonObject, storage: Storage | undefined, now: number) {
+  const catalog = kind === "local" ? { dashboards: keepRows(payload.dashboards, localFields) }
+    : { nodes: (payload.nodes as unknown[]).map((node) => object(node) ? {
+      ...keep(node, ["node", "locked", "error"]),
+      // The parser lists no apps for a locked or failing machine, so none are kept for one.
+      dashboards: node.locked === true || text(node.error) ? [] : keepRows(node.dashboards, remoteFields),
+    } : null) };
+  try { storage?.setItem(homeCatalogKeys[kind], JSON.stringify({ savedAt: now, catalog })); } catch { /* Private mode or a full store: the next visit starts empty. */ }
+}
+
+function savedCatalog<T>(kind: CatalogKind, parse: (payload: unknown) => T, storage: Storage | undefined): SavedCatalog<T> | undefined {
+  try {
+    const saved: unknown = JSON.parse(storage?.getItem(homeCatalogKeys[kind]) ?? "null");
+    if (!object(saved) || typeof saved.savedAt !== "number" || !Number.isFinite(saved.savedAt)) return undefined;
+    return { data: parse(saved.catalog), savedAt: saved.savedAt };
+  } catch { return undefined; }
+}
+
+export function saveLocalApps(payload: unknown, storage = browserStorage(), now = Date.now()) {
+  const apps = localApps(payload);
+  saveCatalog("local", payload as JsonObject, storage, now);
+  return apps;
+}
+export function saveFleetMachines(payload: unknown, storage = browserStorage(), now = Date.now()) {
+  const machines = fleetMachines(payload);
+  saveCatalog("fleet", payload as JsonObject, storage, now);
+  return machines;
+}
+export const savedLocalApps = (storage = browserStorage()) => savedCatalog("local", localApps, storage);
+export const savedFleetMachines = (storage = browserStorage()) =>
+  savedCatalog("fleet", (payload) => fleetMachines(payload).map((machine): HomeMachine => ({ ...machine, saved: true })), storage);
+
+export async function getLocalApps(signal?: AbortSignal) { return saveLocalApps(await request("/dashboards", signal)); }
+export async function getFleetMachines(signal?: AbortSignal) { return saveFleetMachines(await request("/fleet/dashboards", signal)); }

@@ -1,7 +1,7 @@
 /// <reference types="node" />
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fleetMachines, localApps } from "./home-apps";
+import { fleetMachines, homeCatalogKeys, localApps, saveFleetMachines, saveLocalApps, savedFleetMachines, savedLocalApps } from "./home-apps";
 
 test("local catalog excludes archived and invalid records while keeping live app details", () => {
   const apps = localApps({ dashboards: [
@@ -161,4 +161,103 @@ test("machines with rejected stored credentials stay locked and retain the serve
   assert.equal(machines[0]?.issue, "studio refused the password");
   assert.equal(machines[1]?.locked, false);
   assert.equal(machines[1]?.issue, "server did not answer in time");
+});
+
+function memoryStorage(): Storage {
+  const items = new Map<string, string>();
+  return {
+    get length() { return items.size; },
+    clear: () => items.clear(),
+    getItem: (key) => items.get(key) ?? null,
+    key: (index) => [...items.keys()][index] ?? null,
+    removeItem: (key) => { items.delete(key); },
+    setItem: (key, value) => { items.set(key, String(value)); },
+  };
+}
+
+test("a saved catalog restores the apps a live read listed, with the time it was read", () => {
+  const storage = memoryStorage();
+  const local = { dashboards: [
+    { id: "design-system", name: "Design System", description: "Shared components", host: "design-system.adi", icon: "blocks", archived_at: null },
+    { id: "port-only", frontend_port: 4313, frontend_running: true },
+    { id: "archived", host: "archived.adi", archived_at: 1000 },
+    { id: "no-address" },
+  ] };
+  const fleet = { nodes: [
+    { node: "studio", locked: false, error: null, dashboards: [
+      { id: "crm", name: "CRM", description: "Accounts", url: "http://crm.studio.n.adi/", allowed: true, icon: "wallet" },
+      { id: "restricted", url: "http://restricted.studio.n.adi/", allowed: false },
+    ] },
+    { node: "empty", dashboards: [] },
+  ] };
+  assert.equal(savedLocalApps(storage), undefined);
+  assert.equal(savedFleetMachines(storage), undefined);
+  const apps = saveLocalApps(local, storage, 1000);
+  const machines = saveFleetMachines(fleet, storage, 2000);
+  assert.deepEqual(savedLocalApps(storage), { data: apps, savedAt: 1000 });
+  assert.deepEqual(savedFleetMachines(storage), { data: machines.map((machine) => ({ ...machine, saved: true })), savedAt: 2000 });
+  assert.deepEqual(apps.map((app) => app.href), ["/library", "http://127.0.0.1:4313/", null]);
+  assert.notEqual(savedLocalApps(storage)?.data[0]?.icon, null);
+  assert.equal(machines.some((machine) => machine.saved), false, "a live read is never marked as saved");
+});
+
+test("a saved catalog keeps only the fields Home reads", () => {
+  const storage = memoryStorage();
+  saveLocalApps({ dashboards: [{ id: "editor", host: "editor.adi", dir: "/Users/someone/editor", project: "private", routes: ["/x"], backend_port: 4000 }], token: "secret" }, storage);
+  saveFleetMachines({ nodes: [{ node: "studio", password: "secret", dashboards: [{ id: "crm", url: "http://crm.studio.n.adi/", allowed: true, service: "crm", dir: "/srv/crm" }] }] }, storage);
+  const stored = Object.values(homeCatalogKeys).map((key) => storage.getItem(key) ?? "").join("\n");
+  for (const kept of ["editor.adi", "http://crm.studio.n.adi/"]) assert.ok(stored.includes(kept));
+  for (const dropped of ["/Users/someone", "private", "routes", "backend_port", "secret", "/srv/crm", "service"]) assert.ok(!stored.includes(dropped), `${dropped} is not stored`);
+});
+
+test("a machine that was locked or failing when it was read is restored without apps", () => {
+  const storage = memoryStorage();
+  const row = { id: "editor", url: "http://editor.studio.n.adi/", allowed: true };
+  saveFleetMachines({ nodes: [
+    { node: "locked", locked: true, dashboards: [row] },
+    { node: "offline", error: "Machine is unreachable", dashboards: [row] },
+    { node: "malformed", dashboards: { editor: row } },
+    null,
+  ] }, storage);
+  assert.ok(!(storage.getItem(homeCatalogKeys.fleet) ?? "").includes("editor"));
+  const machines = savedFleetMachines(storage)?.data ?? [];
+  assert.deepEqual(machines.map((machine) => [machine.id, machine.locked, machine.apps.length, machine.saved]), [["locked", true, 0, true], ["offline", false, 0, true], ["malformed", false, 0, true]]);
+  assert.match(machines[0]?.issue ?? "", /Unlock/);
+  assert.equal(machines[1]?.issue, "Machine is unreachable");
+  assert.match(machines[2]?.issue ?? "", /app catalog could not be read/);
+});
+
+test("a failed read saves nothing and leaves the last good catalog in place", () => {
+  const storage = memoryStorage();
+  saveLocalApps({ dashboards: [{ id: "editor", host: "editor.adi" }] }, storage, 1000);
+  assert.throws(() => saveLocalApps({ error: "unavailable" }, storage, 2000), /app catalog could not be read/);
+  assert.throws(() => saveFleetMachines({ error: "unavailable" }, storage, 2000), /app catalog could not be read/);
+  assert.equal(savedLocalApps(storage)?.savedAt, 1000);
+  assert.equal(savedFleetMachines(storage), undefined);
+});
+
+test("stored addresses are checked again, so an edited store cannot add a link the server would not send", () => {
+  const storage = memoryStorage();
+  storage.setItem(homeCatalogKeys.local, JSON.stringify({ savedAt: 1000, catalog: { dashboards: [{ id: "bad", host: "javascript:alert(1)" }, { id: "path", host: "editor.adi/path" }] } }));
+  storage.setItem(homeCatalogKeys.fleet, JSON.stringify({ savedAt: 1000, catalog: { nodes: [{ node: "studio", dashboards: [
+    { id: "script", url: "javascript:alert(1)", allowed: true }, { id: "elsewhere", url: "https://editor.attacker.example/", allowed: true },
+  ] }] } }));
+  for (const app of [...savedLocalApps(storage)?.data ?? [], ...savedFleetMachines(storage)?.data[0]?.apps ?? []]) assert.equal(app.href, null);
+  assert.equal(savedLocalApps(storage)?.data.length, 2);
+  assert.equal(savedFleetMachines(storage)?.data[0]?.apps.length, 2);
+});
+
+test("an unreadable, outdated or unavailable store means an empty start, not an error", () => {
+  const storage = memoryStorage();
+  for (const value of ["", "{", "null", "[]", "{}", JSON.stringify({ savedAt: "yesterday", catalog: { dashboards: [] } }), JSON.stringify({ savedAt: 1000 }), JSON.stringify({ savedAt: 1000, catalog: { dashboards: {} } })]) {
+    storage.setItem(homeCatalogKeys.local, value);
+    storage.setItem(homeCatalogKeys.fleet, value);
+    assert.equal(savedLocalApps(storage), undefined, value);
+    assert.equal(savedFleetMachines(storage), undefined, value);
+  }
+  const refusing = { ...memoryStorage(), getItem: () => { throw new Error("denied"); }, setItem: () => { throw new Error("quota"); } } as Storage;
+  assert.equal(savedLocalApps(refusing), undefined);
+  assert.deepEqual(saveLocalApps({ dashboards: [] }, refusing), []);
+  assert.deepEqual(saveLocalApps({ dashboards: [] }, undefined), []);
+  assert.equal(savedFleetMachines(undefined), undefined);
 });

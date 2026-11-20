@@ -8,7 +8,7 @@ import { Button, Card, cn } from "@design-system/ui";
 import { useChatSelection } from "../lib/app-chat-selection";
 import { hasSource } from "../lib/app-chat-sources";
 import { reportEvent } from "../lib/event-log";
-import { getFleetMachines, getLocalApps, type HomeMachine } from "../lib/home-apps";
+import { getFleetMachines, getLocalApps, savedFleetMachines, savedLocalApps, type HomeMachine } from "../lib/home-apps";
 
 function appInitials(name: string) {
   const words = name.trim().split(/\s+/);
@@ -19,8 +19,11 @@ export function Home() {
   const { newConversation, sources } = useChatSelection();
   const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
-  const local = useQuery({ queryKey: ["home-apps", "local"], queryFn: ({ signal }) => getLocalApps(signal), refetchInterval: 30000, retry: false });
-  const fleet = useQuery({ queryKey: ["home-apps", "fleet"], queryFn: ({ signal }) => getFleetMachines(signal), refetchInterval: 30000, retry: false });
+  // Home opens with the catalogs this browser last read and refreshes them in the background:
+  // the first frame already has the apps, and a refresh only changes what really changed.
+  const [saved] = useState(() => ({ local: savedLocalApps(), fleet: savedFleetMachines() }));
+  const local = useQuery({ queryKey: ["home-apps", "local"], queryFn: ({ signal }) => getLocalApps(signal), refetchInterval: 30000, retry: false, initialData: saved.local?.data, initialDataUpdatedAt: saved.local?.savedAt });
+  const fleet = useQuery({ queryKey: ["home-apps", "fleet"], queryFn: ({ signal }) => getFleetMachines(signal), refetchInterval: 30000, retry: false, initialData: saved.fleet?.data, initialDataUpdatedAt: saved.fleet?.savedAt });
   const machines: HomeMachine[] = [{ id: "", label: "This machine", locked: false, apps: local.data ?? [] }, ...(fleet.data ?? [])];
   // The topbar machine selector decides whose apps are listed, exactly as it does for the chats.
   const remote = sources.nodes.length > 0;
@@ -31,7 +34,8 @@ export function Home() {
   const loading = (sources.local && local.isPending) || (remote && fleet.isPending);
   const localError = sources.local && local.isError ? local.error.message : null;
   const fleetError = remote && fleet.isError ? fleet.error.message : null;
-  const issues = shown.filter((item) => item.issue);
+  // A machine's trouble in a saved catalog is old news: it is logged once this visit has read it.
+  const issues = shown.filter((item) => item.issue && !item.saved);
   const issueKey = JSON.stringify(issues.map((item) => [item.id, item.issue]));
 
   // A chosen machine that is locked or unreachable is a background condition: it is recorded in
