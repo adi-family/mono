@@ -1338,7 +1338,7 @@ try {
     await visit();
     await until(async () => await activeIs(main) && await contains("Mock main answer"), "the saved newest conversation opens with its saved page");
     const held = await evaluate("window.chatFrames");
-    assert.ok(held.every((frame) => frame.loading === "" && frame.newChat === false), `no loading state and no new-chat screen on the way: ${JSON.stringify(held)}`);
+    assert.ok(held.every((frame) => frame.loading === "" && frame.newChat === false && frame.title !== "New chat"), `no loading state and no new-chat screen on the way: ${JSON.stringify(held)}`);
     // Meanwhile another conversation became the newest: the machine's answer moves the page there.
     activity.set(idOf(other), 9000);
     release();
@@ -1374,6 +1374,8 @@ try {
     activity.clear();
     await open(main, "Mock main answer");
     await click('[aria-label="Refresh chat"]');
+    // Rows that are still moving back would put the next scenario's click on the wrong one.
+    await until(() => evaluate(`[...document.querySelectorAll('[data-slot="app-conversation-link"]')].findIndex(link => link.dataset.run === ${JSON.stringify(other.runId)}) > 1`), "the list is back in the machine's order");
   });
 
   await check("a failed background poll goes to the event log, not into the page", async () => {

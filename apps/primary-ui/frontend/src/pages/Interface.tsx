@@ -109,7 +109,7 @@ export function Interface() {
     cancelQueued, isCancellingQueued, cancelWaiting, cancellingWaits, isRewinding,
   } = useChatThread();
   const { conversations, isLoading, renameChat, starChat } = useChatList();
-  const { draft, setDraft, appendDraft, images, addImages, removeImage, imageError, sendMessage, editMessage } = useChatComposer();
+  const { draft, setDraft, appendDraft, images, addImages, removeImage, imageError, sendMessage, editMessage, openingRecent } = useChatComposer();
   const composerArea = useRef<HTMLDivElement>(null);
   const [voiceBusy, setVoiceBusy] = useState(false);
   const selected = agents.find((item) => item.name === agent);
@@ -127,7 +127,7 @@ export function Interface() {
           : !active && (!selected || selected.runnable === false) ? "This agent cannot start a new chat."
             : ask ? "Answer the agent’s question to continue." : "";
 
-  useEffect(() => { document.title = `${title} — ADI`; }, [title]);
+  useEffect(() => { if (!openingRecent) document.title = `${title} — ADI`; }, [title, openingRecent]);
 
   function retry() { void refresh().catch(() => {}); }
 
@@ -137,6 +137,9 @@ export function Interface() {
     input?.focus();
     input?.setSelectionRange(input.value.length, input.value.length);
   }
+
+  // The newest conversation is on its way in: an empty pane, not a new-chat screen that would flash.
+  if (openingRecent) return <main data-slot="app-chat" data-opening="true" aria-label="ADI chat" aria-busy="true" className="flex h-full min-h-0 min-w-0 flex-1 flex-col" />;
 
   return (
     <main data-slot="app-chat" aria-label="ADI chat" className="flex h-full min-h-0 min-w-0 flex-1 flex-col">

@@ -145,10 +145,17 @@ function useComposerState() {
   // page opens that at once and, when the machine answers with a different newest, follows it,
   // provided the reader is still where the page put them and has not started writing.
   const openedFromSaved = useRef<string | null>(null);
+  const settled = enabled && !isComposing && !sending.current.has(selectionKey);
+  const desktop = !window.matchMedia(mobileViewport).matches;
+  // While this holds the page shows nothing of its own: a route change waits for whatever the
+  // conversation still has to load, and a new-chat screen painted meanwhile would only flash.
+  const openingRecent = settled && desktop && recentHref !== null && !routeNamesConversation;
+  // A passive effect on purpose: on a first render the router starts listening for navigations in
+  // a layout effect of its own, which runs after this component's, and would miss one made earlier.
   useEffect(() => {
-    if (!enabled || isComposing || sending.current.has(selectionKey)) { openedFromSaved.current = null; return; }
-    if (!recentHref || window.matchMedia(mobileViewport).matches) return;
-    if (!routeNamesConversation) {
+    if (!settled) { openedFromSaved.current = null; return; }
+    if (!recentHref || !desktop) return;
+    if (openingRecent) {
       openedFromSaved.current = recentSaved ? recentHref : null;
       navigate(recentHref, { replace: true });
     } else if (openedFromSaved.current && !recentSaved) {
@@ -157,7 +164,7 @@ function useComposerState() {
       // Asked of the address bar, not of this render: a click made a moment ago is already there.
       if (opened !== recentHref && addressedHref() === opened) navigate(recentHref, { replace: true });
     }
-  }, [enabled, routeNamesConversation, recentHref, recentSaved, isComposing, selectionKey, navigate]);
+  }, [settled, desktop, openingRecent, recentHref, recentSaved, selectionKey, navigate]);
 
   return {
     draft: drafts[selectionKey] ?? "",
@@ -169,6 +176,8 @@ function useComposerState() {
     removeImage: (id: string) => updateImages(selectionKey, (images) => images.filter((image) => image.id !== id)),
     sendMessage,
     editMessage,
+    /** The newest conversation is about to replace an unaddressed chat page. */
+    openingRecent,
   };
 }
 
