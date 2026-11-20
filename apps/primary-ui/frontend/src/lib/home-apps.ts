@@ -5,6 +5,7 @@ import {
 } from "lucide-react";
 
 import { appApiBase } from "./app-api";
+import { browserStorage, readSaved, writeSaved } from "./saved-results";
 
 export type HomeApp = {
   id: string;
@@ -116,8 +117,9 @@ async function request(path: string, signal?: AbortSignal): Promise<unknown> {
 }
 
 /*
- * The last catalogs this browser read. Home opens with them and refreshes in the background, so
- * a visit starts with its apps instead of an empty grid that fills in as each read answers.
+ * The last catalogs this browser read (lib/saved-results). Home opens with them and refreshes in
+ * the background, so a visit starts with its apps instead of an empty grid that fills in as each
+ * read answers.
  *
  * What is kept is the server's own rows, cut down to the fields the parsers above read, and a
  * saved catalog goes through the same parser as a live one. Nothing in storage can therefore
@@ -126,18 +128,12 @@ async function request(path: string, signal?: AbortSignal): Promise<unknown> {
  */
 export const homeCatalogKeys = { local: "adi.home-apps.local.v1", fleet: "adi.home-apps.fleet.v1" } as const;
 type CatalogKind = keyof typeof homeCatalogKeys;
-/** A catalog as it was last read, and when: the query starts from it and still refreshes. */
-export type SavedCatalog<T> = { data: T; savedAt: number };
 
 const localFields = ["id", "name", "description", "icon", "host", "archived_at", "frontend_running", "frontend_port"];
 const remoteFields = ["id", "name", "description", "icon", "url", "allowed"];
 const keep = (value: unknown, fields: string[]) => object(value)
   ? Object.fromEntries(fields.filter((field) => Object.hasOwn(value, field)).map((field) => [field, value[field]])) : null;
 const keepRows = (rows: unknown, fields: string[]) => Array.isArray(rows) ? rows.map((row) => keep(row, fields)) : null;
-
-function browserStorage(): Storage | undefined {
-  try { return window.localStorage; } catch { return undefined; }
-}
 
 function saveCatalog(kind: CatalogKind, payload: JsonObject, storage: Storage | undefined, now: number) {
   const catalog = kind === "local" ? { dashboards: keepRows(payload.dashboards, localFields) }
@@ -146,16 +142,10 @@ function saveCatalog(kind: CatalogKind, payload: JsonObject, storage: Storage | 
       // The parser lists no apps for a locked or failing machine, so none are kept for one.
       dashboards: node.locked === true || text(node.error) ? [] : keepRows(node.dashboards, remoteFields),
     } : null) };
-  try { storage?.setItem(homeCatalogKeys[kind], JSON.stringify({ savedAt: now, catalog })); } catch { /* Private mode or a full store: the next visit starts empty. */ }
+  writeSaved(homeCatalogKeys[kind], catalog, storage, now);
 }
 
-function savedCatalog<T>(kind: CatalogKind, parse: (payload: unknown) => T, storage: Storage | undefined): SavedCatalog<T> | undefined {
-  try {
-    const saved: unknown = JSON.parse(storage?.getItem(homeCatalogKeys[kind]) ?? "null");
-    if (!object(saved) || typeof saved.savedAt !== "number" || !Number.isFinite(saved.savedAt)) return undefined;
-    return { data: parse(saved.catalog), savedAt: saved.savedAt };
-  } catch { return undefined; }
-}
+const savedCatalog = <T>(kind: CatalogKind, parse: (payload: unknown) => T, storage: Storage | undefined) => readSaved(homeCatalogKeys[kind], parse, storage);
 
 export function saveLocalApps(payload: unknown, storage = browserStorage(), now = Date.now()) {
   const apps = localApps(payload);

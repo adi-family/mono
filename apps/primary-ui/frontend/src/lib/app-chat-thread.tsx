@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useRef, useState, type ReactNode 
 import { partialMatchKey, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
-  answerQuestion, cancelAwait, cancelQueuedMessage, getConversation, rewindConversation, snapshotPageSize, stopConversation,
+  answerQuestion, cancelAwait, cancelQueuedMessage, getConversation, rewindConversation, savedConversation, snapshotPageSize, stopConversation,
   type AgentPeek, type AgentTurn,
 } from "./app-chat";
 import { errorText, useScopedErrors } from "./app-chat-errors";
@@ -30,6 +30,9 @@ function useThreadState() {
     queryFn: ({ signal }) => getConversation(ref, signal, { limit }),
     enabled: enabled && !invalidSource && active !== null && hasSource(sources, activeSource),
     retry: false,
+    // A conversation opens with the page this browser last saw of it, then catches up.
+    initialData: () => active ? savedConversation(ref, { limit })?.data : undefined,
+    initialDataUpdatedAt: () => active ? savedConversation(ref, { limit })?.savedAt : undefined,
     placeholderData: (previous, previousQuery) => previousQuery && partialMatchKey(previousQuery.queryKey, threadKey) ? previous : undefined,
     refetchInterval: (query) => query.state.data?.running || query.state.data?.turns.some((turn) => turn.pending || turn.queued) ? busyThreadPollMs : idleThreadPollMs,
   });

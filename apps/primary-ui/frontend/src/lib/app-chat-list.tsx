@@ -2,7 +2,8 @@ import { createContext, useContext, useEffect, useRef, useState, type ReactNode 
 import { useQueries, useQueryClient } from "@tanstack/react-query";
 
 import {
-  getConversationIndex, hideConversation, renameConversation, starConversation, type Conversation, type ConversationIndex, type ConversationRef,
+  getConversationIndex, hideConversation, renameConversation, savedConversationIndex, starConversation,
+  type Conversation, type ConversationIndex, type ConversationIndexOptions, type ConversationRef,
 } from "./app-chat";
 import { errorText } from "./app-chat-errors";
 import { buildSourceRows, clearOverlayField, indexRows, patchIndex, previewText, rememberRows, type ChatOverlay, type ChatOverlays } from "./app-chat-model";
@@ -35,13 +36,17 @@ function useListState() {
     queries: sourceList.map((source) => {
       const key = sourceKey(source);
       const limit = indexLimits[key] ?? indexPageSize;
+      const options: ConversationIndexOptions = {
+        filter, limit,
+        ...(group === "project" ? { group: "project" as const, groupLimit: projectPageSize, groupMore: projectMore[key] } : {}),
+      };
       return {
         queryKey: chatQueryKeys.index(source, filter, group, limit, projectMore[key] ?? {}),
-        queryFn: ({ signal }: { signal: AbortSignal }) => getConversationIndex(signal, source, {
-          filter, limit,
-          ...(group === "project" ? { group: "project" as const, groupLimit: projectPageSize, groupMore: projectMore[key] } : {}),
-        }),
+        queryFn: ({ signal }: { signal: AbortSignal }) => getConversationIndex(signal, source, options),
         enabled, refetchInterval: indexPollMs, retry: false,
+        // The list opens with the rows this browser last saw for this machine and view.
+        initialData: () => savedConversationIndex(source, options)?.data,
+        initialDataUpdatedAt: () => savedConversationIndex(source, options)?.savedAt,
       };
     }),
     combine: queryOutcomes<ConversationIndex>,
@@ -58,6 +63,8 @@ function useListState() {
     return {
       ...buildSourceRows({ source, index: result.data, agents: agentsBySource[position] ?? [], overlays, filter, group, active, snapshot, remembered }),
       isLoading: result.isPending,
+      /** Still the rows saved on an earlier visit; this machine has not answered on this one. */
+      saved: result.data?.saved === true,
       error: error ? errorText(error) : null,
     };
   });

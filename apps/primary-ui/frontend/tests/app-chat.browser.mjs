@@ -95,12 +95,25 @@ const hiddenRuns = new Set();
 let failNextHide = false;
 let holdIndexRefresh = false;
 let failNextIndex = false;
+let failEveryIndex = false;
 const heldIndexes = [];
 async function releaseIndexRefresh() {
   holdIndexRefresh = false;
   await Promise.all(heldIndexes.splice(0).map((release) => release()));
 }
 let failTranscription = false;
+// The reads a chat page opens with. Holding them shows what the page paints before any of them
+// has answered, which on a return visit is what this browser saved the last time.
+const openingRead = (method, path) => method === "GET" ? ["/api/app/fleet/nodes", "/api/app/agents", "/api/app/agents/runs/all", "/api/app/voice"].includes(path)
+  : method === "POST" && path === "/api/app/agents/run/peek";
+let heldReads = null;
+function holdReads() {
+  let release;
+  heldReads = new Promise((resolve) => { release = resolve; });
+  return () => { heldReads = null; release(); };
+}
+/** A conversation's last activity, when a scenario needs a different one to be the newest. */
+const activity = new Map();
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const idOf = (ref) => `${ref.agent}:${ref.runId}`;
 const copy = (value) => structuredClone(value);
@@ -162,7 +175,7 @@ function allRuns() {
     name, answerable: true, interactive: false, caps: capabilities,
     runs: [...snapshots.values()].filter((snapshot) => snapshot.name === name && !hiddenRuns.has(`${name}:${snapshot.run_id}`)).map((snapshot, index) => ({
       run_id: snapshot.run_id, caps: capabilities, started_at: 5000 - index * 100,
-      last_activity: 5000 - index * 100, message: titles.get(`${name}:${snapshot.run_id}`),
+      last_activity: activity.get(`${name}:${snapshot.run_id}`) ?? 5000 - index * 100, message: titles.get(`${name}:${snapshot.run_id}`),
       title: titles.get(`${name}:${snapshot.run_id}`), running: snapshot.running, hidden: false, starred: stars.has(`${name}:${snapshot.run_id}`), launched_by: "human",
       ...(snapshot.pending_question ? { pending_question: snapshot.pending_question } : {}),
     })),
@@ -202,6 +215,8 @@ async function intercept({ requestId, request }) {
     const path = fixturePath(url.pathname);
     const body = request.postData && path !== "/api/app/voice/transcribe" ? JSON.parse(request.postData) : {};
     requests.push({ method: request.method, path, query: url.search, body });
+    // A held read is answered with whatever the fixtures say once it is released.
+    if (heldReads && openingRead(request.method, path)) await heldReads;
     if (!path.startsWith("/api/app/")) {
       mockErrors.push(`Unexpected direct API request: ${request.method} ${path}`);
       await fulfill(requestId, { ok: false, error: "Direct API requests are disabled in this browser fixture." });
@@ -236,7 +251,7 @@ async function intercept({ requestId, request }) {
     }
     if (request.method === "GET" && path === "/api/app/agents/runs/all") {
       assert.equal(url.searchParams.get("hidden"), "false");
-      if (failNextIndex) { failNextIndex = false; await fulfill(requestId, { ok: false, error: "Fixture index refused" }); return; }
+      if (failNextIndex || failEveryIndex) { failNextIndex = false; await fulfill(requestId, { ok: false, error: "Fixture index refused" }); return; }
       if (holdIndexRefresh) { heldIndexes.push(() => fulfill(requestId, allRuns())); return; }
       await fulfill(requestId, allRuns());
       return;
@@ -475,6 +490,27 @@ try {
       start(){this.state='recording';}
       stop(){this.state='inactive';this.ondataavailable?.({data:new Blob(['fixture-audio'],{type:this.mimeType})});this.onstop?.();}
     };
+    // Every document notes each distinct state the chat page was painted in, from the first frame on.
+    window.chatFrames = [];
+    (function sample() {
+      const side = document.querySelector('[data-slot="app-chat-sidebar"]');
+      const main = document.querySelector('[data-slot="app-chat"]');
+      if (side || main) {
+        const thread = main?.querySelector('[data-slot="chat-thread"]')?.textContent ?? '';
+        const frame = {
+          rows: side ? side.querySelectorAll('[data-slot="app-conversation-link"]').length : null,
+          loading: [...document.querySelectorAll('[data-slot="app-chat-sidebar"] [role="status"], [data-slot="app-chat"] [role="status"]')].filter((el) => el.checkVisibility()).map((el) => el.textContent).filter((text) => text.startsWith('Loading')).join('|'),
+          run: new URLSearchParams(location.search).get('run'),
+          title: main ? main.querySelector('header h1')?.textContent ?? '' : null,
+          answers: ['Mock main answer', 'Mock other answer', 'Mock caught-up answer'].filter((text) => thread.includes(text)).join('|'),
+          newChat: !!main?.querySelector('[data-slot="app-chat-agent"]'),
+          composerOff: main ? main.querySelector('textarea')?.disabled ?? null : null,
+        };
+        const last = window.chatFrames[window.chatFrames.length - 1];
+        if (!last || Object.keys(frame).some((key) => last[key] !== frame[key])) window.chatFrames.push(frame);
+      }
+      requestAnimationFrame(sample);
+    })();
   ` });
   await send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 1000, deviceScaleFactor: 1, mobile: false });
   await send("Page.navigate", { url: conversationUrl(main) });
@@ -1249,6 +1285,97 @@ try {
     await type(composer,"");
   });
 
+  await check("a return visit opens the chat page with what it last showed and catches up in the background", async () => {
+    await open(main, "Mock main answer");
+    await click('[aria-label="Refresh chat"]');
+    const rows = await evaluate(`document.querySelectorAll('[data-slot="app-conversation-link"]').length`);
+    const title = titles.get(idOf(main));
+    await until(() => evaluate(`['fleet','agents','index','thread','voice'].every(kind => Object.keys(localStorage).some(key => key.startsWith('adi.chat.' + kind + '.v1')))`), "every read the page opens with has a saved copy");
+    assert.equal(await evaluate(`Object.keys(localStorage).filter(key => key.startsWith('adi.chat.')).some(key => /tool_steps|history/.test(localStorage.getItem(key)) && !key.startsWith('adi.chat.thread.') && !key.startsWith('adi.chat.agents.'))`), false, "the saved list keeps only the capabilities it reads");
+    const release = holdReads();
+    const before = requests.length;
+    await evaluate("window.__beforeReturnVisit = true");
+    await send("Page.reload");
+    await until(async () => await evaluate("!window.__beforeReturnVisit") && await contains("Mock main answer"), "the conversation is on screen while its reads are still out");
+    await until(() => requests.slice(before).filter((request) => openingRead(request.method, request.path)).length >= 4, "the page is reading everything again");
+    await pause(200);
+    const held = await evaluate("window.chatFrames");
+    assert.ok(held.length > 0);
+    for (const frame of held) {
+      assert.equal(frame.loading, "", `nothing says Loading: ${JSON.stringify(held)}`);
+      if (frame.rows !== null) assert.equal(frame.rows, rows, `the list has its rows from the first frame: ${JSON.stringify(held)}`);
+      if (frame.title !== null) assert.deepEqual([frame.title, frame.answers, frame.newChat, frame.composerOff], [title, "Mock main answer", false, false], `the conversation is whole from the first frame: ${JSON.stringify(held)}`);
+    }
+    assert.equal(await evaluate(`${q(listLink(main))}.getAttribute('aria-current')`), "page");
+    // The machine's answer wins as soon as it arrives: a new reply and a new title.
+    const snapshot = snapshots.get(idOf(main));
+    snapshot.turns.push(assistant("Mock caught-up answer", snapshot.turns.length));
+    snapshot.total_turns = snapshot.turns.length;
+    titles.set(idOf(main), `${title}, continued`);
+    release();
+    await until(async () => await contains("Mock caught-up answer") && await evaluate(`${q(`${chat} header h1`)}.textContent === ${JSON.stringify(`${title}, continued`)}`), "the page catches up");
+    const frames = await evaluate("window.chatFrames");
+    assert.ok(frames.every((frame) => frame.loading === "" && (frame.rows === null || frame.rows === rows) && frame.newChat === false && frame.composerOff !== true), `catching up never empties or disables anything: ${JSON.stringify(frames)}`);
+    snapshot.turns.pop();
+    snapshot.total_turns = snapshot.turns.length;
+    titles.set(idOf(main), title);
+    await click('[aria-label="Refresh chat"]');
+    await until(async () => !(await contains("Mock caught-up answer")) && await evaluate(`${q(`${chat} header h1`)}.textContent === ${JSON.stringify(title)}`), "the fixture is back as it was");
+  });
+
+  await check("an unaddressed chat page opens the saved newest conversation at once and follows the machine's newest", async () => {
+    const visit = async () => {
+      await evaluate("window.__beforeBareVisit = true");
+      await send("Page.navigate", { url: `${origin}/interface` });
+      await until(() => evaluate("!window.__beforeBareVisit && !!document.querySelector('[data-slot=\"app-chat\"]')"), "the chat page is mounted");
+    };
+    const settled = async (since) => {
+      await until(() => requests.slice(since).some((request) => request.path === "/api/app/agents/runs/all"), "the list was read again");
+      await pause(400);
+    };
+    // The saved list says the main conversation is the newest.
+    let release = holdReads();
+    await visit();
+    await until(async () => await activeIs(main) && await contains("Mock main answer"), "the saved newest conversation opens with its saved page");
+    const held = await evaluate("window.chatFrames");
+    assert.ok(held.every((frame) => frame.loading === "" && frame.newChat === false), `no loading state and no new-chat screen on the way: ${JSON.stringify(held)}`);
+    // Meanwhile another conversation became the newest: the machine's answer moves the page there.
+    activity.set(idOf(other), 9000);
+    release();
+    await until(async () => await activeIs(other) && await contains("Mock other answer"), "the page follows the machine's newest");
+    assert.equal(await evaluate("history.length") > 0, true);
+
+    // Saved newest is now the other conversation, the machine's is the main one again. A reader
+    // who has started writing is not moved.
+    activity.clear();
+    release = holdReads();
+    let since = requests.length;
+    await visit();
+    await until(async () => await activeIs(other) && await contains("Mock other answer"), "the saved newest opens");
+    await type(composer, "A draft begun before the list arrived");
+    release();
+    await settled(since);
+    assert.equal(await activeIs(other), true, "a reader who is writing stays put");
+    assert.equal(await draft(), "A draft begun before the list arrived");
+    await type(composer, "");
+
+    // Nor is a reader who has already gone to a conversation of their own choosing.
+    await until(() => evaluate(`document.querySelector('[data-slot="app-conversation-link"]')?.dataset.run === ${JSON.stringify(main.runId)}`), "the list is the machine's again, the main conversation first");
+    activity.set(idOf(other), 9000);
+    release = holdReads();
+    since = requests.length;
+    await visit();
+    await until(async () => await activeIs(main) && await contains("Mock main answer"), "the saved newest opens");
+    await click(listLink(question));
+    await until(() => activeIs(question), "the reader opens another conversation");
+    release();
+    await settled(since);
+    assert.equal(await activeIs(question), true, "a reader who chose a conversation stays on it");
+    activity.clear();
+    await open(main, "Mock main answer");
+    await click('[aria-label="Refresh chat"]');
+  });
+
   await check("a failed background poll goes to the event log, not into the page", async () => {
     await open(main, "Mock main answer");
     const button = '[data-slot="event-log-button"]';
@@ -1297,6 +1424,26 @@ try {
     await closed("the panel closes again");
     const filed = requests.filter((request) => request.method === "POST" && request.path === "/api/app/diagnostics/report");
     assert.ok(filed.length >= 2, "each reported event is also filed with the machine's stored log");
+  });
+
+  await check("a return visit whose list cannot be read keeps the saved list and conversation on screen", async () => {
+    // Placed after the scenario that counts the event log's rows: this failure and recovery repeat its events.
+    await open(main, "Mock main answer");
+    const rows = await evaluate(`document.querySelectorAll('[data-slot="app-conversation-link"]').length`);
+    const logged = (message, since) => evaluate(`JSON.parse(sessionStorage.getItem('adi.event-log.v1') ?? '{"events":[]}').events.some(event => event.message === ${JSON.stringify(message)} && event.lastSeen >= ${since})`);
+    const since = await evaluate("Date.now()");
+    await evaluate("window.__beforeFailedVisit = true");
+    await send("Page.reload");
+    // From here on only the new document can meet the failure; which of its reads does is not fixed.
+    failEveryIndex = true;
+    await until(async () => await evaluate("!window.__beforeFailedVisit") && await contains("Mock main answer"), "the saved conversation is on screen");
+    await until(() => logged("Fixture index refused", since), "the failed list read is in the event log", 9000);
+    assert.equal(await evaluate(`document.querySelectorAll('[data-slot="app-conversation-link"]').length`), rows, "the saved rows stay listed");
+    assert.equal(await evaluate(`!!document.querySelector('[data-slot="app-chat-sidebar"] [role="alert"]')`), false, "the list shows no banner");
+    assert.equal(await evaluate(`${q('nav[aria-label="Conversations"]')}.textContent.includes('unavailable')`), false);
+    assert.ok(await contains("Mock main answer"));
+    failEveryIndex = false;
+    await until(() => logged("Responding again.", since), "the next poll recovers", 9000);
   });
 
   await check("mobile navigation, keyboard dismissal and both themes keep chat within the viewport", async () => {

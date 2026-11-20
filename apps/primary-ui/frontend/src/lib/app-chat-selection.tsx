@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef,
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
-import { getAgents, getFleetNodes, type Agent, type ConversationRef } from "./app-chat";
+import { getAgents, getFleetNodes, savedAgents, savedFleetNodes, type Agent, type ConversationRef } from "./app-chat";
 import { errorText } from "./app-chat-errors";
 import { chooseAgentName, newChatHref, resolveActiveSource, selectionKeyOf } from "./app-chat-model";
 import { agentPollMs, chatQueryKeys, chatRoute, fleetPollMs, queryOutcomes } from "./app-chat-queries";
@@ -36,7 +36,12 @@ function useSelectionState() {
 
   // The machine selector sits in every page's topbar, so the fleet is read everywhere; the
   // session reads stay confined to the chat page.
-  const fleetQuery = useQuery({ queryKey: chatQueryKeys.fleet, queryFn: ({ signal }) => getFleetNodes(signal), retry: false, refetchInterval: fleetPollMs });
+  // Every read here starts from what this browser last saw and refreshes in the background, so
+  // the page opens whole instead of filling in as each machine answers.
+  const fleetQuery = useQuery({
+    queryKey: chatQueryKeys.fleet, queryFn: ({ signal }) => getFleetNodes(signal), retry: false, refetchInterval: fleetPollMs,
+    initialData: () => savedFleetNodes()?.data, initialDataUpdatedAt: () => savedFleetNodes()?.savedAt,
+  });
   const fleetError = fleetQuery.error ? errorText(fleetQuery.error) : null;
   // The fleet is polled on every page; a failure goes to the event log once per outage.
   useEffect(() => {
@@ -47,6 +52,7 @@ function useSelectionState() {
       queryKey: chatQueryKeys.agents(source),
       queryFn: ({ signal }: { signal: AbortSignal }) => getAgents(signal, source),
       enabled, refetchInterval: agentPollMs, retry: false,
+      initialData: () => savedAgents(source)?.data, initialDataUpdatedAt: () => savedAgents(source)?.savedAt,
     })),
     combine: queryOutcomes<Agent[]>,
   });

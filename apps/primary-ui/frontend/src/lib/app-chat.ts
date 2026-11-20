@@ -1,4 +1,5 @@
 import { appApiBase } from "./app-api";
+import { readSaved, readSavedIn, writeSaved, writeSavedIn, type Saved, type SavedFamily } from "./saved-results";
 
 export interface ConversationRef {
   agent: string;
@@ -75,6 +76,8 @@ export interface ConversationIndex {
   total: number;
   askingUser: string | null;
   groups: ConversationGroup[];
+  /** Restored from this browser's saved copy, not read from the machine on this visit. */
+  saved?: true;
 }
 
 export type AgentToolStatus = "running" | "ok" | "error" | "unanswered";
@@ -158,6 +161,8 @@ export interface AgentPeek {
   pending_question?: AgentAsk;
   awaits: AgentAwait[];
   stats?: AgentChatStats;
+  /** Restored from this browser's saved copy, not read from the machine on this visit. */
+  saved?: true;
 }
 
 export class AppChatError extends Error {
@@ -364,16 +369,47 @@ function peekOf(data: JsonObject): AgentPeek {
   };
 }
 
-export async function getFleetNodes(signal?: AbortSignal): Promise<FleetNode[]> {
-  const data = await request("/fleet/nodes", signal);
+/*
+ * The reads the chat page opens with are saved as they arrive (lib/saved-results): the paired
+ * machines, each machine's agents, each list of conversations in its first-page form, and the
+ * latest page of the conversations opened most recently. The page starts from them and refreshes
+ * in the background, so it does not fill in piece by piece as each machine answers.
+ *
+ * Each copy holds only what the parsers below read and goes back through the same parser, so a
+ * stored value means exactly what the same answer from the machine would mean.
+ */
+const savedFleetKey = "adi.chat.fleet.v1";
+const savedVoiceKey = "adi.chat.voice.v1";
+const savedAgentLists: SavedFamily = { prefix: "adi.chat.agents.v1:", keep: 12 };
+const savedIndexes: SavedFamily = { prefix: "adi.chat.index.v1:", keep: 24 };
+const savedThreads: SavedFamily = { prefix: "adi.chat.thread.v1:", keep: 8 };
+/** The list's first message is only ever shown as a preview; a stored copy needs no more of it. */
+const savedMessageLength = 600;
+
+const kept = (value: unknown, fields: readonly string[]): JsonObject => isObject(value)
+  ? Object.fromEntries(fields.filter((field) => Object.hasOwn(value, field)).map((field) => [field, value[field]])) : {};
+const fromSaved = <T>(parse: (data: JsonObject) => T) => (payload: unknown) => parse(object(payload));
+
+function fleetNodesOf(data: JsonObject): FleetNode[] {
   return array(data.nodes).map((value) => {
     const node = object(value);
     return { node: requiredText(node.node), locked: node.locked === true };
   });
 }
 
-export async function getAgents(signal?: AbortSignal, source?: string): Promise<Agent[]> {
-  const data = await request("/agents", signal, undefined, source);
+export async function getFleetNodes(signal?: AbortSignal): Promise<FleetNode[]> {
+  const nodes = fleetNodesOf(await request("/fleet/nodes", signal));
+  writeSaved(savedFleetKey, { nodes });
+  return nodes;
+}
+
+export function savedFleetNodes(storage?: Storage): Saved<FleetNode[]> | undefined {
+  return readSaved(savedFleetKey, fromSaved(fleetNodesOf), storage);
+}
+
+const agentFields = ["name", "running", "starred", "project", "created_by", "runnable", "backend", "caps"];
+
+function agentsOf(data: JsonObject, source?: string): Agent[] {
   return array(data.agents).map((value) => {
     const agent = object(value);
     return {
@@ -388,21 +424,19 @@ export async function getAgents(signal?: AbortSignal, source?: string): Promise<
   });
 }
 
-export async function getConversationIndex(
-  signal?: AbortSignal, source?: string, options: ConversationIndexOptions = {},
-): Promise<ConversationIndex> {
-  const params = new URLSearchParams({ hidden: String(options.hidden ?? false) });
-  // Hidden is deliberately unpaged in the main app, so every put-away conversation is reachable.
-  if (!options.hidden || options.limit !== undefined) params.set("limit", String(options.limit ?? 100));
-  if (options.filter && options.filter !== "all") params.set("filter", options.filter);
-  if (options.group === "project") {
-    params.set("group", "project");
-    params.set("group_limit", String(options.groupLimit ?? 3));
-    const more = Object.entries(options.groupMore ?? {}).filter(([, count]) => Number.isSafeInteger(count) && count > 0)
-      .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0).map(([project, count]) => `${project}:${count}`).join(",");
-    if (more) params.set("group_more", more);
-  }
-  const data = await request(`/agents/runs/all?${params}`, signal, undefined, source);
+export async function getAgents(signal?: AbortSignal, source?: string): Promise<Agent[]> {
+  const data = await request("/agents", signal, undefined, source);
+  const agents = agentsOf(data, source);
+  // An agent's full definition is hundreds of times the few fields the chat reads.
+  writeSavedIn(savedAgentLists, source ?? "", { agents: array(data.agents).map((agent) => kept(agent, agentFields)) });
+  return agents;
+}
+
+export function savedAgents(source?: string, storage?: Storage): Saved<Agent[]> | undefined {
+  return readSavedIn(savedAgentLists, source ?? "", fromSaved((data) => agentsOf(data, source)), storage);
+}
+
+function conversationIndexOf(data: JsonObject, source?: string): ConversationIndex {
   const askingUser = typeof data.asking_user === "string" ? data.asking_user : null;
   const groupData = (Array.isArray(data.groups) ? data.groups : []).map((value) => {
     const group = object(value);
@@ -446,6 +480,68 @@ export async function getConversationIndex(
   };
 }
 
+const indexCaps = ["answerable", "interactive"];
+const indexRunFields = ["run_id", "title", "running", "last_activity", "started_at", "launched_by", "hidden", "starred", "state"];
+
+/** The list's answer cut down to what `conversationIndexOf` reads; the parser gives it the same meaning. */
+function keptIndex(data: JsonObject): JsonObject {
+  return {
+    ...kept(data, ["total", "asking_user"]),
+    ...(Array.isArray(data.groups) ? { groups: data.groups.map((group) => kept(group, ["project", "label", "agents", "total"])) } : {}),
+    agents: array(data.agents).map((value) => {
+      const agent = object(value);
+      return {
+        ...kept(agent, ["name", "answerable", "interactive", "starred"]),
+        ...(isObject(agent.caps) ? { caps: kept(agent.caps, indexCaps) } : {}),
+        runs: array(agent.runs).map((value) => {
+          const run = object(value);
+          return {
+            ...kept(run, indexRunFields),
+            message: text(run.message).slice(0, savedMessageLength),
+            ...(isObject(run.caps) ? { caps: kept(run.caps, indexCaps) } : {}),
+            // Only whether there is a question, or anything awaited, is read from these two.
+            ...(isObject(run.pending_question) ? { pending_question: {} } : {}),
+            ...(Array.isArray(run.awaits) && run.awaits.length > 0 ? { awaits: [0] } : {}),
+          };
+        }),
+      };
+    }),
+  };
+}
+
+const savedIndexId = (source: string | undefined, options: ConversationIndexOptions) => JSON.stringify([source ?? "", options.filter ?? "all", options.group ?? "flat"]);
+/** The view a page opens with: the unhidden first page with no project expanded further. */
+function isFirstPage(options: ConversationIndexOptions): boolean {
+  return !options.hidden && (options.limit ?? 100) === 100 && (options.groupLimit ?? 3) === 3
+    && !Object.values(options.groupMore ?? {}).some((count) => count > 0);
+}
+
+export async function getConversationIndex(
+  signal?: AbortSignal, source?: string, options: ConversationIndexOptions = {},
+): Promise<ConversationIndex> {
+  const params = new URLSearchParams({ hidden: String(options.hidden ?? false) });
+  // Hidden is deliberately unpaged in the main app, so every put-away conversation is reachable.
+  if (!options.hidden || options.limit !== undefined) params.set("limit", String(options.limit ?? 100));
+  if (options.filter && options.filter !== "all") params.set("filter", options.filter);
+  if (options.group === "project") {
+    params.set("group", "project");
+    params.set("group_limit", String(options.groupLimit ?? 3));
+    const more = Object.entries(options.groupMore ?? {}).filter(([, count]) => Number.isSafeInteger(count) && count > 0)
+      .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0).map(([project, count]) => `${project}:${count}`).join(",");
+    if (more) params.set("group_more", more);
+  }
+  const data = await request(`/agents/runs/all?${params}`, signal, undefined, source);
+  const index = conversationIndexOf(data, source);
+  if (isFirstPage(options)) writeSavedIn(savedIndexes, savedIndexId(source, options), keptIndex(data));
+  return index;
+}
+
+/** One machine's list as this browser last read it, marked `saved`. Only the first page is ever kept. */
+export function savedConversationIndex(source: string | undefined, options: ConversationIndexOptions, storage?: Storage): Saved<ConversationIndex> | undefined {
+  if (!isFirstPage(options)) return undefined;
+  return readSavedIn(savedIndexes, savedIndexId(source, options), fromSaved((data): ConversationIndex => ({ ...conversationIndexOf(data, source), saved: true })), storage);
+}
+
 export async function getConversations(
   signal?: AbortSignal, source?: string, options?: ConversationIndexOptions,
 ): Promise<Conversation[]> {
@@ -455,15 +551,28 @@ export async function getConversations(
 /** Turns in the first transcript page. A reply's response always carries exactly this page. */
 export const snapshotPageSize = 20;
 
+type ThreadView = { limit?: number; before?: number };
+const savedThreadId = (ref: ConversationRef) => JSON.stringify([ref.source ?? "", ref.agent, ref.runId]);
+const isLatestPage = (view: ThreadView) => view.before === undefined && (view.limit ?? snapshotPageSize) === snapshotPageSize;
+
 export async function getConversation(
   ref: ConversationRef,
   signal?: AbortSignal,
-  view: { limit?: number; before?: number } = {},
+  view: ThreadView = {},
 ): Promise<AgentPeek> {
-  return peekOf(await request("/agents/run/peek", signal, {
+  const peek = peekOf(await request("/agents/run/peek", signal, {
     ...runBody(ref), limit: view.limit ?? snapshotPageSize, fold: true,
     ...(view.before === undefined ? {} : { before: view.before }),
   }, ref.source));
+  // The parsed page is the server's own field names, so it is stored as it is and parsed again.
+  if (isLatestPage(view)) writeSavedIn(savedThreads, savedThreadId(ref), peek);
+  return peek;
+}
+
+/** A conversation as this browser last read it, marked `saved`. Only its latest page is ever kept. */
+export function savedConversation(ref: ConversationRef, view: ThreadView = {}, storage?: Storage): Saved<AgentPeek> | undefined {
+  if (!isLatestPage(view)) return undefined;
+  return readSavedIn(savedThreads, savedThreadId(ref), fromSaved((data): AgentPeek => ({ ...peekOf(data), saved: true })), storage);
 }
 
 export async function getSteps(
@@ -599,12 +708,20 @@ export async function renameConversation(ref: ConversationRef, title: string): P
 }
 
 export interface VoiceEngine { id: string; label: string; ready: boolean; in_browser: boolean; detail: string }
-export async function getVoice(): Promise<{ engines: VoiceEngine[]; default_engine: string }> {
-  const data = await request("/voice");
+type Voice = { engines: VoiceEngine[]; default_engine: string };
+function voiceOf(data: JsonObject): Voice {
   return { engines: array(data.engines).map((value) => {
     const item = object(value);
     return { id: text(item.id), label: text(item.label), ready: item.ready === true, in_browser: item.in_browser === true, detail: text(item.detail) };
   }), default_engine: text(data.default_engine) || "browser" };
+}
+export async function getVoice(): Promise<Voice> {
+  const voice = voiceOf(await request("/voice"));
+  writeSaved(savedVoiceKey, voice);
+  return voice;
+}
+export function savedVoice(storage?: Storage): Saved<Voice> | undefined {
+  return readSaved(savedVoiceKey, fromSaved(voiceOf), storage);
 }
 export async function transcribeAudio(audio: Blob, engine: string, signal?: AbortSignal): Promise<string> {
   const response = await fetch(`${appApiBase()}/voice/transcribe?engine=${encodeURIComponent(engine)}`, {

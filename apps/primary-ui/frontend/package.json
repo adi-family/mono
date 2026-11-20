@@ -7,7 +7,7 @@
     "build": "tsc -b && vite build",
     "build:primary": "tsc -b && VITE_APP_API_BASE=/api vite build --outDir dist-primary",
     "typecheck": "tsc -b --noEmit",
-    "test:home": "bun test src/lib/home-apps.test.ts",
+    "test:home": "bun test src/lib/home-apps.test.ts src/lib/saved-results.test.ts",
     "test:home:browser": "bun tests/home-apps.browser.mjs",
     "test:primary": "bun test src/lib/primary-routes.test.ts src/lib/app-api.test.ts && VITE_APP_API_BASE=/api bun test src/lib/app-api.test.ts",
     "test:primary:browser": "bun tests/primary-app.browser.mjs",

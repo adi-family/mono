@@ -238,8 +238,8 @@ test("a failed read saves nothing and leaves the last good catalog in place", ()
 
 test("stored addresses are checked again, so an edited store cannot add a link the server would not send", () => {
   const storage = memoryStorage();
-  storage.setItem(homeCatalogKeys.local, JSON.stringify({ savedAt: 1000, catalog: { dashboards: [{ id: "bad", host: "javascript:alert(1)" }, { id: "path", host: "editor.adi/path" }] } }));
-  storage.setItem(homeCatalogKeys.fleet, JSON.stringify({ savedAt: 1000, catalog: { nodes: [{ node: "studio", dashboards: [
+  storage.setItem(homeCatalogKeys.local, JSON.stringify({ savedAt: 1000, payload: { dashboards: [{ id: "bad", host: "javascript:alert(1)" }, { id: "path", host: "editor.adi/path" }] } }));
+  storage.setItem(homeCatalogKeys.fleet, JSON.stringify({ savedAt: 1000, payload: { nodes: [{ node: "studio", dashboards: [
     { id: "script", url: "javascript:alert(1)", allowed: true }, { id: "elsewhere", url: "https://editor.attacker.example/", allowed: true },
   ] }] } }));
   for (const app of [...savedLocalApps(storage)?.data ?? [], ...savedFleetMachines(storage)?.data[0]?.apps ?? []]) assert.equal(app.href, null);
@@ -249,7 +249,7 @@ test("stored addresses are checked again, so an edited store cannot add a link t
 
 test("an unreadable, outdated or unavailable store means an empty start, not an error", () => {
   const storage = memoryStorage();
-  for (const value of ["", "{", "null", "[]", "{}", JSON.stringify({ savedAt: "yesterday", catalog: { dashboards: [] } }), JSON.stringify({ savedAt: 1000 }), JSON.stringify({ savedAt: 1000, catalog: { dashboards: {} } })]) {
+  for (const value of ["", "{", "null", "[]", "{}", JSON.stringify({ savedAt: "yesterday", payload: { dashboards: [] } }), JSON.stringify({ savedAt: 1000 }), JSON.stringify({ savedAt: 1000, payload: { dashboards: {} } })]) {
     storage.setItem(homeCatalogKeys.local, value);
     storage.setItem(homeCatalogKeys.fleet, value);
     assert.equal(savedLocalApps(storage), undefined, value);

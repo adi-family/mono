@@ -5,6 +5,7 @@ import {
   AppChatError, answerQuestion, getAgents, getConversation, getConversationIndex, getConversations, getFleetNodes, getSteps,
   replyToConversation, startConversation, stopConversation, uploadImage, attachmentUrl, renameConversation, starConversation, hideConversation, getVoice, transcribeAudio,
   cancelAwait, cancelQueuedMessage, queuedPosition, queuedTurns, rewindConversation, type AgentPeek, type AgentTurn,
+  savedAgents, savedConversation, savedConversationIndex, savedFleetNodes, savedVoice,
 } from "./app-chat";
 import { groupErrorCount } from "./app-chat-activity";
 
@@ -26,7 +27,24 @@ function body(index = 0): unknown {
 afterEach(() => {
   globalThis.fetch = originalFetch;
   calls.length = 0;
+  delete (globalThis as { window?: unknown }).window;
 });
+
+/** Gives the reads a browser store for one test, as `window.localStorage`. */
+function browserStore(): Storage {
+  const items = new Map<string, string>();
+  const storage: Storage = {
+    get length() { return items.size; },
+    clear: () => items.clear(),
+    getItem: (key) => items.get(key) ?? null,
+    key: (index) => [...items.keys()][index] ?? null,
+    removeItem: (key) => { items.delete(key); },
+    setItem: (key, value) => { items.set(key, String(value)); },
+  };
+  (globalThis as { window?: unknown }).window = { localStorage: storage };
+  return storage;
+}
+const stored = (storage: Storage) => [...Array(storage.length).keys()].map((index) => storage.getItem(storage.key(index)!)).join("\n");
 
 test("agent list uses the relay and forwards abort without returning unrelated fields", async () => {
   const controller = new AbortController();
@@ -448,4 +466,152 @@ test("cancelling an await names the conversation and returns what is still pendi
   mockResponse({ ok: false, error: "await build changed or fired before this reached it" }, 400);
   await assert.rejects(cancelAwait(ref, "build"), /changed or fired/);
   assert.equal(calls.length, 2);
+});
+
+test("without a browser store the reads save nothing and nothing is restored", async () => {
+  mockResponse({ nodes: [{ node: "studio", locked: false }] });
+  assert.deepEqual(await getFleetNodes(), [{ node: "studio", locked: false }]);
+  assert.equal(savedFleetNodes(), undefined);
+  assert.equal(savedAgents(), undefined);
+  assert.equal(savedConversationIndex(undefined, { filter: "me" }), undefined);
+  assert.equal(savedConversation(ref), undefined);
+  assert.equal(savedVoice(), undefined);
+});
+
+test("the paired machines and the voice engines are restored as they were read", async () => {
+  const storage = browserStore();
+  mockResponse({ nodes: [{ node: "studio", locked: false, key: "private" }, { node: "server", locked: true }] });
+  const nodes = await getFleetNodes();
+  assert.deepEqual(savedFleetNodes(storage)?.data, nodes);
+  mockResponse({ engines: [{ id: "browser", label: "Browser", ready: true, in_browser: true, detail: "Built in" }], default_engine: "browser", api_key: "private" });
+  const voice = await getVoice();
+  assert.deepEqual(savedVoice(storage)?.data, voice);
+  assert.ok(!stored(storage).includes("private"));
+});
+
+test("a machine's agents are restored per machine, from the few fields the chat reads", async () => {
+  const storage = browserStore();
+  mockResponse({ agents: [
+    { name: "designer", running: true, starred: true, project: "studio", created_by: "human", runnable: true, backend: "process", caps: { answerable: true, images: true },
+      prompt: "A very long private definition", env: { TOKEN: "private" } },
+    { name: "plain" },
+  ] });
+  const local = await getAgents();
+  const remote = await getAgents(undefined, "studio");
+  assert.deepEqual(savedAgents(undefined, storage)?.data, local);
+  assert.deepEqual(savedAgents("studio", storage)?.data, remote);
+  assert.equal(savedAgents("studio", storage)?.data[0]?.source, "studio");
+  assert.equal(savedAgents("server", storage), undefined);
+  assert.ok(typeof savedAgents(undefined, storage)?.savedAt === "number");
+  for (const dropped of ["private", "prompt", "env"]) assert.ok(!stored(storage).includes(dropped), `${dropped} is not stored`);
+});
+
+const listing = { total: 3, asking_user: "igor", groups: [{ project: "studio", label: "Studio", agents: ["designer"], total: 2, path: "/private/studio" }], agents: [
+  { name: "designer", answerable: true, interactive: true, starred: true, caps: { answerable: true, interactive: false, images: true }, definition: "private definition", runs: [
+    { run_id: "one", title: "First", message: "Draw it", running: true, last_activity: 300, started_at: 100, launched_by: "human", hidden: false, starred: true, state: "running",
+      caps: { answerable: false, interactive: true, rewind: true }, pending_question: { id: "ask-1", note: "private question" }, awaits: [{ id: "w-1", note: "private wait" }], outcome: "private outcome" },
+    { run_id: "two", message: "m".repeat(2000), last_activity: 200 },
+  ] },
+  { name: "reviewer", runs: [{ run_id: "three", message: "Review", started_at: 50 }] },
+] };
+
+test("a list of conversations is restored exactly as it was read, marked as saved", async () => {
+  const storage = browserStore();
+  mockResponse(listing);
+  const live = await getConversationIndex(undefined, undefined, { filter: "me", limit: 100 });
+  assert.equal(live.saved, undefined, "an answer from the machine is never marked as saved");
+  const restored = savedConversationIndex(undefined, { filter: "me", limit: 100 }, storage);
+  assert.equal(restored?.data.saved, true);
+  const long = live.conversations.find((conversation) => conversation.runId === "two")!;
+  assert.equal(long.message.length, 2000);
+  // Only the first message's preview is shown anywhere, so the stored copy keeps the start of it.
+  assert.deepEqual({ ...restored?.data, saved: undefined }, { ...live, saved: undefined,
+    conversations: live.conversations.map((conversation) => conversation === long ? { ...long, message: long.message.slice(0, 600) } : conversation),
+    groups: live.groups.map((group) => ({ ...group, conversations: group.conversations.map((conversation) => conversation === long ? { ...long, message: long.message.slice(0, 600) } : conversation) })) });
+  assert.deepEqual(restored?.data.conversations.map((conversation) => [conversation.runId, conversation.title, conversation.pendingQuestion, conversation.awaiting, conversation.answerable, conversation.interactive, conversation.projectName]),
+    [["one", "First", true, true, false, true, "Studio"], ["two", "m".repeat(120), false, false, true, false, "Studio"], ["three", "Review", false, false, false, false, undefined]]);
+  for (const dropped of ["private", "definition", "outcome", "images", "rewind", "path"]) assert.ok(!stored(storage).includes(dropped), `${dropped} is not stored`);
+});
+
+test("each machine and view has its own saved list, and only the first page is kept", async () => {
+  const storage = browserStore();
+  mockResponse(listing);
+  await getConversationIndex(undefined, undefined, { filter: "me" });
+  await getConversationIndex(undefined, "studio", { filter: "me", group: "project", groupLimit: 3 });
+  assert.equal(savedConversationIndex(undefined, { filter: "me" }, storage)?.data.conversations.length, 3);
+  assert.equal(savedConversationIndex("studio", { filter: "me", group: "project", groupLimit: 3, groupMore: {} }, storage)?.data.conversations[0]?.source, "studio");
+  for (const other of [{ filter: "all" as const }, { filter: "me" as const, group: "project" as const }]) assert.equal(savedConversationIndex(undefined, other, storage), undefined);
+  assert.equal(savedConversationIndex("studio", { filter: "me" }, storage), undefined);
+  // Longer pages, expanded projects and the hidden list are read but never stored or restored.
+  const before = stored(storage);
+  for (const page of [{ filter: "me" as const, limit: 200 }, { filter: "me" as const, hidden: true }, { filter: "me" as const, group: "project" as const, groupMore: { studio: 3 } }]) {
+    await getConversationIndex(undefined, undefined, page);
+    assert.equal(savedConversationIndex(undefined, page, storage), undefined);
+  }
+  assert.equal(stored(storage), before);
+});
+
+test("an open conversation's latest page is restored through the same parser, marked as saved", async () => {
+  const storage = browserStore();
+  mockResponse({ name: "design assistant", run_id: "run/one", running: true, answerable: true, interactive: true, caps: { rewind: true }, cwd: "/work", output: "", total_turns: 40, state: "running",
+    pending_question: { id: "ask-1", note: "", headline: "Which one?", asked_at: 5, deadline: null, questions: [{ header: "Pick", question: "Which?", multi_select: false, options: [{ label: "A", description: "First" }] }] },
+    awaits: [{ id: "w-1", note: "build", summary: "waiting", check: "true" }], stats: { failed: [{ turn: 39, step: 1 }], by_tool: [{ tool: "Bash", calls: 4, failed: 1 }] },
+    turns: [
+      { role: "user", text: "Hello", seq: 38, at: 10, images: [{ id: "img-1", name: "a.png", media_type: "image/png", size: 12 }], markers: [{ kind: "from", node: "studio", user: "igor" }] },
+      { role: "assistant", text: "Hi", seq: 39, at: 11, pending: true, steps: [{ kind: "thinking", text: "hm" }, { kind: "tool", name: "Bash", input: "ls", status: "error", output: "no" },
+        { kind: "calls", from: 2, to: 5, count: 4, tools: ["Bash"], preview: "ls", status: "ok" }, { kind: "future-step" }] },
+      { role: "user", text: "Later", seq: 40, at: 12, queued: true, mode: "asap" },
+    ] });
+  const live = await getConversation(ref);
+  assert.equal(live.saved, undefined);
+  const restored = savedConversation(ref, {}, storage);
+  assert.deepEqual(restored?.data, { ...live, saved: true });
+  assert.equal(savedConversation({ ...ref, source: "studio" }, {}, storage), undefined, "the same run on another machine is another conversation");
+  assert.equal(savedConversation({ ...ref, runId: "run/two" }, {}, storage), undefined);
+  // Earlier and longer pages are neither stored nor restored.
+  const before = stored(storage);
+  await getConversation(ref, undefined, { limit: 40 });
+  await getConversation(ref, undefined, { before: 38 });
+  assert.equal(stored(storage), before);
+  assert.equal(savedConversation(ref, { limit: 40 }, storage), undefined);
+  assert.equal(savedConversation(ref, { before: 38 }, storage), undefined);
+});
+
+test("only the conversations opened most recently keep a saved page", async () => {
+  const storage = browserStore();
+  const realNow = Date.now;
+  try {
+    for (let index = 0; index < 10; index++) {
+      Date.now = () => 1_000_000 + index;
+      mockResponse({ name: "designer", run_id: `run-${index}`, turns: [{ role: "user", text: `message ${index}`, seq: 0 }] });
+      await getConversation({ agent: "designer", runId: `run-${index}` });
+    }
+  } finally { Date.now = realNow; }
+  const kept = [...Array(10).keys()].filter((index) => savedConversation({ agent: "designer", runId: `run-${index}` }, {}, storage));
+  assert.deepEqual(kept, [2, 3, 4, 5, 6, 7, 8, 9]);
+});
+
+test("a read that fails leaves the last good saved copy alone", async () => {
+  const storage = browserStore();
+  mockResponse({ agents: [{ name: "designer" }] });
+  await getAgents();
+  mockResponse({ ok: false, error: "The machine is restarting." }, 503);
+  await assert.rejects(() => getAgents(), /restarting/);
+  mockResponse({ agents: [{ running: true }] });
+  await assert.rejects(() => getAgents(), /invalid response/);
+  assert.deepEqual(savedAgents(undefined, storage)?.data.map((agent) => agent.name), ["designer"]);
+});
+
+test("a stored value in an unknown shape is dropped instead of reaching the page", () => {
+  const storage = browserStore();
+  storage.setItem("adi.chat.fleet.v1", JSON.stringify({ savedAt: 1, payload: { nodes: [{ locked: true }] } }));
+  storage.setItem("adi.chat.agents.v1:", JSON.stringify({ savedAt: 1, payload: [{ name: "designer" }] }));
+  storage.setItem(`adi.chat.index.v1:${JSON.stringify(["", "me", "flat"])}`, JSON.stringify({ savedAt: 1, payload: { agents: [{ name: "designer", runs: [{ title: "No id" }] }] } }));
+  storage.setItem(`adi.chat.thread.v1:${JSON.stringify(["", ref.agent, ref.runId])}`, JSON.stringify({ savedAt: 1, payload: { turns: [{ images: [{ name: "no id" }] }] } }));
+  storage.setItem("adi.chat.voice.v1", JSON.stringify({ savedAt: 1, payload: { engines: "browser" } }));
+  assert.equal(savedFleetNodes(storage), undefined);
+  assert.equal(savedAgents(undefined, storage), undefined);
+  assert.equal(savedConversationIndex(undefined, { filter: "me" }, storage), undefined);
+  assert.equal(savedConversation(ref, {}, storage), undefined);
+  assert.equal(savedVoice(storage), undefined);
 });

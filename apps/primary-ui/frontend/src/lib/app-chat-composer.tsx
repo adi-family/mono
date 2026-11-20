@@ -8,7 +8,7 @@ import {
 import { errorText, useScopedErrors } from "./app-chat-errors";
 import { useChatList } from "./app-chat-list";
 import { confirmsReply, latestTurnSeq, selectionKeyOf } from "./app-chat-model";
-import { invalidSourceMessage } from "./app-chat-queries";
+import { chatRoute, invalidSourceMessage } from "./app-chat-queries";
 import { useChatSelection } from "./app-chat-selection";
 import { useChatThread } from "./app-chat-thread";
 import { conversationHref } from "./app-chat-transcript";
@@ -38,10 +38,17 @@ async function deliverReply(target: ConversationRef, message: string, options: R
   }
 }
 
+/** The conversation the address bar names right now. A navigation shows there before React has rendered it. */
+function addressedHref(): string | null {
+  const params = new URLSearchParams(window.location.search);
+  const [agent, runId] = [params.get("agent"), params.get("run")];
+  return window.location.pathname === chatRoute && agent && runId ? conversationHref({ agent, runId, source: params.get("node") || undefined }) : null;
+}
+
 function useComposerState() {
   const { enabled, invalidSource, active, agent, activeSource, selectionKey, routeNamesConversation, isCurrentSelection, openConversation, recordLaunch } = useChatSelection();
   const { snapshot, adoptResponse, refresh, rewindTo } = useChatThread();
-  const { conversations } = useChatList();
+  const { conversations, sourceStates } = useChatList();
   const navigate = useNavigate();
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [imageDrafts, setImageDrafts] = useState<Record<string, DraftImage[]>>({});
@@ -91,7 +98,9 @@ function useComposerState() {
     sending.current.add(key);
     try {
       if (active) {
-        adoptResponse(await deliverReply(active, message, { attachments, mode }, latestTurnSeq(snapshot)));
+        // A saved page says nothing reliable about what the conversation holds now, so a send
+        // that fails over one is reported as it is instead of being looked for in a re-read.
+        adoptResponse(await deliverReply(active, message, { attachments, mode }, latestTurnSeq(snapshot?.saved ? undefined : snapshot)));
         setDrafts((current) => current[key] === submittedDraft ? { ...current, [key]: "" } : current);
       } else {
         const created = await startConversation(agent, message, { source: activeSource, attachments });
@@ -129,12 +138,26 @@ function useComposerState() {
 
   const recent = conversations.find((conversation) => conversation.source === activeSource);
   const recentHref = recent ? conversationHref(recent) : null;
+  const recentSaved = sourceStates.find((state) => state.source === activeSource)?.saved === true;
   const isComposing = Boolean(drafts[selectionKey]) || Boolean(imageDrafts[selectionKey]?.length);
   // On desktop an unaddressed chat page opens the newest conversation, unless one is being written.
+  // The list may still be the one saved on an earlier visit, whose newest can be out of date: the
+  // page opens that at once and, when the machine answers with a different newest, follows it,
+  // provided the reader is still where the page put them and has not started writing.
+  const openedFromSaved = useRef<string | null>(null);
   useEffect(() => {
-    if (!enabled || routeNamesConversation || !recentHref || isComposing || sending.current.has(selectionKey)) return;
-    if (!window.matchMedia(mobileViewport).matches) navigate(recentHref, { replace: true });
-  }, [enabled, routeNamesConversation, recentHref, isComposing, selectionKey, navigate]);
+    if (!enabled || isComposing || sending.current.has(selectionKey)) { openedFromSaved.current = null; return; }
+    if (!recentHref || window.matchMedia(mobileViewport).matches) return;
+    if (!routeNamesConversation) {
+      openedFromSaved.current = recentSaved ? recentHref : null;
+      navigate(recentHref, { replace: true });
+    } else if (openedFromSaved.current && !recentSaved) {
+      const opened = openedFromSaved.current;
+      openedFromSaved.current = null;
+      // Asked of the address bar, not of this render: a click made a moment ago is already there.
+      if (opened !== recentHref && addressedHref() === opened) navigate(recentHref, { replace: true });
+    }
+  }, [enabled, routeNamesConversation, recentHref, recentSaved, isComposing, selectionKey, navigate]);
 
   return {
     draft: drafts[selectionKey] ?? "",
