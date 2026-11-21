@@ -770,6 +770,13 @@ mod tests {
         assert_eq!(conv.run("sh('echo last')").output, "last\n");
         assert_eq!(conv.run("y = 1 + 1").output, "");
         assert_eq!(conv.run("_").output, "5\n", "`_` is the last value shown");
+
+        // A dict is shown in the order it is in. Sorted, the display would contradict the dict.
+        assert_eq!(
+            conv.run("{'numbers': [1, 2], 'sum': 3, 'mean': 1.5}")
+                .output,
+            "{'numbers': [1, 2], 'sum': 3, 'mean': 1.5}\n"
+        );
     }
 
     /// A value handed over with `share` is there for whatever a variable cannot reach: the other
@@ -815,7 +822,7 @@ mod tests {
         );
         assert_eq!(
             conv.run("shared('from-job')").output.trim(),
-            "{'has_d': False, 'seen': ['react', 'vite']}"
+            "{'seen': ['react', 'vite'], 'has_d': False}"
         );
         let ts_job = Command::new("sh")
             .arg("-c")

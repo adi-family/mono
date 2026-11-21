@@ -536,7 +536,9 @@ class Cells:
         self.ns["_"] = value
         if isinstance(value, (dict, list, tuple, set, frozenset)) and not hasattr(value, "_fields"):
             try:
-                text = pprint.pformat(value, width=120, compact=True)
+                # In the order it is in, not sorted: a dict's order is part of what it is, and a
+                # display that rearranges it answers "what order are these in?" wrongly.
+                text = pprint.pformat(value, width=120, compact=True, sort_dicts=False)
             except Exception:
                 text = repr(value)
         else:
