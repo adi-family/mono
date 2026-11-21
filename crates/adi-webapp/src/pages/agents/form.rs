@@ -19,8 +19,10 @@ use super::{argument_text, scalar_argument_text};
 const ADI_HARNESS: &str = "harness:adi";
 
 /// The fields that say what the agent *is* rather than how it runs, in the order the editor asks
-/// them. None of them is scoped to a backend, so they are always shown.
-const IDENTITY: [&str; 5] = ["name", "project", "tags", "starred", "unattended"];
+/// them. None of them is scoped to a backend, so they are always shown. The two code tools close
+/// the list: which languages an agent may work in is a fact about the agent, like whether anybody
+/// is watching it.
+const IDENTITY: [&str; 7] = ["name", "project", "tags", "starred", "unattended", "pycode", "tscode"];
 
 /// The fields the editor renders somewhere other than the runtime section, or no longer renders at
 /// all: the identity above, the CLI command scope (under Tools), the system prompt (its own
@@ -32,12 +34,14 @@ const IDENTITY: [&str; 5] = ["name", "project", "tags", "starred", "unattended"]
 /// that names it. Leaving a model box on this form would be a second way to reach a model, which is
 /// the thing the ordered list exists to replace. The schema still carries them because an agent
 /// that lists no backends falls back to its own arguments, and the CLI can still write them.
-const NOT_RUNTIME: [&str; 11] = [
+const NOT_RUNTIME: [&str; 13] = [
     "name",
     "project",
     "tags",
     "starred",
     "unattended",
+    "pycode",
+    "tscode",
     "tools",
     "system_prompt",
     "model",
@@ -601,6 +605,8 @@ fn agent_field_bool(form: AgentsForm, name: &str) -> bool {
     match name {
         "starred" => form.starred.get(),
         "unattended" => form.unattended.get(),
+        "pycode" => form.pycode.get(),
+        "tscode" => form.tscode.get(),
         other => form
             .argument_values
             .get()
@@ -612,6 +618,8 @@ fn agent_field_bool(form: AgentsForm, name: &str) -> bool {
 fn set_agent_field_bool(form: AgentsForm, name: &str, value: bool) {
     match name {
         "unattended" => form.unattended.set(value),
+        "pycode" => form.pycode.set(value),
+        "tscode" => form.tscode.set(value),
         "starred" => form.starred.set(value),
         other => set_agent_argument_value(
             form.argument_values,
@@ -738,7 +746,7 @@ fn insert_text_argument(
 fn is_argument_field(name: &str) -> bool {
     !matches!(
         name,
-        "name" | "backend" | "project" | "tags" | "starred" | "unattended"
+        "name" | "backend" | "project" | "tags" | "starred" | "unattended" | "pycode" | "tscode"
     )
 }
 
@@ -757,6 +765,8 @@ fn is_scalar_argument_field(name: &str) -> bool {
             | "system_prompt"
             | "starred"
             | "unattended"
+            | "pycode"
+            | "tscode"
     )
 }
 
@@ -877,6 +887,8 @@ pub(crate) fn load_agent_into_form(form: AgentsForm, a: &AgentDto) {
         .set(argument_text(&a.arguments, "system_prompt"));
     form.starred.set(a.starred);
     form.unattended.set(a.unattended);
+    form.pycode.set(a.pycode);
+    form.tscode.set(a.tscode);
     form.llm_rows.set(a.backends.clone());
     // Neither the drag nor the unfolded row survives loading a different agent: both are positions
     // in a list that has just been replaced, and row 2 of the old agent is not row 2 of this one.
@@ -923,6 +935,8 @@ pub(crate) fn clear_agent_form(form: AgentsForm) {
     form.system_prompt.set(String::new());
     form.starred.set(false);
     form.unattended.set(false);
+    form.pycode.set(false);
+    form.tscode.set(false);
     form.llm_rows.set(Vec::new());
     form.llm_drag_from.set(None);
     form.llm_row_open.set(None);

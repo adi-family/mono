@@ -1654,6 +1654,14 @@ pub struct AgentDto {
     /// will see is the work stopping without failing.
     #[serde(default)]
     pub unattended: bool,
+    /// Whether this agent has `PyCode` — a Python interpreter its conversation keeps between
+    /// calls, beside `Bash`. Off unless switched on; an agent with it off is not told it exists.
+    #[serde(default)]
+    pub pycode: bool,
+    /// Whether this agent has `TsCode` — the same in TypeScript, on Bun. Independent of
+    /// [`pycode`](Self::pycode): either, both or neither.
+    #[serde(default)]
+    pub tscode: bool,
     /// Whether this agent's backend has a run adapter, i.e. whether ▶ Run can work at all.
     #[serde(default)]
     pub runnable: bool,
@@ -1899,6 +1907,14 @@ pub struct SaveAgent {
     /// project panel can save without silently switching it off.
     #[serde(default)]
     pub unattended: Option<bool>,
+    /// Whether the agent has `PyCode` (see [`AgentDto::pycode`]). **Omit to keep whatever the
+    /// agent already has**, as for `unattended` and for the same reason: only the full agent
+    /// editor offers it, and a save from anywhere else must not quietly take a tool away.
+    #[serde(default)]
+    pub pycode: Option<bool>,
+    /// Whether the agent has `TsCode` (see [`AgentDto::tscode`]). Omit to keep, as above.
+    #[serde(default)]
+    pub tscode: Option<bool>,
     /// The agent's previous name when an edit renames it. The manifest is moved first (keeping
     /// `created_at`), then saved under `name`, so no orphan is left behind. Omitted — or equal to
     /// `name` — for a plain create/update.

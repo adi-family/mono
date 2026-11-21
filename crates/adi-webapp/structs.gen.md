@@ -2258,6 +2258,8 @@ pub(crate) struct AgentsForm {
     pub(crate) system_prompt: RwSignal<String>,
     pub(crate) starred: RwSignal<bool>,
     pub(crate) unattended: RwSignal<bool>,
+    pub(crate) pycode: RwSignal<bool>,
+    pub(crate) tscode: RwSignal<bool>,
     pub(crate) llm_rows: RwSignal<Vec<AgentBackendRowDto>>,
     pub(crate) llm_drag_from: RwSignal<Option<usize>>,
     pub(crate) llm_row_open: RwSignal<Option<usize>>,

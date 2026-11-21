@@ -11,10 +11,10 @@ pub(crate) mod jobs;
 pub(crate) mod mcp;
 pub(crate) mod process;
 pub(crate) mod pty;
-// The Python interpreter a conversation keeps between `PyCode` calls. Beside `shell` because it
-// shares that state, and for the same reason it is not under one engine: every engine reaches it.
+// The interpreters a conversation keeps between `PyCode` and `TsCode` calls. Beside `shell` because
+// they share that state, and for the same reason not under one engine: every engine reaches them.
 #[cfg(unix)]
-pub(crate) mod pycode;
+pub(crate) mod interpreter;
 // The shell a conversation keeps between commands. Here rather than under one engine because two
 // engines reach it: the adi loop's own `Bash` runs through it, and the Claude CLI's `Bash` is bent
 // through it by the hook the runner installs.

@@ -116,6 +116,14 @@ pub(crate) enum AgentsCommand {
         unattended: bool,
         #[arg(long, conflicts_with = "unattended")]
         no_unattended: bool,
+        #[arg(long)]
+        pycode: bool,
+        #[arg(long, conflicts_with = "pycode")]
+        no_pycode: bool,
+        #[arg(long)]
+        tscode: bool,
+        #[arg(long, conflicts_with = "tscode")]
+        no_tscode: bool,
         #[arg(long = "prelude", value_name = "COMMAND")]
         prelude: Vec<String>,
         #[arg(long, conflicts_with = "prelude")]

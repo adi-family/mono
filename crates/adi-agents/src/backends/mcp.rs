@@ -9,7 +9,8 @@
 //!
 //! # What it serves, and what it deliberately does not
 //!
-//! Only [`SERVED`] — `Bash`, `PyCode`, `Await` and `Ask`. The engine's own built-in `Bash` never reaches a run
+//! Only [`SERVED`] — `Bash`, `Await` and `Ask`, and `PyCode` and `TsCode` for an agent that switched
+//! them on ([`CodeTools`]). The engine's own built-in `Bash` never reaches a run
 //! (see [`scope_tools`]) precisely so ours is the shell an agent gets: one shell per *conversation*,
 //! where a `cd` and an `export` outlive the call and the turn (see [`super::shell`]). The CLI's own
 //! `Read`/`Write`/`Edit`/`Glob`/`Grep` are better than ours would be — diff-aware edits, the CLI's
@@ -44,7 +45,7 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
-use super::harness::tools::{self, Ctx};
+use super::harness::tools::{self, CodeTools, Ctx};
 use super::shell::Shell;
 use crate::awaits::Awaits;
 use crate::error::{Error, Result};
@@ -64,7 +65,10 @@ const DEFAULT_PROTOCOL: &str = "2025-11-25";
 
 /// Which of the shared tools this server hands to a Claude engine. See the module docs: the file
 /// tools stay the CLI's own, and only what has to be *ours* crosses the wire.
-const SERVED: &[&str] = &["Bash", "PyCode", "Await", "Ask"];
+///
+/// The most an agent is served, not what every agent is: the two code tools are in here and still
+/// reach only an agent whose definition switched them on (see [`served_tools`]).
+const SERVED: &[&str] = &["Bash", "PyCode", "TsCode", "Await", "Ask"];
 
 /// The `--mcp-config` value that gives a Claude engine ADI's own tools: this binary, re-entered as
 /// a stdio MCP server scoped to one conversation (see the module docs).
@@ -292,6 +296,16 @@ fn tool_name(entry: &str) -> &str {
     entry.split('(').next().unwrap_or(entry).trim()
 }
 
+/// What an agent's definition says about the tools this server hands out: the two things that
+/// are the agent's to decide rather than the conversation's.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct Standing {
+    /// Nobody is watching this agent, so `Ask` refuses.
+    pub(crate) unattended: bool,
+    /// Which code tools it switched on.
+    pub(crate) code: CodeTools,
+}
+
 /// Serve one run's tools until the client closes the pipe.
 ///
 /// `cwd` is the run's own directory, passed in rather than read from the process: this server is a
@@ -306,7 +320,7 @@ pub(crate) fn serve(
     conv: &str,
     cwd: &Path,
     sessions: &SessionStore,
-    unattended: bool,
+    standing: Standing,
     input: impl BufRead,
     mut output: impl Write,
 ) -> Result<()> {
@@ -326,7 +340,8 @@ pub(crate) fn serve(
         awaits: Awaits::open(),
         sessions: sessions.clone(),
         agent_dir: &agent_dir,
-        unattended,
+        unattended: standing.unattended,
+        code: standing.code,
     };
 
     for line in input.lines() {
@@ -358,7 +373,7 @@ fn answer(request: &Value, ctx: &Ctx<'_>) -> Option<String> {
     let result = match method {
         "initialize" => Ok(initialize(request)),
         "ping" => Ok(json!({})),
-        "tools/list" => Ok(json!({ "tools": served_tools() })),
+        "tools/list" => Ok(json!({ "tools": served_tools(ctx.code) })),
         "tools/call" => call(request, ctx),
         other => Err(format!("no method {other}")),
     };
@@ -391,11 +406,11 @@ fn initialize(request: &Value) -> Value {
     })
 }
 
-/// [`SERVED`] in MCP's shape. The description and schema are the ones the adi loop advertises,
-/// untouched — the whole point of serving the shared table rather than a second one.
-fn served_tools() -> Vec<Value> {
-    tools::TOOLS
-        .iter()
+/// What of [`SERVED`] an agent with these switches has, in MCP's shape. The description and schema
+/// are the ones the adi loop advertises, untouched — the whole point of serving the shared table
+/// rather than a second one.
+fn served_tools(code: CodeTools) -> Vec<Value> {
+    tools::offered(code)
         .filter(|spec| SERVED.contains(&spec.name))
         .map(|spec| {
             json!({
@@ -418,7 +433,8 @@ fn call(request: &Value, ctx: &Ctx<'_>) -> std::result::Result<Value, String> {
         .pointer("/params/name")
         .and_then(Value::as_str)
         .ok_or_else(|| "a tools/call needs params.name".to_string())?;
-    if !SERVED.contains(&name) {
+    // A code tool this agent does not have is no tool at all, exactly as it was not listed.
+    if !SERVED.contains(&name) || !ctx.code.offers(name) {
         return Err(format!("no tool named {name}"));
     }
     // Absent arguments are an empty object, not a failure: a tool with only optional fields is
@@ -454,8 +470,14 @@ mod tests {
         dir
     }
 
-    /// Drive a whole session over the transport and read back the replies, one per line.
+    /// Drive a whole session over the transport and read back the replies, one per line — as an
+    /// agent with neither code tool, which is what an agent is until its definition says otherwise.
     fn talk(requests: &str) -> Vec<Value> {
+        talk_as(CodeTools::default(), requests)
+    }
+
+    /// The same, as an agent with the given code tools switched on.
+    fn talk_as(code: CodeTools, requests: &str) -> Vec<Value> {
         let dir = scratch("talk");
         let mut out = Vec::new();
         serve(
@@ -463,7 +485,10 @@ mod tests {
             "conv-1",
             &dir,
             &SessionStore::new(dir.join("sessions")),
-            false,
+            Standing {
+                unattended: false,
+                code,
+            },
             std::io::Cursor::new(requests.as_bytes()),
             &mut out,
         )
@@ -616,7 +641,11 @@ mod tests {
             .iter()
             .map(|t| t["name"].as_str().expect("name"))
             .collect();
-        assert_eq!(names, SERVED, "the file tools stay the CLI's own");
+        assert_eq!(
+            names,
+            ["Bash", "Await", "Ask"],
+            "the file tools stay the CLI's own, and a code tool nobody switched on is not there"
+        );
 
         let bash = tools::TOOLS
             .iter()
@@ -625,6 +654,69 @@ mod tests {
         let served = listed.iter().find(|t| t["name"] == "Bash").expect("served");
         assert_eq!(served["description"], bash.description);
         assert_eq!(served["inputSchema"], (bash.schema)());
+    }
+
+    /// The code tools are an agent's to switch on, one by one: each is listed only for an agent
+    /// that has it, and calling one it does not have is calling a tool that does not exist —
+    /// neither is advertised and then refused.
+    #[cfg(unix)]
+    #[test]
+    fn a_code_tool_is_listed_and_callable_only_for_an_agent_that_switched_it_on() {
+        let list = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
+        let names = |code: CodeTools| -> Vec<String> {
+            talk_as(code, list)[0]["result"]["tools"]
+                .as_array()
+                .expect("tools")
+                .iter()
+                .map(|t| t["name"].as_str().expect("name").to_string())
+                .collect()
+        };
+        let python = CodeTools { python: true, typescript: false };
+        let typescript = CodeTools { python: false, typescript: true };
+        assert_eq!(names(python), ["Bash", "PyCode", "Await", "Ask"]);
+        assert_eq!(names(typescript), ["Bash", "TsCode", "Await", "Ask"]);
+        assert_eq!(names(CodeTools::BOTH), SERVED);
+
+        let call = |name: &str| {
+            json!({
+                "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": { "name": name, "arguments": { "code": "1" } },
+            })
+            .to_string()
+        };
+        let refused = talk_as(python, &call("TsCode"));
+        assert_eq!(refused[0]["error"]["code"], -32601, "{:?}", refused[0]);
+        let refused = talk(&call("PyCode"));
+        assert_eq!(refused[0]["error"]["code"], -32601, "{:?}", refused[0]);
+    }
+
+    /// `TsCode` crosses the wire the same way, with an interpreter of its own: what a cell
+    /// declared is there for the next, and an exception that escapes is `isError`.
+    #[cfg(unix)]
+    #[test]
+    fn tscode_is_served_keeps_state_between_calls_and_flags_an_exception() {
+        let call = |id: u32, code: &str| {
+            json!({
+                "jsonrpc": "2.0", "id": id, "method": "tools/call",
+                "params": { "name": "TsCode", "arguments": { "code": code } },
+            })
+            .to_string()
+        };
+        let replies = talk_as(
+            CodeTools::BOTH,
+            &[call(1, "const x: number = 20;"), call(2, "x + 1;"), call(3, "(null as any).y;")].join("\n"),
+        );
+        let text = |i: usize| {
+            replies[i]["result"]["content"][0]["text"]
+                .as_str()
+                .expect("text")
+                .to_string()
+        };
+
+        assert_eq!(replies[0]["result"]["isError"], false, "{:?}", replies[0]);
+        assert_eq!(text(1), "21", "the second call saw what the first one declared");
+        assert_eq!(replies[2]["result"]["isError"], true, "{:?}", replies[2]);
+        assert!(text(2).contains("TypeError"), "{}", text(2));
     }
 
     /// `PyCode` crosses the wire as `Bash` does, and one server's calls share one interpreter: the
@@ -639,7 +731,7 @@ mod tests {
             })
             .to_string()
         };
-        let replies = talk(&[call(1, "x = 20"), call(2, "x + 1"), call(3, "x / 0")].join("\n"));
+        let replies = talk_as(CodeTools::BOTH, &[call(1, "x = 20"), call(2, "x + 1"), call(3, "x / 0")].join("\n"));
         let text = |i: usize| {
             replies[i]["result"]["content"][0]["text"]
                 .as_str()

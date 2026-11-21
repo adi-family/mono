@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-163 structs · 47 enums · 5 type aliases across 64 files.
+165 structs · 48 enums · 5 type aliases across 64 files.
 
 ## Index
 
@@ -21,11 +21,11 @@
 - [`src/backends/harness/adi_loop.rs`](#srcbackendsharnessadi_looprs) — `ToolCall`, `ToolResult`, `Reply`, `Calls`, `RunCtx`, `Wire`, `Said`, `Encoded`, `ImageStore`, `OpenAiDialect`, `HttpCtx`, `ContextLimit`, `FailureReport`
 - [`src/backends/harness/claude_rewind.rs`](#srcbackendsharnessclaude_rewindrs) — `Entry`
 - [`src/backends/harness/claude_sdk.rs`](#srcbackendsharnessclaude_sdkrs) — `Continuation`
-- [`src/backends/harness/tools.rs`](#srcbackendsharnesstoolsrs) — `ToolSpec`, `Ctx`, `ToolDeclaration`, `Drain`
+- [`src/backends/harness/tools.rs`](#srcbackendsharnesstoolsrs) — `ToolSpec`, `Ctx`, `CodeTools`, `ToolDeclaration`, `Drain`
+- [`src/backends/interpreter.rs`](#srcbackendsinterpreterrs) — `Language`, `Interpreter`, `Ended`, `Ran`, `Live`, `Unanswered`
 - [`src/backends/jobs.rs`](#srcbackendsjobsrs) — `Job`
-- [`src/backends/mcp.rs`](#srcbackendsmcprs) — `ToolScope`
+- [`src/backends/mcp.rs`](#srcbackendsmcprs) — `ToolScope`, `Standing`
 - [`src/backends/process/codex.rs`](#srcbackendsprocesscodexrs) — `Continuation`
-- [`src/backends/pycode.rs`](#srcbackendspycoders) — `Interpreter`, `Ended`, `Ran`, `Live`, `Unanswered`
 - [`src/backends/shell.rs`](#srcbackendsshellrs) — `Shell`
 - [`src/dispatch.rs`](#srcdispatchrs) — `Dispatched`
 - [`src/error.rs`](#srcerrorrs) — `Result`, `Error`
@@ -148,6 +148,10 @@ pub struct AgentManifest<Args> {
     pub env: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unattended: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pycode: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tscode: bool,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub created_by: String,
     pub created_at: u64,
@@ -875,6 +879,7 @@ struct RunCtx<'a> {
     round: u64,
     max_rounds: u64,
     session: Option<(&'a Path, &'a str)>,
+    code: tools::CodeTools,
 }
 ```
 
@@ -1072,6 +1077,19 @@ pub(crate) struct Ctx<'a> {
     pub sessions: SessionStore,
     pub agent_dir: &'a Path,
     pub unattended: bool,
+    pub code: CodeTools,
+}
+```
+
+### struct `CodeTools`
+
+Which of the code tools — `PyCode`, `TsCode` — an agent has.
+
+```rust
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CodeTools {
+    pub python: bool,
+    pub typescript: bool,
 }
 ```
 
@@ -1101,65 +1119,28 @@ struct Drain {
 
 ---
 
-## `src/backends/jobs.rs`
+## `src/backends/interpreter.rs`
 
-### struct `Job`
+### enum `Language`
 
-A detached command and the two files that say what became of it.
-
-```rust
-#[derive(Debug, Clone)]
-pub(crate) struct Job {
-    pub id: String,
-    pub log: PathBuf,
-    pub exit: PathBuf,
-    pub pid: u32,
-}
-```
-
----
-
-## `src/backends/mcp.rs`
-
-### struct `ToolScope`
-
-One run's tool surface: what exists, and what it may use without stopping to ask.
+Which language an interpreter speaks — and so which tool it is behind.
 
 ```rust
-pub(crate) struct ToolScope {
-    pub(crate) builtins: String,
-    pub(crate) allowed: String,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Language {
+    Python,
+    TypeScript,
 }
 ```
-
----
-
-## `src/backends/process/codex.rs`
-
-### enum `Continuation`
-
-Whether this turn opens a Codex thread or continues one the first turn established.
-
-```rust
-pub(crate) enum Continuation<'a> {
-    First,
-    Resume {
-        thread_id: &'a str,
-    },
-}
-```
-
----
-
-## `src/backends/pycode.rs`
 
 ### struct `Interpreter`
 
-One conversation's interpreter, as the files that say where it is.
+One conversation's interpreter for one language, as the files that say where it is.
 
 ```rust
 #[derive(Debug)]
 pub(crate) struct Interpreter {
+    language: Language,
     state: PathBuf,
     script: PathBuf,
     log: PathBuf,
@@ -1215,6 +1196,68 @@ Why a call got no reply.
 enum Unanswered {
     TimedOut,
     Gone(String),
+}
+```
+
+---
+
+## `src/backends/jobs.rs`
+
+### struct `Job`
+
+A detached command and the two files that say what became of it.
+
+```rust
+#[derive(Debug, Clone)]
+pub(crate) struct Job {
+    pub id: String,
+    pub log: PathBuf,
+    pub exit: PathBuf,
+    pub pid: u32,
+}
+```
+
+---
+
+## `src/backends/mcp.rs`
+
+### struct `ToolScope`
+
+One run's tool surface: what exists, and what it may use without stopping to ask.
+
+```rust
+pub(crate) struct ToolScope {
+    pub(crate) builtins: String,
+    pub(crate) allowed: String,
+}
+```
+
+### struct `Standing`
+
+What an agent's definition says about the tools this server hands out: the two things that are the agent's to decide rather than the conversation's.
+
+```rust
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct Standing {
+    pub(crate) unattended: bool,
+    pub(crate) code: CodeTools,
+}
+```
+
+---
+
+## `src/backends/process/codex.rs`
+
+### enum `Continuation`
+
+Whether this turn opens a Codex thread or continues one the first turn established.
+
+```rust
+pub(crate) enum Continuation<'a> {
+    First,
+    Resume {
+        thread_id: &'a str,
+    },
 }
 ```
 

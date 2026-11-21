@@ -170,6 +170,8 @@ mod tests {
                 path: Vec::new(),
                 env: BTreeMap::new(),
                 unattended: false,
+                pycode: false,
+                tscode: false,
                 created_by: String::new(),
                 created_at: 0,
                 updated_at: 0,

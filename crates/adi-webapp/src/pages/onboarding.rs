@@ -908,6 +908,8 @@ fn submit_onb_agent(state: State, form: OnboardingForm, m: &MetaState) {
         env: manual.then(|| parsed_env_vars(&form.agent.env.get_untracked())),
         // Not offered here, so not stated — `None` leaves whatever the agent already has.
         unattended: None,
+        pycode: None,
+        tscode: None,
         rename_from: None,
         // Absent means human — the wizard is the control panel, and somebody is looking at it.
         created_by: None,

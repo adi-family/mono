@@ -77,7 +77,7 @@ pub use agent::{
 pub use auto_title::AutoTitleSettings;
 pub use backend::Backend;
 /// A tool as a model is told about it — see [`Agents::simulated_tools`].
-pub use backends::harness::tools::ToolDeclaration;
+pub use backends::harness::tools::{CodeTools, ToolDeclaration};
 pub use error::{Error, Result};
 pub use events::{
     AgentDeleted, AgentGoalClosed, AgentGoalGivenUp, AgentGoalMet, AgentGoalNudged, AgentGoalSet,
@@ -2778,18 +2778,25 @@ impl Agents {
         // The conversation's own answer, not the definition's: a run launched unattended must have
         // its Ask refuse for the whole of that run, and this process is where Ask is served from.
         let record = store.get(agent, conv);
-        let unattended = self.get(agent).ok().flatten().is_some_and(|a| {
+        let definition = self.get(agent).ok().flatten();
+        let unattended = definition.as_ref().is_some_and(|a| {
             record
                 .as_ref()
-                .map_or(a.manifest.unattended, |r| as_run(&a, r).manifest.unattended)
+                .map_or(a.manifest.unattended, |r| as_run(a, r).manifest.unattended)
         });
+        // The definition's own answer, read now: a code tool is a capability, which a run cannot
+        // grant itself, and a manifest that has gone missing grants nothing.
+        let code = definition
+            .as_ref()
+            .map(|a| a.manifest.code_tools())
+            .unwrap_or_default();
         let stdin = std::io::stdin();
         backends::mcp::serve(
             agent,
             conv,
             cwd,
             &store,
-            unattended,
+            backends::mcp::Standing { unattended, code },
             stdin.lock(),
             std::io::stdout().lock(),
         )
@@ -3786,13 +3793,14 @@ impl Agents {
         Ok(HumanRunner::prompt_of(&store.session(name, run_id)).unwrap_or_default())
     }
 
-    /// The tools a simulated run may call, exactly as they are declared to a model.
+    /// The tools a simulated run of an agent with these code tools may call, exactly as they are
+    /// declared to a model.
     ///
     /// Straight off the table [`adi_loop`](crate::backends::harness::adi_loop) builds its provider
     /// payloads from, so a tool added there appears here without anybody remembering to.
     #[must_use]
-    pub fn simulated_tools() -> Vec<ToolDeclaration> {
-        backends::harness::tools::declarations()
+    pub fn simulated_tools(code: CodeTools) -> Vec<ToolDeclaration> {
+        backends::harness::tools::declarations(code)
     }
 
     /// Close the open turn: run every call in it, in order, and append what each returned.
@@ -3833,6 +3841,7 @@ impl Agents {
         let ctx = backends::harness::tools::Ctx::for_conversation(
             name,
             agent.manifest.unattended,
+            agent.manifest.code_tools(),
             &cwd,
             run_id,
             &agent_dir,

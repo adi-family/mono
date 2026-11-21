@@ -2367,6 +2367,14 @@ pub fn save_agent(store: &Agents, body: &[u8], sender: Option<FleetSender<'_>>) 
         unattended: req
             .unattended
             .unwrap_or_else(|| stored.as_ref().is_some_and(|m| m.unattended)),
+        // The code tools, omit-to-keep like `unattended` above: a capability the agent editor
+        // granted is not something a save from the project panel gets to take back by silence.
+        pycode: req
+            .pycode
+            .unwrap_or_else(|| stored.as_ref().is_some_and(|m| m.pycode)),
+        tscode: req
+            .tscode
+            .unwrap_or_else(|| stored.as_ref().is_some_and(|m| m.tscode)),
         // Only takes effect if this save turns out to create the definition — the store ignores it
         // on an edit (`Agents::save`) — so it costs nothing to compute even when `stored` says this
         // is a resave. Absent is a person: this endpoint's caller is the control panel, and somebody
@@ -2702,6 +2710,8 @@ fn agent_dto(
         path: m.path,
         env: m.env,
         unattended: m.unattended,
+        pycode: m.pycode,
+        tscode: m.tscode,
         created_by: m.created_by,
         created_at: m.created_at,
         updated_at: m.updated_at,
@@ -3223,6 +3233,19 @@ fn agent_form_spec() -> AgentFormSpec {
                        refuses and tells the run to decide for itself and say what it assumed"
         .into();
     fields.push(overridable(unattended));
+
+    // The code tools. Capabilities, so not overridable per run: a run cannot grant itself a tool
+    // its agent was not given (see `adi_agents::RunOverrides`).
+    let mut pycode = agent_field("pycode", "Python (PyCode)", AgentFormFieldKind::Checkbox);
+    pycode.hint = "a Python interpreter the conversation keeps between calls, beside Bash — what \
+                   one call read or worked out is still in a variable on the next. Needs python3 \
+                   on the machine; reaches Claude engines and harness:adi"
+        .into();
+    fields.push(pycode);
+    let mut tscode = agent_field("tscode", "TypeScript (TsCode)", AgentFormFieldKind::Checkbox);
+    tscode.hint = "the same in TypeScript, run by bun. Either, both or neither may be on"
+        .into();
+    fields.push(tscode);
 
     let mut tags = agent_field("tags", "Tags", AgentFormFieldKind::Text);
     tags.placeholder = "comma-separated (dispatch / filtering)".into();
@@ -4248,6 +4271,51 @@ mod tests {
         });
         assert_eq!(save_agent(&store, off.to_string().as_bytes(), None).status, 200);
         assert!(!saved(&store).unattended);
+    }
+
+    /// The code tools are switches a person sets in the agent editor: a save that states them
+    /// sets them, each on its own, and a save that says nothing about them — every save from
+    /// anywhere but that editor — leaves them exactly as they were.
+    #[test]
+    fn a_save_sets_each_code_tool_on_its_own_and_one_that_omits_them_keeps_them() {
+        let store = scratch("code-tools");
+        let save = |extra: serde_json::Value| {
+            let mut request = serde_json::json!({ "name": "solver", "backend": "pty:claude" });
+            for (key, value) in extra.as_object().expect("an object") {
+                request[key] = value.clone();
+            }
+            assert_eq!(save_agent(&store, request.to_string().as_bytes(), None).status, 200);
+            let now = saved(&store);
+            (now.pycode, now.tscode)
+        };
+
+        assert_eq!(save(serde_json::json!({})), (false, false), "off until somebody says so");
+        assert_eq!(save(serde_json::json!({ "tscode": true })), (false, true), "one without the other");
+        assert_eq!(
+            save(serde_json::json!({ "pycode": true })),
+            (true, true),
+            "the other was not mentioned, so it stays"
+        );
+        assert_eq!(
+            save(serde_json::json!({ "tags": ["x"] })),
+            (true, true),
+            "a save about something else keeps both"
+        );
+        assert_eq!(
+            save(serde_json::json!({ "pycode": false })),
+            (false, true),
+            "and one can be taken away alone"
+        );
+
+        // …and the editor is told what it has, so the boxes it draws are the truth.
+        let state: AgentsState = serde_json::from_str(&agents(&store).body).expect("json");
+        let dto = state.agents.iter().find(|a| a.name == "solver").expect("listed");
+        assert_eq!((dto.pycode, dto.tscode), (false, true));
+        for name in ["pycode", "tscode"] {
+            let field = state.form.fields.iter().find(|f| f.name == name).expect("a box to tick");
+            assert_eq!(field.kind, AgentFormFieldKind::Checkbox);
+            assert!(!field.run_override, "a run cannot grant itself a tool");
+        }
     }
 
     /// Tags, star, project and secrets are omit-to-keep for the same reason `unattended` is. The
@@ -5616,7 +5684,7 @@ fn sim_state_of(
         tokens,
         sections,
         encoding: adi_agents::analytics::ENCODING.to_string(),
-        tools: Agents::simulated_tools()
+        tools: Agents::simulated_tools(agent.manifest.code_tools())
             .into_iter()
             .map(sim_tool)
             .collect(),

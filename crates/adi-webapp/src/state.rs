@@ -1428,6 +1428,10 @@ pub(crate) struct AgentsForm {
     /// Whether the agent runs with nobody watching — the `Ask` tool refuses on an unattended agent,
     /// so a question can never leave the work stopped in silence.
     pub(crate) unattended: RwSignal<bool>,
+    /// Whether the agent has `PyCode` — a Python interpreter its conversation keeps between calls.
+    pub(crate) pycode: RwSignal<bool>,
+    /// Whether the agent has `TsCode` — the same in TypeScript. Independent of `pycode`.
+    pub(crate) tscode: RwSignal<bool>,
     /// The agent's ordered LLM backend list — its whole model configuration. Row 1 is what a new
     /// conversation starts on, the rest are where it goes when one runs out. The agent itself
     /// carries no model, provider or login: those are the backend's, named here in order.
@@ -1479,6 +1483,8 @@ impl AgentsForm {
             system_prompt: RwSignal::new(String::new()),
             starred: RwSignal::new(false),
             unattended: RwSignal::new(false),
+            pycode: RwSignal::new(false),
+            tscode: RwSignal::new(false),
             llm_rows: RwSignal::new(Vec::new()),
             llm_drag_from: RwSignal::new(None),
             llm_row_open: RwSignal::new(None),

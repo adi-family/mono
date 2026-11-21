@@ -225,6 +225,19 @@ pub struct AgentManifest<Args> {
     /// unattended run that asks is a run that has quietly stopped without failing.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unattended: bool,
+    /// Whether this agent has `PyCode` — a Python interpreter its conversation keeps between
+    /// calls, beside `Bash` (see the crate's `backends::interpreter`).
+    ///
+    /// Off unless switched on, like every other capability an agent has: it is a process per
+    /// conversation and a long description in every request, and neither is worth paying for an
+    /// agent that will never write a line of Python. An agent with it off is not told the tool
+    /// exists.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pycode: bool,
+    /// Whether this agent has `TsCode` — the same thing in TypeScript, on Bun. Independent of
+    /// [`pycode`](Self::pycode): an agent may have either, both or neither.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tscode: bool,
     /// Who created this definition, in [`crate::launcher`]'s vocabulary (`human`, `agent:<name>`,
     /// `automation`) — or `""` for every agent that exists without ever having said, which today is
     /// every agent: this field has no backfill.
@@ -255,6 +268,16 @@ pub struct Agent<Args> {
 }
 
 impl<Args> AgentManifest<Args> {
+    /// Which code tools this agent has switched on — [`pycode`](Self::pycode) and
+    /// [`tscode`](Self::tscode), in the shape the tool table filters by.
+    #[must_use]
+    pub fn code_tools(&self) -> crate::CodeTools {
+        crate::CodeTools {
+            python: self.pycode,
+            typescript: self.tscode,
+        }
+    }
+
     /// The runtime this definition runs on, or the empty [`Backend`] when nothing has said.
     ///
     /// Every read goes through here rather than at [`backend`](Self::backend) directly, so the
@@ -299,6 +322,8 @@ impl<Args> AgentManifest<Args> {
             path: self.path.clone(),
             env: self.env.clone(),
             unattended: self.unattended,
+            pycode: self.pycode,
+            tscode: self.tscode,
             created_by: self.created_by.clone(),
             created_at: self.created_at,
             updated_at: self.updated_at,

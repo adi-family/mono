@@ -4030,6 +4030,20 @@ fn chat_agent_settings(d: &AgentDto) -> AnyView {
             "the Ask tool refuses; the run decides and says what it assumed".to_string(),
             false,
         ))}
+        // The languages it may work in, beside the shell every agent has.
+        {(d.pycode || d.tscode).then(|| {
+            let tools = [(d.pycode, "PyCode"), (d.tscode, "TsCode")]
+                .into_iter()
+                .filter_map(|(on, tool)| on.then_some(tool))
+                .collect::<Vec<_>>()
+                .join(", ");
+            kv(
+                "Code",
+                tools,
+                "an interpreter the conversation keeps between calls, beside Bash".to_string(),
+                false,
+            )
+        })}
     }
     .into_any()
 }

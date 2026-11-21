@@ -151,6 +151,22 @@ pub(crate) enum AgentsCommand {
         /// Let the agent stop and ask again (see `--unattended`).
         #[arg(long, conflicts_with = "unattended")]
         no_unattended: bool,
+        /// Give the agent `PyCode`: a Python interpreter its conversation keeps between calls,
+        /// beside `Bash` — what one call read or worked out is still in a variable on the next.
+        /// Needs `python3` on the machine. Off unless given; independent of `--tscode`, so an
+        /// agent may have either, both or neither. Omit both this and `--no-pycode` to leave the
+        /// setting as it was.
+        #[arg(long)]
+        pycode: bool,
+        /// Take `PyCode` away again (see `--pycode`).
+        #[arg(long, conflicts_with = "pycode")]
+        no_pycode: bool,
+        /// Give the agent `TsCode`: the same thing in TypeScript, run by `bun` (see `--pycode`).
+        #[arg(long)]
+        tscode: bool,
+        /// Take `TsCode` away again (see `--tscode`).
+        #[arg(long, conflicts_with = "tscode")]
+        no_tscode: bool,
         /// A command every run of this agent really runs before its first message reaches the
         /// model — its standing orientation read. Repeatable, run in order, in the run's own shell
         /// and directory; the real output is carried into the opening message, labelled as the
@@ -538,6 +554,10 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
             no_env,
             unattended,
             no_unattended,
+            pycode,
+            no_pycode,
+            tscode,
+            no_tscode,
             prelude,
             no_prelude,
             knowledge,
@@ -702,6 +722,8 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
                     old.map(|m| m.env.clone()),
                 ),
                 unattended: flag(unattended, no_unattended, old.is_some_and(|m| m.unattended)),
+                pycode: flag(pycode, no_pycode, old.is_some_and(|m| m.pycode)),
+                tscode: flag(tscode, no_tscode, old.is_some_and(|m| m.tscode)),
                 // Kept verbatim, not split on commas the way `--knowledge` is: a shell command
                 // routinely contains one, and a prelude cut in half at `--json,--limit` would run
                 // two commands neither of which was asked for.
@@ -1430,6 +1452,13 @@ fn print_agent(agent: &StoredAgent) {
     if !agent.manifest.mcp.is_empty() {
         println!("  mcp servers: {}", agent.manifest.mcp.join(", "));
     }
+    let code: Vec<&str> = [(agent.manifest.pycode, "PyCode"), (agent.manifest.tscode, "TsCode")]
+        .into_iter()
+        .filter_map(|(on, tool)| on.then_some(tool))
+        .collect();
+    if !code.is_empty() {
+        println!("  code tools: {}", code.join(", "));
+    }
     // One line per command rather than a joined list: these are shell commands, and a reader
     // scanning a comma-separated line of them cannot tell a separator from a command's own comma.
     for command in &agent.manifest.prelude {
@@ -2095,7 +2124,7 @@ mod tests {
     }
 
     /// A bare `bool` has no "unmentioned" value of its own, so the pair of flags carries it. This
-    /// is what `--starred`, `--unattended`, and `--memory` all now share.
+    /// is what `--starred`, `--unattended`, `--memory`, `--pycode` and `--tscode` all now share.
     #[test]
     fn a_boolean_needs_both_flags_to_mean_anything() {
         assert!(flag(true, false, false), "--x turns it on");

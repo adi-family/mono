@@ -1906,6 +1906,10 @@ pub struct AgentDto {
     #[serde(default)]
     pub unattended: bool,
     #[serde(default)]
+    pub pycode: bool,
+    #[serde(default)]
+    pub tscode: bool,
+    #[serde(default)]
     pub runnable: bool,
     #[serde(default)]
     pub running: bool,
@@ -2090,6 +2094,10 @@ pub struct SaveAgent {
     pub env: Option<BTreeMap<String, String>>,
     #[serde(default)]
     pub unattended: Option<bool>,
+    #[serde(default)]
+    pub pycode: Option<bool>,
+    #[serde(default)]
+    pub tscode: Option<bool>,
     #[serde(default)]
     pub rename_from: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

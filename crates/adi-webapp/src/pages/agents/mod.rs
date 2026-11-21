@@ -333,6 +333,10 @@ pub(crate) fn agent_detail_view(state: State, form: AgentsForm, route: RwSignal<
                     env: Some(parsed_env_vars(&form.env.get())),
                     // …and the same for whether this agent may stop and wait for somebody.
                     unattended: Some(form.unattended.get()),
+                    // …and for the code tools: this is the form that offers them, so it states
+                    // both, on or off.
+                    pycode: Some(form.pycode.get()),
+                    tscode: Some(form.tscode.get()),
                     // The ordered backend list — this agent's whole model configuration, and this
                     // is the form that owns it, so it states the list even when it is empty. An
                     // agent that lists none falls back to its runtime's own settings, which is what

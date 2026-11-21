@@ -20,6 +20,8 @@ use adi_events::Event as _;
 use serde_json::{Value, json};
 
 use crate::awaits::{self, Awaits, Request};
+#[cfg(unix)]
+use crate::backends::interpreter::Language;
 use crate::backends::jobs;
 use crate::backends::shell::Shell;
 use crate::store::{AskRequest, Choice, MAX_QUESTIONS, SessionStore};
@@ -60,6 +62,52 @@ pub(crate) struct Ctx<'a> {
     /// [`AgentManifest::unattended`](crate::AgentManifest::unattended)). The one thing it changes
     /// is that `Ask` refuses.
     pub unattended: bool,
+    /// Which of the code tools this agent has switched on — see [`CodeTools`].
+    pub code: CodeTools,
+}
+
+/// Which of the code tools — `PyCode`, `TsCode` — an agent has.
+///
+/// Neither, unless its definition says so ([`AgentManifest::pycode`](crate::AgentManifest::pycode),
+/// [`tscode`](crate::AgentManifest::tscode)). They are switches on the agent rather than rows
+/// everybody is served for the reason [`super::super::mcp::scope_tools`] gives for the engine's own
+/// tools: a capability nobody asked for is one nobody decided to grant. Each is also a long-lived
+/// process per conversation, and two thousand tokens of description in every request — a cost an
+/// agent that will never write a line of Python should not be paying.
+///
+/// A tool that is off is *absent*: not declared to the model, not listed over MCP, and answered
+/// as any unknown name is if called anyway.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CodeTools {
+    /// `PyCode`.
+    pub python: bool,
+    /// `TsCode`.
+    pub typescript: bool,
+}
+
+impl CodeTools {
+    /// Both on — for a test, and for nothing else.
+    #[cfg(test)]
+    pub(crate) const BOTH: Self = Self {
+        python: true,
+        typescript: true,
+    };
+
+    /// Whether an agent with these switches has the tool called `name`. Every tool that is not a
+    /// code tool is one it has.
+    #[must_use]
+    pub fn offers(self, name: &str) -> bool {
+        match name {
+            "PyCode" => self.python,
+            "TsCode" => self.typescript,
+            _ => true,
+        }
+    }
+}
+
+/// The tools an agent with these switches has, in the order they are advertised.
+pub(crate) fn offered(code: CodeTools) -> impl Iterator<Item = &'static ToolSpec> {
+    TOOLS.iter().filter(move |spec| code.offers(spec.name))
 }
 
 /// What `Bash` is, told in the terms that decide how a command gets written: the shell is the
@@ -123,8 +171,55 @@ const PYCODE: &str = "Run Python in this conversation's own interpreter and retu
                       output. A background script does not see your variables and nothing it \
                       defines comes back, so have it write what you need to a file.";
 
+/// What `TsCode` is. The same tool as [`PYCODE`] in another language, and told in the same order
+/// for the same reason — but not the same text, because the differences are exactly what a model
+/// would get wrong by assuming: everything here is `await`ed, only the last expression is shown,
+/// a missing semicolon changes what a cell means, and a cell that will not stop cannot be made to.
+#[cfg(unix)]
+const TSCODE: &str = "Run TypeScript in this conversation's own interpreter (Bun) and return what \
+                      it printed. The interpreter stays up between calls: what a cell declares at \
+                      its top level — a `const`, a function, a class, an import — is still there \
+                      on your next call, and may be declared again. So read or fetch a thing \
+                      **once**, keep it in a variable, and work on it from there — rather than \
+                      printing all of it, or fetching it again. Top-level `await` works. The value \
+                      of the cell's last expression is shown, as in a notebook, so end with a bare \
+                      `rows.length;` rather than a `console.log`. Write semicolons: a line that \
+                      begins with `(` or `[` otherwise continues the line above it. An exception \
+                      ends the call with the error and the line it came from; what ran before it \
+                      has happened, and the interpreter and your variables survive it.\n\n`await \
+                      sh(cmd)` runs a command and resolves to its result: `.text` is stdout with \
+                      the trailing newline dropped (and what the result becomes inside a template \
+                      string), with `.stdout`, `.stderr`, `.code`, `.ok`, `.lines` and `.json()` \
+                      beside it — `const head = (await sh('git rev-parse HEAD')).text;`. A string \
+                      runs through the shell; an array (`sh(['git', 'commit', '-m', msg])`) runs \
+                      as written, with no quoting to get wrong. A command that exits non-zero \
+                      rejects with `ShError` carrying its output, so a cell of several steps stops \
+                      at the one that broke — pass `{ check: false }` where failing is an answer \
+                      (`grep`, `diff`, `test`). A bare `await sh(...);` line shows the command's \
+                      output wherever it stands in the cell; `{ echo: true }` shows it as it is \
+                      produced. `fs`, `path` and `os` are already imported, every `Bun.*` API and \
+                      Bun's `$` are there, and `import` — static or dynamic — resolves from the \
+                      directory you are in and re-reads a file of yours that has changed.\n\nIt \
+                      stands where your shell stands, and moves it: `process.chdir()` moves Bash \
+                      too, what you put in `process.env` is exported to it, and wherever Bash \
+                      `cd`'d or whatever it exported is where this starts. Only what a cell \
+                      declared is the interpreter's own. It is kept for an hour without a call; if \
+                      it is ever gone, the result says so, and what it held has to be built \
+                      again.\n\nRunning JavaScript cannot be interrupted. Past `timeout_ms` the \
+                      command the code is waiting on is stopped, which ends most slow cells with \
+                      everything else intact — but code still running after that (a long loop, a \
+                      wait on something that is not a command) costs the interpreter and every \
+                      variable in it. So set `background` for code that will outlast the turn: it \
+                      runs as a script of its own — same directory, same environment, same `sh` — \
+                      and you **end your turn** and are woken when it exits, with its status and \
+                      the tail of its output. A background script does not see your variables and \
+                      nothing it defines comes back, so have it write what you need to a file.";
+
 /// Everything a turn may call. Order is the order they're advertised, which is the order a model
 /// tends to consider them in: look before you write, and shell out only when nothing else fits.
+///
+/// Not every agent is advertised all of it: see [`offered`] for the two that are switched on per
+/// agent.
 pub(crate) const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "Read",
@@ -190,8 +285,8 @@ pub(crate) const TOOLS: &[ToolSpec] = &[
             })
         },
     },
-    // Declared only where it can run — see `backends::pycode` for why that is Unix. A tool that is
-    // advertised and then refuses every call is worse than one that is not there.
+    // Declared only where they can run — see `backends::interpreter` for why that is Unix. A tool
+    // that is advertised and then refuses every call is worse than one that is not there.
     #[cfg(unix)]
     ToolSpec {
         name: "PyCode",
@@ -204,6 +299,23 @@ pub(crate) const TOOLS: &[ToolSpec] = &[
                     "timeout_ms": { "type": "integer", "description": "Interrupt the code after this long. Defaults to 120000. An interrupt leaves the interpreter and your variables intact. Ignored when `background` is set — a job has no deadline." },
                     "background": { "type": "boolean", "description": "Run the code as a script of its own and return immediately with a job id instead of waiting for it. Use it for anything that outlasts a couple of minutes. It starts where you stand but in a new interpreter, without your variables. You are woken when it exits, with its status and the tail of its log." },
                     "restart": { "type": "boolean", "description": "Start from a new interpreter first, dropping every variable and import. For when what it holds is in your way — it is never needed just because the last call raised." },
+                },
+                "required": ["code"],
+            })
+        },
+    },
+    #[cfg(unix)]
+    ToolSpec {
+        name: "TsCode",
+        description: TSCODE,
+        schema: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "code": { "type": "string", "description": "The TypeScript to run. A cell, not a line: several statements, declarations and loops are all fine, and so is plain JavaScript." },
+                    "timeout_ms": { "type": "integer", "description": "Stop the command the code is waiting on after this long. Defaults to 120000. Code that is still running after that cannot be interrupted and costs the interpreter. Ignored when `background` is set — a job has no deadline." },
+                    "background": { "type": "boolean", "description": "Run the code as a script of its own and return immediately with a job id instead of waiting for it. Use it for anything that outlasts a couple of minutes. It starts where you stand but in a new interpreter, without your variables. You are woken when it exits, with its status and the tail of its log." },
+                    "restart": { "type": "boolean", "description": "Start from a new interpreter first, dropping everything earlier cells declared. For when what it holds is in your way — it is never needed just because the last call threw." },
                 },
                 "required": ["code"],
             })
@@ -410,16 +522,16 @@ pub struct ToolDeclaration {
     pub schema: Value,
 }
 
-/// Every tool an `harness:adi` turn can call, exactly as declared to the model.
+/// Every tool an `harness:adi` turn of an agent with these switches can call, exactly as declared
+/// to the model.
 ///
-/// Read off the same [`TOOLS`] table [`super::adi_loop`] builds its provider payloads from, so a
-/// tool added there appears here without anybody remembering to. Anything that renders this list
+/// Read off the same [`TOOLS`] table [`super::adi_loop`] builds its provider payloads from, through
+/// the same [`offered`] filter, so a tool added there appears here without anybody remembering to. Anything that renders this list
 /// for a person is then showing the inventory the model has rather than a second copy of it that
 /// can fall behind.
 #[must_use]
-pub fn declarations() -> Vec<ToolDeclaration> {
-    TOOLS
-        .iter()
+pub fn declarations(code: CodeTools) -> Vec<ToolDeclaration> {
+    offered(code)
         .map(|t| ToolDeclaration {
             name: t.name.to_string(),
             description: t.description.to_string(),
@@ -439,6 +551,7 @@ impl<'a> Ctx<'a> {
     pub(crate) fn for_conversation(
         agent: &'a str,
         unattended: bool,
+        code: CodeTools,
         cwd: &'a Path,
         conv: &'a str,
         agent_dir: &'a Path,
@@ -453,6 +566,7 @@ impl<'a> Ctx<'a> {
             sessions,
             agent_dir,
             unattended,
+            code,
         }
     }
 }
@@ -472,8 +586,12 @@ pub(crate) fn execute(
         "Write" => write(input, ctx.cwd),
         "Edit" => edit(input, ctx.cwd),
         "Bash" => bash(input, ctx),
+        // Only for an agent that has them. One that does not is answered below, as for any name
+        // it was never given — which is what these are to it.
         #[cfg(unix)]
-        "PyCode" => pycode(input, ctx),
+        "PyCode" if ctx.code.python => cell(Language::Python, input, ctx),
+        #[cfg(unix)]
+        "TsCode" if ctx.code.typescript => cell(Language::TypeScript, input, ctx),
         "Glob" => glob(input, ctx.cwd),
         "Grep" => grep(input, ctx.cwd),
         "Await" => await_wake(input, ctx),
@@ -481,7 +599,7 @@ pub(crate) fn execute(
         "Report" => report(input, ctx),
         other => Err(format!(
             "no tool named {other} — the tools you have are: {}",
-            TOOLS.iter().map(|t| t.name).collect::<Vec<_>>().join(", ")
+            offered(ctx.code).map(|t| t.name).collect::<Vec<_>>().join(", ")
         )),
     }
 }
@@ -674,30 +792,34 @@ fn with_note(body: &str, note: Option<String>) -> String {
 #[cfg(unix)]
 const WAKE_CODE_CHARS: usize = 2_000;
 
-/// Run a cell in the conversation's Python interpreter — see [`crate::backends::pycode`].
+/// Run a cell in the conversation's interpreter for `language` — see
+/// [`crate::backends::interpreter`].
 ///
 /// Where `Bash` reports a non-zero exit as a result, this reports an escaped exception as a
 /// *failed* one, and the difference is deliberate. A command's status is routinely an answer — a
 /// `grep` that found nothing — so the shell tool cannot call it a failure. Here that case has a
-/// spelling of its own (`check=False`), which leaves an exception meaning only one thing: the cell
-/// did not do what it was written to do.
+/// spelling of its own (`check=False`, `{ check: false }`), which leaves an exception meaning only
+/// one thing: the cell did not do what it was written to do.
 #[cfg(unix)]
-fn pycode(input: &Value, ctx: &Ctx<'_>) -> std::result::Result<String, String> {
-    use crate::backends::pycode::{Ended, Interpreter};
+fn cell(language: Language, input: &Value, ctx: &Ctx<'_>) -> std::result::Result<String, String> {
+    use crate::backends::interpreter::{Ended, Interpreter};
 
     let code = arg_str(input, "code")?;
-    let python = Interpreter::new(ctx.agent_dir, ctx.conv);
+    let interpreter = Interpreter::new(language, ctx.agent_dir, ctx.conv);
     if flag(input, "background") {
-        let command = python.job_command(code)?;
+        let command = interpreter.job_command(code)?;
         let shown: String = code.chars().take(WAKE_CODE_CHARS).collect();
         let more = if shown.len() < code.len() { "\n[…]" } else { "" };
-        let note = format!("You started this Python in the background:\n\n{shown}{more}");
+        let note = format!(
+            "You started this {} in the background:\n\n{shown}{more}",
+            language.name()
+        );
         return background(&command, note, ctx);
     }
 
     let timeout = arg_u64(input, "timeout_ms").unwrap_or(DEFAULT_TIMEOUT_MS);
     let start = ctx.shell.start_dir(ctx.cwd);
-    let ran = python.run(
+    let ran = interpreter.run(
         &ctx.shell,
         ctx.cwd,
         code,
@@ -730,11 +852,17 @@ fn pycode(input: &Value, ctx: &Ctx<'_>) -> std::result::Result<String, String> {
         Ended::Completed => Ok(with_note(&text, moved)),
         Ended::Raised => Err(with_note(&text, moved)),
         Ended::TimedOut => {
+            // What was done about the deadline is the one thing the two interpreters do
+            // differently, and the model is about to decide whether to run the cell again.
+            let stopped = match language {
+                Language::Python => "was interrupted where the traceback shows",
+                Language::TypeScript => "the command it was waiting on was stopped",
+            };
             let _ = write!(
                 text,
-                "\n\n(the code was still running after {timeout}ms and was interrupted where the \
-                 traceback shows. The interpreter and your variables are intact. Set `background` \
-                 to let it run past this call, or raise timeout_ms.)"
+                "\n\n(the code was still running after {timeout}ms and {stopped}. The \
+                 interpreter and your variables are intact. Set `background` to let it run past \
+                 this call, or raise timeout_ms.)"
             );
             Err(with_note(&text, moved))
         }
@@ -1443,6 +1571,7 @@ mod tests {
             sessions: SessionStore::new(root.join("sessions")),
             agent_dir: cwd,
             unattended: false,
+            code: CodeTools::BOTH,
         }
     }
 
@@ -1486,6 +1615,7 @@ mod tests {
                 sessions: self.sessions.clone(),
                 agent_dir: &self.root,
                 unattended: false,
+                code: CodeTools::BOTH,
             }
         }
     }
@@ -1584,6 +1714,114 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The code tools are switches on the agent, and one that is off is not there: not in what the
+    /// model is declared, and answered like any name it was never given if it is called anyway —
+    /// with the list of what the agent does have, which does not mention it either.
+    #[cfg(unix)]
+    #[test]
+    fn a_code_tool_exists_only_for_an_agent_that_switched_it_on() {
+        let names = |code: CodeTools| -> Vec<String> {
+            declarations(code).into_iter().map(|tool| tool.name).collect()
+        };
+        let neither = names(CodeTools::default());
+        assert!(neither.contains(&"Bash".to_string()), "{neither:?}");
+        assert!(!neither.iter().any(|name| name == "PyCode" || name == "TsCode"), "{neither:?}");
+        let python = names(CodeTools { python: true, typescript: false });
+        assert!(python.contains(&"PyCode".to_string()) && !python.contains(&"TsCode".to_string()), "{python:?}");
+        let both = names(CodeTools::BOTH);
+        assert!(both.contains(&"PyCode".to_string()) && both.contains(&"TsCode".to_string()), "{both:?}");
+
+        let dir = scratch("code-off");
+        let mut ctx = ctx_in(&dir, "code-off");
+        ctx.code = CodeTools { python: false, typescript: true };
+        let refused = execute("PyCode", &json!({ "code": "1" }), &ctx).expect_err("it has no PyCode");
+        assert!(refused.starts_with("no tool named PyCode"), "{refused}");
+        assert!(refused.contains("TsCode"), "what it does have is named: {refused}");
+        assert!(!refused.contains("PyCode,"), "and what it does not is not: {refused}");
+        assert!(
+            !dir.join("conv-1.py-kernel").exists(),
+            "nothing was started for a tool the agent does not have"
+        );
+
+        let allowed = execute("TsCode", &json!({ "code": "1 + 1;" }), &ctx).expect("it has TsCode");
+        assert_eq!(allowed, "2");
+        crate::backends::interpreter::Interpreter::new(Language::TypeScript, ctx.agent_dir, ctx.conv).stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A `TsCode` call as the model meets it: the last expression comes back, a thrown error is a
+    /// failed result naming the line, the next call still has what the first declared — and a
+    /// deadline says which of the two things a deadline can mean here happened.
+    #[cfg(unix)]
+    #[test]
+    fn tscode_keeps_what_it_declared_fails_the_call_that_throws_and_reports_a_deadline() {
+        let dir = scratch("tscode");
+        std::fs::create_dir_all(dir.join("workspaces")).expect("mkdir");
+        let ctx = ctx_in(&dir, "tscode");
+        let typescript = crate::backends::interpreter::Interpreter::new(Language::TypeScript, ctx.agent_dir, ctx.conv);
+
+        let quiet = execute("TsCode", &json!({ "code": "const rows: number[] = [1, 2, 3];" }), &ctx).expect("run");
+        assert_eq!(quiet, "(no output)");
+        let shown = execute("TsCode", &json!({ "code": "rows.reduce((a, b) => a + b, 0);" }), &ctx).expect("run");
+        assert_eq!(shown, "6");
+
+        let thrown = execute("TsCode", &json!({ "code": "console.log('so far');\n(rows as any).nope.x;" }), &ctx)
+            .expect_err("an exception fails the call");
+        assert!(thrown.starts_with("so far\n"), "{thrown}");
+        assert!(thrown.contains("TypeError"), "{thrown}");
+        assert!(thrown.contains("at <cell 3>: rows.nope.x;"), "{thrown}");
+
+        let moved = execute("TsCode", &json!({ "code": "process.chdir('workspaces');" }), &ctx).expect("run");
+        assert!(moved.contains("the shell is now in"), "{moved}");
+        let after = bash(&json!({ "command": "basename \"$(pwd -P)\"" }), &ctx).expect("run");
+        assert!(after.starts_with("workspaces"), "Bash stands where TypeScript moved: {after}");
+
+        let late = execute("TsCode", &json!({ "code": "await sh('sleep 60');", "timeout_ms": 300 }), &ctx)
+            .expect_err("a timeout fails the call");
+        assert!(late.contains("still running after 300ms"), "{late}");
+        assert!(late.contains("the command it was waiting on was stopped"), "{late}");
+        assert!(late.contains("variables are intact"), "{late}");
+        assert_eq!(execute("TsCode", &json!({ "code": "rows.length;" }), &ctx).expect("run"), "3");
+
+        typescript.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A background `TsCode` is a job like any other, and its wake quotes the code.
+    #[cfg(unix)]
+    #[test]
+    fn a_background_tscode_starts_a_job_and_the_wake_quotes_the_code() {
+        let dir = scratch("tscode-bg");
+        let ctx = ctx_in(&dir, "tscode-bg");
+
+        let said = execute(
+            "TsCode",
+            &json!({ "code": "console.log('from the job');", "background": true }),
+            &ctx,
+        )
+        .expect("a job starts");
+        assert!(said.contains("in the background"), "{said}");
+
+        let pending = ctx.awaits.for_conversation("watcher", "conv-1");
+        assert_eq!(pending.len(), 1, "exactly one wake: {pending:?}");
+        assert!(pending[0].note.contains("this TypeScript in the background"), "{:?}", pending[0]);
+        assert!(pending[0].note.contains("console.log('from the job');"), "{:?}", pending[0]);
+
+        let log = said
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("log: "))
+            .expect("the log path is in the reply");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while !std::fs::read_to_string(log).is_ok_and(|text| text.contains("from the job"))
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert_eq!(std::fs::read_to_string(log).expect("log").trim(), "from the job");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A `PyCode` call as the model meets it: what was printed comes back, an escaped exception is
     /// a *failed* result with its traceback, and the next call still has the first one's variables.
     #[cfg(unix)]
@@ -1591,7 +1829,7 @@ mod tests {
     fn pycode_keeps_its_variables_and_fails_the_call_that_raises() {
         let dir = scratch("pycode");
         let ctx = ctx_in(&dir, "pycode");
-        let python = crate::backends::pycode::Interpreter::new(ctx.agent_dir, ctx.conv);
+        let python = crate::backends::interpreter::Interpreter::new(Language::Python, ctx.agent_dir, ctx.conv);
 
         let quiet = execute("PyCode", &json!({ "code": "rows = [1, 2, 3]" }), &ctx).expect("run");
         assert_eq!(quiet, "(no output)");
@@ -1621,7 +1859,7 @@ mod tests {
         let inner = std::fs::canonicalize(dir.join("workspaces")).expect("canonicalize");
         let inner = inner.to_str().expect("utf8");
         let ctx = ctx_in(&dir, "pycode-cd");
-        let python = crate::backends::pycode::Interpreter::new(ctx.agent_dir, ctx.conv);
+        let python = crate::backends::interpreter::Interpreter::new(Language::Python, ctx.agent_dir, ctx.conv);
 
         let stayed = execute("PyCode", &json!({ "code": "1" }), &ctx).expect("run");
         assert!(!stayed.contains("the shell is now in"), "{stayed}");
@@ -1643,7 +1881,7 @@ mod tests {
     fn pycode_past_its_deadline_says_the_variables_are_intact() {
         let dir = scratch("pycode-deadline");
         let ctx = ctx_in(&dir, "pycode-deadline");
-        let python = crate::backends::pycode::Interpreter::new(ctx.agent_dir, ctx.conv);
+        let python = crate::backends::interpreter::Interpreter::new(Language::Python, ctx.agent_dir, ctx.conv);
 
         let said = execute(
             "PyCode",

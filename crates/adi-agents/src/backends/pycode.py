@@ -15,7 +15,7 @@ Written against Python 3.8 so the interpreter a machine happens to ship is enoug
 library only: this file is embedded in the adi binary and dropped beside a session, so there is
 nowhere to install a dependency from.
 
-The Rust half is `pycode.rs`; the wire between them is one JSON object per line, one request and
+The Rust half is `interpreter.rs`, shared with `tscode.ts`; the wire is one JSON object per line, one request and
 one reply per connection.
 """
 
