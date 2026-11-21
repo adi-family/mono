@@ -195,7 +195,7 @@ function ChatToolOutput({ label = "Tool output", className, children, tabIndex =
       role="region"
       aria-label={label}
       tabIndex={tabIndex}
-      className={cn("bg-muted/40 text-foreground focus-visible:ring-ring/50 m-0 max-h-64 min-w-0 overflow-auto overscroll-contain p-3 font-mono text-xs leading-5 whitespace-pre outline-none focus-visible:ring-2 focus-visible:ring-inset", className)}
+      className={cn("bg-muted/40 text-foreground focus-visible:ring-ring/50 m-0 max-h-64 min-w-0 overflow-auto overscroll-x-contain p-3 font-mono text-xs leading-5 whitespace-pre outline-none focus-visible:ring-2 focus-visible:ring-inset", className)}
       {...props}
     >
       <code>{children}</code>
@@ -241,7 +241,7 @@ function ChatToolDiff({ file, lines, className, ...props }: ChatToolDiffProps) {
         role="region"
         aria-label={`Changes to ${file}`}
         tabIndex={0}
-        className="focus-visible:ring-ring/50 max-h-72 overflow-auto overscroll-contain py-1 font-mono leading-5 outline-none focus-visible:ring-2 focus-visible:ring-inset"
+        className="focus-visible:ring-ring/50 max-h-72 overflow-auto overscroll-x-contain py-1 font-mono leading-5 outline-none focus-visible:ring-2 focus-visible:ring-inset"
       >
         <div className="w-max min-w-full">
           {lines.map((line, index) => (

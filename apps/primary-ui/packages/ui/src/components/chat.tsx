@@ -14,6 +14,11 @@ type ChatThreadProps = React.ComponentProps<"div"> & {
   autoScroll?: boolean;
   label?: string;
   scrollToLatestLabel?: string;
+  /**
+   * Sizes the message column, e.g. `mx-auto w-full max-w-4xl`. The scroll area keeps the thread's
+   * full width, so the margins beside a narrower column scroll it too.
+   */
+  contentClassName?: string;
 };
 
 function ChatThread({
@@ -22,6 +27,7 @@ function ChatThread({
   label = "Conversation",
   scrollToLatestLabel = "Jump to latest",
   "aria-live": ariaLive = "polite",
+  contentClassName,
   children,
   className,
   ...props
@@ -162,24 +168,27 @@ function ChatThread({
           newestAtTop && "[overflow-anchor:none]",
         )}
       >
-        <div ref={contentRef} data-slot="chat-thread-content" className="flex min-w-0 flex-col gap-6 p-3 sm:p-4">
+        <div ref={contentRef} data-slot="chat-thread-content" className={cn("flex min-w-0 flex-col gap-6 p-3 sm:p-4", contentClassName)}>
           {orderedChildren}
         </div>
       </div>
       {awayFromLatest && (
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          data-slot="chat-thread-jump"
-          className={cn("absolute right-4 shadow-sm", newestAtTop ? "top-3" : "bottom-3")}
-          onClick={jumpToLatest}
-        >
-          {newestAtTop
-            ? <ArrowUp className="size-3.5" aria-hidden="true" />
-            : <ArrowDown className="size-3.5" aria-hidden="true" />}
-          {scrollToLatestLabel}
-        </Button>
+        // Laid out like the message column, so the control stays at that column's edge.
+        <div className={cn("pointer-events-none absolute inset-x-0 flex justify-end px-4", newestAtTop ? "top-3" : "bottom-3", contentClassName)}>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            data-slot="chat-thread-jump"
+            className="pointer-events-auto shadow-sm"
+            onClick={jumpToLatest}
+          >
+            {newestAtTop
+              ? <ArrowUp className="size-3.5" aria-hidden="true" />
+              : <ArrowDown className="size-3.5" aria-hidden="true" />}
+            {scrollToLatestLabel}
+          </Button>
+        </div>
       )}
     </div>
   );

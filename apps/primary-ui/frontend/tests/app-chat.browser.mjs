@@ -643,6 +643,68 @@ try {
     await send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 1000, deviceScaleFactor: 1, mobile: false });
   });
 
+  await check("the transcript scrolls from its side margins and from over a table, code and tool output", async () => {
+    // Wide enough for margins beside the messages, short enough for the transcript to overflow.
+    await send("Emulation.setDeviceMetricsOverride", { width: 1600, height: 520, deviceScaleFactor: 1, mobile: false });
+    await evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
+    const viewport = q(`${chat} [data-slot="chat-thread-viewport"]`);
+    const box = (element) => evaluate(`(() => { const node=${element}; const style=getComputedStyle(node); const r=node.getBoundingClientRect(); return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,innerLeft:r.left+parseFloat(style.paddingLeft),innerRight:r.right-parseFloat(style.paddingRight)}; })()`);
+    const pane = await box(q(chat));
+    const scroller = await box(viewport);
+    const column = await box(q(`${chat} [data-slot="chat-thread-content"]`));
+    const composerBox = await box(q(`${chat} [data-slot="chat-composer"]`));
+    assert.ok(Math.abs(scroller.left - pane.left) <= 1 && Math.abs(scroller.right - pane.right) <= 1, "the scroll area spans the chat pane");
+    assert.ok(column.width <= 896 + 1, "messages keep their reading width");
+    assert.ok(column.left - scroller.left > 40 && scroller.right - column.right > 40, "the pane has margins beside the messages");
+    assert.ok(Math.abs((column.left - scroller.left) - (scroller.right - column.right)) <= 1, "messages are centred in the pane");
+    assert.ok(Math.abs(column.innerLeft - composerBox.left) <= 1 && Math.abs(column.innerRight - composerBox.right) <= 1, "messages line up with the composer");
+
+    const scrollTop = () => evaluate(`${viewport}.scrollTop`);
+    const room = await evaluate(`${viewport}.scrollHeight - ${viewport}.clientHeight`);
+    assert.ok(room > 200, "the fixture transcript overflows its pane");
+    /** A real wheel turn at a point; the transcript itself has to move. */
+    async function wheelMovesTranscript(point, description) {
+      const before = await scrollTop();
+      const deltaY = before > room / 2 ? -120 : 120;
+      await send("Input.dispatchMouseEvent", { type: "mouseWheel", x: point.x, y: point.y, deltaX: 0, deltaY });
+      await until(async () => Math.abs(await scrollTop() - before) > 20, description, 2500);
+      // Let the wheel animation settle so the next turn starts from rest.
+      await pause(350);
+    }
+    const middle = (scroller.top + scroller.bottom) / 2;
+    await wheelMovesTranscript({ x: scroller.left + 12, y: middle }, "a wheel turn in the left margin scrolls the transcript");
+    const jump = `${chat} [data-slot="chat-thread-jump"]`;
+    await until(() => evaluate(`${q(jump)} !== null`), "scrolling away from the latest message offers a way back");
+    assert.ok(Math.abs((await box(q(jump))).right - column.innerRight) <= 1, "the jump control sits at the message column's edge, not the pane's");
+    if (process.env.BROWSER_SCREENSHOTS_DIR) {
+      await mkdir(process.env.BROWSER_SCREENSHOTS_DIR, { recursive: true });
+      const screenshot = await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
+      await writeFile(resolve(process.env.BROWSER_SCREENSHOTS_DIR, "design-system-app-chat-wide-pane.png"), Buffer.from(screenshot.data, "base64"));
+    }
+    await wheelMovesTranscript({ x: scroller.right - 12, y: middle }, "a wheel turn in the right margin scrolls the transcript");
+
+    async function over(selector) {
+      await evaluate(`${q(selector)}.scrollIntoView({block:'center',behavior:'instant'})`);
+      await pause(100);
+      return evaluate(`(() => { const r=${q(selector)}.getBoundingClientRect(); return {x:r.left+Math.min(r.width/2,120),y:r.top+r.height/2}; })()`);
+    }
+    const table = `${chat} [data-slot="chat-markdown-table"]`;
+    await wheelMovesTranscript(await over(table), "a wheel turn over a table scrolls the transcript");
+    await wheelMovesTranscript(await over(`${chat} [data-slot="chat-markdown"] pre`), "a wheel turn over a short code block scrolls the transcript");
+    await click(`${chat} [data-slot="chat-tool-call-trigger"]`);
+    await until(() => evaluate(`${q(`${chat} [data-slot="chat-tool-output"]`)}?.checkVisibility() === true`), "tool output opens");
+    await wheelMovesTranscript(await over(`${chat} [data-slot="chat-tool-output"]`), "a wheel turn over short tool output scrolls the transcript");
+    await click(`${chat} [data-slot="chat-tool-call-trigger"]`);
+
+    // A wide table still scrolls sideways inside its own box.
+    const tablePoint = await over(table);
+    assert.ok(await evaluate(`${q(table)}.scrollWidth > ${q(table)}.clientWidth + 100`), "the fixture table is wider than its message");
+    await send("Input.dispatchMouseEvent", { type: "mouseWheel", x: tablePoint.x, y: tablePoint.y, deltaX: 120, deltaY: 0 });
+    await until(() => evaluate(`${q(table)}.scrollLeft > 20`), "a sideways wheel turn scrolls the table");
+    await send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 1000, deviceScaleFactor: 1, mobile: false });
+    await evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
+  });
+
   await check("streamed Markdown tolerates incomplete fences and updates completed markup", async () => {
     const snapshot = snapshots.get(idOf(markdown));
     const streamed = { ...assistant('## Streaming markdown\n\n```ts\nconst partial = "<pending>";', snapshot.turns.length), pending: true };

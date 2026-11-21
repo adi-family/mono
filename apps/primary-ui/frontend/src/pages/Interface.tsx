@@ -170,7 +170,7 @@ export function Interface() {
       {/* A refresh that fails over a loaded transcript goes to the event log; only a user's own action reports here. */}
       {actionError && <p role="alert" className="text-destructive shrink-0 px-4 py-2 text-xs sm:px-5">{actionError}</p>}
 
-      {active && snapshot ? <ChatThread key={selectionKey} label="Chat messages" aria-live="off" className="mx-auto w-full max-w-4xl">
+      {active && snapshot ? <ChatThread key={selectionKey} label="Chat messages" aria-live="off" contentClassName="mx-auto w-full max-w-4xl">
         {snapshot.total_turns > snapshot.turns.length && <div key="earlier" className="flex justify-center">
           <Button type="button" size="sm" variant="ghost" onClick={loadEarlier} disabled={isLoadingEarlier} disabledReason="Earlier messages are loading.">
             {isLoadingEarlier ? "Loading earlier messages…" : "Load earlier messages"}

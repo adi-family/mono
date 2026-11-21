@@ -10,8 +10,9 @@ const components: Components = {
     </a>
   ) : <span>{children}</span>,
   pre: ({ node: _node, ...props }) => <pre {...props} tabIndex={0} role="region" aria-label="Code block" />,
+  // Sideways overscroll stays inside the table; a vertical wheel turn must still reach the transcript.
   table: ({ node: _node, ...props }) => (
-    <div data-slot="chat-markdown-table" tabIndex={0} role="region" aria-label="Table" className="max-w-full overflow-x-auto overscroll-contain rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50">
+    <div data-slot="chat-markdown-table" tabIndex={0} role="region" aria-label="Table" className="max-w-full overflow-x-auto overscroll-x-contain rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50">
       <table {...props} />
     </div>
   ),

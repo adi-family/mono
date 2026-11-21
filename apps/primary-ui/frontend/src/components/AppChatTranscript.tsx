@@ -43,7 +43,7 @@ function ToolArguments({ input }: { input: string }) {
             tabIndex={lengthy ? 0 : undefined}
             role={lengthy ? "region" : undefined}
             aria-label={lengthy ? `${name} argument` : undefined}
-            className="focus-visible:ring-ring/50 m-0 max-h-64 overflow-auto overscroll-contain rounded-sm font-mono whitespace-pre-wrap outline-none focus-visible:ring-2 focus-visible:ring-inset [overflow-wrap:anywhere]"
+            className="focus-visible:ring-ring/50 m-0 max-h-64 overflow-auto overscroll-x-contain rounded-sm font-mono whitespace-pre-wrap outline-none focus-visible:ring-2 focus-visible:ring-inset [overflow-wrap:anywhere]"
           >{value}</dd>
         </div>;
       })}

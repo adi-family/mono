@@ -599,6 +599,11 @@ change still navigates to its latest edge. The scrollable log
 is keyboard focusable; native props and `ref` target the outer wrapper. `label` names the log,
 and `scrollToLatestLabel` customizes its jump button.
 
+To keep messages at a reading width inside a wide pane, size the column with `contentClassName`
+(for example `contentClassName="mx-auto w-full max-w-4xl"`) rather than narrowing the thread with
+`className`. The scroll area then spans the pane, so a wheel turn in the margins beside the
+messages scrolls the conversation, and the jump button stays at the column's edge.
+
 `ChatMessage` requires `from="user" | "assistant" | "system"`. Compose an optional avatar,
 speaker/time metadata, content, and actions using the corresponding primitives. Always show
 the speaker in `ChatMessageMeta` or provide an accessible name. Content accepts React nodes;
