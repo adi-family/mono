@@ -88,6 +88,41 @@ const BASH: &str = "Run a shell command in the working directory and return its 
                     its own shell, so a `cd` or a variable you set is gone by the next one — use \
                     full paths.";
 
+/// What `PyCode` is, told in the terms that decide how a cell gets written. The first paragraph is
+/// the reason the tool exists — state that outlives the call — and it leads because a model that
+/// misses it writes Python the way it writes shell: everything fetched again, everything printed.
+/// The rest is what it could not guess: that `sh()` raises, that expressions are echoed, that the
+/// directory is the shell's, and that a background cell is a different interpreter.
+#[cfg(unix)]
+const PYCODE: &str = "Run Python in this conversation's own interpreter and return what it \
+                      printed. The interpreter stays up between calls: a variable you set, a \
+                      module you imported, a function you defined is still there on your next \
+                      call. So read or fetch a thing **once**, keep it in a variable, and work on \
+                      it from there — rather than printing all of it, or fetching it again. \
+                      Top-level expressions are echoed as in the Python REPL, so a bare \
+                      `len(rows)` shows its value without a `print`. An exception ends the call \
+                      with its traceback; what ran before it has happened, and the interpreter and \
+                      your variables survive it.\n\n`sh(cmd)` runs a command and returns its \
+                      stdout as a string, trailing newline dropped, with `.stderr`, `.code`, `.ok` \
+                      and `.lines` beside it — `head = sh('git rev-parse HEAD')`. A string runs \
+                      through the shell; a list (`sh(['git', 'commit', '-m', msg])`) runs as \
+                      written, with no quoting to get wrong. A command that exits non-zero raises \
+                      `ShError` carrying its output, so a cell of several steps stops at the one \
+                      that broke — pass `check=False` where failing is an answer (`grep`, `diff`, \
+                      `test`). A bare `sh(...)` line shows the command's output like any other \
+                      expression; `echo=True` shows it as it is produced. `os`, `sys`, `re`, \
+                      `json`, `subprocess`, `shutil`, `time` and `Path` are already imported.\n\n\
+                      It stands where your shell stands, and moves it: `os.chdir()` moves Bash \
+                      too, what you put in `os.environ` is exported to it, and wherever Bash `cd`'d \
+                      or whatever it exported is where this starts. Only variables and imports are \
+                      the interpreter's own. It is kept for an hour without a call; if it is ever \
+                      gone, the result says so, and what it held has to be built again.\n\nSet \
+                      `background` for code that will outlast the turn: it runs as a script of its \
+                      own — same directory, same environment, same `sh` — and you **end your \
+                      turn** and are woken when it exits, with its status and the tail of its \
+                      output. A background script does not see your variables and nothing it \
+                      defines comes back, so have it write what you need to a file.";
+
 /// Everything a turn may call. Order is the order they're advertised, which is the order a model
 /// tends to consider them in: look before you write, and shell out only when nothing else fits.
 pub(crate) const TOOLS: &[ToolSpec] = &[
@@ -152,6 +187,25 @@ pub(crate) const TOOLS: &[ToolSpec] = &[
                     "background": { "type": "boolean", "description": "Start the command and return immediately with a job id instead of waiting for it. Use it for anything that outlasts a couple of minutes — a build, a test suite, a deploy. Don't background `adi-mono agents run` — it already returns in about a second and hands you its own await for the run; backgrounding it only adds a second, redundant wake for the launcher exiting. You are woken when it exits, with its status and the tail of its log." },
                 },
                 "required": ["command"],
+            })
+        },
+    },
+    // Declared only where it can run — see `backends::pycode` for why that is Unix. A tool that is
+    // advertised and then refuses every call is worse than one that is not there.
+    #[cfg(unix)]
+    ToolSpec {
+        name: "PyCode",
+        description: PYCODE,
+        schema: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "code": { "type": "string", "description": "The Python to run. A cell, not a line: several statements, definitions and loops are all fine." },
+                    "timeout_ms": { "type": "integer", "description": "Interrupt the code after this long. Defaults to 120000. An interrupt leaves the interpreter and your variables intact. Ignored when `background` is set — a job has no deadline." },
+                    "background": { "type": "boolean", "description": "Run the code as a script of its own and return immediately with a job id instead of waiting for it. Use it for anything that outlasts a couple of minutes. It starts where you stand but in a new interpreter, without your variables. You are woken when it exits, with its status and the tail of its log." },
+                    "restart": { "type": "boolean", "description": "Start from a new interpreter first, dropping every variable and import. For when what it holds is in your way — it is never needed just because the last call raised." },
+                },
+                "required": ["code"],
             })
         },
     },
@@ -418,6 +472,8 @@ pub(crate) fn execute(
         "Write" => write(input, ctx.cwd),
         "Edit" => edit(input, ctx.cwd),
         "Bash" => bash(input, ctx),
+        #[cfg(unix)]
+        "PyCode" => pycode(input, ctx),
         "Glob" => glob(input, ctx.cwd),
         "Grep" => grep(input, ctx.cwd),
         "Await" => await_wake(input, ctx),
@@ -512,12 +568,9 @@ fn edit(input: &Value, cwd: &Path) -> std::result::Result<String, String> {
 
 fn bash(input: &Value, ctx: &Ctx<'_>) -> std::result::Result<String, String> {
     let command = arg_str(input, "command")?;
-    if input
-        .get("background")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        return background(command, ctx);
+    if flag(input, "background") {
+        let note = format!("You started this in the background:\n\n{command}");
+        return background(command, note, ctx);
     }
     let (cwd, shell) = (ctx.cwd, &ctx.shell);
     let timeout = arg_u64(input, "timeout_ms").unwrap_or(DEFAULT_TIMEOUT_MS);
@@ -574,13 +627,17 @@ fn bash(input: &Value, ctx: &Ctx<'_>) -> std::result::Result<String, String> {
 /// registered is reported as exactly that — the job is already running, and killing work the model
 /// asked for because a bookkeeping record didn't fit would be the worse of the two failures. The log
 /// path travels either way, which is what makes that recoverable rather than merely honest.
-fn background(command: &str, ctx: &Ctx<'_>) -> std::result::Result<String, String> {
+///
+/// `note` is what the wake says was started — the caller's to word, because what the model wrote
+/// is not always the command that runs: a background `PyCode` is a script on disk, and telling the
+/// model it started `python3 … run …` would describe the wrapper instead of its work.
+fn background(command: &str, note: String, ctx: &Ctx<'_>) -> std::result::Result<String, String> {
     let start = ctx.shell.start_dir(ctx.cwd);
     let job = jobs::start(ctx.agent_dir, ctx.conv, &ctx.shell, &start, command)
         .map_err(|e| format!("couldn't start the job: {e}"))?;
 
     let request = Request {
-        note: format!("You started this in the background:\n\n{command}"),
+        note,
         every_seconds: Some(jobs::LOOK_EVERY_SECONDS),
         check: Some(jobs::done_check(&job)),
         cwd: start.display().to_string(),
@@ -610,6 +667,87 @@ fn with_note(body: &str, note: Option<String>) -> String {
         Some(note) => format!("{body}{note}"),
         None => body.to_string(),
     }
+}
+
+/// How much of a background cell's source travels in the note that wakes its conversation. The
+/// note is replayed with every later turn, and the whole script is on disk beside the job's log.
+#[cfg(unix)]
+const WAKE_CODE_CHARS: usize = 2_000;
+
+/// Run a cell in the conversation's Python interpreter — see [`crate::backends::pycode`].
+///
+/// Where `Bash` reports a non-zero exit as a result, this reports an escaped exception as a
+/// *failed* one, and the difference is deliberate. A command's status is routinely an answer — a
+/// `grep` that found nothing — so the shell tool cannot call it a failure. Here that case has a
+/// spelling of its own (`check=False`), which leaves an exception meaning only one thing: the cell
+/// did not do what it was written to do.
+#[cfg(unix)]
+fn pycode(input: &Value, ctx: &Ctx<'_>) -> std::result::Result<String, String> {
+    use crate::backends::pycode::{Ended, Interpreter};
+
+    let code = arg_str(input, "code")?;
+    let python = Interpreter::new(ctx.agent_dir, ctx.conv);
+    if flag(input, "background") {
+        let command = python.job_command(code)?;
+        let shown: String = code.chars().take(WAKE_CODE_CHARS).collect();
+        let more = if shown.len() < code.len() { "\n[…]" } else { "" };
+        let note = format!("You started this Python in the background:\n\n{shown}{more}");
+        return background(&command, note, ctx);
+    }
+
+    let timeout = arg_u64(input, "timeout_ms").unwrap_or(DEFAULT_TIMEOUT_MS);
+    let start = ctx.shell.start_dir(ctx.cwd);
+    let ran = python.run(
+        &ctx.shell,
+        ctx.cwd,
+        code,
+        timeout,
+        MAX_OUTPUT,
+        flag(input, "restart"),
+    )?;
+    let moved = ctx
+        .shell
+        .moved_from(&start)
+        .map(|ended| format!("\n(the shell is now in {})", ended.display()));
+
+    let printed = ran.output.trim_end();
+    let mut text = String::new();
+    if ran.replaced {
+        // First, not last: everything below it was computed without the variables the model
+        // believes it has, and a `NameError` read before this line reads as its own mistake.
+        text.push_str(
+            "(this is a new interpreter: the one this conversation had is gone, and every \
+             variable, import and definition it held went with it. Files, the directory and \
+             exported variables are as you left them — rebuild what you still need.)\n\n",
+        );
+    }
+    text.push_str(if printed.is_empty() {
+        "(no output)"
+    } else {
+        printed
+    });
+    match ran.ended {
+        Ended::Completed => Ok(with_note(&text, moved)),
+        Ended::Raised => Err(with_note(&text, moved)),
+        Ended::TimedOut => {
+            let _ = write!(
+                text,
+                "\n\n(the code was still running after {timeout}ms and was interrupted where the \
+                 traceback shows. The interpreter and your variables are intact. Set `background` \
+                 to let it run past this call, or raise timeout_ms.)"
+            );
+            Err(with_note(&text, moved))
+        }
+        Ended::Interrupted => {
+            text.push_str("\n\n(the code was interrupted before it finished.)");
+            Err(with_note(&text, moved))
+        }
+    }
+}
+
+/// A boolean argument that is absent, or anything but `true`, is off.
+fn flag(input: &Value, key: &str) -> bool {
+    input.get(key).and_then(Value::as_bool).unwrap_or(false)
 }
 
 fn glob(input: &Value, cwd: &Path) -> std::result::Result<String, String> {
@@ -1442,6 +1580,130 @@ mod tests {
             "and reminds the run what it started: {wake:?}"
         );
         assert_eq!(wake.every, Some(jobs::LOOK_EVERY_SECONDS));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A `PyCode` call as the model meets it: what was printed comes back, an escaped exception is
+    /// a *failed* result with its traceback, and the next call still has the first one's variables.
+    #[cfg(unix)]
+    #[test]
+    fn pycode_keeps_its_variables_and_fails_the_call_that_raises() {
+        let dir = scratch("pycode");
+        let ctx = ctx_in(&dir, "pycode");
+        let python = crate::backends::pycode::Interpreter::new(ctx.agent_dir, ctx.conv);
+
+        let quiet = execute("PyCode", &json!({ "code": "rows = [1, 2, 3]" }), &ctx).expect("run");
+        assert_eq!(quiet, "(no output)");
+
+        let shown = execute("PyCode", &json!({ "code": "sum(rows)" }), &ctx).expect("run");
+        assert_eq!(shown, "6", "the variable survived, and the expression is echoed");
+
+        let raised = execute("PyCode", &json!({ "code": "print('so far')\nrows[9]" }), &ctx)
+            .expect_err("an exception fails the call");
+        assert!(raised.starts_with("so far\n"), "{raised}");
+        assert!(raised.contains("IndexError"), "{raised}");
+
+        let after = execute("PyCode", &json!({ "code": "len(rows)" }), &ctx).expect("run");
+        assert_eq!(after, "3", "the exception cost the interpreter nothing");
+
+        python.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The directory is the conversation's, not the tool's: Python moving it is reported the way a
+    /// `cd` is, and `Bash` is standing there afterwards.
+    #[cfg(unix)]
+    #[test]
+    fn pycode_moves_the_same_shell_bash_uses_and_says_so() {
+        let dir = scratch("pycode-cd");
+        std::fs::create_dir_all(dir.join("workspaces")).expect("mkdir");
+        let inner = std::fs::canonicalize(dir.join("workspaces")).expect("canonicalize");
+        let inner = inner.to_str().expect("utf8");
+        let ctx = ctx_in(&dir, "pycode-cd");
+        let python = crate::backends::pycode::Interpreter::new(ctx.agent_dir, ctx.conv);
+
+        let stayed = execute("PyCode", &json!({ "code": "1" }), &ctx).expect("run");
+        assert!(!stayed.contains("the shell is now in"), "{stayed}");
+
+        let moved = execute("PyCode", &json!({ "code": "os.chdir('workspaces')" }), &ctx).expect("run");
+        assert!(moved.contains("the shell is now in"), "{moved}");
+        assert!(moved.contains(inner), "{moved}");
+
+        let after = bash(&json!({ "command": "pwd -P" }), &ctx).expect("run");
+        assert!(after.contains(inner), "{after}");
+
+        python.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A deadline is a failed call that says what survived it — which is everything but the cell.
+    #[cfg(unix)]
+    #[test]
+    fn pycode_past_its_deadline_says_the_variables_are_intact() {
+        let dir = scratch("pycode-deadline");
+        let ctx = ctx_in(&dir, "pycode-deadline");
+        let python = crate::backends::pycode::Interpreter::new(ctx.agent_dir, ctx.conv);
+
+        let said = execute(
+            "PyCode",
+            &json!({ "code": "import time\ntime.sleep(60)", "timeout_ms": 300 }),
+            &ctx,
+        )
+        .expect_err("a timeout fails the call");
+        assert!(said.contains("still running after 300ms"), "{said}");
+        assert!(said.contains("variables are intact"), "{said}");
+        assert!(said.contains("background"), "and what to do instead: {said}");
+
+        python.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A background cell is a job like any other: started and watched in one act, and the wake
+    /// reminds the run of the *code* it wrote rather than of the wrapper that runs it.
+    #[cfg(unix)]
+    #[test]
+    fn a_background_pycode_starts_a_job_and_the_wake_quotes_the_code() {
+        let dir = scratch("pycode-bg");
+        let ctx = ctx_in(&dir, "pycode-bg");
+
+        let said = execute(
+            "PyCode",
+            &json!({ "code": "print('from the job')", "background": true }),
+            &ctx,
+        )
+        .expect("a job starts");
+        assert!(said.contains("in the background"), "{said}");
+        assert!(said.contains("job-"), "{said}");
+
+        let pending = ctx.awaits.for_conversation("watcher", "conv-1");
+        assert_eq!(pending.len(), 1, "exactly one wake: {pending:?}");
+        assert!(
+            pending[0].note.contains("print('from the job')"),
+            "{:?}",
+            pending[0]
+        );
+        assert!(
+            !pending[0].note.contains("pycode.py"),
+            "the wrapper is not what the model started: {:?}",
+            pending[0]
+        );
+
+        // The job really ran the cell: its log ends up holding what the code printed.
+        let log = said
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("log: "))
+            .expect("the log path is in the reply");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while !std::fs::read_to_string(log).is_ok_and(|text| text.contains("from the job"))
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert_eq!(
+            std::fs::read_to_string(log).expect("log").trim(),
+            "from the job"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

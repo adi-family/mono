@@ -9,7 +9,7 @@
 //!
 //! # What it serves, and what it deliberately does not
 //!
-//! Only [`SERVED`] — `Bash`, `Await` and `Ask`. The engine's own built-in `Bash` never reaches a run
+//! Only [`SERVED`] — `Bash`, `PyCode`, `Await` and `Ask`. The engine's own built-in `Bash` never reaches a run
 //! (see [`scope_tools`]) precisely so ours is the shell an agent gets: one shell per *conversation*,
 //! where a `cd` and an `export` outlive the call and the turn (see [`super::shell`]). The CLI's own
 //! `Read`/`Write`/`Edit`/`Glob`/`Grep` are better than ours would be — diff-aware edits, the CLI's
@@ -64,7 +64,7 @@ const DEFAULT_PROTOCOL: &str = "2025-11-25";
 
 /// Which of the shared tools this server hands to a Claude engine. See the module docs: the file
 /// tools stay the CLI's own, and only what has to be *ours* crosses the wire.
-const SERVED: &[&str] = &["Bash", "Await", "Ask"];
+const SERVED: &[&str] = &["Bash", "PyCode", "Await", "Ask"];
 
 /// The `--mcp-config` value that gives a Claude engine ADI's own tools: this binary, re-entered as
 /// a stdio MCP server scoped to one conversation (see the module docs).
@@ -625,6 +625,32 @@ mod tests {
         let served = listed.iter().find(|t| t["name"] == "Bash").expect("served");
         assert_eq!(served["description"], bash.description);
         assert_eq!(served["inputSchema"], (bash.schema)());
+    }
+
+    /// `PyCode` crosses the wire as `Bash` does, and one server's calls share one interpreter: the
+    /// second call reads what the first one set. An exception that escapes is `isError`.
+    #[cfg(unix)]
+    #[test]
+    fn pycode_is_served_keeps_state_between_calls_and_flags_an_exception() {
+        let call = |id: u32, code: &str| {
+            json!({
+                "jsonrpc": "2.0", "id": id, "method": "tools/call",
+                "params": { "name": "PyCode", "arguments": { "code": code } },
+            })
+            .to_string()
+        };
+        let replies = talk(&[call(1, "x = 20"), call(2, "x + 1"), call(3, "x / 0")].join("\n"));
+        let text = |i: usize| {
+            replies[i]["result"]["content"][0]["text"]
+                .as_str()
+                .expect("text")
+                .to_string()
+        };
+
+        assert_eq!(replies[0]["result"]["isError"], false, "{:?}", replies[0]);
+        assert_eq!(text(1), "21", "the second call saw the first one's variable");
+        assert_eq!(replies[2]["result"]["isError"], true, "{:?}", replies[2]);
+        assert!(text(2).contains("ZeroDivisionError"), "{}", text(2));
     }
 
     #[test]

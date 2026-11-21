@@ -69,6 +69,16 @@ impl Shell {
         }
     }
 
+    /// The two files the state lives in — the recorded directory, then the exported variables.
+    ///
+    /// For [`super::pycode`], whose interpreter reads and writes the same pair so that a
+    /// conversation has one location whichever of the two tools moved it. Anything else wants
+    /// [`Self::script`], which is the only writer that knows the format it writes.
+    #[cfg(unix)]
+    pub(crate) fn files(&self) -> (&Path, &Path) {
+        (&self.cwd, &self.env)
+    }
+
     /// Where the next command starts: where the last one ended, or `home` — the run's own directory
     /// — when there was no last one, or when what it recorded is no longer a directory.
     ///

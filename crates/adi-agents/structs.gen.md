@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-160 structs · 45 enums · 5 type aliases across 63 files.
+163 structs · 47 enums · 5 type aliases across 64 files.
 
 ## Index
 
@@ -25,6 +25,7 @@
 - [`src/backends/jobs.rs`](#srcbackendsjobsrs) — `Job`
 - [`src/backends/mcp.rs`](#srcbackendsmcprs) — `ToolScope`
 - [`src/backends/process/codex.rs`](#srcbackendsprocesscodexrs) — `Continuation`
+- [`src/backends/pycode.rs`](#srcbackendspycoders) — `Interpreter`, `Ended`, `Ran`, `Live`, `Unanswered`
 - [`src/backends/shell.rs`](#srcbackendsshellrs) — `Shell`
 - [`src/dispatch.rs`](#srcdispatchrs) — `Dispatched`
 - [`src/error.rs`](#srcerrorrs) — `Result`, `Error`
@@ -1145,6 +1146,75 @@ pub(crate) enum Continuation<'a> {
     Resume {
         thread_id: &'a str,
     },
+}
+```
+
+---
+
+## `src/backends/pycode.rs`
+
+### struct `Interpreter`
+
+One conversation's interpreter, as the files that say where it is.
+
+```rust
+#[derive(Debug)]
+pub(crate) struct Interpreter {
+    state: PathBuf,
+    script: PathBuf,
+    log: PathBuf,
+    dir: PathBuf,
+    id: String,
+}
+```
+
+### enum `Ended`
+
+How a cell ended.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Ended {
+    Completed,
+    Raised,
+    TimedOut,
+    Interrupted,
+}
+```
+
+### struct `Ran`
+
+What one call produced.
+
+```rust
+#[derive(Debug)]
+pub(crate) struct Ran {
+    pub(crate) output: String,
+    pub(crate) ended: Ended,
+    pub(crate) replaced: bool,
+}
+```
+
+### struct `Live`
+
+A reachable interpreter: an open connection to it, and what killing it needs.
+
+```rust
+struct Live {
+    stream: UnixStream,
+    pid: u32,
+    socket: PathBuf,
+}
+```
+
+### enum `Unanswered`
+
+Why a call got no reply.
+
+```rust
+enum Unanswered {
+    TimedOut,
+    Gone(String),
 }
 ```
 
