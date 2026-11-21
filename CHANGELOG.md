@@ -26,6 +26,14 @@ extraction script cares about.
 - **adi Fleet on iPhone and iPad is now your apps and your chats, natively.** The app opens on **Apps** — the control panel's home grid, every app on every paired machine with its own icon, one tap to open. The second tab, **Chats**, is every conversation on every paired machine in the panel's own order — what is waiting on your answer first, then what is running, then what is waiting on a wake, each with the panel's dot — and the panel's own filter (started by any user by default, by you, starred, or everything); a chat opens as a native transcript with markdown (code blocks, tables, lists), tool calls folded into one-line receipts you can open, and a composer that sends, queues behind an answer in flight, or stops it. An agent's question is answered in place, and a link an agent writes to one of the machine's own apps (`http://shop.adi/…`) opens that app over the mesh. Pairing moved to the third tab, Fleet. Attachments and voice are not in the native chat yet — **Open in the control panel** in a chat's menu opens the same conversation in the web UI.
 - **Edit a message you already sent.** Hovering one of your messages in a chat shows an edit button; clicking it resets the conversation to just before that message and puts the message, with its attachments, back in the composer to reword and send again. Everything after that point is dropped — from the transcript and from the agent's own memory, so it answers as if the later turns never happened. Works for `harness:claude-sdk` and `harness:adi` conversations; the button appears once the agent has stopped answering. Files the agent changed in the dropped turns are not restored.
 
+### Changed
+
+- **Home and Chats open with what they showed last time.** Both pages used to start empty and fill in as each machine answered — on Chats that was half a dozen visible steps over several seconds when a paired machine was slow to reply. They now show at once the apps, the conversation list and the open conversation this browser saw last, and refresh them in the background as the machines answer. Opening Chats without a conversation in the address goes straight to the newest one, without the new-chat screen flashing first. The copy is kept in this browser only, and a first visit still loads as before.
+
+### Fixed
+
+- **A chat scrolls from anywhere in its pane.** A conversation's scroll area was only as wide as the messages, so turning the wheel with the pointer in the margins beside them did nothing; it now spans the pane, and the messages keep their reading width. Turning the wheel over a table, a code block or a tool's output scrolls the conversation as well — in current Chrome those boxes swallowed it, even when they had nothing to scroll themselves.
+
 ## 1.43.0 — 2026-11-17
 
 ### Security
