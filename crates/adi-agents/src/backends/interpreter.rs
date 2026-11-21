@@ -20,13 +20,17 @@
 //! and language, reached over a Unix socket: each call connects, sends one request, reads one
 //! reply.
 //!
-//! Three files per language in the session's own `<id>.*` namespace, where the session's deletion
-//! sweeps them without this module being told (`py` below is `ts` for the other one):
+//! A few files in the session's own `<id>.*` namespace, where the session's deletion sweeps them
+//! without this module being told (`py` below is `ts` for the other language):
 //!
 //! - `<id>.py-kernel` — who is serving: a pid and where its socket is. The socket itself lives in
 //!   a private temp directory, because a socket path has about a hundred bytes to fit in and a
 //!   session directory is often longer than that on its own.
 //! - `<id>.pycode.py` — the interpreter's own source, written from this binary.
+//! - `<id>.shared.<name>.json` — what a cell handed to `share(name, value)`: a value kept as JSON
+//!   so that it can be read where a variable cannot reach — by a background cell, by the other
+//!   language's interpreter, and by this one's successor when it is restarted or lost. One file
+//!   per name rather than a directory, because the session's sweep removes files.
 //! - `<id>.py-kernel.log` — the interpreter process's own stdout and stderr. For Python that is
 //!   only what it says when it will not start; the TypeScript interpreter also reads what its
 //!   cells printed back out of it, because a JavaScript process cannot point its own stdout
@@ -48,7 +52,9 @@
 //! this avoids: the tools are three languages over one conversation, not three conversations.
 //!
 //! Only variables, imports and definitions are an interpreter's alone — a Python name is not a
-//! TypeScript one — and they are what is lost when it goes. That is said to the model when it
+//! TypeScript one — and they are what is lost when it goes. A value that has to cross either
+//! line is handed over on purpose, with `share`, as JSON; nothing is synchronized behind a cell's
+//! back, because a variable that changes because another language assigned it is not a variable. That is said to the model when it
 //! happens ([`Ran::replaced`]) rather than left to be discovered as a `NameError`.
 //!
 //! # Stopping a cell
@@ -80,9 +86,14 @@ use serde_json::{Value, json};
 
 use super::shell::Shell;
 
-/// The wire both halves were built against. An interpreter started by an older binary announces
-/// an older number and is replaced rather than spoken to in a dialect it does not have.
-const PROTOCOL: u64 = 1;
+/// What both halves were built against — the wire, and what an interpreter does with a cell. An
+/// interpreter started by an older binary announces an older number and is replaced rather than
+/// spoken to in a dialect it does not have.
+///
+/// 2: a Python cell shows its last expression rather than every one, and both interpreters have
+/// `share`/`shared`. Nothing on the wire moved, but a conversation whose interpreter outlived an
+/// upgrade would otherwise keep the old behaviour under a description of the new one.
+const PROTOCOL: u64 = 2;
 
 /// How long an interpreter nobody calls stays up. An hour is a conversation still in progress —
 /// a build awaited, a person answering — while anything longer is most likely a conversation that
@@ -198,6 +209,14 @@ pub(crate) struct Interpreter {
     dir: PathBuf,
     /// The session id, the stem of everything above.
     id: String,
+}
+
+impl Interpreter {
+    /// The path prefix `share(name, value)` writes under: `<dir>/<id>.shared.`, to which the
+    /// interpreter adds the name and `.json`. The same for both languages, which is the point.
+    fn shared_prefix(&self) -> PathBuf {
+        self.dir.join(format!("{}.shared.", self.id))
+    }
 }
 
 /// How a cell ended.
@@ -372,11 +391,14 @@ impl Interpreter {
         let program = quote(&self.language.program());
         let script = quote(&self.script.display().to_string());
         let cell = quote(&cell.display().to_string());
+        // A job cannot see the conversation's variables, so what it shares is how its result
+        // gets back: it is given the same place to put it.
+        let shared = quote(&self.shared_prefix().display().to_string());
         Ok(match self.language {
             // `-u`: a job's output is a log somebody may read while it runs, so it is written
             // through as it happens rather than when a buffer fills.
-            Language::Python => format!("exec {program} -u {script} run {cell}"),
-            Language::TypeScript => format!("exec {program} {script} run {cell}"),
+            Language::Python => format!("exec {program} -u {script} run {cell} --shared {shared}"),
+            Language::TypeScript => format!("exec {program} {script} run {cell} --shared {shared}"),
         })
     }
 
@@ -464,6 +486,8 @@ impl Interpreter {
             .arg(cwd_file)
             .arg("--shell-env")
             .arg(env_file)
+            .arg("--shared")
+            .arg(self.shared_prefix())
             .arg("--home")
             .arg(home)
             .arg("--idle")
@@ -724,14 +748,175 @@ mod tests {
         assert!(!second.replaced);
     }
 
-    /// Every top-level expression is echoed, so three bare commands read like three commands —
-    /// and a `print` in between lands in order with them.
+    /// The last expression is shown whatever it is, and every bare command where it stands, in
+    /// order with what is printed — but not the byte count, the popped item or the `True` that
+    /// Python returns from things called for what they do. The first agent to use the tool for
+    /// real is why: a `write_text` in the middle of its cell printed `418`.
     #[test]
-    fn top_level_expressions_are_echoed_in_order_with_what_is_printed() {
+    fn python_shows_the_last_expression_and_every_command_but_not_what_a_call_returned() {
         let conv = Conversation::new("echo");
-        let ran =
-            conv.run("sh('echo one')\nprint('two')\nsh('echo three >&2')\nx = sh('echo quiet')\n4");
-        assert_eq!(ran.output, "one\ntwo\nthree\n4\n");
+        let ran = conv.run(
+            "sh('echo one')\n\
+             Path('note.txt').write_text('four')\n\
+             [1, 2].pop()\n\
+             print('two')\n\
+             sh('echo three >&2')\n\
+             x = sh('echo quiet')\n\
+             len(x)",
+        );
+        assert_eq!(ran.output, "one\ntwo\nthree\n5\n");
+
+        // A command on the last line is shown once, not twice; a statement there shows nothing.
+        assert_eq!(conv.run("sh('echo last')").output, "last\n");
+        assert_eq!(conv.run("y = 1 + 1").output, "");
+        assert_eq!(conv.run("_").output, "5\n", "`_` is the last value shown");
+    }
+
+    /// A value handed over with `share` is there for whatever a variable cannot reach: the other
+    /// language's interpreter, a background cell, and this language's own interpreter once the
+    /// one that shared it is gone. Each direction, and a job's way of returning a result.
+    #[test]
+    fn a_shared_value_reaches_the_other_language_a_background_cell_and_a_new_interpreter() {
+        let conv = Conversation::new("share");
+        let ts = Interpreter::new(Language::TypeScript, &conv.home, "conv");
+        let in_ts = |code: &str| {
+            ts.run(&conv.shell, &conv.home, code, 30_000, 32_000, false)
+                .expect("typescript")
+        };
+
+        // Python to TypeScript, as JSON: a tuple arrives as an array, and that is said nowhere
+        // but here because it is what JSON is.
+        let quiet = conv.run("share('totals', {'adi-agents': 59409, 'top': ('a', 'b')})");
+        assert_eq!(quiet.output, "", "sharing is not something to print");
+        assert_eq!(
+            in_ts("const totals = shared('totals') as any;\nconsole.log(totals['adi-agents'], totals.top.join('+'));").output,
+            "59409 a+b\n"
+        );
+
+        // TypeScript to Python.
+        in_ts("share('deps', { shared: ['react', 'vite'], mismatched: 0 });");
+        assert_eq!(
+            conv.run("d = shared('deps')\n(d['shared'], d['mismatched'])")
+                .output
+                .trim(),
+            "(['react', 'vite'], 0)"
+        );
+        assert_eq!(conv.run("shared()").output.trim(), "['deps', 'totals']");
+        assert_eq!(in_ts("shared();").output.trim(), "[ \"deps\", \"totals\" ]");
+
+        // A background cell sees no variables — what it shares is how its answer gets back.
+        let job = conv.job(
+            "share('from-job', {'seen': shared('deps')['shared'], 'has_d': 'd' in globals()})",
+        );
+        assert!(
+            job.status.success(),
+            "{}",
+            String::from_utf8_lossy(&job.stderr)
+        );
+        assert_eq!(
+            conv.run("shared('from-job')").output.trim(),
+            "{'has_d': False, 'seen': ['react', 'vite']}"
+        );
+        let ts_job = Command::new("sh")
+            .arg("-c")
+            .arg(
+                ts.job_command("share('from-ts-job', (shared('totals') as any).top);")
+                    .expect("command"),
+            )
+            .current_dir(&conv.home)
+            .output()
+            .expect("sh");
+        assert!(
+            ts_job.status.success(),
+            "{}",
+            String::from_utf8_lossy(&ts_job.stderr)
+        );
+        assert_eq!(
+            conv.run("shared('from-ts-job')").output.trim(),
+            "['a', 'b']"
+        );
+
+        // …and it outlives the interpreter that shared it, which a variable does not.
+        let after = conv
+            .code
+            .run(
+                &conv.shell,
+                &conv.home,
+                "('d' in globals(), shared('totals')['adi-agents'])",
+                30_000,
+                32_000,
+                true,
+            )
+            .expect("run");
+        assert_eq!(after.output.trim(), "(False, 59409)");
+
+        // The values are the session's own files, so the session's sweep takes them.
+        assert!(conv.home.join("conv.shared.totals.json").is_file());
+        ts.stop();
+    }
+
+    /// What cannot be shared says so at the `share`, in terms of what to do about it — and a
+    /// name nobody shared is answered with the names somebody did.
+    #[test]
+    fn sharing_what_json_cannot_hold_or_reading_what_nobody_shared_explains_itself() {
+        let conv = Conversation::new("share-errors");
+        let ts = Interpreter::new(Language::TypeScript, &conv.home, "conv");
+        let in_ts = |code: &str| {
+            ts.run(&conv.shell, &conv.home, code, 30_000, 32_000, false)
+                .expect("typescript")
+        };
+
+        let refused = conv.run("share('s', {1, 2})");
+        assert_eq!(refused.ended, Ended::Raised);
+        assert!(
+            refused
+                .output
+                .contains("TypeError: share('s'): only what JSON can hold"),
+            "{}",
+            refused.output
+        );
+        assert!(
+            refused.output.contains("a set to a list"),
+            "{}",
+            refused.output
+        );
+        assert!(
+            conv.run("share('../escape', 1)")
+                .output
+                .contains("ValueError: a shared name is")
+        );
+
+        let refused = in_ts("share('f', () => 1);");
+        assert_eq!(refused.ended, Ended::Raised);
+        assert!(
+            refused.output.contains("only what JSON can hold"),
+            "{}",
+            refused.output
+        );
+        assert!(
+            in_ts("share('../escape', 1);")
+                .output
+                .contains("a shared name is")
+        );
+
+        conv.run("share('kept', [1])");
+        let missing = conv.run("shared('nope')");
+        assert!(
+            missing
+                .output
+                .contains("nothing is shared as 'nope'. What is: kept"),
+            "{}",
+            missing.output
+        );
+        let missing = in_ts("shared('nope');");
+        assert!(
+            missing
+                .output
+                .contains("nothing is shared as \"nope\". What is: kept"),
+            "{}",
+            missing.output
+        );
+        ts.stop();
     }
 
     /// An exception ends the cell, not the interpreter: the traceback names the model's own line,

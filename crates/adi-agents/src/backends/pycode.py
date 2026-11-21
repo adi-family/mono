@@ -2,14 +2,14 @@
 
 Two ways in, one namespace:
 
-  pycode.py kernel --state F --shell-cwd F --shell-env F --home DIR --idle SECONDS --protocol N
+  pycode.py kernel --state F --shell-cwd F --shell-env F --shared PREFIX --home DIR --idle SECONDS --protocol N
       The conversation's interpreter. Listens on a Unix socket, runs one cell per connection in
       a namespace that outlives the call, and exits when it has been idle too long or when its
       state file is gone (the session was deleted) or names another kernel (it was replaced).
 
-  pycode.py run SCRIPT
-      One cell in a fresh interpreter, for a background job: same helpers, same echoing of
-      top-level expressions, nothing kept afterwards.
+  pycode.py run SCRIPT [--shared PREFIX]
+      One cell in a fresh interpreter, for a background job: same helpers, same display of
+      what it evaluates, nothing kept afterwards.
 
 Written against Python 3.8 so the interpreter a machine happens to ship is enough. Standard
 library only: this file is embedded in the adi binary and dropped beside a session, so there is
@@ -257,6 +257,55 @@ def sh(cmd, check=True, timeout=None, input=None, cwd=None, env=None, echo=False
     return got
 
 
+# Where shared values are kept: a path prefix, to which a name and `.json` are added. Set by
+# whoever starts this file — it is the session's own namespace, so the values are swept with the
+# conversation, and the TypeScript interpreter is handed the same prefix.
+_SHARED = None
+
+
+def _shared_file(name):
+    if not isinstance(name, str) or not name or not name.isascii() or not all(c.isalnum() or c in "_-" for c in name):
+        raise ValueError("a shared name is letters, digits, _ and -, not %r" % (name,))
+    if _SHARED is None:
+        raise RuntimeError("there is nowhere to share a value from here")
+    return "%s%s.json" % (_SHARED, name)
+
+
+def share(name, value):
+    """Keep `value` under `name`, outside this interpreter.
+
+    What is kept is JSON, so it is found again — with `shared(name)` — wherever JSON can go and
+    a variable cannot: by a background cell, by this conversation after its interpreter is
+    restarted or lost, and by its TypeScript interpreter. For a result, a list of names, a
+    configuration; something large belongs in a file of its own.
+    """
+    path = _shared_file(name)
+    try:
+        text = json.dumps(value, allow_nan=False)
+    except (TypeError, ValueError) as error:
+        raise TypeError(
+            "share(%r): only what JSON can hold can be shared (%s). Convert it first — a set to a "
+            "list, an object to a dict — or write it to a file." % (name, error)
+        ) from None
+    _replace(path, text)
+
+
+def shared(name=None):
+    """The value kept under `name` by `share` — or, with no name, the names there are."""
+    if name is None:
+        import glob
+
+        if _SHARED is None:
+            return []
+        return sorted(found[len(_SHARED):-len(".json")] for found in glob.glob(glob.escape(_SHARED) + "*.json"))
+    path = _shared_file(name)
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        raise KeyError("nothing is shared as %r. What is: %s" % (name, ", ".join(shared()) or "nothing yet")) from None
+
+
 def _tail(result, limit=4000):
     """The end of what a failed command printed, for the exception that reports it."""
     text = (result.stderr if result.stderr.strip() else result.stdout).rstrip("\n")
@@ -339,6 +388,8 @@ class Cells:
             sh=sh,
             Sh=Sh,
             ShError=ShError,
+            share=share,
+            shared=shared,
             os=os,
             sys=sys,
             re=re,
@@ -443,14 +494,12 @@ class Cells:
             # Nothing ran. Shown as the error alone: the frames above it are the parser's.
             raise _Unparsed(error) from None
         for node in tree.body:
-            # Every top-level expression is echoed, not only the last: a cell of three bare
-            # `sh(...)` lines then reads like the three commands it is.
+            # Every top-level expression is evaluated for display; `_show` decides which are
+            # worth it. A statement is never shown, and never was.
             if isinstance(node, ast.Expr):
                 compiled = compile(ast.Expression(node.value), name, "eval", flags=flags)
                 value = self._await(eval(compiled, self.ns))
-                if value is not None:
-                    self.ns["_"] = value
-                    self._show(value)
+                self._show(value, node is tree.body[-1])
             else:
                 module = ast.Module(body=[node], type_ignores=[])
                 self._await(eval(compile(module, name, "exec", flags=flags), self.ns))
@@ -467,8 +516,24 @@ class Cells:
             asyncio.set_event_loop(self.loop)
         return self.loop.run_until_complete(value)
 
-    @staticmethod
-    def _show(value):
+    def _show(self, value, last):
+        """Print what a top-level expression came to: a command's output wherever it stands, so
+        three bare `sh(...)` lines read like the three commands they are, and any other value
+        only when it is the cell's last line, as a notebook would.
+
+        It used to be every expression, as the interactive interpreter does. The first agent to
+        use the tool for real showed what that costs: half of what a cell calls is called for
+        its effect and returns something anyway — `write_text` its byte count, `pop` its item —
+        and each of those landed in the output as a number nobody asked for.
+        """
+        if isinstance(value, Sh):
+            text = repr(value)
+            if text:
+                print(text)
+            return
+        if not last or value is None:
+            return
+        self.ns["_"] = value
         if isinstance(value, (dict, list, tuple, set, frozenset)) and not hasattr(value, "_fields"):
             try:
                 text = pprint.pformat(value, width=120, compact=True)
@@ -662,6 +727,8 @@ def _printed(fd, limit):
 
 class Kernel:
     def __init__(self, args):
+        global _SHARED
+        _SHARED = args.get("shared")
         self.state = args["state"]
         self.idle = float(args["idle"])
         # Echoed back in the state file, so a newer binary can tell an interpreter it started
@@ -854,6 +921,8 @@ def _options(argv):
 
 def main(argv):
     if len(argv) >= 2 and argv[0] == "run":
+        global _SHARED
+        _SHARED = _options(argv[2:]).get("shared")
         with open(argv[1]) as f:
             code = f.read()
         cells = Cells()
@@ -862,8 +931,8 @@ def main(argv):
     if argv and argv[0] == "kernel":
         Kernel(_options(argv[1:])).serve()
         return 0
-    sys.stderr.write("usage: pycode.py kernel --state F --shell-cwd F --shell-env F --home DIR --idle S\n"
-                     "       pycode.py run SCRIPT\n")
+    sys.stderr.write("usage: pycode.py kernel --state F --shell-cwd F --shell-env F --shared PREFIX --home DIR --idle S\n"
+                     "       pycode.py run SCRIPT [--shared PREFIX]\n")
     return 2
 
 

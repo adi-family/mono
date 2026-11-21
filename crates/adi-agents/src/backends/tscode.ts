@@ -3,14 +3,14 @@
  *
  * Two ways in, one namespace:
  *
- *   bun tscode.ts kernel --state F --capture F --shell-cwd F --shell-env F --home DIR --idle SECONDS --protocol N
+ *   bun tscode.ts kernel --state F --capture F --shell-cwd F --shell-env F --shared PREFIX --home DIR --idle SECONDS --protocol N
  *       The conversation's interpreter. Listens on a Unix socket, runs one cell per connection in
  *       the process's own global scope, and exits when it has been idle too long or when its
  *       state file is gone (the session was deleted) or names another kernel (it was replaced).
  *
- *   bun tscode.ts run SCRIPT
- *       One cell in a fresh process, for a background job: same helpers, same echoing of
- *       top-level expressions, nothing kept afterwards.
+ *   bun tscode.ts run SCRIPT [--shared PREFIX]
+ *       One cell in a fresh process, for a background job: same helpers, same display of what
+ *       it evaluates, nothing kept afterwards.
  *
  * Runs on Bun, which is the one JavaScript runtime the platform puts on every machine, and uses
  * nothing but what Bun ships: this file is embedded in the adi binary and dropped beside a
@@ -288,6 +288,68 @@ function sh(cmd: string | readonly unknown[], options: ShOptions = {}): Promise<
       setTimeout(() => finish(status(code, signal)), DRAIN_GRACE_MS);
     });
   });
+}
+
+/**
+ * Where shared values are kept: a path prefix, to which a name and `.json` are added. Set by
+ * whoever starts this file — it is the session's own namespace, so the values are swept with the
+ * conversation, and the Python interpreter is handed the same prefix.
+ */
+let sharedPrefix: string | undefined;
+
+function sharedFile(name: unknown): string {
+  if (typeof name !== "string" || !/^[A-Za-z0-9_-]+$/.test(name)) {
+    throw new TypeError(`a shared name is letters, digits, _ and -, not ${Bun.inspect(name)}`);
+  }
+  if (sharedPrefix === undefined) throw new Error("there is nowhere to share a value from here");
+  return `${sharedPrefix}${name}.json`;
+}
+
+/**
+ * Keep `value` under `name`, outside this interpreter.
+ *
+ * What is kept is JSON, so it is found again — with `shared(name)` — wherever JSON can go and a
+ * variable cannot: by a background cell, by this conversation after its interpreter is restarted
+ * or lost, and by its Python interpreter. For a result, a list of names, a configuration;
+ * something large belongs in a file of its own.
+ */
+function share(name: string, value: unknown): void {
+  const file = sharedFile(name);
+  let text: string | undefined;
+  try {
+    text = JSON.stringify(value);
+  } catch (error) {
+    throw new TypeError(`share(${JSON.stringify(name)}): only what JSON can hold can be shared (${(error as Error).message}). Convert it first, or write it to a file.`);
+  }
+  if (text === undefined) {
+    throw new TypeError(`share(${JSON.stringify(name)}): only what JSON can hold can be shared, and ${typeof value === "function" ? "a function" : String(value)} is not. Convert it first, or write it to a file.`);
+  }
+  replaceFile(file, text);
+}
+
+/** The value kept under `name` by `share` — or, with no name, the names there are. */
+function shared(name?: string): unknown {
+  if (name === undefined) {
+    if (sharedPrefix === undefined) return [];
+    const dir = path.dirname(sharedPrefix);
+    const stem = path.basename(sharedPrefix);
+    let entries: string[] = [];
+    try { entries = fs.readdirSync(dir); } catch {}
+    return entries
+      .filter((entry) => entry.startsWith(stem) && entry.endsWith(".json"))
+      .map((entry) => entry.slice(stem.length, -".json".length))
+      .filter((entry) => /^[A-Za-z0-9_-]+$/.test(entry))
+      .sort();
+  }
+  const file = sharedFile(name);
+  let text: string;
+  try {
+    text = fs.readFileSync(file, "utf8");
+  } catch {
+    const names = shared() as string[];
+    throw new ReferenceError(`nothing is shared as ${JSON.stringify(name)}. What is: ${names.join(", ") || "nothing yet"}`);
+  }
+  return JSON.parse(text);
 }
 
 // ───────────────────────────── reading a cell ─────────────────────────────
@@ -646,7 +708,7 @@ class Cells {
   private transpiler = new Bun.Transpiler({ loader: "ts", target: "node", deadCodeElimination: false, trimUnusedImports: false } as never);
 
   constructor() {
-    Object.assign(AsyncGlobals, { sh, ShError, Sh, fs, path, os });
+    Object.assign(AsyncGlobals, { sh, ShError, Sh, share, shared, fs, path, os });
     AsyncGlobals.$ ??= Bun.$;
   }
 
@@ -963,6 +1025,7 @@ class Kernel {
   private exit = process.exit.bind(process);
 
   constructor(private args: Record<string, string>) {
+    sharedPrefix = args.shared;
     this.shared = new Shared(args["shell-cwd"], args["shell-env"], args.home);
     // A socket path has ~100 bytes to live in, and a session directory is often longer than that
     // on its own — so the socket lives in a private temp directory (mkdtemp makes it 0700, which
@@ -1170,6 +1233,7 @@ const [mode, ...rest] = process.argv.slice(2);
 if (mode === "kernel") {
   new Kernel(options(rest)).serve();
 } else if (mode === "run" && rest[0]) {
+  sharedPrefix = options(rest.slice(1)).shared;
   const cells = new Cells();
   process.on("unhandledRejection", (error) => {
     console.error(`Unhandled rejection: ${cells.describe(error)}`);
@@ -1177,6 +1241,6 @@ if (mode === "kernel") {
   });
   if ((await cells.run(fs.readFileSync(rest[0], "utf8"))) !== "ok") process.exitCode = 1;
 } else {
-  console.error("usage: tscode.ts kernel --state F --capture F --shell-cwd F --shell-env F --home DIR --idle S --protocol N\n       tscode.ts run SCRIPT");
+  console.error("usage: tscode.ts kernel --state F --capture F --shell-cwd F --shell-env F --shared PREFIX --home DIR --idle S --protocol N\n       tscode.ts run SCRIPT [--shared PREFIX]");
   process.exitCode = 2;
 }

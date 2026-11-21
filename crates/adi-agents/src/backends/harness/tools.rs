@@ -139,16 +139,17 @@ const BASH: &str = "Run a shell command in the working directory and return its 
 /// What `PyCode` is, told in the terms that decide how a cell gets written. The first paragraph is
 /// the reason the tool exists — state that outlives the call — and it leads because a model that
 /// misses it writes Python the way it writes shell: everything fetched again, everything printed.
-/// The rest is what it could not guess: that `sh()` raises, that expressions are echoed, that the
-/// directory is the shell's, and that a background cell is a different interpreter.
+/// The rest is what it could not guess: that `sh()` raises, what a cell shows, that the directory
+/// is the shell's, that a background cell is a different interpreter, and how a value gets out
+/// of this one.
 #[cfg(unix)]
 const PYCODE: &str = "Run Python in this conversation's own interpreter and return what it \
                       printed. The interpreter stays up between calls: a variable you set, a \
                       module you imported, a function you defined is still there on your next \
                       call. So read or fetch a thing **once**, keep it in a variable, and work on \
                       it from there — rather than printing all of it, or fetching it again. \
-                      Top-level expressions are echoed as in the Python REPL, so a bare \
-                      `len(rows)` shows its value without a `print`. An exception ends the call \
+                      The value of the cell's last expression is shown, as in a notebook, so end \
+                      with a bare `len(rows)` rather than a `print`. An exception ends the call \
                       with its traceback; what ran before it has happened, and the interpreter and \
                       your variables survive it.\n\n`sh(cmd)` runs a command and returns its \
                       stdout as a string, trailing newline dropped, with `.stderr`, `.code`, `.ok` \
@@ -157,19 +158,22 @@ const PYCODE: &str = "Run Python in this conversation's own interpreter and retu
                       written, with no quoting to get wrong. A command that exits non-zero raises \
                       `ShError` carrying its output, so a cell of several steps stops at the one \
                       that broke — pass `check=False` where failing is an answer (`grep`, `diff`, \
-                      `test`). A bare `sh(...)` line shows the command's output like any other \
-                      expression; `echo=True` shows it as it is produced. `os`, `sys`, `re`, \
+                      `test`). A bare `sh(...)` line shows the command's output wherever it stands \
+                      in the cell; `echo=True` shows it as it is produced. `os`, `sys`, `re`, \
                       `json`, `subprocess`, `shutil`, `time` and `Path` are already imported.\n\n\
                       It stands where your shell stands, and moves it: `os.chdir()` moves Bash \
                       too, what you put in `os.environ` is exported to it, and wherever Bash `cd`'d \
                       or whatever it exported is where this starts. Only variables and imports are \
                       the interpreter's own. It is kept for an hour without a call; if it is ever \
-                      gone, the result says so, and what it held has to be built again.\n\nSet \
+                      gone, the result says so, and what it held has to be built again. \
+                      `share('name', value)` keeps a JSON-able value outside the interpreter, \
+                      where `shared('name')` finds it again: after a restart, from a background \
+                      cell, and from TsCode if you have it.\n\nSet \
                       `background` for code that will outlast the turn: it runs as a script of its \
                       own — same directory, same environment, same `sh` — and you **end your \
                       turn** and are woken when it exits, with its status and the tail of its \
                       output. A background script does not see your variables and nothing it \
-                      defines comes back, so have it write what you need to a file.";
+                      defines comes back, so have it `share` its result or write it to a file.";
 
 /// What `TsCode` is. The same tool as [`PYCODE`] in another language, and told in the same order
 /// for the same reason — but not the same text, because the differences are exactly what a model
@@ -205,7 +209,9 @@ const TSCODE: &str = "Run TypeScript in this conversation's own interpreter (Bun
                       `cd`'d or whatever it exported is where this starts. Only what a cell \
                       declared is the interpreter's own. It is kept for an hour without a call; if \
                       it is ever gone, the result says so, and what it held has to be built \
-                      again.\n\nRunning JavaScript cannot be interrupted. Past `timeout_ms` the \
+                      again. `share('name', value)` keeps a JSON-able value outside the \
+                      interpreter, where `shared('name')` finds it again: after a restart, from a \
+                      background cell, and from PyCode if you have it.\n\nRunning JavaScript cannot be interrupted. Past `timeout_ms` the \
                       command the code is waiting on is stopped, which ends most slow cells with \
                       everything else intact — but code still running after that (a long loop, a \
                       wait on something that is not a command) costs the interpreter and every \
@@ -213,7 +219,8 @@ const TSCODE: &str = "Run TypeScript in this conversation's own interpreter (Bun
                       runs as a script of its own — same directory, same environment, same `sh` — \
                       and you **end your turn** and are woken when it exits, with its status and \
                       the tail of its output. A background script does not see your variables and \
-                      nothing it defines comes back, so have it write what you need to a file.";
+                      nothing it defines comes back, so have it `share` its result or write it to \
+                      a file.";
 
 /// Everything a turn may call. Order is the order they're advertised, which is the order a model
 /// tends to consider them in: look before you write, and shell out only when nothing else fits.
