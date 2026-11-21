@@ -118,7 +118,7 @@ import { AppLayout } from "@design-system/ui/app-layout";
 import { ScrollSidebar } from "@design-system/ui/scroll-sidebar";
 import { ChatThread, ChatMessage } from "@design-system/ui/chat";
 import { ChatComposer } from "@design-system/ui/chat-composer";
-import { ChatToolCall, ChatToolOutput, ChatToolDiff } from "@design-system/ui/chat-tool-call";
+import { ChatToolCall, ChatToolOutput, ChatToolCode, ChatToolDiff } from "@design-system/ui/chat-tool-call";
 import { Button } from "@design-system/ui/standalone";  // self-contained, styles included
 ```
 
@@ -682,6 +682,11 @@ an `Error` label. Individual failed tools retain their red title and icon.
     { type: "addition", content: "const tools = true;", newLineNumber: 8 },
   ]} />
 </ChatToolCall>
+
+<ChatToolCall title="PyCode" kind="code" status="completed">
+  <ChatToolCode language="py">{'rows = sh("git ls-files").lines\nlen(rows)'}</ChatToolCode>
+  <ChatToolOutput label="Python output">{"412"}</ChatToolOutput>
+</ChatToolCall>
 ```
 
 Children appear in a keyboard accessible disclosure. Rows start collapsed unless `defaultOpen`
@@ -689,6 +694,11 @@ is set; use `open` and `onOpenChange` for controlled disclosure state. Status up
 the reader's expanded/collapsed choice. Optional `description` and `meta` appear with the
 expanded details, for a working directory, exit code, duration, or file count. Without details,
 the component is a plain status row.
+
+`ChatToolCode` shows the program a tool was given to run — a Python cell, a script — highlighted
+by `language` (the same scanners `CodeEditor` uses) in a bounded, scrollable, read-only region.
+Use `kind="code"` for such a call, and put the code above its output: the code sits on the plain
+surface and the output on the muted one, which is what tells what was asked from what came back.
 
 `ChatToolOutput` preserves plain command output in a bounded, scrollable region. `ChatToolDiff`
 accepts a file path and explicit context/addition/deletion lines with optional old/new line
@@ -783,7 +793,7 @@ word carries the meaning.
 undo, paste and the input method stay the browser's own. It numbers its lines, shows the caret
 position, never wraps a line, and can be dragged taller. Tab indents (a caret, or every line of a
 selection), Shift+Tab outdents, Enter keeps the indentation, and Escape then Tab leaves the
-editor, so the keyboard is never trapped. `language` is `"sh"`, `"ts"`, `"json"` or `"plain"` and
+editor, so the keyboard is never trapped. `language` is `"sh"`, `"ts"`, `"json"`, `"py"` or `"plain"` and
 may change while the editor stays mounted. The highlighter (`highlightCode`) is a small
 hand-written scanner per language: total on any input, and its runs always reproduce the source,
 which is what keeps the paint under the caret.

@@ -10,14 +10,16 @@ import {
   FilePenLine,
   GitBranch,
   LoaderCircle,
+  SquareCode,
   SquareTerminal,
   Wrench,
 } from "lucide-react";
 import { cva } from "class-variance-authority";
 
 import { cn } from "../lib/cn";
+import { codeLanguageLabels, codeTokenInk, highlightCode, type CodeLanguage } from "../lib/highlight";
 
-type ChatToolCallKind = "terminal" | "git" | "edit" | "agent" | "tool";
+type ChatToolCallKind = "terminal" | "code" | "git" | "edit" | "agent" | "tool";
 type ChatToolCallStatus = "pending" | "running" | "completed" | "error" | "cancelled";
 
 type ChatToolCallProps = React.ComponentProps<"div"> & {
@@ -37,7 +39,7 @@ type ChatToolCallProps = React.ComponentProps<"div"> & {
   linkProps?: Omit<React.ComponentProps<"a">, "href" | "children">;
 };
 
-const kindIcons = { terminal: SquareTerminal, git: GitBranch, edit: FilePenLine, agent: Bot, tool: Wrench };
+const kindIcons = { terminal: SquareTerminal, code: SquareCode, git: GitBranch, edit: FilePenLine, agent: Bot, tool: Wrench };
 const statusIcons = {
   pending: Clock3,
   running: LoaderCircle,
@@ -100,7 +102,7 @@ function ChatToolCall({
       <span
         data-slot="chat-tool-call-title"
         title={title}
-        className={cn("min-w-0 truncate", (kind === "terminal" || kind === "git") && "font-mono")}
+        className={cn("min-w-0 truncate", (kind === "terminal" || kind === "code" || kind === "git") && "font-mono")}
       >
         {title}
       </span>
@@ -203,6 +205,40 @@ function ChatToolOutput({ label = "Tool output", className, children, tabIndex =
   );
 }
 
+type ChatToolCodeProps = Omit<React.ComponentProps<"pre">, "children"> & {
+  children: string;
+  /** What to scan the code as. */
+  language?: CodeLanguage;
+  /** Names the region for assistive technology; the language's name by default. */
+  label?: string;
+};
+
+/**
+ * The code a tool was given to run, highlighted. A record of the call, so it is read-only —
+ * code somebody edits belongs in a CodeEditor. It sits on the plain surface where tool output
+ * sits on the muted one, which is what tells what was asked from what came back.
+ */
+function ChatToolCode({ language = "plain", label, className, children, tabIndex = 0, ...props }: ChatToolCodeProps) {
+  const runs = React.useMemo(() => highlightCode(language, children), [language, children]);
+  return (
+    <pre
+      data-slot="chat-tool-code"
+      data-language={language}
+      role="region"
+      aria-label={label ?? `${codeLanguageLabels[language]} code`}
+      tabIndex={tabIndex}
+      className={cn("text-foreground focus-visible:ring-ring/50 m-0 max-h-64 min-w-0 overflow-auto overscroll-x-contain p-3 font-mono text-xs leading-5 whitespace-pre outline-none [tab-size:4] focus-visible:ring-2 focus-visible:ring-inset", className)}
+      {...props}
+    >
+      <code>
+        {runs.map(([token, text], index) => (
+          token === "plain" ? text : <span key={index} data-token={token} className={codeTokenInk[token]}>{text}</span>
+        ))}
+      </code>
+    </pre>
+  );
+}
+
 type ChatToolDiffLine = {
   type: "context" | "addition" | "deletion";
   content: string;
@@ -270,11 +306,13 @@ function ChatToolDiff({ file, lines, className, ...props }: ChatToolDiffProps) {
 export {
   ChatToolCall,
   ChatToolOutput,
+  ChatToolCode,
   ChatToolDiff,
   type ChatToolCallKind,
   type ChatToolCallStatus,
   type ChatToolCallProps,
   type ChatToolOutputProps,
+  type ChatToolCodeProps,
   type ChatToolDiffLine,
   type ChatToolDiffProps,
 };

@@ -18,6 +18,7 @@ import {
   ChatMessageMeta,
   ChatThread,
   ChatToolCall,
+  ChatToolCode,
   ChatToolDiff,
   ChatToolOutput,
   ChatTypingIndicator,
@@ -38,6 +39,20 @@ const reply = "Let’s make that the next step. Keep the conversation easy to sc
 const gitOutput = `## feature/chat-tools
  M src/components/chat-panel.tsx
  M src/styles.css`;
+
+const pythonCell = `# Which components changed since the last release?
+changed = sh("git diff --name-only v1.44.0 -- packages/ui/src/components").lines
+sizes = {Path(f).stem: len(Path(f).read_text().splitlines()) for f in changed}
+sorted(sizes.items(), key=lambda item: -item[1])[:3]`;
+
+const pythonOutput = `[('chat-tool-call', 318), ('code-editor', 189), ('chat', 174)]`;
+
+const typescriptCell = `// The same question, asked in TypeScript.
+const changed = (await sh("git diff --name-only v1.44.0 -- packages/ui/src/components")).lines;
+const sizes = changed.map((file) => [path.basename(file, ".tsx"), fs.readFileSync(file, "utf8").split("\\n").length] as const);
+sizes.sort((a, b) => b[1] - a[1]).slice(0, 3);`;
+
+const typescriptOutput = `[ [ "chat-tool-call", 318 ], [ "code-editor", 189 ], [ "chat", 174 ] ]`;
 
 const layoutDiff = [
   { type: "context", content: "export function ChatPanel() {", oldLineNumber: 16, newLineNumber: 16 },
@@ -97,6 +112,14 @@ function ConversationTools() {
       <AgentActivity status="completed" />
       <ChatToolCall kind="git" title="exec_command" description="git status --short --branch" status="completed" meta="Exit 0">
         <ChatToolOutput label="Git output">{gitOutput}</ChatToolOutput>
+      </ChatToolCall>
+      <ChatToolCall kind="code" title="PyCode" status="completed" defaultOpen>
+        <ChatToolCode language="py">{pythonCell}</ChatToolCode>
+        <ChatToolOutput label="Python output">{pythonOutput}</ChatToolOutput>
+      </ChatToolCall>
+      <ChatToolCall kind="code" title="TsCode" status="completed">
+        <ChatToolCode language="ts">{typescriptCell}</ChatToolCode>
+        <ChatToolOutput label="TypeScript output">{typescriptOutput}</ChatToolOutput>
       </ChatToolCall>
       <ChatToolCall kind="edit" title="apply_patch" description="Update chat spacing" status="completed" meta="2 files">
         <ChatToolDiff file="src/components/chat-panel.tsx" lines={layoutDiff} />
@@ -175,6 +198,12 @@ const composerCode = `const [draft, setDraft] = useState("");
 
 const toolsCode = `<ChatToolCall kind="terminal" title="exec_command" description="bun run typecheck" status="running">
   <ChatToolOutput label="Terminal output">{output}</ChatToolOutput>
+</ChatToolCall>
+
+{/* Code a tool was given to run: highlighted, read-only, above what it printed. */}
+<ChatToolCall kind="code" title="PyCode" status="completed">
+  <ChatToolCode language="py">{code}</ChatToolCode>
+  <ChatToolOutput label="Python output">{output}</ChatToolOutput>
 </ChatToolCall>
 
 <ChatToolCall title="8 tool calls · exec_command, apply_patch" status="error" group={{ errorCount: 1 }}>

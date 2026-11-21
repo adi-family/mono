@@ -6,11 +6,12 @@ import {
   ChatMessageContent,
   ChatMessageMeta,
   ChatToolCall,
+  ChatToolCode,
   ChatToolOutput,
   ChatTypingIndicator,
 } from "@design-system/ui";
 import { attachmentUrl, getSteps, type AgentPeek, type AgentStep, type AgentTurn, type Conversation, type ConversationRef } from "../lib/app-chat";
-import { activityStatus, agentLaunches, conversationHref, toolArguments, toolDisplayName, toolSummary, transcriptParts } from "../lib/app-chat-transcript";
+import { activityStatus, agentLaunches, conversationHref, toolArguments, toolCode, toolDisplayName, toolSummary, transcriptParts } from "../lib/app-chat-transcript";
 import { groupErrorCount } from "../lib/app-chat-activity";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { conversationKey, sameConversation } from "../lib/app-chat-sources";
@@ -30,11 +31,16 @@ type ActivityProps = Pick<AppChatTranscriptProps, "conversation" | "conversation
 type ToolStep = Extract<AgentStep, { kind: "tool" }>;
 type FoldedStep = Extract<AgentStep, { kind: "calls" }>;
 
-function ToolArguments({ input }: { input: string }) {
-  const args = toolArguments(input);
-  if (!args.length) return null;
-  return (
-    <dl className="space-y-2 px-3 py-2 text-xs">
+function ToolArguments({ name: tool, input }: { name: string; input: string }) {
+  const all = toolArguments(input);
+  // A tool that runs a program shows it as highlighted code; what remains are its options.
+  const program = toolCode(tool);
+  const code = program ? all.find((arg) => arg.name === program.argument) : undefined;
+  const args = code ? all.filter((arg) => arg !== code) : all;
+  if (!all.length) return null;
+  return <>
+    {program && code && <ChatToolCode language={program.language}>{code.value}</ChatToolCode>}
+    {args.length > 0 && <dl className={`space-y-2 px-3 py-2 text-xs${code ? " border-t" : ""}`}>
       {args.map(({ name, value }) => {
         const lengthy = value.length > 400 || value.split("\n").length > 12;
         return <div key={name}>
@@ -47,14 +53,14 @@ function ToolArguments({ input }: { input: string }) {
           >{value}</dd>
         </div>;
       })}
-    </dl>
-  );
+    </dl>}
+  </>;
 }
 
 function ToolActivity({ step, conversation, conversations, onOpenConversation }: ActivityProps & { step: ToolStep }) {
   const children = agentLaunches(step).map((ref) => ({ ...ref, ...(conversation.source ? { source: conversation.source } : {}) }));
   const details = <>
-    <ToolArguments input={step.input} />
+    <ToolArguments name={step.name} input={step.input} />
     {step.output && <ChatToolOutput>{step.output}</ChatToolOutput>}
     {!step.output && step.status === "running" && <p className="text-muted-foreground px-3 py-2 text-xs">Waiting for output…</p>}
   </>;

@@ -2,7 +2,7 @@ import * as React from "react";
 
 import { cn } from "../lib/cn";
 import { caretPosition, indentEdit, lineCount, newlineEdit, outdentEdit, type CodeEdit } from "../lib/code-edit";
-import { codeLanguageLabels, highlightCode, type CodeLanguage, type CodeToken } from "../lib/highlight";
+import { codeLanguageLabels, codeTokenInk as ink, highlightCode, type CodeLanguage } from "../lib/highlight";
 
 /**
  * Everything that decides where a glyph lands, applied to the painted layer, the textarea and
@@ -14,21 +14,6 @@ const layer = "m-0 border-0 py-3 font-mono text-[13px] leading-5 whitespace-pre 
 const lineHeight = 20;
 const verticalPadding = 24;
 const headerHeight = 32;
-
-/**
- * Ink per token. Colour only — never a weight or a style, which would change glyph advances
- * and pull the paint out from under the caret.
- */
-const ink: Record<CodeToken, string> = {
-  plain: "",
-  comment: "text-muted-foreground",
-  str: "text-emerald-700 dark:text-emerald-300",
-  num: "text-orange-700 dark:text-orange-300",
-  key: "text-sky-700 dark:text-sky-300",
-  kw: "text-violet-700 dark:text-violet-300",
-  func: "text-blue-700 dark:text-blue-300",
-  punct: "text-muted-foreground",
-};
 
 type CodeEditorProps = Omit<React.ComponentProps<"textarea">, "value" | "defaultValue" | "onChange" | "rows" | "wrap" | "children"> & {
   value: string;

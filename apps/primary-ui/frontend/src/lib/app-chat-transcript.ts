@@ -1,3 +1,4 @@
+import type { CodeLanguage } from "@design-system/ui";
 import type { AgentStep, AgentToolStatus, AgentTurn, ConversationRef } from "./app-chat";
 import { appHref, IS_PRIMARY_APP } from "./app-api";
 
@@ -42,15 +43,28 @@ export function toolDisplayName(name: string): string {
   return name.split(/__|[.:/]/).filter(Boolean).at(-1) || name;
 }
 
-export function toolSummary(name: string, input: string): { title: string; kind: "git" | "terminal" | "edit" | "tool" } {
+/** The tools whose `code` argument is a program, and the language each one runs. A Map, so a tool named `constructor` is not one of them. */
+const CODE_TOOLS = new Map<string, CodeLanguage>([["pycode", "py"], ["tscode", "ts"]]);
+
+/**
+ * The argument of a tool that is a program, and the language to read it as. Such an argument is
+ * shown as code rather than as one more value in the list: it is the whole of what was asked.
+ */
+export function toolCode(name: string): { argument: string; language: CodeLanguage } | null {
+  const language = CODE_TOOLS.get(toolDisplayName(name).toLowerCase());
+  return language ? { argument: "code", language } : null;
+}
+
+export function toolSummary(name: string, input: string): { title: string; kind: "git" | "terminal" | "code" | "edit" | "tool" } {
   const args = toolArguments(input);
   const command = args.find((arg) => ["command", "cmd"].includes(arg.name))?.value;
-  const terminal = /(?:bash|shell|terminal|exec_command|exec)$/i.test(name) || Boolean(command);
+  const code = Boolean(toolCode(name));
+  const terminal = !code && (/(?:bash|shell|terminal|exec_command|exec)$/i.test(name) || Boolean(command));
   const edit = /(?:edit|write|apply_patch|patch)$/i.test(name);
   const git = terminal && /(?:^|[;&|]\s*)git\s/.test(command?.trim() || "");
   return {
     title: toolDisplayName(name),
-    kind: git ? "git" : edit ? "edit" : terminal ? "terminal" : "tool",
+    kind: code ? "code" : git ? "git" : edit ? "edit" : terminal ? "terminal" : "tool",
   };
 }
 
@@ -72,10 +86,14 @@ export function startedAgents(output: string): ConversationRef[] {
 
 /** A receipt inside a file read is still file content, not an agent launch. */
 export function agentLaunches(step: Extract<AgentStep, { kind: "tool" }>): ConversationRef[] {
-  if (step.status === "error" || !/(?:^|[._:-])(?:bash|shell|terminal|exec_command|exec)$/i.test(step.name)) return [];
+  if (step.status === "error" || !/(?:^|[._:-])(?:bash|shell|terminal|exec_command|exec|pycode|tscode)$/i.test(step.name)) return [];
   const args = toolArguments(step.input);
   const command = args.find((arg) => ["command", "cmd", "code", "Input"].includes(arg.name))?.value ?? "";
-  if (!/(?:^|[\s/'"])(?:adi(?:-mono)?\s+agents\s+run|adi-agents\s+run)(?=\s|$)/.test(command)) return [];
+  // In a code cell the launch is an argument to `sh`: a string, or a list whose words are quoted and comma-separated.
+  const launch = toolCode(step.name)
+    ? /(?:^|[\s/'"])(?:adi(?:-mono)?["',\s]+agents["',\s]+run|adi-agents["',\s]+run)(?=[\s"',]|$)/
+    : /(?:^|[\s/'"])(?:adi(?:-mono)?\s+agents\s+run|adi-agents\s+run)(?=\s|$)/;
+  if (!launch.test(command)) return [];
   return startedAgents(step.output);
 }
 

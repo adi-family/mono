@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type { AgentTurn } from "../src/lib/app-chat";
-import { activityStatus, agentLaunches, conversationHref, startedAgents, toolArguments, toolDisplayName, toolSummary, transcriptParts } from "../src/lib/app-chat-transcript";
+import { activityStatus, agentLaunches, conversationHref, startedAgents, toolArguments, toolCode, toolDisplayName, toolSummary, transcriptParts } from "../src/lib/app-chat-transcript";
 
 function turn(values: Partial<AgentTurn>): AgentTurn {
   return { role: "assistant", text: "", seq: 80, at: 0, pending: false, queued: false, images: [], steps: [], ...values };
@@ -34,6 +34,18 @@ describe("readable tool arguments", () => {
     assert.deepEqual(toolSummary("functions.apply_patch", '{"patch":"*** Update File: src/chat.tsx"}'), { title: "apply_patch", kind: "edit" });
   });
 
+  it("reads a Python or TypeScript cell as code, whatever namespace the tool arrives under", () => {
+    assert.deepEqual(toolCode("PyCode"), { argument: "code", language: "py" });
+    assert.deepEqual(toolCode("mcp__adi__PyCode"), { argument: "code", language: "py" });
+    assert.deepEqual(toolCode("TsCode"), { argument: "code", language: "ts" });
+    assert.deepEqual(toolCode("mcp__adi__TsCode"), { argument: "code", language: "ts" });
+    assert.equal(toolCode("Bash"), null);
+    assert.equal(toolCode("mcp__other__decode"), null);
+    assert.equal(toolCode("constructor"), null);
+    assert.deepEqual(toolSummary("mcp__adi__PyCode", '{"code":"sh(\'git status\')"}'), { title: "PyCode", kind: "code" });
+    assert.deepEqual(toolSummary("mcp__adi__TsCode", '{"code":"await sh(\'git status\');"}'), { title: "TsCode", kind: "code" });
+  });
+
   it("keeps unanswered distinct from a returned tool error", () => {
     assert.equal(activityStatus("unanswered"), "cancelled");
     assert.equal(activityStatus("error"), "error");
@@ -58,6 +70,19 @@ describe("agent conversation links", () => {
       assert.deepEqual(agentLaunches({ ...base, name: "shell", input: `/bin/zsh -lc '${command}'` }), [{ agent: "reviewer", runId: "run-local" }]);
     }
     assert.deepEqual(agentLaunches({ ...base, name: "functions.exec_command", input: '{"cmd":"adi-agents run reviewer task"}' }), [{ agent: "reviewer", runId: "run-local" }]);
+  });
+
+  it("finds a launch made from Python, as a command string or as a list of words", () => {
+    const output = "Started agent reviewer as background process 123.\n  run:     run-local\n";
+    const base = { kind: "tool" as const, status: "ok" as const, output, name: "mcp__adi__PyCode" };
+    for (const code of ['sh("adi-mono agents run reviewer task")', "print(sh(['adi-mono', 'agents', 'run', 'reviewer', task]))", 'sh(["adi-agents", "run", "reviewer"])']) {
+      assert.deepEqual(agentLaunches({ ...base, input: JSON.stringify({ code }) }), [{ agent: "reviewer", runId: "run-local" }]);
+    }
+    assert.deepEqual(agentLaunches({ ...base, input: JSON.stringify({ code: 'print(open("notes.txt").read())' }) }), []);
+    assert.deepEqual(agentLaunches({ ...base, input: JSON.stringify({ code: 'sh("adi-mono agents runs")' }) }), []);
+    for (const code of ['await sh("adi-mono agents run reviewer task");', "const started = await sh(['adi-mono', 'agents', 'run', 'reviewer', task]);"]) {
+      assert.deepEqual(agentLaunches({ ...base, name: "mcp__adi__TsCode", input: JSON.stringify({ code }) }), [{ agent: "reviewer", runId: "run-local" }]);
+    }
   });
 
   it("keeps file output and unrelated shell output as ordinary tools", () => {

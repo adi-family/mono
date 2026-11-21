@@ -32,6 +32,8 @@ const compactText = "A long message should keep a clear gap between the speaker 
 const markdownCode = `const html = "<section>escaped & preserved</section>";\n  const indented = true;  \nconst longLine = "${"code-width-".repeat(25)}";\n`;
 const markdownOneLiner = `curl --data "${"one-line-width-".repeat(20)}" https://example.com/submit`;
 const markdownOutput = "**tool output stays literal**\n<h2>tool markup stays literal</h2>";
+const typescriptCell = 'const rows: string[] = (await sh("git ls-files", { check: false })).lines; // every tracked file\nfor (const row of rows.slice(0, 3)) console.log(`<b>${row}</b>`);\nrows.length;';
+const pythonCell = 'rows = sh("git ls-files", check=False).lines  # every tracked file\nfor row in rows[:3]:\n    print(f"<b>{row}</b>")\nlen(rows)';
 const markdownText = [
   "## Markdown fixture",
   "",
@@ -160,6 +162,15 @@ put(markdown, "Markdown rendering", [
   assistant(markdownText, 1, [
     { kind: "message", text: "### Interim checkpoint\n\nAn **interim bold phrase**." },
     { kind: "tool", name: "Bash", input: JSON.stringify({ command: "printf markdown-fixture" }), status: "ok", output: markdownOutput },
+  ]),
+  // A turn of its own, so the cell is not folded into a group with the command above it.
+  user("Python fixture request", 2),
+  assistant("Python fixture answer", 3, [
+    { kind: "tool", name: "mcp__adi__PyCode", input: JSON.stringify({ code: pythonCell, timeout_ms: 30000 }), status: "ok", output: "3" },
+  ]),
+  user("TypeScript fixture request", 4),
+  assistant("TypeScript fixture answer", 5, [
+    { kind: "tool", name: "mcp__adi__TsCode", input: JSON.stringify({ code: typescriptCell }), status: "ok", output: "3" },
   ]),
 ]);
 
@@ -614,6 +625,57 @@ try {
     assert.equal(literal.markup, 0);
     assert.equal(literal.tag, "PRE");
     await click(`${chat} [data-slot="chat-tool-call-trigger"]`);
+  });
+
+  await check("a Python cell is shown as highlighted code above its output, with its options after it", async () => {
+    await open(markdown, "Python fixture answer");
+    const call = `${chat} [data-slot="chat-tool-call"][data-kind="code"]`;
+    await click(`${call} [data-slot="chat-tool-call-trigger"]`);
+    await until(() => evaluate(`${q(`${call} [data-slot="chat-tool-code"]`)}?.checkVisibility() === true`), "the Python cell opens");
+    const shown = await evaluate(`(() => {
+      const call = ${q(call)}, code = call.querySelector('[data-slot="chat-tool-code"]'), output = call.querySelector('[data-slot="chat-tool-output"]');
+      const ink = (token) => getComputedStyle(code.querySelector('[data-token="' + token + '"]')).color;
+      return {
+        title: call.querySelector('[data-slot="chat-tool-call-title"]').textContent,
+        language: code.dataset.language, label: code.getAttribute('aria-label'), text: code.textContent,
+        tokens: [...new Set([...code.querySelectorAll('[data-token]')].map((span) => span.dataset.token))].sort(),
+        // Markup inside the code is text, never elements.
+        elements: code.querySelectorAll('b').length,
+        inked: new Set([getComputedStyle(code).color, ink('kw'), ink('str'), ink('key')]).size,
+        options: [...call.querySelectorAll('dl dt')].map((term) => term.textContent),
+        output: output.textContent,
+        codeFirst: Boolean(code.compareDocumentPosition(output) & Node.DOCUMENT_POSITION_FOLLOWING),
+        contained: getComputedStyle(code).overscrollBehaviorX + '/' + getComputedStyle(code).overscrollBehaviorY,
+      };
+    })()`);
+    assert.deepEqual(shown, {
+      title: "PyCode", language: "py", label: "Python code", text: pythonCell,
+      tokens: ["comment", "func", "key", "kw", "num", "punct", "str"],
+      elements: 0, inked: 4, options: ["timeout_ms"], output: "3", codeFirst: true,
+      // Sideways only: a vertical wheel turn over the cell still scrolls the transcript.
+      contained: "contain/auto",
+    });
+    await click(`${call} [data-slot="chat-tool-call-trigger"]`);
+  });
+
+  await check("a TypeScript cell is shown the same way, read as TypeScript", async () => {
+    await until(() => contains("TypeScript fixture answer"), "the TypeScript turn");
+    const shown = await evaluate(`(() => {
+      const call = [...document.querySelectorAll(${JSON.stringify(`${chat} [data-slot="chat-tool-call"][data-kind="code"]`)})].at(-1);
+      call.querySelector('[data-slot="chat-tool-call-trigger"]').click();
+      const code = call.querySelector('[data-slot="chat-tool-code"]');
+      return {
+        title: call.querySelector('[data-slot="chat-tool-call-title"]').textContent,
+        language: code.dataset.language, label: code.getAttribute('aria-label'), text: code.textContent,
+        keywords: [...new Set([...code.querySelectorAll('[data-token="kw"]')].map((span) => span.textContent))].sort(),
+        elements: code.querySelectorAll('b').length,
+        options: [...call.querySelectorAll('dl dt')].length,
+      };
+    })()`);
+    assert.deepEqual(shown, {
+      title: "TsCode", language: "ts", label: "TypeScript code", text: typescriptCell,
+      keywords: ["await", "const", "false", "for", "of"], elements: 0, options: 0,
+    });
   });
 
   await check("Markdown code and tables stay bounded in light, dark and narrow layouts", async () => {
