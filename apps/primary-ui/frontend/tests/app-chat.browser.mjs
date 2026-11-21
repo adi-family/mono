@@ -30,6 +30,7 @@ const markdown = { agent: "design-assistant", runId: "markdown-run" };
 const compact = { agent: "design-assistant", runId: "compact-run" };
 const compactText = "A long message should keep a clear gap between the speaker and the opposite edge of the transcript. ".repeat(9);
 const markdownCode = `const html = "<section>escaped & preserved</section>";\n  const indented = true;  \nconst longLine = "${"code-width-".repeat(25)}";\n`;
+const markdownOneLiner = `curl --data "${"one-line-width-".repeat(20)}" https://example.com/submit`;
 const markdownOutput = "**tool output stays literal**\n<h2>tool markup stays literal</h2>";
 const markdownText = [
   "## Markdown fixture",
@@ -65,6 +66,10 @@ const markdownText = [
   "",
   "```js",
   markdownCode.trimEnd(),
+  "```",
+  "",
+  "```sh",
+  markdownOneLiner,
   "```",
 ].join("\n");
 const capabilities = { answerable: true, interactive: false, history: true, images: false, tool_steps: true };
@@ -641,6 +646,88 @@ try {
     }
     await setTheme(false);
     await send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 1000, deviceScaleFactor: 1, mobile: false });
+  });
+
+  await check("a code block copies its code from a button pinned to its top-right corner", async () => {
+    const frame = `${chat} [data-slot="chat-markdown-code"]`;
+    const pre = `${frame} pre`;
+    const button = `${frame} [data-slot="chat-markdown-code-copy"]`;
+    await evaluate(`${q(frame)}.scrollIntoView({block:'center',behavior:'instant'})`);
+    await pause(100);
+    const place = () => evaluate(`(() => {
+      const b=${q(button)}.getBoundingClientRect(), p=${q(pre)}.getBoundingClientRect();
+      return { top: b.top - p.top, right: p.right - b.right, inside: b.left >= p.left && b.bottom <= p.bottom, opacity: getComputedStyle(${q(button)}).opacity };
+    })()`);
+    const shown = (value, description) => until(async () => (await place()).opacity === value, description, 2500);
+    const pointer = (x, y) => send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+    const overCode = async () => { const r = await evaluate(`(() => { const r=${q(pre)}.getBoundingClientRect(); return {x:r.left+40,y:r.top+r.height/2}; })()`); await pointer(r.x, r.y); };
+
+    await pointer(2, 2);
+    await shown("0", "the copy button stays out of the way until the block is pointed at");
+    await overCode();
+    await shown("1", "pointing at a code block reveals its copy button");
+    const corner = await place();
+    assert.ok(corner.inside && corner.top >= 4 && corner.top <= 12 && corner.right >= 4 && corner.right <= 12, `the copy button sits in the block's top-right corner (${JSON.stringify(corner)})`);
+    assert.equal(await evaluate(`${q(button)}.getAttribute('aria-label')`), "Copy code");
+    if (process.env.BROWSER_SCREENSHOTS_DIR) {
+      await mkdir(process.env.BROWSER_SCREENSHOTS_DIR, { recursive: true });
+      const screenshot = await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
+      await writeFile(resolve(process.env.BROWSER_SCREENSHOTS_DIR, "design-system-app-markdown-code-copy.png"), Buffer.from(screenshot.data, "base64"));
+    }
+
+    // The fixture's long line overflows; scrolling the code must not carry the button away.
+    await evaluate(`${q(pre)}.scrollLeft = 300`);
+    assert.ok(await evaluate(`${q(pre)}.scrollLeft`) > 100, "the fixture code scrolls sideways");
+    const scrolled = await place();
+    assert.deepEqual({ top: scrolled.top, right: scrolled.right }, { top: corner.top, right: corner.right }, "the copy button stays in the corner while the code scrolls");
+    await evaluate(`${q(pre)}.scrollLeft = 0`);
+
+    await evaluate(`window.__copiedCode = []; window.__originalCopyCommand = document.execCommand; document.execCommand = (command) => { if (command === 'copy') { window.__copiedCode.push(document.activeElement.value); return true; } return false; }`);
+    try {
+      await click(button);
+      await until(() => evaluate(`${q(button)}.dataset.outcome === 'copied'`), "the button confirms the copy");
+      // Exactly the code, inner spacing included, without the line break that closes the fence.
+      assert.equal(await evaluate(`window.__copiedCode.at(-1)`), markdownCode.slice(0, -1));
+      assert.equal(await evaluate(`${q(`${frame} [role="status"]`)}.textContent`), "Code copied");
+      assert.equal(await evaluate(`document.activeElement === ${q(button)}`), true, "focus returns to the copy button");
+      await until(() => evaluate(`${q(button)}.dataset.outcome === undefined`), "the confirmation clears", 4000);
+      await evaluate(`document.execCommand = () => false`);
+      await click(button);
+      await until(() => evaluate(`${q(button)}.dataset.outcome === 'failed' && ${q(`${frame} [role="status"]`)}.textContent.includes('Could not copy the code')`), "a refused copy is reported");
+    } finally {
+      await evaluate(`document.execCommand = window.__originalCopyCommand`);
+    }
+
+    // Without a pointer over the block, keyboard focus on the code or on the button shows it too.
+    await evaluate(`document.activeElement?.blur()`);
+    await pointer(2, 2);
+    await shown("0", "the copy button hides again once the block is left");
+    await evaluate(`${q(pre)}.focus({preventScroll:true})`);
+    await shown("1", "keyboard focus on a code block reveals its copy button");
+    await evaluate(`document.activeElement?.blur()`);
+    await shown("0", "the copy button hides again once focus leaves");
+
+    // A touch screen has no hover: the button is always there, and a long first line scrolls clear of it.
+    // Touch emulation is what turns the pointer media coarse; setEmulatedMedia does not carry that feature.
+    await send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 });
+    try {
+      await shown("1", "a touch screen always shows the copy button");
+      const clear = await evaluate(`(() => {
+        const frame = document.querySelectorAll(${JSON.stringify(frame)})[1];
+        const block = frame.querySelector('pre'), b = frame.querySelector('[data-slot="chat-markdown-code-copy"]').getBoundingClientRect(), p = block.getBoundingClientRect();
+        const overflows = block.scrollWidth > block.clientWidth + 100;
+        block.scrollLeft = block.scrollWidth;
+        const range = document.createRange(); range.selectNodeContents(block.querySelector('code'));
+        const ends = [...range.getClientRects()].filter(r => r.width > 0).map(r => r.right);
+        block.scrollLeft = 0;
+        return { overflows, lines: ends.length, end: Math.max(...ends), button: b.left, fits: b.top > p.top && b.bottom < p.bottom, code: block.textContent };
+      })()`);
+      assert.equal(clear.code, `${markdownOneLiner}\n`);
+      assert.ok(clear.fits, "the copy button fits inside a one-line block");
+      assert.ok(clear.overflows && clear.lines > 0 && clear.end <= clear.button, `scrolled to its end, a long line is not left under the button (${JSON.stringify({ ...clear, code: undefined })})`);
+    } finally {
+      await send("Emulation.setTouchEmulationEnabled", { enabled: false });
+    }
   });
 
   await check("the transcript scrolls from its side margins and from over a table, code and tool output", async () => {
