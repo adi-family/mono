@@ -20,6 +20,8 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.44.0 — 2026-11-21
+
 ### Added
 
 - **An OpenAI embedding backend finds its key in the secrets store.** A backend's `api_key_env` used to be read from the process environment only, so it worked inside agent runs — which get every global secret injected — and failed in the control panel and a plain shell. It now falls back to the global secret of the same name, so `knowledge`, `facts` or the indexer can be assigned to an `openai` backend without putting a key in any service's environment.
