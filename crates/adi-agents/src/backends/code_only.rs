@@ -288,25 +288,69 @@ pub(crate) fn serving<T>(
     });
     let closing = AtomicBool::new(false);
 
+    // Never blocked in `accept`: this thread has to be able to end when the cell does, and the
+    // scope below does not return until it has.
+    door.listener
+        .set_nonblocking(true)
+        .map_err(|e| format!("couldn't listen on {}: {e}", door.path.display()))?;
+
     let ran = std::thread::scope(|scope| {
         scope.spawn(|| {
-            for conn in door.listener.incoming() {
+            while !closing.load(Ordering::SeqCst) {
+                if !readable(&door.listener, POLL) {
+                    continue;
+                }
+                // Nothing there after all — a caller that hung up between the two calls.
+                let Ok((conn, _)) = door.listener.accept() else {
+                    continue;
+                };
                 if closing.load(Ordering::SeqCst) {
                     break;
                 }
-                let Ok(conn) = conn else { continue };
+                // What is accepted from a non-blocking listener is non-blocking too on some
+                // systems, and the conversation on it is a plain blocking read and write.
+                if conn.set_nonblocking(false).is_err() {
+                    continue;
+                }
                 // A thread per call: a cell is free to start several at once, and a slow MCP
                 // server must not stand in front of a `Read`.
                 scope.spawn(move || answer_on(conn, ctx, deadline));
             }
         });
         let ran = run(&offered);
-        // The listener is blocked in `accept`. Connecting is what wakes it to see the flag.
+        // Connecting is what wakes the listener at once to see the flag. Should that fail, it
+        // sees it within `POLL` anyway.
         closing.store(true, Ordering::SeqCst);
         let _ = UnixStream::connect(&door.path);
         ran
     });
     Ok(ran)
+}
+
+/// How long the door waits for a connection before looking again at whether it is closing. A
+/// backstop only — closing wakes it by connecting — so it is how long a cell's end could be held
+/// up if that wake were ever lost, and nothing a call waits on.
+const POLL: Duration = Duration::from_millis(100);
+
+/// Wait up to `wait` for a connection to be pending on `listener`.
+fn readable(listener: &UnixListener, wait: Duration) -> bool {
+    use std::os::fd::AsRawFd as _;
+
+    let mut pending = libc::pollfd {
+        fd: listener.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    let millis = i32::try_from(wait.as_millis()).unwrap_or(i32::MAX);
+    // SAFETY: `poll(2)` reads and writes the one `pollfd` it is given, which lives on this stack
+    // frame for the whole call, and the descriptor is the listener's, borrowed for as long.
+    #[allow(unsafe_code)]
+    let ready = unsafe { libc::poll(&raw mut pending, 1, millis) };
+    if ready < 0 {
+        // Interrupted, most likely. Not spun on: whatever it is, it is looked at again shortly.
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    ready > 0
 }
 
 /// One connection: a request line in, an answer line out.
