@@ -81,7 +81,7 @@ pub(crate) fn describe(base: &str, language: Language, servers: &[String]) -> St
     for spec in tools::inner() {
         let schema = (spec.schema)();
         let _ = write!(text, "\n\n`{}` — ", signature(spec, &schema, language));
-        text.push_str(&told(spec));
+        text.push_str(&told(spec, language));
         fields(&mut text, &schema, "");
     }
     if !servers.is_empty() {
@@ -130,14 +130,26 @@ fn server_path(id: &str) -> String {
 }
 
 /// What a tool says about itself, as it reads from inside code.
-fn told(spec: &ToolSpec) -> String {
+fn told(spec: &ToolSpec, language: Language) -> String {
     match spec.name {
         // Written for a model whose file tools resolve somewhere other than its shell stands.
-        // From inside code there is one directory, and the paragraph above has said so.
+        // From inside code there is one directory, and the paragraph above has said so. What
+        // is added is where this tool went: each language has a spelling of its own for a
+        // command, and TypeScript's is this very shell.
         "Bash" => format!(
-            "{} From code, `sh` is the plain way to run a command; this is here for \
-             `background`.",
-            spec.description.replace(tools::BASH_PATHS, "")
+            "{} {}",
+            spec.description.replace(tools::BASH_PATHS, ""),
+            match language {
+                Language::TypeScript => {
+                    "From code this shell is `$`: `await $`…`;` is this call without the \
+                     wrapping, and `await $.background`…`;` is its `background`. Call `Bash` \
+                     itself when the text it answers with is what you want."
+                }
+                Language::Python => {
+                    "From code, `sh` is the plain way to run a command; this is here for \
+                     `background`."
+                }
+            }
         ),
         _ => spec.description.to_string(),
     }
@@ -471,8 +483,15 @@ mod tests {
     fn the_shell_tool_is_described_for_what_it_is_from_inside_code() {
         let ts = describe("BASE.", Language::TypeScript, &[]);
         assert!(!ts.contains("Only the shell moves"), "{ts}");
-        assert!(ts.contains("this is here for `background`"), "{ts}");
+        assert!(ts.contains("From code this shell is `$`"), "{ts}");
+        assert!(ts.contains("`await $.background`…`;` is its `background`"), "{ts}");
         assert!(ts.contains("It is one shell across the whole conversation"), "the rest of it stands: {ts}");
+
+        // Python has no template to write a command in, so there the function is the way.
+        let py = describe("BASE.", Language::Python, &[]);
+        assert!(!py.contains("Only the shell moves"), "{py}");
+        assert!(py.contains("this is here for `background`"), "{py}");
+        assert!(!py.contains("$.background"), "{py}");
     }
 
     /// Servers are named, not listed: a script asks one what it offers.

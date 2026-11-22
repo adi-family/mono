@@ -82,6 +82,10 @@ class Sh {
     readonly echoed = false,
   ) {}
   get ok(): boolean { return this.code === 0; }
+  /** The same number under the name Bun's and Node's results give it. */
+  get exitCode(): number { return this.code; }
+  /** This result, as one that shows nothing when it stands on a line of its own. */
+  quieted(): Sh { return new Sh(this.stdout, this.stderr, this.code, this.cmd, this.truncated, true); }
   /** stdout with trailing newlines dropped — what `$(...)` would have given. */
   get text(): string { return this.stdout.replace(/\n+$/, ""); }
   get lines(): string[] { return this.text === "" ? [] : this.text.split("\n"); }
@@ -109,7 +113,8 @@ class ShError extends Error {
   readonly code: number;
   readonly stdout: string;
   readonly stderr: string;
-  constructor(message: string, readonly result: Sh) {
+  /** `killed`: the command did not end by itself — it was stopped at a deadline. */
+  constructor(message: string, readonly result: Sh, readonly killed = false) {
     super(message);
     this.name = "ShError";
     this.code = result.code;
@@ -169,11 +174,12 @@ function killTree(child: ChildProcess) {
  * get wrong. A non-zero exit rejects with `ShError` carrying the output — pass `check: false`
  * where failing is an answer rather than a fault (`grep`, `diff`, `test`).
  */
-function sh(cmd: string | readonly unknown[], options: ShOptions = {}): Promise<Sh> {
+function sh(cmd: string | readonly unknown[], options: ShOptions = {}, label?: string): Promise<Sh> {
   const check = options.check ?? true;
   const echo = options.echo ?? false;
   const argv = typeof cmd === "string" ? ["/bin/sh", "-c", cmd] : cmd.map((part) => String(part));
-  const shown = typeof cmd === "string" ? cmd : argv.join(" ");
+  // `label`: what to call the command when what runs is not what was written (see `$`).
+  const shown = label ?? (typeof cmd === "string" ? cmd : argv.join(" "));
   const where = options.cwd !== undefined ? path.resolve(options.cwd) : process.cwd();
   // A program that reads $PWD rather than asking the kernel would otherwise be told where the
   // run began, not where this command starts.
@@ -216,7 +222,7 @@ function sh(cmd: string | readonly unknown[], options: ShOptions = {}): Promise<
       if (timer) clearTimeout(timer);
       const got = result(code);
       if (stopped === "timeout") {
-        reject(new ShError(`command still running after ${options.timeout}ms and was killed: ${shown}${tail(got)}`, got));
+        reject(new ShError(`command still running after ${options.timeout}ms and was killed: ${shown}${tail(got)}`, got, true));
       } else if (stopped) {
         // The call's own deadline. What the command had printed is worth showing — it is
         // usually the only clue to why it was slow.
@@ -224,7 +230,7 @@ function sh(cmd: string | readonly unknown[], options: ShOptions = {}): Promise<
           if (got.stdout) process.stdout.write(got.stdout);
           if (got.stderr) process.stderr.write(got.stderr);
         }
-        reject(new ShError(`command was stopped (${stopped}): ${shown}`, got));
+        reject(new ShError(`command was stopped (${stopped}): ${shown}`, got, true));
       } else if (check && code !== 0) {
         reject(new ShError(`command exited ${code}: ${shown}${tail(got)}`, got));
       } else {
@@ -293,6 +299,510 @@ function sh(cmd: string | readonly unknown[], options: ShOptions = {}): Promise<
     });
   });
 }
+
+// ───────────────────────────── $`…`: the conversation's shell ─────────────────────────────
+
+/*
+ * `sh` runs a command. `$` is the shell — the one the `Bash` tool is, written as a template:
+ *
+ *     await $`cd crates/adi-agents && cargo test ${filter}`;
+ *
+ * Two things make it that, rather than a second spelling of `sh`.
+ *
+ * What a command leaves behind stays. The directory it ends in and what it exported become this
+ * process's own — and this process's own are what the conversation's shell is between calls (see
+ * `Shared`). So the next command, the code around it and the `Bash` tool all start from there.
+ *
+ * What is interpolated is data. A value never becomes part of the script's text: it is assigned
+ * to a shell variable ahead of the command, and the command refers to it. There is then nothing a
+ * value can contain that the shell will run, however the reference to it is quoted. The quoting
+ * decides only how faithfully the value arrives, and it is read off the template (`Quoting`): a
+ * value standing bare is one word, inside the template's own "…" or '…' it is part of that
+ * string, and in a heredoc it is part of the body.
+ */
+
+/** Where in a command a value is about to be put. */
+type Place = "bare" | "double" | "single" | "ansi" | "heredoc" | "sealed";
+
+type Heredoc = { word: string; sealed: boolean; tabs: boolean };
+
+/**
+ * Follows a command's quoting as its text goes by, so that the place of each value is known.
+ *
+ * It reads as much of the shell's grammar as keeping its place takes — quotes, escapes,
+ * comments, `$( … )`, heredocs — and no more. Where it loses its place anyway, nothing is at
+ * stake but fidelity: a value is only ever a variable reference, so quoted wrongly it arrives
+ * split or wrapped in quotes it should not have, and is never run.
+ */
+class Quoting {
+  private mode: "bare" | "double" | "single" | "ansi" = "bare";
+  /** The quoting to return to at each `)` still open. */
+  private outer: Array<"bare" | "double"> = [];
+  /** Heredocs named on the line being read; their bodies begin where it ends. */
+  private awaited: Heredoc[] = [];
+  /** The heredoc whose body is being read. */
+  private here: Heredoc | undefined;
+  /** That body's current line, or `undefined` once a value is in it — it is not the last line then. */
+  private line: string | undefined = "";
+  /** Inside a `#` comment that the text read so far has not ended. */
+  private comment = false;
+  /** Whether a `#` here would begin a comment: at the start of a word. */
+  private fresh = true;
+
+  /** Where a value put in at this point stands. */
+  place(): Place {
+    if (this.here) {
+      this.line = undefined;
+      return this.here.sealed ? "sealed" : "heredoc";
+    }
+    this.fresh = false;
+    return this.comment ? "bare" : this.mode;
+  }
+
+  read(text: string) {
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (this.here) {
+        if (c !== "\n") {
+          if (this.line !== undefined) this.line += c;
+          continue;
+        }
+        const line = this.line;
+        this.line = "";
+        if (line !== undefined && (this.here.tabs ? line.replace(/^\t+/, "") : line) === this.here.word) {
+          this.here = this.awaited.shift();
+          this.fresh = true;
+        }
+      } else if (this.comment) {
+        const end = text.indexOf("\n", i);
+        if (end < 0) return;
+        this.comment = false;
+        i = end - 1;
+      } else if (this.mode === "single") {
+        if (c === "'") this.mode = "bare";
+      } else if (this.mode === "ansi") {
+        if (c === "\\") i += 1;
+        else if (c === "'") this.mode = "bare";
+      } else if (this.mode === "double") {
+        if (c === "\\") i += 1;
+        else if (c === '"') this.mode = "bare";
+        else if (c === "$" && text[i + 1] === "(" && text[i + 2] !== "(") {
+          this.outer.push("double");
+          this.mode = "bare";
+          this.fresh = true;
+          i += 1;
+        }
+      } else {
+        i = this.bare(text, i);
+      }
+    }
+  }
+
+  /** One character of unquoted text, at `i`. Returns the index of the last character it took. */
+  private bare(text: string, i: number): number {
+    const fresh = this.fresh;
+    this.fresh = false;
+    switch (text[i]) {
+      case "\\":
+        return i + 1;
+      case "'":
+        this.mode = "single";
+        return i;
+      case '"':
+        this.mode = "double";
+        return i;
+      case "#":
+        if (fresh) {
+          this.comment = true;
+          return i;
+        }
+        return i;
+      case "$":
+        if (text[i + 1] === "'") {
+          this.mode = "ansi";
+          return i + 1;
+        }
+        if (text[i + 1] === "(" && text[i + 2] === "(") {
+          // Arithmetic, where `<<` is a shift and a quote is not one. Stepped over whole.
+          const end = text.indexOf("))", i + 3);
+          if (end >= 0) return end + 1;
+        }
+        if (text[i + 1] === "(") {
+          this.outer.push("bare");
+          this.fresh = true;
+          return i + 1;
+        }
+        return i;
+      case "(":
+        this.outer.push("bare");
+        this.fresh = true;
+        return i;
+      case ")":
+        this.mode = this.outer.pop() ?? "bare";
+        return i;
+      case "\n":
+        this.fresh = true;
+        if (this.awaited.length) {
+          this.here = this.awaited.shift();
+          this.line = "";
+        }
+        return i;
+      case " ":
+      case "\t":
+      case ";":
+      case "&":
+      case "|":
+        this.fresh = true;
+        return i;
+      case "<":
+        if (text[i + 1] !== "<") return i;
+        // `<<<` is a here-string: a word follows it, like any other.
+        if (text[i + 2] === "<") return i + 2;
+        return this.heredoc(text, i + 2);
+      default:
+        return i;
+    }
+  }
+
+  /** A `<<` has just gone by and `i` is what follows it: note the heredoc it opens. */
+  private heredoc(text: string, i: number): number {
+    let tabs = false;
+    if (text[i] === "-") {
+      tabs = true;
+      i += 1;
+    }
+    while (text[i] === " " || text[i] === "\t") i += 1;
+    let word = "";
+    // A delimiter with any quoting in it seals the body: nothing in it is expanded.
+    let sealed = false;
+    for (; i < text.length; i++) {
+      const c = text[i];
+      if (c === "'" || c === '"') {
+        const end = text.indexOf(c, i + 1);
+        if (end < 0) break;
+        word += text.slice(i + 1, end);
+        sealed = true;
+        i = end;
+      } else if (c === "\\") {
+        word += text[i + 1] ?? "";
+        sealed = true;
+        i += 1;
+      } else if (/[\s;&|<>()]/.test(c)) {
+        break;
+      } else {
+        word += c;
+      }
+    }
+    if (word) this.awaited.push({ word, sealed, tabs });
+    return i - 1;
+  }
+}
+
+/** A piece of command the caller built and vouches for: put in as written, not as a value. */
+class RawText {
+  constructor(readonly text: string) {}
+}
+
+/** The words a value is: one for each element of an array, otherwise one. */
+function wordsOf(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap(wordsOf);
+  if (value === undefined || value === null) {
+    throw new TypeError(`$: a value put into the command is ${value}. A command with a hole in it is not run — check the variable, or pass "" if empty is what you mean.`);
+  }
+  if (value instanceof Sh) return [value.text];
+  switch (typeof value) {
+    case "string":
+      return [value];
+    case "number":
+    case "bigint":
+    case "boolean":
+      return [String(value)];
+    case "object": {
+      // Something that says what it is — a URL, a Date, a Buffer — and not a bag of fields.
+      const text = String(value);
+      if (text !== "[object Object]") return [text];
+    }
+  }
+  throw new TypeError(`$: ${typeof value === "object" ? "an object" : `a ${typeof value}`} cannot be put into a command — pass a string (JSON.stringify it, if JSON is what the command wants).`);
+}
+
+/** A template as the script that runs it, and as the command to call it when reporting on it. */
+type Built = { script: string; label: string };
+
+function build(pieces: readonly string[], values: readonly unknown[]): Built {
+  const quoting = new Quoting();
+  const assigned: string[] = [];
+  let body = "";
+  let label = "";
+  const keep = (value: string) => {
+    const name = `__adi_${assigned.length + 1}`;
+    assigned.push(`${name}=${quote(value)}`);
+    return `\${${name}}`;
+  };
+
+  pieces.forEach((piece, at) => {
+    quoting.read(piece);
+    body += piece;
+    label += piece;
+    if (at >= values.length) return;
+    const value = values[at];
+    if (value instanceof RawText) {
+      // Command, not data — so it is read as command, and moves the quoting like any other.
+      quoting.read(value.text);
+      body += value.text;
+      label += value.text;
+      return;
+    }
+    const words = wordsOf(value);
+    const place = quoting.place();
+    if (place === "sealed") {
+      throw new TypeError("$: a value cannot be put into a heredoc whose delimiter is quoted (<<'EOF'): nothing inside one is expanded. Leave the delimiter bare, or hand the text over with .input(text).");
+    }
+    if (place === "bare") {
+      body += words.map((word) => `"${keep(word)}"`).join(" ");
+      label += words.map(quote).join(" ");
+      return;
+    }
+    const whole = words.join(" ");
+    const ref = keep(whole);
+    // Inside single quotes nothing expands, so the string is closed around the reference and
+    // opened again behind it.
+    body += place === "single" ? `'"${ref}"'` : place === "ansi" ? `'"${ref}"$'` : ref;
+    label += whole;
+  });
+  return { script: assigned.length ? `${assigned.join("\n")}\n${body}` : body, label };
+}
+
+/** The names an `export -p` listing exports, in its order, leaving out the shell's own four. */
+function exportedNames(text: string): string[] {
+  const names: string[] = [];
+  for (const line of text.split("\n")) {
+    const name = exportedName(line);
+    if (name && !names.includes(name)) names.push(name);
+  }
+  return names;
+}
+
+/** The variable one line of such a listing exports: `""` for one that is not carried, `undefined` for a line that exports nothing. */
+function exportedName(line: string): string | undefined {
+  for (const lead of ["export ", "declare -x "]) {
+    if (!line.startsWith(lead)) continue;
+    const name = line.slice(lead.length).split("=", 1)[0].trim();
+    return isName(name) && !UNCARRIED.has(name) ? name : "";
+  }
+  return undefined;
+}
+
+/**
+ * What each of `names` holds once `sh` has read the listing in `file`. Asked of `sh` because
+ * the listing is `sh`'s own output, in whichever spelling that `sh` uses, and it is the only
+ * reader always right about it. `undefined` when it could not be asked.
+ */
+function exportedValues(file: string, names: readonly string[], env: Record<string, string | undefined>): Record<string, string> | undefined {
+  const found: Record<string, string> = {};
+  if (!names.length) return found;
+  // Every name was checked to be a plain identifier, which is what makes the `eval` safe.
+  const script =
+    'if sh -n "$1" 2>/dev/null; then . "$1"; fi; shift; ' +
+    "for n do eval 'v=${'\"$n\"'-}; s=${'\"$n\"'+x}'; " +
+    "[ -n \"$s\" ] && printf '%s=%s\\0' \"$n\" \"$v\"; done; true";
+  const ran = spawnSync("/bin/sh", ["-c", script, "sh", file, ...names], { env: env as NodeJS.ProcessEnv, stdio: ["ignore", "pipe", "ignore"], timeout: 30_000 });
+  if (ran.error || !ran.stdout) return undefined;
+  for (const item of ran.stdout.toString("utf8").split("\0")) {
+    const eq = item.indexOf("=");
+    if (eq > 0) found[item.slice(0, eq)] = item.slice(eq + 1);
+  }
+  return found;
+}
+
+/** Where `$` commands report how they ended: a private directory, made when first needed. */
+let stateDir: string | undefined;
+let stateCalls = 0;
+
+type StateFiles = { cwd: string; before: string; after: string };
+
+/**
+ * Make what a command left behind this process's own: the directory it ended in, and what it
+ * exported or unset. A call that was pointed somewhere on purpose (`cwd`, `env`) moves nothing
+ * of that kind — where it ran was not where the conversation stood.
+ */
+function adopt(files: StateFiles, options: ShOptions) {
+  if (options.cwd === undefined) {
+    try {
+      const where = fs.readFileSync(files.cwd, "utf8").trim();
+      if (where && where !== process.cwd()) {
+        process.chdir(where);
+        process.env.PWD = process.cwd();
+      }
+    } catch {}
+  }
+  if (options.env !== undefined) return;
+  let before: string;
+  let after: string;
+  try {
+    before = fs.readFileSync(files.before, "utf8");
+    after = fs.readFileSync(files.after, "utf8");
+  } catch {
+    return;
+  }
+  if (after === before) return;
+  const had = new Set(before.split("\n"));
+  let changed: string[] = [];
+  let unsure = false;
+  for (const line of after.split("\n")) {
+    if (!line || had.has(line)) continue;
+    const name = exportedName(line);
+    // A changed line that exports nothing is the inside of a value that spans lines: which
+    // variable's is not worth working out when all of them can be asked for.
+    if (name === undefined) unsure = true;
+    else if (name && !changed.includes(name)) changed.push(name);
+  }
+  const now = exportedNames(after);
+  if (unsure) changed = now;
+  const values = exportedValues(files.after, changed, process.env);
+  if (values) Object.assign(process.env, values);
+  for (const name of exportedNames(before)) {
+    if (!now.includes(name)) delete process.env[name];
+  }
+}
+
+/** Run a built command through `/bin/sh`, and stand afterwards where it left the shell. */
+function runInShell(built: Built, options: ShOptions): Promise<Sh> {
+  stateDir ??= fs.mkdtempSync(path.join(os.tmpdir(), "adi-sh-"));
+  const stem = path.join(stateDir, String(++stateCalls));
+  const files: StateFiles = { cwd: `${stem}.cwd`, before: `${stem}.before`, after: `${stem}.after` };
+  // Recorded by an `EXIT` trap, so that it still happens when the command itself exits, and
+  // the command's own status is what the shell then ends with.
+  const script =
+    `__adi_cwd=${quote(files.cwd)} __adi_before=${quote(files.before)} __adi_after=${quote(files.after)}\n` +
+    'export -p > "$__adi_before" 2>/dev/null\n' +
+    `trap '__adi_status=$?; pwd -P > "$__adi_cwd" 2>/dev/null; export -p > "$__adi_after" 2>/dev/null; exit $__adi_status' EXIT\n` +
+    `${built.script}\n`;
+  const settle = (killed: boolean) => {
+    // A command stopped at a deadline did not finish, and half of a shell's state is worse
+    // than none: nothing is taken from it.
+    if (!killed) adopt(files, options);
+    for (const file of Object.values(files)) {
+      try { fs.unlinkSync(file); } catch {}
+    }
+  };
+  return sh(script, options, built.label).then(
+    (result) => {
+      settle(false);
+      return result;
+    },
+    (error) => {
+      settle(error instanceof ShError && error.killed);
+      throw error;
+    },
+  );
+}
+
+/**
+ * A `$` command: awaited for its result, and adjusted before that — `.nothrow()`, `.quiet()`,
+ * `.timeout(ms)`, `.cwd(dir)`, `.env({…})`, `.input(text)` — or awaited straight for a value
+ * with `.text()`, `.lines()`, `.json()`.
+ *
+ * It starts on its own a moment after the line that made it, so that a forgotten `await` is not
+ * also a command that never ran; what a call is adjusted with has to be said on that line.
+ */
+class ShCall implements PromiseLike<Sh> {
+  private options: ShOptions = {};
+  private silent = false;
+  private started: Promise<Sh> | undefined;
+
+  /** `built`: the command — or why the template could not be made into one. */
+  constructor(private readonly built: Built | Error) {
+    queueMicrotask(() => void this.start());
+  }
+
+  private start(): Promise<Sh> {
+    const { built } = this;
+    // A template that is no command fails where its result is awaited, like a command that
+    // fails — not on the line that wrote it, where a `.catch()` further along would never see it.
+    this.started ??= built instanceof Error
+      ? Promise.reject(built)
+      : runInShell(built, this.options).then((result) => (this.silent ? result.quieted() : result));
+    return this.started;
+  }
+
+  private adjust(change: () => void): this {
+    if (this.started) throw new Error("this command is already running — adjust it on the line that starts it: await $`…`.nothrow()");
+    change();
+    return this;
+  }
+
+  /** Resolve with the result whatever the exit status, instead of rejecting on a non-zero one. */
+  nothrow(): this { return this.adjust(() => { this.options.check = false; }); }
+  /** Show nothing of the output when the call stands on a line of its own. */
+  quiet(): this { return this.adjust(() => { this.silent = true; }); }
+  /** Copy the output through as it is produced. */
+  echo(): this { return this.adjust(() => { this.options.echo = true; }); }
+  /** Kill the command after this many milliseconds. */
+  timeout(ms: number): this { return this.adjust(() => { this.options.timeout = ms; }); }
+  /** Run it in `dir` instead of where the conversation stands — and leave the conversation there. */
+  cwd(dir: string): this { return this.adjust(() => { this.options.cwd = dir; }); }
+  /** Run it with exactly this environment. What it exports is then not kept. */
+  env(vars: Record<string, string | undefined>): this { return this.adjust(() => { this.options.env = vars; }); }
+  /** Give it this on its standard input. */
+  input(data: string | Uint8Array): this { return this.adjust(() => { this.options.input = data; }); }
+
+  /** stdout with the trailing newline dropped. */
+  text(): Promise<string> { return this.start().then((result) => result.text); }
+  lines(): Promise<string[]> { return this.start().then((result) => result.lines); }
+  json(): Promise<unknown> { return this.start().then((result) => result.json()); }
+
+  then<A = Sh, B = never>(done?: ((result: Sh) => A | PromiseLike<A>) | null, failed?: ((reason: unknown) => B | PromiseLike<B>) | null): Promise<A | B> {
+    return this.start().then(done, failed);
+  }
+  catch<B = never>(failed?: ((reason: unknown) => B | PromiseLike<B>) | null): Promise<Sh | B> {
+    return this.start().catch(failed);
+  }
+  finally(done?: (() => void) | null): Promise<Sh> {
+    return this.start().finally(done);
+  }
+
+  /** What a call that was not awaited looks like when a cell ends with it. */
+  [Symbol.for("nodejs.util.inspect.custom")](): string {
+    const label = this.built instanceof Error ? "…" : this.built.label;
+    return `[\$\`${label}\` — not awaited: write \`await $\`…\`\` to have its result]`;
+  }
+}
+
+/**
+ * The shell, as a template tag: `` await $`git status` ``. See the top of this section for what
+ * it does with the command and with what is interpolated into it.
+ */
+function dollar(pieces: TemplateStringsArray, ...values: unknown[]): ShCall {
+  if (!Array.isArray(pieces) || !Array.isArray(pieces.raw)) {
+    throw new TypeError("$ is a template tag — write $`command`, with backticks. For a command held in a string there is sh(command).");
+  }
+  try {
+    // The raw text, so that what is typed between the backticks is what the shell reads: a
+    // `\n` for `printf`, a `\b` for `grep`, a `\$` that is not to be expanded.
+    const built = build(pieces.raw, values);
+    if (!built.script.trim()) throw new TypeError("$: there is no command between the backticks.");
+    return new ShCall(built);
+  } catch (error) {
+    return new ShCall(error instanceof Error ? error : new Error(String(error)));
+  }
+}
+
+/** Text to put into a command as written rather than as a value: `` $`ls ${$.raw(flags)}` ``. */
+dollar.raw = (text: unknown): RawText => new RawText(String(text));
+
+/**
+ * Start a command as a job that outlives the turn, and be woken when it ends — the `Bash`
+ * tool's `background`, which is where it goes. So it is there where that tool is a function: in
+ * a cell of a code-only agent.
+ */
+dollar.background = async (pieces: TemplateStringsArray, ...values: unknown[]): Promise<string> => {
+  const built = build(pieces.raw, values);
+  if (!door?.names.includes("Bash")) {
+    throw new Error("$.background starts a job through the Bash tool, which code can call only in a cell of a code-only agent. Here, start it with the Bash tool's own `background`.");
+  }
+  return (toolFunction("Bash") as (input: unknown) => Promise<string>)({ command: built.script, background: true });
+};
 
 /**
  * Where shared values are kept: a path prefix, to which a name and `.json` are added. Set by
@@ -896,8 +1406,7 @@ class Cells {
   private transpiler = new Bun.Transpiler({ loader: "ts", target: "node", deadCodeElimination: false, trimUnusedImports: false } as never);
 
   constructor() {
-    Object.assign(AsyncGlobals, { sh, ShError, Sh, share, shared, fs, path, os });
-    AsyncGlobals.$ ??= Bun.$;
+    Object.assign(AsyncGlobals, { sh, ShError, Sh, share, shared, fs, path, os, $: dollar });
   }
 
   /**
@@ -1100,28 +1609,8 @@ class Shared {
       return {};
     }
     if (text === this.text) return { ...this.carried };
-    const names: string[] = [];
-    for (const line of text.split("\n")) {
-      for (const lead of ["export ", "declare -x "]) {
-        if (!line.startsWith(lead)) continue;
-        const name = line.slice(lead.length).split("=", 1)[0].trim();
-        if (isName(name) && !UNCARRIED.has(name) && !names.includes(name)) names.push(name);
-      }
-    }
-    const carried: Record<string, string> = {};
-    if (names.length) {
-      // Every name was checked to be a plain identifier, which is what makes the `eval` safe.
-      const script =
-        'if sh -n "$1" 2>/dev/null; then . "$1"; fi; shift; ' +
-        "for n do eval 'v=${'\"$n\"'-}; s=${'\"$n\"'+x}'; " +
-        "[ -n \"$s\" ] && printf '%s=%s\\0' \"$n\" \"$v\"; done; true";
-      const ran = spawnSync("/bin/sh", ["-c", script, "sh", this.envFile, ...names], { env: base, stdio: ["ignore", "pipe", "ignore"], timeout: 30_000 });
-      if (ran.error || !ran.stdout) return {};
-      for (const item of ran.stdout.toString("utf8").split("\0")) {
-        const eq = item.indexOf("=");
-        if (eq > 0) carried[item.slice(0, eq)] = item.slice(eq + 1);
-      }
-    }
+    const carried = exportedValues(this.envFile, exportedNames(text), base);
+    if (!carried) return {};
     this.text = text;
     this.carried = carried;
     return { ...carried };
@@ -1285,6 +1774,9 @@ class Kernel {
     }
     try { fs.unlinkSync(this.socket); } catch {}
     try { fs.rmdirSync(this.dir); } catch {}
+    if (stateDir) {
+      try { fs.rmSync(stateDir, { recursive: true, force: true }); } catch {}
+    }
     this.exit(0);
   }
 

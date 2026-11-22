@@ -242,6 +242,12 @@ const PYCODE: &str = "Run Python in this conversation's own interpreter and retu
 /// for the same reason — but not the same text, because the differences are exactly what a model
 /// would get wrong by assuming: everything here is `await`ed, only the last expression is shown,
 /// a missing semicolon changes what a cell means, and a cell that will not stop cannot be made to.
+///
+/// The second paragraph is the shell, and it leads with `` $`…` `` rather than with `sh`: a
+/// template tag is what a model reaches for in TypeScript, and the one this interpreter has is
+/// not the one it knows from Bun or `zx` in the two ways that matter — it moves the
+/// conversation's shell as `Bash` does, and what is interpolated into it needs no quoting and
+/// must be given none.
 #[cfg(unix)]
 const TSCODE: &str = "Run TypeScript in this conversation's own interpreter (Bun) and return what \
                       it printed. The interpreter stays up between calls: what a cell declares at \
@@ -254,19 +260,33 @@ const TSCODE: &str = "Run TypeScript in this conversation's own interpreter (Bun
                       begins with `(` or `[` otherwise continues the line above it. An exception \
                       ends the call with the error and the line it came from; what ran before it \
                       has happened, and the interpreter and your variables survive it.\n\n`await \
-                      sh(cmd)` runs a command and resolves to its result: `.text` is stdout with \
-                      the trailing newline dropped (and what the result becomes inside a template \
-                      string), with `.stdout`, `.stderr`, `.code`, `.ok`, `.lines` and `.json()` \
-                      beside it — `const head = (await sh('git rev-parse HEAD')).text;`. A string \
-                      runs through the shell; an array (`sh(['git', 'commit', '-m', msg])`) runs \
-                      as written, with no quoting to get wrong. A command that exits non-zero \
-                      rejects with `ShError` carrying its output, so a cell of several steps stops \
-                      at the one that broke — pass `{ check: false }` where failing is an answer \
-                      (`grep`, `diff`, `test`). A bare `await sh(...);` line shows the command's \
-                      output wherever it stands in the cell; `{ echo: true }` shows it as it is \
-                      produced. `fs`, `path` and `os` are already imported, every `Bun.*` API and \
-                      Bun's `$` are there, and `import` — static or dynamic — resolves from the \
-                      directory you are in and re-reads a file of yours that has changed.\n\nIt \
+                      $`git status`` is your shell — the one Bash is, written as a template. The \
+                      command runs through `sh` where the conversation stands, and what it leaves \
+                      behind stays: after `await $`cd crates/app && export FE=$PWD`;` your code, \
+                      the next command and Bash all stand there with `FE` set. What you \
+                      interpolate arrives as data and is never run: `$`grep -n ${pattern} \
+                      ${files}`` passes `pattern` as one argument whatever is in it and each \
+                      element of the array `files` as its own, and inside quotes of your own \
+                      (`\"${msg}\"`) a value is still exactly that value — so never quote or \
+                      escape what you interpolate (`$.raw(text)` is the one exception, for a \
+                      piece of command you built). It resolves to the command's result: `.text` \
+                      is stdout with the trailing newline dropped (and what the result becomes \
+                      inside a template string), with `.stdout`, `.stderr`, `.code`, `.ok`, \
+                      `.lines` and `.json()` beside it — `const head = (await $`git rev-parse \
+                      HEAD`).text;` — or go straight to the value with `await $`…`.text()`, \
+                      `.lines()` or `.json()`. A command that exits non-zero rejects with \
+                      `ShError` carrying its output, so a cell of several steps stops at the one \
+                      that broke — add `.nothrow()` where failing is an answer (`grep`, `diff`, \
+                      `test`); `.quiet()`, `.timeout(ms)`, `.cwd(dir)`, `.env({…})` and \
+                      `.input(text)` adjust a call the same way. A bare `await $`…`;` line shows \
+                      the command's output wherever it stands in the cell. `sh(cmd)` is the plain \
+                      function beneath it, for a command you already hold: a string, or an array \
+                      (`sh(['git', 'commit', '-m', msg])`) that runs with no shell at all, with \
+                      `{ check: false }` and `{ echo: true }` as options — it runs where you \
+                      stand and moves nothing. `fs`, `path` and `os` are already imported, every \
+                      `Bun.*` API is there (Bun's own shell as `Bun.$`), and `import` — static or \
+                      dynamic — resolves from the directory you are in and re-reads a file of \
+                      yours that has changed.\n\nIt \
                       stands where your shell stands, and moves it: `process.chdir()` moves Bash \
                       too, what you put in `process.env` is exported to it, and wherever Bash \
                       `cd`'d or whatever it exported is where this starts. Only what a cell \
@@ -279,11 +299,11 @@ const TSCODE: &str = "Run TypeScript in this conversation's own interpreter (Bun
                       everything else intact — but code still running after that (a long loop, a \
                       wait on something that is not a command) costs the interpreter and every \
                       variable in it. So set `background` for code that will outlast the turn: it \
-                      runs as a script of its own — same directory, same environment, same `sh` — \
-                      and you **end your turn** and are woken when it exits, with its status and \
-                      the tail of its output. A background script does not see your variables and \
-                      nothing it defines comes back, so have it `share` its result or write it to \
-                      a file.";
+                      runs as a script of its own — same directory, same environment, same `$` \
+                      and `sh` — and you **end your turn** and are woken when it exits, with its \
+                      status and the tail of its output. A background script does not see your \
+                      variables and nothing it defines comes back, so have it `share` its result \
+                      or write it to a file.";
 
 /// Everything a turn may call. Order is the order they're advertised, which is the order a model
 /// tends to consider them in: look before you write, and shell out only when nothing else fits.
@@ -2947,6 +2967,44 @@ print(','.join(offered), '|', said.split('\\n')[0], '|', counted['calls'], '|', 
             interpreter.stop();
             let _ = std::fs::remove_dir_all(&dir);
         }
+    }
+
+    /// For a code-only agent in TypeScript the shell is `$`, and `$.background` is the `Bash`
+    /// tool's `background`: a job of this conversation's with a wake of its own, started with
+    /// what was interpolated into it intact — and described to the agent in those terms.
+    #[cfg(unix)]
+    #[test]
+    fn a_code_only_agents_dollar_starts_a_job_through_bash() {
+        let dir = scratch("only-dollar");
+        let ctx = only_in(&dir, "only-dollar", CodeTools::ONLY_TYPESCRIPT, Hub::default());
+        let typescript = crate::backends::interpreter::Interpreter::new(Language::TypeScript, ctx.agent_dir, ctx.conv);
+
+        let described = &declarations_with(ctx.code, &ctx.mcp.ids())[0].description;
+        assert!(described.contains("is your shell — the one Bash is, written as a template"), "{described}");
+        assert!(described.contains("From code this shell is `$`"), "{described}");
+
+        let said = execute(
+            "TsCode",
+            &json!({ "code": "const label = \"from the job's label\";\nawait $.background`echo ${label} > job-said.txt`;" }),
+            &ctx,
+        )
+        .expect("started");
+        assert!(said.contains("in the background"), "{said}");
+        let pending = ctx.awaits.for_conversation("watcher", "conv-1");
+        assert_eq!(pending.len(), 1, "a wake for the job: {said}");
+
+        let written = dir.join("job-said.txt");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !written.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert_eq!(
+            std::fs::read_to_string(&written).expect("the job ran"),
+            "from the job's label\n"
+        );
+
+        typescript.stop();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The interpreter cannot be called from inside itself, and a name that is no tool at all is

@@ -97,7 +97,11 @@ use super::shell::Shell;
 /// 3: a request may carry `tools` — where the cell's tool functions are answered, for a code-only
 /// agent (see [`super::code_only`]). An interpreter that predates it would run such a cell with
 /// none of the functions its description promises.
-const PROTOCOL: u64 = 3;
+///
+/// 4: in TypeScript `$` is the conversation's shell — a `cd` or an `export` in it stays, and
+/// what is interpolated is passed as data — where it used to be Bun's. Nothing on the wire moved;
+/// like 2, it is the description that would otherwise be about an interpreter that is not there.
+const PROTOCOL: u64 = 4;
 
 /// How long an interpreter nobody calls stays up. An hour is a conversation still in progress —
 /// a build awaited, a person answering — while anything longer is most likely a conversation that
@@ -116,6 +120,9 @@ const START_WAIT: Duration = Duration::from_secs(20);
 /// The interpreter acts at the deadline and needs a moment to kill what the cell was running. Past
 /// this it is not going to stop.
 const STOP_GRACE: Duration = Duration::from_secs(15);
+
+/// The longest one read of a reply waits before the deadline is looked at again.
+const READ_SLICE: Duration = Duration::from_secs(1);
 
 /// What every way of losing an interpreter leaves true, said once.
 const GONE: &str = "every variable and import it held is gone, and your next call starts a new \
@@ -447,6 +454,10 @@ impl Interpreter {
         let socket = PathBuf::from(record.get("socket")?.as_str()?);
         let pid = u32::try_from(record.get("pid")?.as_u64()?).ok()?;
         let stream = UnixStream::connect(&socket).ok()?;
+        // Bounded from the first read on, and set here rather than only where the reply is read:
+        // by then the interpreter may have answered and hung up, and a socket whose peer is gone
+        // refuses to have an option set at all (see `read_reply`).
+        let _ = stream.set_read_timeout(Some(READ_SLICE));
         let live = Live {
             stream,
             pid,
@@ -588,10 +599,13 @@ fn read_reply(stream: &mut UnixStream, deadline: Instant) -> Result<Value, Unans
         }
         // Never zero: a zero read timeout means "block for ever" to the socket API, which is the
         // one thing this loop exists to rule out.
-        let wait = left.clamp(Duration::from_millis(1), Duration::from_secs(1));
-        if let Err(e) = stream.set_read_timeout(Some(wait)) {
-            return Err(Unanswered::Gone(e.to_string()));
-        }
+        let wait = left.clamp(Duration::from_millis(1), READ_SLICE);
+        // Not an error when it fails. A peer that has already answered and closed makes this
+        // `EINVAL` on macOS, with its whole reply sitting unread in the buffer — and calling
+        // that "the interpreter went away" threw away the result of a cell that had run. The
+        // read below is what finds out how things stand; the timeout set at `reach` still
+        // bounds it.
+        let _ = stream.set_read_timeout(Some(wait));
         match stream.read(&mut chunk) {
             Ok(0) => break,
             Ok(n) => reply.extend_from_slice(&chunk[..n]),
@@ -1420,6 +1434,151 @@ mod tests {
         assert!(!ran.output.contains("never"), "{}", ran.output);
 
         assert_eq!(conv.run("kept;").output.trim(), "\"still here\"");
+    }
+
+    /// `$` is the conversation's shell, not a command runner: where a command ends and what it
+    /// exported are where the code stands afterwards, and where `Bash` starts — an `unset` and a
+    /// move back included. A call that was pointed somewhere else on purpose moves nothing.
+    #[test]
+    fn typescript_dollar_is_the_conversations_shell() {
+        let conv = Conversation::ts("dollar-shell");
+        std::fs::create_dir_all(conv.home.join("sub")).expect("mkdir");
+
+        let ran = conv.run(
+            r#"await $`cd sub && export FROM_DOLLAR='two words' MULTI="l1
+l2"`.quiet();
+console.log(JSON.stringify([process.cwd().endsWith('/sub'), process.env.FROM_DOLLAR, process.env.MULTI, (await $`pwd`).text.endsWith('/sub'), (await $`echo "$FROM_DOLLAR"`).text]));"#,
+        );
+        assert_eq!(
+            ran.output.trim(),
+            r#"[true,"two words","l1\nl2",true,"two words"]"#,
+            "the code moved with the command, and the next command starts there"
+        );
+        let seen = conv.bash("pwd; echo \"$FROM_DOLLAR\"");
+        assert!(seen.ends_with("/sub\ntwo words\n"), "and so does Bash: {seen}");
+
+        let ran = conv.run(
+            r"await $`unset FROM_DOLLAR; cd ..`.quiet();
+const there = (await $`pwd`.cwd('sub')).text;
+console.log(JSON.stringify([process.env.FROM_DOLLAR ?? null, process.cwd().endsWith('/sub'), there.endsWith('/sub')]));",
+        );
+        assert_eq!(ran.output.trim(), "[null,false,true]");
+        assert_eq!(conv.bash("echo ${FROM_DOLLAR-gone}"), "gone\n");
+    }
+
+    /// What is interpolated is data, wherever in the command it lands: standing bare it is one
+    /// argument (and an array several), inside the template's own quotes it is part of that
+    /// string, in a heredoc part of the body — and in none of them is anything in it run.
+    #[test]
+    fn typescript_dollar_passes_what_is_interpolated_as_data() {
+        let conv = Conversation::ts("dollar-data");
+        let hostile = r#"two words; echo PWNED $(echo SUB) `echo TICK` "q" 'a' \n $HOME *"#;
+        let ran = conv.run(&format!(
+            r#"const hostile = {hostile};
+const out = [
+  (await $`printf '[%s]' ${{hostile}} ${{['a b', 7, []]}}`).text,
+  (await $`printf '[%s]' "x ${{hostile}} y"`).text,
+  (await $`printf '[%s]' 'x ${{hostile}} y'`).text,
+  (await $`printf '%s' "nested $(printf '%s' "${{hostile}}") end"`).text,
+  (await $`# a comment's apostrophe is not a quote
+printf '[%s]' ${{hostile}}`).text,
+  (await $`cat <<EOF
+body ${{hostile}}
+EOF`).text,
+  (await $`printf '%s|' ${{$.raw('a   b')}} ${{'a   b'}}`).text,
+  (await $`printf 'x\ny' | grep -c '\by'`).text,
+];
+console.log(JSON.stringify(out));"#,
+            hostile = serde_json::to_string(hostile).expect("a string"),
+        ));
+        assert_eq!(ran.ended, Ended::Completed, "{}", ran.output);
+        let out: Vec<String> = serde_json::from_str(ran.output.trim()).expect("json");
+        assert_eq!(
+            out,
+            [
+                format!("[{hostile}][a b][7]"),
+                format!("[x {hostile} y]"),
+                format!("[x {hostile} y]"),
+                format!("nested {hostile} end"),
+                format!("[{hostile}]"),
+                format!("body {hostile}"),
+                "a|b|a   b|".to_string(),
+                "1".to_string(),
+            ],
+            "each value arrived whole and none of it ran; what is typed between the backticks \
+             reaches the shell as typed"
+        );
+
+        // A value that is not there, or is not something a command can hold, is refused before
+        // anything runs — and where the result is awaited, like any other failure of the call.
+        let refused = conv.run(
+            r"const errors = [];
+for (const make of [() => $`touch ran-anyway ${undefined}`, () => $`touch ran-anyway ${{ a: 1 }}`, () => $`cat <<'EOF'
+${'x'}
+EOF`, () => $.background`echo x`]) {
+  errors.push(await Promise.resolve().then(make).then(() => 'ran', (error) => error.name + ': ' + error.message.slice(0, 38)));
+}
+console.log(JSON.stringify([...errors, fs.existsSync('ran-anyway')]));",
+        );
+        assert_eq!(
+            refused.output.trim(),
+            r#"["TypeError: $: a value put into the command is und","TypeError: $: an object cannot be put into a comm","TypeError: $: a value cannot be put into a heredo","Error: $.background starts a job through the ",false]"#
+        );
+    }
+
+    /// A `$` call ends the way a command does and reads the way one reads: a non-zero exit
+    /// rejects unless told it may fail, the helpers go straight to a value, and a call on a
+    /// line of its own shows its output unless it was asked to be quiet.
+    #[test]
+    fn typescript_dollar_fails_resolves_and_shows_like_a_command() {
+        let conv = Conversation::ts("dollar-result");
+        let ran = conv.run(
+            r#"const failed = await $`echo out; exit 3`.nothrow();
+let thrown = '';
+try { await $`echo before; echo why >&2; exit 4`; } catch (error) { thrown = `${error.name} ${error.code} ${error.message.split('\n')[0]}`; }
+console.log(JSON.stringify([failed.code, failed.exitCode, failed.ok, failed.text, thrown, await $`echo hi`.text(), await $`printf 'a\nb\n'`.lines(), await $`echo '{"a":1}'`.json(), (await $`tr a-z A-Z`.input('shout')).text]));"#,
+        );
+        assert_eq!(
+            ran.output.trim(),
+            r#"[3,3,false,"out","ShError 4 command exited 4: echo before; echo why >&2; exit 4","hi",["a","b"],{"a":1},"SHOUT"]"#
+        );
+
+        let shown = conv.run(
+            "await $`echo one`;\nawait $`echo hidden`.quiet();\nconst kept = await $`echo kept`;\nawait $`echo three >&2`;",
+        );
+        assert_eq!(shown.output, "one\nthree\n");
+
+        let forgot = conv.run("$`echo never-read`;");
+        assert!(
+            forgot.output.contains("not awaited"),
+            "a call nobody awaited says what is missing: {}",
+            forgot.output
+        );
+    }
+
+    /// A `$` command past the cell's deadline is stopped like any other, the variables survive —
+    /// and nothing is taken from a command that did not finish: the conversation stays where it
+    /// stood, not where the command had got to.
+    #[test]
+    fn typescript_dollar_past_its_deadline_is_stopped_and_moves_nothing() {
+        let conv = Conversation::ts("dollar-deadline");
+        std::fs::create_dir_all(conv.home.join("sub")).expect("mkdir");
+        conv.run("const kept = 'still here';");
+
+        let began = Instant::now();
+        let ran = conv.run_for("await $`cd sub; echo partial; sleep 60`;\nconsole.log('never');", 400);
+        assert_eq!(ran.ended, Ended::TimedOut, "{}", ran.output);
+        assert!(began.elapsed() < Duration::from_secs(10), "{:?}", began.elapsed());
+        assert!(ran.output.starts_with("partial\n"), "{}", ran.output);
+        assert!(
+            ran.output.contains("ShError: command was stopped") && ran.output.contains("cd sub; echo partial; sleep 60"),
+            "named as it was written, not as the script that ran it: {}",
+            ran.output
+        );
+        assert!(!ran.output.contains("__adi_"), "{}", ran.output);
+
+        let after = conv.run("console.log(kept, process.cwd().endsWith('/sub'));");
+        assert_eq!(after.output.trim(), "still here false");
     }
 
     /// A cell waiting on something that is not a command cannot be stopped at all. That costs the
