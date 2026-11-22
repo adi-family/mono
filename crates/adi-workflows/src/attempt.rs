@@ -45,6 +45,20 @@ const CRASH_BACKOFF: [Duration; 3] =
 /// "a bun crash is transient, not permanent," up to a point (ADI-MONO-151).
 const MAX_CRASH_STREAK: u32 = 3;
 
+/// Upper bound on one WHOLE attempt — host-side [`Attempt::dispatch`] included, not just the
+/// `bun` child [`ATTEMPT_TIMEOUT`] already watches. Without this, a `dispatch` call that itself
+/// never returns (a wedged store call, a lock that never clears) blocks [`attempt_once_bounded`]
+/// forever, which blocks [`crate::Engine::run_tick_bounded`]'s own `thread::scope` (or, at
+/// `max_concurrency == 1`, the calling thread directly) forever — not just the one stuck run,
+/// every workflow on the machine, since nothing else ever gets a worker slot again once every one
+/// is permanently wedged (ADI-TIKTOK-170: a `ctx.task` dispatch that silently never returned froze
+/// every workflow tick machine-wide for hours, while `dispatch`/`goals`/`awaits` on their own
+/// separate loop kept running undisturbed — proof the hang was specific to this call chain, not
+/// the shared scheduler). A margin over `ATTEMPT_TIMEOUT` so a `bun`-side kill always has a chance
+/// to unblock the read loop on its own first; this is the backstop for everything that watchdog
+/// can't reach.
+const HOST_ATTEMPT_DEADLINE: Duration = Duration::from_secs(330);
+
 /// How this attempt ended.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Outcome {
@@ -108,13 +122,42 @@ impl Attempt {
         // *this same* attempt (one that made progress and *then* crashed before its terminal
         // message) still starts counting fresh at 1, not on top of whatever came before.
         let steps_before = self.store.list_steps(&run.run_key).map(|s| s.len()).unwrap_or(0);
-        let outcome = self.attempt_once(run);
+        let outcome = self.attempt_once_bounded(run, HOST_ATTEMPT_DEADLINE);
         let steps_after = self.store.list_steps(&run.run_key).map(|s| s.len()).unwrap_or(0);
         if steps_after > steps_before {
             let _ = self.store.clear_crash_streak(&run.run_key);
         }
         self.finalize(run, &outcome);
         outcome
+    }
+
+    /// [`attempt_once`](Self::attempt_once), but never blocks its caller longer than `deadline` —
+    /// see [`HOST_ATTEMPT_DEADLINE`] for why this exists at all. Runs the real attempt on its own
+    /// thread with a fresh clone of every handle it needs (all cheap, connection-pool-backed
+    /// handles — see [`crate::Engine::attempt`]'s own doc for the same pattern); if that thread
+    /// hasn't reported back by `deadline`, this returns [`Outcome::Crashed`] and simply stops
+    /// waiting. The orphaned thread is NOT killed — Rust has no safe way to preempt a blocked
+    /// native thread — so it keeps running in the background and may still finish, late, with
+    /// nobody listening; its result is then just discarded. Whatever it did manage to do (a `bun`
+    /// child it spawned, a task it created) is safe to leave in place: every `ctx` checkpoint is
+    /// idempotent by its own `stepId`, so a retried attempt that reaches the same checkpoint later
+    /// finds it already resolved rather than redoing it.
+    fn attempt_once_bounded(&self, run: &RunRow, deadline: Duration) -> Outcome {
+        let config = self.config.clone();
+        let store = self.store.clone();
+        let tasks = self.tasks.clone();
+        let events = self.events.clone();
+        let run = run.clone();
+        run_bounded(deadline, move || {
+            Attempt::new(config, store, tasks, events).attempt_once(&run)
+        })
+        .unwrap_or_else(|| {
+            Outcome::Crashed(format!(
+                "the attempt didn't return within its host-side deadline ({}) — a dispatch call \
+                 may be stuck; treated as a transient crash and retried with backoff",
+                format_duration_ms(u64::try_from(deadline.as_millis()).unwrap_or(u64::MAX))
+            ))
+        })
     }
 
     /// The pure mechanics of one attempt — spawn, relay, read the terminal message — with no
@@ -654,6 +697,18 @@ fn outcome_to_reply(outcome: &StepOutcome) -> Value {
 
 fn store_err(e: &crate::error::Error) -> String {
     format!("couldn't read or write the step journal: {e}")
+}
+
+/// Run `f` to completion on its own thread, but never wait longer than `deadline` for it —
+/// [`Attempt::attempt_once_bounded`]'s own backstop. `None` means `f` hadn't reported back in
+/// time; the spawned thread is left running regardless (nothing here can safely stop it), and
+/// whatever it eventually sends has no receiver left to reach, so it's silently dropped.
+fn run_bounded<T: Send + 'static>(deadline: Duration, f: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    rx.recv_timeout(deadline).ok()
 }
 
 /// Drain whatever's left in `stderr`, trimmed — the only diagnostic a crashed `bun` process
@@ -1488,6 +1543,72 @@ mod tests {
         assert_eq!(woke.len(), 1, "the deadline passing must wake the run on its own");
         assert_eq!(woke[0].outcome, Outcome::Completed(json!({"done": true})));
         let _ = started;
+    }
+
+    /// ADI-TIKTOK-170: [`run_bounded`] is the whole fix in miniature — a closure that never
+    /// returns must still let its caller return, on time, with nothing left dangling but an
+    /// orphaned thread nobody is listening to any more.
+    #[test]
+    fn run_bounded_returns_promptly_when_the_closure_never_does() {
+        let start = std::time::Instant::now();
+        let result = run_bounded(Duration::from_millis(50), || {
+            std::thread::sleep(Duration::from_secs(5));
+            "too late"
+        });
+        assert_eq!(result, None, "the closure hadn't finished — must not be waited for");
+        assert!(
+            start.elapsed() < Duration::from_millis(500),
+            "must return close to the deadline, not anywhere near the closure's own 5s: {:?}",
+            start.elapsed()
+        );
+    }
+
+    /// The ordinary case: a closure that finishes well inside the deadline is simply returned.
+    #[test]
+    fn run_bounded_returns_the_value_when_the_closure_finishes_in_time() {
+        let result = run_bounded(Duration::from_secs(5), || 1 + 1);
+        assert_eq!(result, Some(2));
+    }
+
+    /// ADI-TIKTOK-170: the real bug — a host-side stall (here, a `ctx.step`'s own `fn()` blocking
+    /// far longer than any reasonable attempt should) must not block `attempt_once_bounded`'s
+    /// caller forever. Driven through a real `bun` process (not a mocked closure) so this also
+    /// proves the wiring, not just [`run_bounded`] in isolation: the attempt is bounded even when
+    /// the slow thing is genuinely inside the spawned attempt, not simulated.
+    #[test]
+    fn a_slow_attempt_is_bounded_rather_than_awaited_forever() {
+        let config = scratch("host-deadline");
+        let engine = Engine::with_config(config.clone());
+        engine.bootstrap().expect("bootstrap");
+        write_workflow(
+            &config,
+            "slow.ts",
+            "import { manual, workflow } from \"@adi/workflows\";\n\
+             export const on = manual();\n\
+             export default workflow(async (ctx, input) => {\n\
+             \x20 await ctx.step({ key: \"slow\", fn: () => { Bun.sleepSync(1500); return 1; } });\n\
+             \x20 return { done: true };\n\
+             });\n",
+        );
+        let store = WorkflowStore::with_config(config.clone());
+        let tasks = Tasks::with_config(config.clone());
+        let events = Events::with_config(config.clone());
+        let started = engine.start_manual("slow", &json!({}), "req-1").expect("start");
+        let run = store.get_run(&started.run_key).unwrap().unwrap();
+        let attempt = Attempt::new(config, store, tasks, events);
+
+        let start = std::time::Instant::now();
+        let outcome = attempt.attempt_once_bounded(&run, Duration::from_millis(200));
+        let elapsed = start.elapsed();
+
+        assert!(
+            matches!(outcome, Outcome::Crashed(ref reason) if reason.contains("host-side deadline")),
+            "expected a bounded-timeout Crashed outcome, got {outcome:?}"
+        );
+        assert!(
+            elapsed < Duration::from_millis(1300),
+            "must return long before the workflow's own 1.5s sleep finishes: {elapsed:?}"
+        );
     }
 
     /// `attempt_once`'s own `ensure_run_dir` is private; the test needs the exact same path to
