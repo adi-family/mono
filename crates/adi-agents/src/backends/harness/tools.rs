@@ -351,7 +351,8 @@ pub(crate) const TOOLS: &[ToolSpec] = &[
         name: "Edit",
         description: "Replace an exact string in a file. `old_string` must appear exactly once \
                       unless `replace_all` is true — include enough surrounding text to make it \
-                      unique. Read the file first; an edit against text you have not seen fails.",
+                      unique. It is matched character for character, whitespace included, so \
+                      copy it from the file rather than from memory.",
         schema: || {
             json!({
                 "type": "object",
@@ -3078,11 +3079,15 @@ print(','.join(offered), '|', said.split('\\n')[0], '|', counted['calls'], '|', 
 
         let asked = execute(
             "TsCode",
-            &json!({ "code": "const all = tools();\nconsole.log(Edit.toString().split('\\n')[0], '|', all.includes('`await Report({ text })`'), '|', all.includes('- `old_string` (string): Text to replace'));" }),
+            &json!({ "code": "const all = tools();\nconsole.log(Edit.toString().split('\\n')[0], '|', all.includes('`await Report({ text })`'), '|', all.includes('- `old_string` (string): Text to replace'), '|', all.split('\\n').filter((line) => line.startsWith('`await ')).map((line) => line.slice(7, line.indexOf('('))).join(' '));" }),
             &ctx,
         )
         .expect("the cell runs");
-        assert_eq!(asked, "`await Edit({ new_string, old_string, path, replace_all? })` | true | true");
+        assert_eq!(
+            asked,
+            "`await Edit({ new_string, old_string, path, replace_all? })` | true | true | Read Write Edit Bash Glob Grep Await Ask Report",
+            "each says how it is called, and the list is in the order the instructions give it"
+        );
 
         let wrong = execute(
             "TsCode",

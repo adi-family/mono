@@ -437,7 +437,10 @@ _TOOL_DOCS = {}
 def tools():
     """Every tool function and how it is called: the list the agent's instructions carry, from
     inside a cell."""
-    said = list(_TOOL_DOCS.values())
+    # In the order the agent's instructions list them, which is the order they were offered in —
+    # not the alphabetical one a JSON object arrives in.
+    offered = [name for name in (_DOOR or {}).get("names") or [] if name in _TOOL_DOCS]
+    said = [_TOOL_DOCS[name] for name in offered + [name for name in _TOOL_DOCS if name not in offered]]
     servers = (_DOOR or {}).get("servers") or []
     if servers:
         said.append(

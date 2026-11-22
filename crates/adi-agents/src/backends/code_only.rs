@@ -69,7 +69,7 @@ pub(crate) fn describe(base: &str, language: Language) -> String {
     format!(
         "**This is your only tool.** Your other tools — {names}, and each MCP server as \
          `mcp.<server>` — are {called}. \"{}\" in your instructions gives their arguments, and \
-         `tools()` prints them.\n\n{base}",
+         `tools()` returns them.\n\n{base}",
         NOTE_HEADING.trim_start_matches("# ")
     )
 }
@@ -101,7 +101,8 @@ pub(crate) fn note(language: Language, servers: &[String]) -> String {
              code to work on. A tool that fails rejects with `ToolError`, whose message is what \
              the tool said. Relative paths resolve from the directory the code stands in, the \
              one `$` and `fs` use. The functions are there in a cell; a background script has \
-             `$`, `sh` and `share`, and no tools. `tools()` in a cell prints this list again."
+             `$`, `sh` and `share`, and no tools. `tools()` in a cell returns this list again; a bare \
+             `tools();` line shows it."
         }
         Language::Python => {
             "Call a function with keyword arguments (or one dict of them), and it returns the \
@@ -111,7 +112,8 @@ pub(crate) fn note(language: Language, servers: &[String]) -> String {
              code to work on. A tool that fails raises `ToolError`, whose message is what the \
              tool said. Relative paths resolve from the directory the code stands in, the one \
              `sh` and `open` use. The functions are there in a cell; a background script has \
-             `sh` and `share`, and no tools. `tools()` in a cell prints this list again."
+             `sh` and `share`, and no tools. `tools()` in a cell returns this list again; a bare \
+             `tools()` line shows it."
         }
     });
     for spec in tools::inner() {

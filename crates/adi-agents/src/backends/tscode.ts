@@ -1009,7 +1009,10 @@ let toolDocs: Record<string, string> = {};
 
 /** Every tool function and how it is called: the list the agent's instructions carry, from inside a cell. */
 function toolsList(): string {
-  const said = Object.keys(toolDocs).map((name) => toolDocs[name]);
+  // In the order the agent's instructions list them, which is the order they were offered in —
+  // not the alphabetical one a JSON object arrives in.
+  const names = [...(door?.names ?? []).filter((name) => name in toolDocs), ...Object.keys(toolDocs).filter((name) => !door?.names.includes(name))];
+  const said = names.map((name) => toolDocs[name]);
   const servers = door?.servers ?? [];
   if (servers.length) {
     said.push(`MCP servers: ${servers.map((id) => `mcp[${JSON.stringify(id)}]`).join(", ")} — \`await mcp[id].tools()\` lists what one offers, \`await mcp[id].call(name, { … })\` calls one.`);
