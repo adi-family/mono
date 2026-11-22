@@ -11,8 +11,10 @@
 //!
 //! Two things make that work, and both are here:
 //!
-//! - [`describe`] — the functions are invisible unless the one tool the model *is* shown says
-//!   they exist, so that tool's description carries every other tool's, argument by argument.
+//! - [`describe`] and [`note`] — the functions are invisible unless the model is told they
+//!   exist. The one tool it *is* shown says so and says where to look; the system prompt carries
+//!   them, argument by argument, because a tool's description is cut where a prompt is not (see
+//!   [`tools::DESCRIPTION_BUDGET`]). And each function says the same about itself when asked.
 //! - [`serving`] — the door those functions go through. The interpreter is a process of its own
 //!   that outlives the turn (see [`super::interpreter`]); the tools are code in whoever serves
 //!   this turn's calls. So for as long as a cell runs, that process listens on a socket, the cell
@@ -46,43 +48,74 @@ use super::interpreter::Language;
 /// saying nothing cannot hold a thread for the life of the cell.
 const REQUEST_WAIT: Duration = Duration::from_secs(30);
 
-/// `base` — the code tool's own description — with every other tool's behind it, as the
-/// functions they are to a code-only agent.
+/// The heading [`note`] opens with — also how a reader splits a composed prompt back into its
+/// sections (see `runner::prompt`).
+pub(crate) const NOTE_HEADING: &str = "# What your code can call";
+
+/// `base` — the code tool's own description — for a code-only agent: told first that this is
+/// all there is, what the rest became, and where that is written down.
 ///
-/// `servers` are the ids of the MCP servers attached to the agent. Their tools are not listed:
-/// finding out what a server offers means connecting to it, and a description is read on every
-/// request by an agent that may never use the server. A script asks, when it wants to know.
-pub(crate) fn describe(base: &str, language: Language, servers: &[String]) -> String {
-    let mut text = String::from(base);
+/// Short, and in front, on purpose (see [`tools::DESCRIPTION_BUDGET`]). The functions
+/// themselves are in [`note`], which goes into the system prompt.
+pub(crate) fn describe(base: &str, language: Language) -> String {
+    let names = tools::inner()
+        .map(|spec| format!("`{}`", spec.name))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let called = match language {
+        Language::TypeScript => "functions to `await` in this code",
+        Language::Python => "functions to call in this code",
+    };
+    format!(
+        "**This is your only tool.** Your other tools — {names}, and each MCP server as \
+         `mcp.<server>` — are {called}. \"{}\" in your instructions gives their arguments, and \
+         `tools()` prints them.\n\n{base}",
+        NOTE_HEADING.trim_start_matches("# ")
+    )
+}
+
+/// What a code-only agent's code can call, as a section of its system prompt: every other tool
+/// as the function it is in `language`, argument by argument, and the MCP servers attached to
+/// the agent.
+///
+/// `servers` are those servers' ids. Their tools are not listed: finding out what a server
+/// offers means connecting to it, and this is read on every request by an agent that may never
+/// use the server. A script asks, when it wants to know.
+pub(crate) fn note(language: Language, servers: &[String]) -> String {
+    let tool = match language {
+        Language::TypeScript => "TsCode",
+        Language::Python => "PyCode",
+    };
+    let mut text = format!(
+        "{NOTE_HEADING}\n\n`{tool}` is the only tool you have. Everything else you can do is a \
+         function in the code you write for it — and where anything in your instructions names \
+         a tool (\"the Edit tool\", \"run it with Bash\"), it means the function of that name \
+         here.\n\n"
+    );
     text.push_str(match language {
         Language::TypeScript => {
-            "\n\n**This is the only tool you have.** Every other tool is a function in your code: \
-             `await` it with one object of arguments, and it resolves to the text that tool \
-             answers with. A call on a line of its own at the top level of the cell — `await \
-             Read({ path: 'a.txt' });` — shows that text, as a bare `await sh(…);` shows a \
+            "`await` a function with one object of arguments, and it resolves to the text that \
+             tool answers with. A call on a line of its own at the top level of the cell — \
+             `await Read({ path: 'a.txt' });` — shows that text, as a bare `await $`…`;` shows a \
              command's output; assigned to a variable it shows nothing, and is a string for the \
              code to work on. A tool that fails rejects with `ToolError`, whose message is what \
              the tool said. Relative paths resolve from the directory the code stands in, the \
-             one `sh` and `fs` use. The functions are there in a cell; a background script has \
-             `sh` and `share`, and no tools."
+             one `$` and `fs` use. The functions are there in a cell; a background script has \
+             `$`, `sh` and `share`, and no tools. `tools()` in a cell prints this list again."
         }
         Language::Python => {
-            "\n\n**This is the only tool you have.** Every other tool is a function in your code: \
-             call it with keyword arguments (or one dict of them), and it returns the text that \
-             tool answers with. A call on a line of its own at the top level of the cell — \
-             `Read(path='a.txt')` — shows that text, as a bare `sh(...)` shows a command's \
-             output; assigned to a variable it shows nothing, and is a string for the code to \
-             work on. A tool that fails raises `ToolError`, whose message is what the tool said. \
-             Relative paths resolve from the directory the code stands in, the one `sh` and \
-             `open` use. The functions are there in a cell; a background script has `sh` and \
-             `share`, and no tools."
+            "Call a function with keyword arguments (or one dict of them), and it returns the \
+             text that tool answers with. A call on a line of its own at the top level of the \
+             cell — `Read(path='a.txt')` — shows that text, as a bare `sh(...)` shows a \
+             command's output; assigned to a variable it shows nothing, and is a string for the \
+             code to work on. A tool that fails raises `ToolError`, whose message is what the \
+             tool said. Relative paths resolve from the directory the code stands in, the one \
+             `sh` and `open` use. The functions are there in a cell; a background script has \
+             `sh` and `share`, and no tools. `tools()` in a cell prints this list again."
         }
     });
     for spec in tools::inner() {
-        let schema = (spec.schema)();
-        let _ = write!(text, "\n\n`{}` — ", signature(spec, &schema, language));
-        text.push_str(&told(spec, language));
-        fields(&mut text, &schema, "");
+        let _ = write!(text, "\n\n## {}", doc(spec, language));
     }
     if !servers.is_empty() {
         let named = servers
@@ -90,7 +123,10 @@ pub(crate) fn describe(base: &str, language: Language, servers: &[String]) -> St
             .map(|id| format!("`{}`", server_path(id)))
             .collect::<Vec<_>>()
             .join(", ");
-        let _ = write!(text, "\n\nThe MCP servers attached to you are objects under `mcp`: {named}. ");
+        let _ = write!(
+            text,
+            "\n\n## MCP servers\n\nThe MCP servers attached to you are objects under `mcp`: {named}. "
+        );
         text.push_str(match language {
             Language::TypeScript => {
                 "`await mcp.<server>.tools()` lists what one offers — each tool's `name`, \
@@ -114,6 +150,35 @@ pub(crate) fn describe(base: &str, language: Language, servers: &[String]) -> St
         });
     }
     text
+}
+
+/// One tool as code reads about it: how it is called, what it does, and each argument.
+///
+/// The unit [`note`] is made of — and what the function itself answers with when code asks it
+/// what it is (`Edit.toString()`, `help(Edit)`), which is the first thing an agent that has
+/// not read the note tries.
+fn doc(spec: &ToolSpec, language: Language) -> String {
+    let schema = (spec.schema)();
+    let mut text = format!("`{}`\n\n{}", signature(spec, &schema, language), told(spec, language));
+    fields(&mut text, &schema, "");
+    text
+}
+
+/// [`doc`] for every function, by name — what a cell is handed so its functions can describe
+/// themselves.
+fn docs(language: Language) -> Value {
+    Value::Object(
+        tools::inner()
+            .map(|spec| (spec.name.to_string(), Value::String(doc(spec, language))))
+            .collect(),
+    )
+}
+
+/// How `name` is called, for an error about how it was called: `Edit({ path, old_string, … })`.
+pub(crate) fn usage(name: &str, language: Language) -> Option<String> {
+    tools::inner()
+        .find(|spec| spec.name == name)
+        .map(|spec| signature(spec, &(spec.schema)(), language))
 }
 
 /// How a script spells the server called `id`: a property where the id can be one.
@@ -297,6 +362,8 @@ pub(crate) fn serving<T>(
         "socket": door.path.to_string_lossy(),
         "names": tools::inner().map(|spec| spec.name).collect::<Vec<_>>(),
         "servers": ctx.mcp.ids(),
+        // What each function says when code asks it what it is.
+        "docs": docs(ctx.code.language()),
     });
     let closing = AtomicBool::new(false);
 
@@ -449,17 +516,34 @@ fn answer(message: &Value, ctx: &Ctx<'_>, deadline: Instant) -> Value {
 mod tests {
     use super::*;
 
-    /// The description is the only place a code-only agent learns what it can call, so each tool
-    /// has to be in it — spelled the way the language calls it — with its arguments, including
-    /// the ones nested inside another.
+    /// The one tool a code-only agent is shown says, before anything else, that it is the only
+    /// one, what the others became and where they are written down — in few enough words that
+    /// the description it leads is still read whole.
     #[test]
-    fn the_description_carries_every_other_tool_in_the_language_it_is_called_from() {
-        let ts = describe("BASE.", Language::TypeScript, &[]);
-        assert!(ts.starts_with("BASE.\n\n**This is the only tool you have.**"), "{ts}");
+    fn the_description_leads_with_what_became_of_the_other_tools() {
+        let ts = describe("BASE.", Language::TypeScript);
+        assert!(ts.starts_with("**This is your only tool.** Your other tools — `Read`, `Write`, `Edit`, `Bash`, `Glob`, `Grep`, `Await`, `Ask`, `Report`, and each MCP server as `mcp.<server>` — are functions to `await` in this code."), "{ts}");
+        assert!(ts.contains("\"What your code can call\" in your instructions"), "{ts}");
+        assert!(ts.ends_with("\n\nBASE."), "{ts}");
+        assert!(ts.chars().count() < "BASE.".len() + 400, "a lead, not a list: {ts}");
+
+        let py = describe("BASE.", Language::Python);
+        assert!(py.contains("are functions to call in this code"), "{py}");
+        assert!(!py.contains("await"), "{py}");
+    }
+
+    /// The section of the system prompt is the only place a code-only agent learns how to call
+    /// what it has, so each tool has to be in it — spelled the way the language calls it — with
+    /// its arguments, including the ones nested inside another.
+    #[test]
+    fn the_note_carries_every_other_tool_in_the_language_it_is_called_from() {
+        let ts = note(Language::TypeScript, &[]);
+        assert!(ts.starts_with("# What your code can call\n\n`TsCode` is the only tool you have."), "{ts}");
+        assert!(ts.contains("it means the function of that name here"), "{ts}");
         for spec in tools::inner() {
-            assert!(ts.contains(&format!("`await {}(", spec.name)), "{} is missing: {ts}", spec.name);
+            assert!(ts.contains(&format!("\n\n## `await {}(", spec.name)), "{} is missing: {ts}", spec.name);
         }
-        assert!(ts.contains("`await Read({ path, limit?, offset? })`"), "{ts}");
+        assert!(ts.contains("## `await Read({ path, limit?, offset? })`\n\nRead a file from the filesystem."), "{ts}");
         assert!(ts.contains("\n- `path` (string): File to read."), "{ts}");
         assert!(ts.contains("\n- `offset` (integer, optional):"), "{ts}");
         assert!(
@@ -470,25 +554,26 @@ mod tests {
         assert!(!ts.contains("PyCode(") && !ts.contains("TsCode("), "the code tools are not functions: {ts}");
         assert!(!ts.contains("mcp."), "no servers, so nothing about them: {ts}");
 
-        let py = describe("BASE.", Language::Python, &[]);
-        assert!(py.contains("`Read(path=…, limit=None, offset=None)`"), "{py}");
-        assert!(py.contains("`Await(after_seconds=None,"), "{py}");
+        let py = note(Language::Python, &[]);
+        assert!(py.starts_with("# What your code can call\n\n`PyCode` is the only tool you have."), "{py}");
+        assert!(py.contains("## `Read(path=…, limit=None, offset=None)`"), "{py}");
+        assert!(py.contains("## `Await(after_seconds=None,"), "{py}");
         assert!(!py.contains("await Read"), "{py}");
     }
 
     /// From inside code there is one directory, so the sentence telling a model its file tools
-    /// resolve somewhere else than its shell is not said — and the shell tool says what it is
-    /// still for.
+    /// resolve somewhere else than its shell is not said — and the shell tool says where it
+    /// went, which is a different place in each language.
     #[test]
     fn the_shell_tool_is_described_for_what_it_is_from_inside_code() {
-        let ts = describe("BASE.", Language::TypeScript, &[]);
+        let ts = note(Language::TypeScript, &[]);
         assert!(!ts.contains("Only the shell moves"), "{ts}");
         assert!(ts.contains("From code this shell is `$`"), "{ts}");
         assert!(ts.contains("`await $.background`…`;` is its `background`"), "{ts}");
         assert!(ts.contains("It is one shell across the whole conversation"), "the rest of it stands: {ts}");
 
         // Python has no template to write a command in, so there the function is the way.
-        let py = describe("BASE.", Language::Python, &[]);
+        let py = note(Language::Python, &[]);
         assert!(!py.contains("Only the shell moves"), "{py}");
         assert!(py.contains("this is here for `background`"), "{py}");
         assert!(!py.contains("$.background"), "{py}");
@@ -498,11 +583,26 @@ mod tests {
     #[test]
     fn attached_servers_are_named_with_how_to_ask_what_they_offer() {
         let servers = ["n8n".to_string(), "my-server".to_string()];
-        let ts = describe("BASE.", Language::TypeScript, &servers);
-        assert!(ts.contains("`mcp.n8n`, `mcp[\"my-server\"]`"), "{ts}");
+        let ts = note(Language::TypeScript, &servers);
+        assert!(ts.contains("## MCP servers\n\nThe MCP servers attached to you are objects under `mcp`: `mcp.n8n`, `mcp[\"my-server\"]`."), "{ts}");
         assert!(ts.contains("await mcp.<server>.tools()"), "{ts}");
-        let py = describe("BASE.", Language::Python, &servers);
+        let py = note(Language::Python, &servers);
         assert!(py.contains("`mcp.<server>.call(name, { … })`"), "{py}");
         assert!(!py.contains("await mcp"), "{py}");
+    }
+
+    /// What a function says about itself is its entry in the note, and how it is called is the
+    /// first line of that.
+    #[test]
+    fn a_function_is_documented_once_and_says_the_same_everywhere() {
+        let said = docs(Language::TypeScript);
+        let edit = said["Edit"].as_str().expect("a doc");
+        assert!(note(Language::TypeScript, &[]).contains(&format!("## {edit}")), "{edit}");
+        assert_eq!(
+            usage("Edit", Language::TypeScript).as_deref(),
+            Some("await Edit({ new_string, old_string, path, replace_all? })")
+        );
+        assert!(edit.starts_with("`await Edit({ new_string, old_string, path, replace_all? })`\n\n"), "{edit}");
+        assert_eq!(usage("TsCode", Language::TypeScript), None, "not a function");
     }
 }

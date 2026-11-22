@@ -445,7 +445,7 @@ impl<'a> RunCtx<'a> {
 
     /// The same round, declared the tools the agent behind `ctx` has.
     fn offering(mut self, ctx: &tools::Ctx<'_>) -> Self {
-        self.tools = tools::declarations_with(ctx.code, &ctx.mcp.ids());
+        self.tools = tools::declarations(ctx.code);
         self
     }
 

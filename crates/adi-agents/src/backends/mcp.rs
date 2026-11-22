@@ -445,7 +445,7 @@ fn answer(request: &Value, ctx: &Ctx<'_>) -> Option<String> {
     let result = match method {
         "initialize" => Ok(initialize(request)),
         "ping" => Ok(json!({})),
-        "tools/list" => Ok(json!({ "tools": served_tools(ctx.code, &ctx.mcp.ids()) })),
+        "tools/list" => Ok(json!({ "tools": served_tools(ctx.code) })),
         "tools/call" => call(request, ctx),
         other => Err(format!("no method {other}")),
     };
@@ -480,10 +480,9 @@ fn initialize(request: &Value) -> Value {
 
 /// What of [`SERVED`] an agent with these switches has, in MCP's shape. The description and schema
 /// are the ones the adi loop advertises, untouched — the whole point of serving the shared table
-/// rather than a second one. `servers` are the agent's MCP servers this process is the client of,
-/// which is something only a code-only agent's one tool has anything to say about.
-fn served_tools(code: CodeTools, servers: &[String]) -> Vec<Value> {
-    tools::declarations_with(code, servers)
+/// rather than a second one.
+fn served_tools(code: CodeTools) -> Vec<Value> {
+    tools::declarations(code)
         .into_iter()
         .filter(|tool| SERVED.contains(&tool.name.as_str()))
         .map(|tool| {
@@ -792,10 +791,14 @@ mod tests {
         assert_eq!(listed.len(), 1, "{listed:?}");
         assert_eq!(listed[0]["name"], "TsCode");
         let description = listed[0]["description"].as_str().expect("description");
-        assert!(description.contains("This is the only tool you have"), "{description}");
         assert!(
-            description.contains("`await Bash({ command, background?, timeout_ms? })`"),
-            "the shell is a function now: {description}"
+            description.starts_with("**This is your only tool.** Your other tools — `Read`, `Write`, `Edit`, `Bash`,"),
+            "{description}"
+        );
+        assert!(
+            !description.contains("truncated") && description.chars().count() <= 4_000,
+            "short enough to be read whole by the engine it is served to: {} characters",
+            description.chars().count()
         );
 
         assert_eq!(replies[1]["error"]["code"], -32601, "the shell is not a tool: {:?}", replies[1]);

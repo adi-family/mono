@@ -101,7 +101,11 @@ use super::shell::Shell;
 /// 4: in TypeScript `$` is the conversation's shell — a `cd` or an `export` in it stays, and
 /// what is interpolated is passed as data — where it used to be Bun's. Nothing on the wire moved;
 /// like 2, it is the description that would otherwise be about an interpreter that is not there.
-const PROTOCOL: u64 = 4;
+///
+/// 5: a code-only agent's functions describe themselves (`tools()`, what each says when asked
+/// what it is), which its instructions now tell it to rely on; and a command that printed
+/// nothing shows nothing.
+const PROTOCOL: u64 = 5;
 
 /// How long an interpreter nobody calls stays up. An hour is a conversation still in progress —
 /// a build awaited, a person answering — while anything longer is most likely a conversation that
@@ -1544,9 +1548,12 @@ console.log(JSON.stringify([failed.code, failed.exitCode, failed.ok, failed.text
         );
 
         let shown = conv.run(
-            "await $`echo one`;\nawait $`echo hidden`.quiet();\nconst kept = await $`echo kept`;\nawait $`echo three >&2`;",
+            "await $`echo one`;\nawait $`echo hidden`.quiet();\nconst kept = await $`echo kept`;\nawait $`true`;\nawait sh('true');\nawait $`echo three >&2`;",
         );
-        assert_eq!(shown.output, "one\nthree\n");
+        assert_eq!(
+            shown.output, "one\nthree\n",
+            "a command that said nothing adds nothing — no line apiece for the silent ones"
+        );
 
         let forgot = conv.run("$`echo never-read`;");
         assert!(

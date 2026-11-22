@@ -108,7 +108,10 @@ class Sh(str):
             text += "\n[output was cut at %d bytes per stream]" % MAX_CAPTURE
         if self.code != 0:
             return "(exit %s)\n%s" % (self.code, text) if text else "(exit %s)" % self.code
-        return text if text.strip() else "(no output)"
+        # Nothing, for a command that said nothing: in a cell of several, a word for each silent
+        # one is a line of noise apiece. A cell that printed nothing at all is said to have by
+        # whoever reports it.
+        return text if text.strip() else ""
 
 
 class ShError(Exception):
@@ -419,8 +422,29 @@ def _tool(name):
                 sync[1]()
 
     call.__name__ = call.__qualname__ = name
-    call.__doc__ = "The platform's %s tool: returns the text it answers with, raises ToolError when it fails." % name
+    # What `help(Read)` shows: how it is called, as the agent's instructions put it.
+    call.__doc__ = _TOOL_DOCS.get(name) or (
+        "The platform's %s tool: returns the text it answers with, raises ToolError when it fails. "
+        "tools() prints how each is called." % name
+    )
     return call
+
+
+# What each tool function says about itself, as last told by whoever offered them.
+_TOOL_DOCS = {}
+
+
+def tools():
+    """Every tool function and how it is called: the list the agent's instructions carry, from
+    inside a cell."""
+    said = list(_TOOL_DOCS.values())
+    servers = (_DOOR or {}).get("servers") or []
+    if servers:
+        said.append(
+            "MCP servers: %s — mcp[id].tools() lists what one offers, mcp[id].call(name, {...}) calls one."
+            % ", ".join("mcp[%r]" % id for id in servers)
+        )
+    return ToolText("\n\n".join(said) if said else "There are no tool functions here: they exist in a cell of a code-only agent.")
 
 
 class _McpServer:
@@ -489,19 +513,21 @@ class _Mcp:
         return "<MCP servers: %s>" % (", ".join(self._servers) or "none")
 
 
-def _offer(ns, tools, sync=None):
+def _offer(ns, offered, sync=None):
     """Put a cell's tools in reach, or take them away again. The functions are names in the
     cell's namespace, set afresh for every cell that is offered them, so a cell that happened to
     define a `Read` of its own does not cost the next one the tool."""
-    global _DOOR, _SHELL_SYNC
-    _DOOR = tools or None
-    _SHELL_SYNC = sync if tools else None
-    if not tools:
+    global _DOOR, _SHELL_SYNC, _TOOL_DOCS
+    _DOOR = offered or None
+    _SHELL_SYNC = sync if offered else None
+    if not offered:
         return
-    for name in tools.get("names") or []:
+    _TOOL_DOCS = offered.get("docs") or {}
+    for name in offered.get("names") or []:
         ns[name] = _tool(name)
+    ns["tools"] = tools
     ns["ToolError"] = ToolError
-    ns["mcp"] = _Mcp(tools.get("servers") or [])
+    ns["mcp"] = _Mcp(offered.get("servers") or [])
 
 
 # ───────────────────────────── running one cell ─────────────────────────────

@@ -104,7 +104,10 @@ class Sh {
     text = text.replace(/\n+$/, "");
     if (this.truncated) text += `\n[output was cut at ${MAX_CAPTURE} bytes per stream]`;
     if (this.code !== 0) return text ? `(exit ${this.code})\n${text}` : `(exit ${this.code})`;
-    return text.trim() ? text : "(no output)";
+    // Nothing, for a command that said nothing: in a cell of several, a word for each silent one
+    // is a line of noise apiece. A cell that printed nothing at all is said to have by whoever
+    // reports it.
+    return text.trim() ? text : "";
   }
 }
 
@@ -884,8 +887,8 @@ class ToolError extends Error {
   }
 }
 
-/** What a cell is told about its tools: where they are answered, and what they are called. */
-type Door = { socket: string; names: string[]; servers: string[] };
+/** What a cell is told about its tools: where they are answered, what they are called, and what each says about itself. */
+type Door = { socket: string; names: string[]; servers: string[]; docs?: Record<string, string> };
 
 /** Where the cell now running reaches its tools — nowhere, between cells and for an agent that is not code-only. */
 let door: Door | undefined;
@@ -993,9 +996,27 @@ function toolFunction(name: string): unknown {
     }
   };
   Object.defineProperty(call, "name", { value: name });
+  // Asked what it is — `Edit.toString()`, the first thing tried by code that does not know —
+  // it says how it is called rather than showing the wrapper above.
+  call.toString = () => door?.docs?.[name] ?? toolDocs[name] ?? `${name}({ … }) — one of your tools, as a function. tools() prints how each is called.`;
   made = call;
   toolFunctions.set(name, made);
   return made;
+}
+
+/** What each tool function says about itself, as last told — kept so a function still knows between cells. */
+let toolDocs: Record<string, string> = {};
+
+/** Every tool function and how it is called: the list the agent's instructions carry, from inside a cell. */
+function toolsList(): string {
+  const said = Object.keys(toolDocs).map((name) => toolDocs[name]);
+  const servers = door?.servers ?? [];
+  if (servers.length) {
+    said.push(`MCP servers: ${servers.map((id) => `mcp[${JSON.stringify(id)}]`).join(", ")} — \`await mcp[id].tools()\` lists what one offers, \`await mcp[id].call(name, { … })\` calls one.`);
+  }
+  const text = said.length ? said.join("\n\n") : "There are no tool functions here: they exist in a cell of a code-only agent.";
+  toolTexts.add(text);
+  return text;
 }
 
 /** Names a server object is asked for by something other than a script calling a tool. */
@@ -1045,7 +1066,9 @@ function offer(tools: Door | undefined, sync?: { before: () => void; after: () =
   shellSync = tools ? sync : undefined;
   toolTexts.clear();
   if (!tools) return;
+  toolDocs = tools.docs ?? {};
   for (const name of tools.names) AsyncGlobals[name] = toolFunction(name);
+  AsyncGlobals.tools = toolsList;
   AsyncGlobals.ToolError = ToolError;
   AsyncGlobals.mcp = Object.fromEntries(tools.servers.map((id) => [id, mcpServer(id)]));
 }

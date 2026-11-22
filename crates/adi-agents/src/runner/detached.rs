@@ -2525,6 +2525,13 @@ mod tests {
             };
             assert_eq!(after("--tools"), "", "{backend:?}: no built-ins");
             assert_eq!(after("--allowed-tools"), "mcp__adi", "{backend:?}");
+            // What it has instead is said where it will be read whole: in its prompt.
+            if cfg!(unix) {
+                let told = after("--append-system-prompt");
+                assert!(told.contains("# What your code can call"), "{backend:?}: {told}");
+                assert!(told.contains("## `await Read({ path, limit?, offset? })`"), "{backend:?}: {told}");
+                assert!(told.contains("`mcp.n8n`"), "{backend:?}: {told}");
+            }
             let config: Value = serde_json::from_str(after("--mcp-config")).expect("json");
             let servers: Vec<&String> = config["mcpServers"].as_object().expect("servers").keys().collect();
             assert_eq!(servers, ["adi"], "{backend:?}: the agent's own servers are not the engine's");

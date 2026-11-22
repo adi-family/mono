@@ -124,6 +124,17 @@ impl CodeTools {
         only: true,
     };
 
+    /// The language a code-only agent with these switches writes: the one of the two that is
+    /// on. Asked only where [`only`](Self::only) is set, which is where exactly one is.
+    #[cfg(unix)]
+    pub(crate) fn language(self) -> Language {
+        if self.python && !self.typescript {
+            Language::Python
+        } else {
+            Language::TypeScript
+        }
+    }
+
     /// Whether an agent with these switches has the tool called `name`. A code tool is one it
     /// has when it is switched on; every other tool is one it has unless it is code-only, where
     /// the others are functions and not tools.
@@ -249,61 +260,55 @@ const PYCODE: &str = "Run Python in this conversation's own interpreter and retu
 /// conversation's shell as `Bash` does, and what is interpolated into it needs no quoting and
 /// must be given none.
 #[cfg(unix)]
-const TSCODE: &str = "Run TypeScript in this conversation's own interpreter (Bun) and return what \
-                      it printed. The interpreter stays up between calls: what a cell declares at \
-                      its top level — a `const`, a function, a class, an import — is still there \
-                      on your next call, and may be declared again. So read or fetch a thing \
-                      **once**, keep it in a variable, and work on it from there — rather than \
-                      printing all of it, or fetching it again. Top-level `await` works. The value \
-                      of the cell's last expression is shown, as in a notebook, so end with a bare \
-                      `rows.length;` rather than a `console.log`. Write semicolons: a line that \
-                      begins with `(` or `[` otherwise continues the line above it. An exception \
-                      ends the call with the error and the line it came from; what ran before it \
-                      has happened, and the interpreter and your variables survive it.\n\n`await \
-                      $`git status`` is your shell — the one Bash is, written as a template. The \
-                      command runs through `sh` where the conversation stands, and what it leaves \
-                      behind stays: after `await $`cd crates/app && export FE=$PWD`;` your code, \
-                      the next command and Bash all stand there with `FE` set. What you \
-                      interpolate arrives as data and is never run: `$`grep -n ${pattern} \
-                      ${files}`` passes `pattern` as one argument whatever is in it and each \
-                      element of the array `files` as its own, and inside quotes of your own \
-                      (`\"${msg}\"`) a value is still exactly that value — so never quote or \
-                      escape what you interpolate (`$.raw(text)` is the one exception, for a \
-                      piece of command you built). It resolves to the command's result: `.text` \
-                      is stdout with the trailing newline dropped (and what the result becomes \
-                      inside a template string), with `.stdout`, `.stderr`, `.code`, `.ok`, \
-                      `.lines` and `.json()` beside it — `const head = (await $`git rev-parse \
-                      HEAD`).text;` — or go straight to the value with `await $`…`.text()`, \
-                      `.lines()` or `.json()`. A command that exits non-zero rejects with \
-                      `ShError` carrying its output, so a cell of several steps stops at the one \
-                      that broke — add `.nothrow()` where failing is an answer (`grep`, `diff`, \
-                      `test`); `.quiet()`, `.timeout(ms)`, `.cwd(dir)`, `.env({…})` and \
-                      `.input(text)` adjust a call the same way. A bare `await $`…`;` line shows \
-                      the command's output wherever it stands in the cell. `sh(cmd)` is the plain \
-                      function beneath it, for a command you already hold: a string, or an array \
-                      (`sh(['git', 'commit', '-m', msg])`) that runs with no shell at all, with \
-                      `{ check: false }` and `{ echo: true }` as options — it runs where you \
-                      stand and moves nothing. `fs`, `path` and `os` are already imported, every \
-                      `Bun.*` API is there (Bun's own shell as `Bun.$`), and `import` — static or \
-                      dynamic — resolves from the directory you are in and re-reads a file of \
-                      yours that has changed.\n\nIt \
-                      stands where your shell stands, and moves it: `process.chdir()` moves Bash \
-                      too, what you put in `process.env` is exported to it, and wherever Bash \
-                      `cd`'d or whatever it exported is where this starts. Only what a cell \
-                      declared is the interpreter's own. It is kept for an hour without a call; if \
-                      it is ever gone, the result says so, and what it held has to be built \
-                      again. `share('name', value)` keeps a JSON-able value outside the \
-                      interpreter, where `shared('name')` finds it again: after a restart, from a \
-                      background cell, and from PyCode if you have it.\n\nRunning JavaScript cannot be interrupted. Past `timeout_ms` the \
-                      command the code is waiting on is stopped, which ends most slow cells with \
-                      everything else intact — but code still running after that (a long loop, a \
-                      wait on something that is not a command) costs the interpreter and every \
-                      variable in it. So set `background` for code that will outlast the turn: it \
-                      runs as a script of its own — same directory, same environment, same `$` \
-                      and `sh` — and you **end your turn** and are woken when it exits, with its \
+const TSCODE: &str = "Run TypeScript in this conversation's own interpreter (Bun) and return what it \
+                      printed. The interpreter stays up between calls: what a cell declares at its \
+                      top level — a `const`, a function, a class, an import — is still there on your \
+                      next call, and may be declared again. So read or fetch a thing **once**, keep \
+                      it in a variable, and work on it from there — rather than printing all of it, \
+                      or fetching it again. Top-level `await` works. The value of the cell's last \
+                      expression is shown, as in a notebook, so end with a bare `rows.length;` \
+                      rather than a `console.log`. Write semicolons: a line that begins with `(` or \
+                      `[` otherwise continues the line above it. An exception ends the call with the \
+                      error and the line it came from; what ran before it has happened, and the \
+                      interpreter and your variables survive it.\n\n`await $`git status`` is your \
+                      shell — the one Bash is, written as a template. The command runs through `sh` \
+                      where the conversation stands, and what it leaves behind stays: after `await \
+                      $`cd crates/app && export FE=$PWD`;` your code, the next command and Bash all \
+                      stand there with `FE` set. What you interpolate arrives as data and is never \
+                      run: `$`grep -n ${pattern} ${files}`` passes `pattern` as one argument and \
+                      each element of the array `files` as its own, and inside quotes of your own \
+                      (`\"${msg}\"`) a value is still exactly that value — so never quote or escape \
+                      what you interpolate (`$.raw(text)` puts in a piece of command you built). It \
+                      resolves to the command's result — `.text` (stdout, trailing newline dropped), \
+                      `.stdout`, `.stderr`, `.code`, `.ok`, `.lines`, `.json()` — or straight to a \
+                      value with `await $`…`.text()`, `.lines()` or `.json()`. A command that exits \
+                      non-zero rejects with `ShError` carrying its output, so a cell of several \
+                      steps stops at the one that broke — add `.nothrow()` where failing is an \
+                      answer (`grep`, `diff`, `test`); `.quiet()`, `.timeout(ms)`, `.cwd(dir)`, \
+                      `.env({…})` and `.input(text)` adjust a call the same way. A bare `await \
+                      $`…`;` line shows the command's output. `sh(cmd)` is the plain function \
+                      beneath it, for a command you already hold as a string or as an array that \
+                      runs with no shell at all (`sh(['git', 'commit', '-m', msg])`; options `{ \
+                      check: false }`, `{ echo: true }`): it runs where you stand and moves nothing. \
+                      `fs`, `path`, `os` and every `Bun.*` API are there (Bun's own shell as \
+                      `Bun.$`), and `import` resolves from the directory you are in and re-reads a \
+                      file of yours that has changed.\n\nIt stands where your shell stands, and \
+                      moves it: `process.chdir()` moves Bash too, what you put in `process.env` is \
+                      exported to it, and wherever Bash `cd`'d or whatever it exported is where this \
+                      starts. Only what a cell declared is the interpreter's own. It is kept for an \
+                      hour without a call; if it is ever gone, the result says so. `share('name', \
+                      value)` keeps a JSON-able value outside the interpreter, where \
+                      `shared('name')` finds it again: after a restart, from a background cell, and \
+                      from PyCode if you have it.\n\nRunning JavaScript cannot be interrupted. Past \
+                      `timeout_ms` the command the code is waiting on is stopped, which ends most \
+                      slow cells with everything else intact — but code still running after that (a \
+                      long loop, a wait on something that is not a command) costs the interpreter \
+                      and every variable in it. So set `background` for code that will outlast the \
+                      turn: it runs as a script of its own — same directory, same environment, same \
+                      `$` and `sh` — and you **end your turn** and are woken when it exits, with its \
                       status and the tail of its output. A background script does not see your \
-                      variables and nothing it defines comes back, so have it `share` its result \
-                      or write it to a file.";
+                      variables and nothing it defines comes back, so have it `share` its result or \
+                      write it to a file.";
 
 /// Everything a turn may call. Order is the order they're advertised, which is the order a model
 /// tends to consider them in: look before you write, and shell out only when nothing else fits.
@@ -580,6 +585,21 @@ pub(crate) const TOOLS: &[ToolSpec] = &[
     },
 ];
 
+/// How long a tool's description may be and still reach a model whole.
+///
+/// The Claude CLI cuts an MCP tool's description at 4,096 characters and writes `… [truncated]`
+/// where the rest was (2.1.330; its `CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH`). That is not a
+/// limit anybody is told about: the first code-only agent to run for real reported that its one
+/// tool's description stopped mid-sentence — just before the list of functions it had been
+/// extended to carry, all eleven thousand characters of which had gone nowhere. So a
+/// description stays under this, with room to spare, and what does not fit in one is said
+/// somewhere that is never cut: the system prompt (see `backends::code_only::note`).
+///
+/// Held by a test over every tool an agent can be declared, because the next person to add a
+/// paragraph to one of these will not be told either.
+#[cfg(test)]
+pub(crate) const DESCRIPTION_BUDGET: usize = 4_000;
+
 /// How much of a tool's output goes back to the model. A turn replays its whole transcript on every
 /// round, so an unbounded `Read` of a large file is paid for again on each one — the cap is what
 /// keeps one careless call from crowding out the rest of the conversation.
@@ -619,23 +639,15 @@ pub struct ToolDeclaration {
 /// the same [`offered`] filter, so a tool added there appears here without anybody remembering to. Anything that renders this list
 /// for a person is then showing the inventory the model has rather than a second copy of it that
 /// can fall behind.
+///
+/// Every caller that declares tools to a model comes through here — the adi loop, the MCP
+/// server, the simulator — so what a description says cannot differ between them.
 #[must_use]
 pub fn declarations(code: CodeTools) -> Vec<ToolDeclaration> {
-    declarations_with(code, &[])
-}
-
-/// [`declarations`], for an agent with these MCP servers attached.
-///
-/// The servers matter to exactly one kind of agent: a code-only one, whose single tool's
-/// description is where it learns they are there (see [`described`]). Every caller that declares
-/// tools to a model comes through here — the adi loop, the MCP server, the simulator — so what
-/// that description says cannot differ between them.
-#[must_use]
-pub fn declarations_with(code: CodeTools, servers: &[String]) -> Vec<ToolDeclaration> {
     offered(code)
         .map(|t| ToolDeclaration {
             name: t.name.to_string(),
-            description: described(t, code, servers),
+            description: described(t, code),
             schema: (t.schema)(),
         })
         .collect()
@@ -643,21 +655,15 @@ pub fn declarations_with(code: CodeTools, servers: &[String]) -> Vec<ToolDeclara
 
 /// What a tool is told to the model as, for an agent with these switches.
 ///
-/// Its own description — except for a code-only agent's one tool, which also has to say
-/// everything the tools it replaced would have said, because nothing else will.
-fn described(spec: &ToolSpec, code: CodeTools, servers: &[String]) -> String {
+/// Its own description — except for a code-only agent's one tool, which is first told that it
+/// is the only one, and where what became of the others is written down (see
+/// [`crate::backends::code_only::describe`]).
+fn described(spec: &ToolSpec, code: CodeTools) -> String {
     #[cfg(unix)]
-    if code.only {
-        let language = match spec.name {
-            "PyCode" => Some(Language::Python),
-            "TsCode" => Some(Language::TypeScript),
-            _ => None,
-        };
-        if let Some(language) = language {
-            return crate::backends::code_only::describe(spec.description, language, servers);
-        }
+    if code.only && is_code_tool(spec.name) {
+        return crate::backends::code_only::describe(spec.description, code.language());
     }
-    let _ = (code, servers);
+    let _ = code;
     spec.description.to_string()
 }
 
@@ -750,6 +756,25 @@ pub(crate) fn execute_inner(
             "{name} cannot be called from code: it is the tool your code is already running in"
         ));
     }
+    // The file tools of the engines most models learned on call this argument `file_path`, and
+    // a model writing code from habit writes that. Taken as what it means rather than refused:
+    // the first call of a run should not be spent finding out what a path is called here.
+    let renamed;
+    let input = match input.as_object() {
+        Some(given)
+            if matches!(name, "Read" | "Write" | "Edit")
+                && !given.contains_key("path")
+                && given.get("file_path").is_some_and(Value::is_string) =>
+        {
+            let mut given = given.clone();
+            if let Some(path) = given.remove("file_path") {
+                given.insert("path".to_string(), path);
+            }
+            renamed = Value::Object(given);
+            &renamed
+        }
+        _ => input,
+    };
     let answered = if name == "Bash" && !flag(input, "background") {
         let left = u64::try_from(
             deadline
@@ -767,11 +792,19 @@ pub(crate) fn execute_inner(
     } else {
         plain(name, input, ctx)
     };
-    answered.unwrap_or_else(|| {
+    let answered = answered.unwrap_or_else(|| {
         Err(format!(
             "no tool named {name} — the functions there are: {}",
             inner().map(|t| t.name).collect::<Vec<_>>().join(", ")
         ))
+    });
+    // A call that got an argument wrong is told the whole of how the function is called, not
+    // only the first thing missing — or the next attempt is spent finding the second.
+    answered.map_err(|said| {
+        match crate::backends::code_only::usage(name, ctx.code.language()) {
+            Some(usage) if said.starts_with(MISSING_ARGUMENT) => format!("{said} — it is called as `{usage}`"),
+            _ => said,
+        }
     })
 }
 
@@ -1485,8 +1518,12 @@ fn arg_str<'a>(input: &'a Value, key: &str) -> std::result::Result<&'a str, Stri
     input
         .get(key)
         .and_then(Value::as_str)
-        .ok_or_else(|| format!("this tool needs a `{key}` string argument"))
+        .ok_or_else(|| format!("{MISSING_ARGUMENT} `{key}` string argument"))
 }
+
+/// How every "you left an argument out" answer begins — so that a caller with more to say about
+/// how a tool is called can tell that answer from any other.
+const MISSING_ARGUMENT: &str = "this tool needs a";
 
 /// A number argument, however the model spelled it — `2` and `2.0` mean the same line here.
 #[allow(
@@ -1528,7 +1565,12 @@ fn walk(root: &Path, visit: &mut impl FnMut(&Path)) {
     let Ok(entries) = std::fs::read_dir(root) else {
         return;
     };
-    for entry in entries.flatten() {
+    // By name, not in whatever order the directory hands them back: what a search lists is
+    // read by something that will compare two runs of it, and `b, c, a` is a difference that
+    // is not one.
+    let mut entries: Vec<_> = entries.flatten().collect();
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    for entry in entries {
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
         if name.starts_with('.') || SKIP_DIRS.contains(&name.as_str()) {
@@ -2670,13 +2712,12 @@ mod tests {
         let ctx = only_in(&dir, "only-ts", CodeTools::ONLY_TYPESCRIPT, Hub::default());
         let typescript = crate::backends::interpreter::Interpreter::new(Language::TypeScript, ctx.agent_dir, ctx.conv);
 
-        let declared = declarations_with(ctx.code, &ctx.mcp.ids());
+        let declared = declarations(ctx.code);
         let names: Vec<&str> = declared.iter().map(|tool| tool.name.as_str()).collect();
         assert_eq!(names, ["TsCode"], "one tool, and it is the interpreter");
         assert!(
-            declared[0].description.contains("This is the only tool you have")
-                && declared[0].description.contains("`await Edit({ new_string, old_string, path, replace_all? })`"),
-            "which says what the rest became: {}",
+            declared[0].description.starts_with("**This is your only tool.** Your other tools — `Read`, `Write`, `Edit`, `Bash`,"),
+            "which says first what the rest became: {}",
             declared[0].description
         );
 
@@ -2766,10 +2807,10 @@ mod tests {
         let ctx = only_in(&dir, "only-py", CodeTools::ONLY_PYTHON, Hub::default());
         let python = crate::backends::interpreter::Interpreter::new(Language::Python, ctx.agent_dir, ctx.conv);
 
-        let declared = declarations_with(ctx.code, &ctx.mcp.ids());
+        let declared = declarations(ctx.code);
         assert_eq!(declared.len(), 1);
         assert_eq!(declared[0].name, "PyCode");
-        assert!(declared[0].description.contains("`Read(path=…, limit=None, offset=None)`"), "{}", declared[0].description);
+        assert!(declared[0].description.contains("are functions to call in this code"), "{}", declared[0].description);
         let refused = execute("TsCode", &json!({ "code": "1" }), &ctx).expect_err("the other language is not its tool");
         assert_eq!(refused, "no tool named TsCode — the tools you have are: PyCode");
 
@@ -2891,8 +2932,6 @@ print(failed, '|', open('notes/a.txt').read() == 'one\\nthree\\n', '|', 'a.txt:2
         let ctx = only_in(&dir, "only-mcp", CodeTools::ONLY_TYPESCRIPT, hub.clone());
         let typescript = crate::backends::interpreter::Interpreter::new(Language::TypeScript, ctx.agent_dir, ctx.conv);
 
-        let declared = declarations_with(ctx.code, &ctx.mcp.ids());
-        assert!(declared[0].description.contains("`mcp.fake`"), "the server is named: {}", declared[0].description);
 
         let ran = execute(
             "TsCode",
@@ -2979,9 +3018,8 @@ print(','.join(offered), '|', said.split('\\n')[0], '|', counted['calls'], '|', 
         let ctx = only_in(&dir, "only-dollar", CodeTools::ONLY_TYPESCRIPT, Hub::default());
         let typescript = crate::backends::interpreter::Interpreter::new(Language::TypeScript, ctx.agent_dir, ctx.conv);
 
-        let described = &declarations_with(ctx.code, &ctx.mcp.ids())[0].description;
+        let described = &declarations(ctx.code)[0].description;
         assert!(described.contains("is your shell — the one Bash is, written as a template"), "{described}");
-        assert!(described.contains("From code this shell is `$`"), "{described}");
 
         let said = execute(
             "TsCode",
@@ -3004,6 +3042,81 @@ print(','.join(offered), '|', said.split('\\n')[0], '|', counted['calls'], '|', 
         );
 
         typescript.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// No description outgrows what reaches a model whole, for any agent there can be — the
+    /// two code tools are the long ones, and a code-only agent's has a lead in front of it.
+    #[test]
+    fn every_description_fits_what_an_engine_passes_on_whole() {
+        let mut agents = vec![CodeTools::default(), CodeTools::BOTH];
+        if cfg!(unix) {
+            agents.extend([CodeTools::ONLY_TYPESCRIPT, CodeTools::ONLY_PYTHON]);
+        }
+        for code in agents {
+            for tool in declarations(code) {
+                let length = tool.description.chars().count();
+                assert!(
+                    length <= DESCRIPTION_BUDGET,
+                    "{}'s description is {length} characters for {code:?}; past {DESCRIPTION_BUDGET} it is cut before a model reads it",
+                    tool.name
+                );
+            }
+        }
+    }
+
+    /// Code that does not know how a function is called can find out from the function: asked
+    /// what it is, it says; `tools()` lists them all; a call with an argument left out is told
+    /// the whole of how it is called; and the name most models know a path argument by is taken
+    /// for what it means.
+    #[cfg(unix)]
+    #[test]
+    fn a_tool_function_says_how_it_is_called() {
+        let dir = scratch("only-docs");
+        let ctx = only_in(&dir, "only-docs", CodeTools::ONLY_TYPESCRIPT, Hub::default());
+        let typescript = crate::backends::interpreter::Interpreter::new(Language::TypeScript, ctx.agent_dir, ctx.conv);
+
+        let asked = execute(
+            "TsCode",
+            &json!({ "code": "const all = tools();\nconsole.log(Edit.toString().split('\\n')[0], '|', all.includes('`await Report({ text })`'), '|', all.includes('- `old_string` (string): Text to replace'));" }),
+            &ctx,
+        )
+        .expect("the cell runs");
+        assert_eq!(asked, "`await Edit({ new_string, old_string, path, replace_all? })` | true | true");
+
+        let wrong = execute(
+            "TsCode",
+            &json!({ "code": "await Edit({ old_string: 'a', new_string: 'b' });" }),
+            &ctx,
+        )
+        .expect_err("no path");
+        assert!(
+            wrong.contains("ToolError: this tool needs a `path` string argument — it is called as `await Edit({ new_string, old_string, path, replace_all? })`"),
+            "{wrong}"
+        );
+
+        let habit = execute(
+            "TsCode",
+            &json!({ "code": "const wrote = await Write({ file_path: 'habit.txt', content: 'one' });\nconst edited = await Edit({ file_path: 'habit.txt', old_string: 'one', new_string: 'two' });\nawait Read({ file_path: 'habit.txt' });" }),
+            &ctx,
+        )
+        .expect("file_path is a path");
+        assert_eq!(habit, "two");
+        typescript.stop();
+
+        let ctx = Ctx {
+            code: CodeTools::ONLY_PYTHON,
+            ..ctx
+        };
+        let python = crate::backends::interpreter::Interpreter::new(Language::Python, ctx.agent_dir, ctx.conv);
+        let asked = execute(
+            "PyCode",
+            &json!({ "code": "print(Edit.__doc__.split('\\n')[0], '|', '`Report(text=…)`' in tools())" }),
+            &ctx,
+        )
+        .expect("the cell runs");
+        assert_eq!(asked, "`Edit(new_string=…, old_string=…, path=…, replace_all=None)` | True");
+        python.stop();
         let _ = std::fs::remove_dir_all(&dir);
     }
 

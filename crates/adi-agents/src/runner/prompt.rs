@@ -63,12 +63,19 @@ pub struct Section<'a> {
 /// order — and a reader splitting the prompt back up needs the order, not the individual strings.
 /// They are matched at the start of a line, so a prompt that merely *mentions* `# Your tools` in
 /// prose does not split there.
-const HEADINGS: [(&str, &str); 4] = [
+const HEADINGS: [(&str, &str); 5] = [
     ("where you are", "# Where you are"),
     ("what you know", "# What you know"),
     ("what you can launch", "# What you can launch"),
+    ("what your code can call", CODE_HEADING),
     ("your tools", "# Your tools"),
 ];
+
+/// The heading a code-only agent's function list opens with (see [`code_note`]).
+#[cfg(unix)]
+const CODE_HEADING: &str = crate::backends::code_only::NOTE_HEADING;
+#[cfg(not(unix))]
+const CODE_HEADING: &str = "# What your code can call";
 
 /// A composed prompt, cut back into the sections it was assembled from.
 ///
@@ -179,12 +186,36 @@ pub(super) fn with_markers(spec: &RunSpec, existing: Option<String>) -> Option<S
 ///
 /// A conversation past its first turn carries the section it opened with
 /// ([`RunSpec::tool_help`]) and that is used verbatim; only a fresh run renders one.
+///
+/// For a code-only agent the functions its code can call come first ([`code_note`]): they are
+/// what it has in place of tools, and the commands below are run through one of them. Here,
+/// rather than as a step of its own, so that every chain that ends in the tools — [`compose`]
+/// and the Claude runners' own — carries it without each having to remember to.
 pub(super) fn with_tool_help(spec: &RunSpec, existing: Option<String>) -> Option<String> {
+    let existing = behind(existing, code_note(spec).as_deref());
     let block = spec
         .tool_help
         .clone()
         .or_else(|| tool_help::block(&spec.tools));
     behind(existing, block.as_deref())
+}
+
+/// What a code-only agent's code can call — every other tool as a function, and its MCP servers
+/// — or `None` for an agent with its ordinary tools.
+///
+/// In the prompt, and not only in the one tool's description, because a description is cut
+/// short by at least one engine's CLI long before this list ends
+/// (`backends::harness::tools::DESCRIPTION_BUDGET`), and a prompt is not. Rendered from the spec on
+/// every turn: it is a function of the agent's definition and of nothing else, so it is the same
+/// text each time.
+fn code_note(spec: &RunSpec) -> Option<String> {
+    #[cfg(unix)]
+    if spec.code.only {
+        let servers: Vec<String> = spec.mcp_servers.iter().map(|s| s.id.clone()).collect();
+        return Some(crate::backends::code_only::note(spec.code.language(), &servers));
+    }
+    let _ = spec;
+    None
 }
 
 /// `note` behind `existing`, with a blank line between them — and whichever one exists when only
@@ -323,6 +354,48 @@ mod tests {
         );
         assert_eq!(cut.iter().map(|s| s.text).collect::<String>(), prompt);
         assert!(cut[0].text.starts_with("You review code."));
+    }
+
+    /// A code-only agent is told what its code can call in its prompt — every function, and its
+    /// MCP servers — between the conversation's own sections and the commands on its PATH, and a
+    /// reader cutting the prompt up finds that section by its heading like any other. An agent
+    /// with its ordinary tools is told nothing of the kind.
+    #[cfg(unix)]
+    #[test]
+    fn a_code_only_agents_prompt_says_what_its_code_can_call() {
+        let mut spec = spec();
+        spec.system_prompt = Some("You review code.".into());
+        spec.workspace_note = Some("# Where you are\n\n/tmp".into());
+        spec.tool_help = Some("# Your tools\n\nadi-knowledge".into());
+        assert!(
+            !compose(&spec, None).expect("a prompt").contains("What your code can call"),
+            "nothing for an agent with its ordinary tools"
+        );
+
+        spec.code = crate::CodeTools::ONLY_TYPESCRIPT;
+        spec.mcp_servers = vec![crate::mcp_servers::ResolvedMcpServer {
+            id: "n8n".to_string(),
+            transport: crate::mcp_servers::ResolvedTransport::Stdio {
+                command: "npx".to_string(),
+                args: Vec::new(),
+                env: std::collections::BTreeMap::new(),
+            },
+        }];
+        let prompt = compose(&spec, None).expect("a prompt");
+        let cut = sections(&prompt);
+        assert_eq!(
+            cut.iter().map(|s| s.label).collect::<Vec<_>>(),
+            ["instructions", "where you are", "what your code can call", "your tools"],
+        );
+        assert_eq!(cut.iter().map(|s| s.text).collect::<String>(), prompt);
+        let code = cut[2].text;
+        assert!(code.starts_with("# What your code can call\n\n`TsCode` is the only tool you have."), "{code}");
+        assert!(code.contains("## `await Edit({ new_string, old_string, path, replace_all? })`"), "{code}");
+        assert!(code.contains("`mcp.n8n`"), "its servers are named: {code}");
+
+        spec.code = crate::CodeTools::ONLY_PYTHON;
+        let python = compose(&spec, None).expect("a prompt");
+        assert!(python.contains("## `Edit(new_string=…, old_string=…, path=…, replace_all=None)`"), "{python}");
     }
 
     /// A section that was never appended is not reported as an empty one, and a prompt with none of
