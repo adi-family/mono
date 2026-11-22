@@ -87,7 +87,7 @@ function FilterMenu({ anchor, onClose }: { anchor: RefObject<HTMLButtonElement |
 
 export function AppChatSidebar() {
   const { active, sources, filter, group, openConversation, newConversation } = useChatSelection();
-  const { conversations, isLoading, indexFailing, sourceStates, loadMore } = useChatList();
+  const { conversations, isLoading, indexFailing, sourceStates, loadMore, hideChat } = useChatList();
   const { refresh } = useChatThread();
   const [contextTarget, setContextTarget] = useState<ChatContextTarget | null>(null);
   const [query, setQuery] = useState("");
@@ -168,6 +168,12 @@ export function AppChatSidebar() {
                             if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
                             event.preventDefault();
                             openConversation(conversation);
+                          }} onAuxClick={(event) => {
+                            // The middle button hides the chat. Prevented, it no longer opens the row in a new tab.
+                            if (event.button !== 1) return;
+                            event.preventDefault();
+                            setContextTarget(null); setFilterMenuOpen(false);
+                            void hideChat(conversation);
                           }}>
                             <span className="flex min-w-0 items-center gap-2">
                               <span className="min-w-0 flex-1 truncate text-xs font-medium leading-5">{conversation.title}</span>

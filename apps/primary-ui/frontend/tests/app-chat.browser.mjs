@@ -1389,6 +1389,25 @@ try {
     await open(main, "Mock main answer");
   });
 
+  await check("a middle click on a row hides that chat and opens no tab", async () => {
+    const pages = async () => (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).filter((tab) => tab.type === "page").length;
+    const tabsBefore = await pages();
+    const hidesBefore = mutations("run/hide").length;
+    await evaluate(`${q(listLink(other))}.scrollIntoView({block:'center'})`);
+    const point = await evaluate(`(() => { const r=${q(listLink(other))}.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`);
+    await send("Input.dispatchMouseEvent", { type: "mousePressed", button: "middle", buttons: 4, clickCount: 1, ...point });
+    await send("Input.dispatchMouseEvent", { type: "mouseReleased", button: "middle", clickCount: 1, ...point });
+    await until(() => evaluate(`!${q(listLink(other))}`), "middle-clicked chat leaves the list");
+    await until(() => hiddenRuns.has(idOf(other)), "the hide reached the machine");
+    assert.equal(mutations("run/hide").length, hidesBefore + 1, "one hide was sent");
+    assert.ok(await activeIs(main), "the open chat stays open");
+    assert.ok(await evaluate(`${q(listLink(main))}.getAttribute('aria-current')==='page'`));
+    await pause(300);
+    assert.equal(await pages(), tabsBefore, "the row did not open in a new tab");
+    hiddenRuns.clear();
+    await until(() => evaluate(`!!${q(listLink(other))}`), "fixture chat restored", 12000);
+  });
+
   await check("failed stars roll back and report the error outside the menu", async () => {
     await open(main, "Mock main answer");
     failNextStar = true;
