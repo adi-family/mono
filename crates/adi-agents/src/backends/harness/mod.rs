@@ -41,6 +41,9 @@ use crate::error::Result;
 /// return the answer text. Used by the `adi-mono harness-turn` child that an `adi` turn spawns — a
 /// plain sync process, since the blocking provider client must not run inside an async runtime.
 ///
+/// `mcp_servers` are the agent's own MCP servers this turn is the client of — a code-only
+/// agent's, whose scripts call them; empty for every other agent.
+///
 /// `sink` receives the turn's events as they happen (that child's stdout in production), which is
 /// what puts a running tool on screen before the turn settles.
 ///
@@ -50,7 +53,8 @@ pub fn run_adi_turn(
     agent: &StoredAgent,
     sessions_dir: &Path,
     conv_id: &str,
+    mcp_servers: Vec<crate::mcp_servers::ResolvedMcpServer>,
     sink: crate::backends::adi_events::Sink<'_>,
 ) -> Result<String> {
-    adi_loop::run_turn(agent, sessions_dir, conv_id, sink)
+    adi_loop::run_turn(agent, sessions_dir, conv_id, mcp_servers, sink)
 }

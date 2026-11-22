@@ -44,6 +44,7 @@
 use std::path::{Path, PathBuf};
 
 /// One conversation's shell state, as the two files holding it.
+#[derive(Clone)]
 pub(crate) struct Shell {
     /// The directory the last command ended in.
     cwd: PathBuf,

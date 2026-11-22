@@ -8,7 +8,7 @@
  *       the process's own global scope, and exits when it has been idle too long or when its
  *       state file is gone (the session was deleted) or names another kernel (it was replaced).
  *
- *   bun tscode.ts run SCRIPT [--shared PREFIX]
+ *   bun tscode.ts run SCRIPT [--shared PREFIX] [--absent NAMES]
  *       One cell in a fresh process, for a background job: same helpers, same display of what
  *       it evaluates, nothing kept afterwards.
  *
@@ -18,6 +18,10 @@
  *
  * The Rust half is `interpreter.rs`, shared with `pycode.py`; the wire is the same one — a JSON
  * object per line, one request and one reply per connection.
+ *
+ * For a code-only agent a request also says where the cell's *tools* are answered, and the
+ * platform's other tools become functions for as long as the cell runs — see "the platform's
+ * tools, as functions" below.
  *
  * # Why a cell is rewritten before it runs
  *
@@ -350,6 +354,190 @@ function shared(name?: string): unknown {
     throw new ReferenceError(`nothing is shared as ${JSON.stringify(name)}. What is: ${names.join(", ") || "nothing yet"}`);
   }
   return JSON.parse(text);
+}
+
+// ───────────────────────────── the platform's tools, as functions ─────────────────────────────
+
+/*
+ * A code-only agent has one tool — this interpreter — and reaches every other from inside a
+ * cell: `await Read({ path })`, `await mcp.n8n.call("list", {})`. The tools themselves are not
+ * here. They are code in whoever is serving the turn (`code_only.rs`), which listens on a socket
+ * for as long as a cell runs and says where in the cell's request. A call is one connection: a
+ * line of JSON out, a line of JSON back.
+ */
+
+/** A tool called from code failed, or could not be reached. The message is what the tool said. */
+class ToolError extends Error {
+  constructor(message: string, readonly tool: string) {
+    super(message);
+    this.name = "ToolError";
+  }
+}
+
+/** What a cell is told about its tools: where they are answered, and what they are called. */
+type Door = { socket: string; names: string[]; servers: string[] };
+
+/** Where the cell now running reaches its tools — nowhere, between cells and for an agent that is not code-only. */
+let door: Door | undefined;
+
+/**
+ * Around a tool that moves the conversation's shell. `Bash` starts where the shell was last
+ * recorded and records where it ends, so the cell's own position is written down before the call
+ * and read back after it: a `cd` in either is then a `cd` in both, mid-cell as between cells.
+ */
+let shellSync: { before: () => void; after: () => void } | undefined;
+
+type Answer = { text?: string; value?: unknown };
+
+/**
+ * What the tools called by the cell now running answered with. A tool's answer is a plain string,
+ * which cannot be told from any other once it has been returned — and a call standing on a line
+ * of its own should show what the tool said, as a bare `sh` shows what a command printed, rather
+ * than a quoted and escaped rendering of it. So the texts are remembered, and a top-level
+ * expression that comes to one of them is shown as written (see `Cells.show`).
+ */
+const toolTexts = new Set<string>();
+
+/** Send one call through the door and resolve to its answer. */
+function ask(tool: string, message: Record<string, unknown>): Promise<Answer> {
+  // Taken now, for the reason `sh` takes it: the error is made in an event handler.
+  const calledFrom = String(new Error().stack ?? "").split("\n").filter((line) => /^\s+at /.test(line)).slice(2);
+  return new Promise<Answer>((resolve, reject0) => {
+    const reject = (text: string) => {
+      const error = new ToolError(text, tool);
+      error.stack = [`${error.name}: ${error.message}`, ...calledFrom].join("\n");
+      reject0(error);
+    };
+    if (!door) {
+      reject(`${tool} can only be called while a cell of yours is running: not from a background script, and not from a callback that outlived its cell`);
+      return;
+    }
+    if (stopping) {
+      reject(`${tool} was not called (${stopping})`);
+      return;
+    }
+    let payload: string;
+    try {
+      payload = JSON.stringify(message);
+    } catch (error) {
+      reject(`${tool}: its arguments are not something JSON can hold (${(error as Error).message})`);
+      return;
+    }
+
+    let buffer = "";
+    let done = false;
+    const conn = net.connect(door.socket);
+    const finish = (act: () => void) => {
+      if (done) return;
+      done = true;
+      running.delete(entry);
+      act();
+    };
+    // Among the things a deadline stops, beside the commands: a cell waiting on a tool is
+    // otherwise a cell that cannot be told to end.
+    const entry = {
+      stop(why: string) {
+        finish(() => reject(`${tool} was stopped (${why})`));
+        conn.destroy();
+      },
+    };
+    running.add(entry);
+    // Listening from the start — a socket nobody is listening to does not keep what it is sent.
+    conn.on("data", (chunk) => { buffer += chunk.toString("utf8"); });
+    conn.on("error", (error) => finish(() => reject(`couldn't reach the platform for ${tool}: ${error.message}`)));
+    const answered = () => finish(() => {
+      let reply: { ok?: boolean; text?: string; value?: unknown };
+      try {
+        reply = JSON.parse(buffer);
+      } catch {
+        reject(`${tool} got no answer`);
+        return;
+      }
+      if (reply.ok) resolve(reply);
+      else reject(String(reply.text ?? `${tool} failed`));
+    });
+    conn.on("end", answered);
+    conn.on("close", answered);
+    conn.write(payload + "\n");
+  });
+}
+
+const toolFunctions = new Map<string, unknown>();
+
+/** The platform tool called `name`, as a function of one object of arguments. */
+function toolFunction(name: string): unknown {
+  let made = toolFunctions.get(name);
+  if (made) return made;
+  const call = async (input: unknown = {}) => {
+    if (input === null || typeof input !== "object" || Array.isArray(input)) {
+      throw new TypeError(`${name} takes one object of arguments: ${name}({ … })`);
+    }
+    const moves = name === "Bash";
+    if (moves) shellSync?.before();
+    try {
+      const text = String((await ask(name, { tool: name, input, cwd: process.cwd() })).text ?? "");
+      toolTexts.add(text);
+      return text;
+    } finally {
+      if (moves) shellSync?.after();
+    }
+  };
+  Object.defineProperty(call, "name", { value: name });
+  made = call;
+  toolFunctions.set(name, made);
+  return made;
+}
+
+/** Names a server object is asked for by something other than a script calling a tool. */
+const NOT_A_TOOL = new Set(["then", "toJSON", "constructor", "prototype", "inspect", "valueOf", "toString", "name", "length"]);
+
+const mcpServers = new Map<string, unknown>();
+
+/**
+ * One MCP server attached to the agent: `tools()` lists what it offers, `call(name, args)` calls
+ * one, and any other name is that call — `mcp.n8n.list_workflows({})`.
+ */
+function mcpServer(id: string): unknown {
+  let made = mcpServers.get(id);
+  if (made) return made;
+  const call = async (tool: unknown, input: unknown = {}) => {
+    if (typeof tool !== "string" || !tool) throw new TypeError(`mcp.${id}.call takes the tool's name first: call("name", { … })`);
+    if (input === null || typeof input !== "object" || Array.isArray(input)) {
+      throw new TypeError(`mcp.${id}.${tool} takes one object of arguments`);
+    }
+    const answer = await ask(`mcp.${id}.${tool}`, { mcp: id, tool, input });
+    if (answer.value !== undefined && answer.value !== null) return answer.value;
+    const text = String(answer.text ?? "");
+    toolTexts.add(text);
+    return text;
+  };
+  const tools = async () => (await ask(`mcp.${id}.tools`, { mcp: id, list: true })).value ?? [];
+  const fixed: Record<string, unknown> = { call, tools };
+  made = new Proxy(fixed, {
+    get(target, key) {
+      if (typeof key !== "string") return undefined;
+      if (key in target) return target[key];
+      if (NOT_A_TOOL.has(key)) return undefined;
+      return (input?: unknown) => call(key, input);
+    },
+  });
+  mcpServers.set(id, made);
+  return made;
+}
+
+/**
+ * Put a cell's tools in reach, or take them away again. The functions are globals, set afresh for
+ * every cell that is offered them, so a cell that happened to declare a `Read` of its own does
+ * not cost the next one the tool.
+ */
+function offer(tools: Door | undefined, sync?: { before: () => void; after: () => void }) {
+  door = tools;
+  shellSync = tools ? sync : undefined;
+  toolTexts.clear();
+  if (!tools) return;
+  for (const name of tools.names) AsyncGlobals[name] = toolFunction(name);
+  AsyncGlobals.ToolError = ToolError;
+  AsyncGlobals.mcp = Object.fromEntries(tools.servers.map((id) => [id, mcpServer(id)]));
 }
 
 // ───────────────────────────── reading a cell ─────────────────────────────
@@ -714,13 +902,19 @@ class Cells {
 
   /**
    * Print what a top-level expression came to: a command's output wherever it stands, so three
-   * bare `await sh(…)` lines read like the three commands they are, and any other value only
-   * when it is the cell's `last` statement, as a notebook would.
+   * bare `await sh(…)` lines read like the three commands they are — a tool's answer likewise,
+   * for a code-only agent — and any other value only when it is the cell's `last` statement, as
+   * a notebook would.
    */
   private show = (value: unknown, last = false) => {
     if (value instanceof Sh) {
       const text = value.shown();
       if (text) console.log(text);
+      return;
+    }
+    // What a tool answered, standing on a line of its own: shown as the tool said it.
+    if (typeof value === "string" && toolTexts.has(value)) {
+      if (value.trim()) console.log(value.replace(/\n+$/, ""));
       return;
     }
     if (!last || value === undefined) return;
@@ -1001,7 +1195,7 @@ function printed(file: string, from: number, length: number, limit: number): str
   }
 }
 
-type Request = { op?: string; code?: string; timeout_ms?: number; max_output?: number; env?: Record<string, string> };
+type Request = { op?: string; code?: string; timeout_ms?: number; max_output?: number; env?: Record<string, string>; tools?: Door };
 
 /** One connection: a caller, the request it sent, and whether it is still there to be answered. */
 type Call = {
@@ -1185,7 +1379,10 @@ class Kernel {
       call.onGone = () => giveUp("abandoned");
     });
 
+    // A code-only agent's cell is told where its tools are answered. For as long as it runs.
+    offer(request.tools, { before: () => this.shared.save(base), after: () => this.shared.load(base) });
     const outcome = await Promise.race([this.cells.run(request.code ?? ""), stuck]);
+    offer(undefined);
     // Cleared with the cell: a deadline left armed would fire into whichever cell came next.
     call.onGone = () => {};
     for (const timer of timers) clearTimeout(timer);
@@ -1233,8 +1430,15 @@ const [mode, ...rest] = process.argv.slice(2);
 if (mode === "kernel") {
   new Kernel(options(rest)).serve();
 } else if (mode === "run" && rest[0]) {
-  sharedPrefix = options(rest.slice(1)).shared;
+  const given = options(rest.slice(1));
+  sharedPrefix = given.shared;
   const cells = new Cells();
+  // A code-only agent's tools are functions only while a cell runs. Here they are names that
+  // say so when called, which is more use than a `ReferenceError`.
+  if (given.absent) {
+    for (const name of given.absent.split(",")) AsyncGlobals[name] = toolFunction(name);
+    AsyncGlobals.ToolError = ToolError;
+  }
   process.on("unhandledRejection", (error) => {
     console.error(`Unhandled rejection: ${cells.describe(error)}`);
     process.exitCode = 1;

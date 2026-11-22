@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use adi_agents::AgentManifest;
 use adi_agents::Agents;
 use adi_agents::Backend;
+use adi_agents::CodeOnly;
 use adi_agents::Error as AgentStoreError;
 use adi_agents::Marker;
 use adi_agents::SecretAttachment;
@@ -2185,6 +2186,17 @@ pub fn save_agent(store: &Agents, body: &[u8], sender: Option<FleetSender<'_>>) 
             "agent arguments cannot contain null (the manifest store is TOML)",
         );
     }
+    // Read before anything is moved or written: a language nobody has heard of is a mistake in the
+    // request, and must not leave a rename behind it. `None` is "not mentioned"; `Some(None)` is
+    // "off".
+    let code_only = match req.code_only.as_deref().map(str::trim) {
+        None => None,
+        Some("") => Some(None),
+        Some(language) => match language.parse::<CodeOnly>() {
+            Ok(language) => Some(Some(language)),
+            Err(e) => return error(400, &e),
+        },
+    };
     let name = req.name.trim().to_string();
     // The ownership check is against whichever name this save is editing *before* any rename —
     // `from` when this save also renames the agent, else `name` itself — and it runs before the
@@ -2375,6 +2387,9 @@ pub fn save_agent(store: &Agents, body: &[u8], sender: Option<FleetSender<'_>>) 
         tscode: req
             .tscode
             .unwrap_or_else(|| stored.as_ref().is_some_and(|m| m.tscode)),
+        // And the mode that makes one of them the only tool — omit-to-keep for the same reason,
+        // and more so: silence here must never hand an agent back every tool it was denied.
+        code_only: code_only.unwrap_or_else(|| stored.as_ref().and_then(|m| m.code_only)),
         // Only takes effect if this save turns out to create the definition — the store ignores it
         // on an edit (`Agents::save`) — so it costs nothing to compute even when `stored` says this
         // is a resave. Absent is a person: this endpoint's caller is the control panel, and somebody
@@ -2712,6 +2727,7 @@ fn agent_dto(
         unattended: m.unattended,
         pycode: m.pycode,
         tscode: m.tscode,
+        code_only: m.code_only.map(|language| language.as_str().to_string()),
         created_by: m.created_by,
         created_at: m.created_at,
         updated_at: m.updated_at,
@@ -3246,6 +3262,17 @@ fn agent_form_spec() -> AgentFormSpec {
     tscode.hint = "the same in TypeScript, run by bun. Either, both or neither may be on"
         .into();
     fields.push(tscode);
+    // The mode over both: one interpreter as the agent's only tool. A capability like the two
+    // above, and so not overridable per run either.
+    let mut code_only = agent_field("code_only", "Code only", AgentFormFieldKind::Select);
+    code_only.options = opts(&[
+        ("", "Off — its ordinary tools"),
+        ("typescript", "TypeScript"),
+        ("python", "Python"),
+    ]);
+    code_only.hint = "the agent's single tool is its interpreter, in this language; the file                       tools, the shell, Await, Ask and every tool of its MCP servers become                       functions its code calls. Its engine's own tools are switched off. Claude                       engines and harness:adi"
+        .into();
+    fields.push(code_only);
 
     let mut tags = agent_field("tags", "Tags", AgentFormFieldKind::Text);
     tags.placeholder = "comma-separated (dispatch / filtering)".into();
@@ -4316,6 +4343,57 @@ mod tests {
             assert_eq!(field.kind, AgentFormFieldKind::Checkbox);
             assert!(!field.run_override, "a run cannot grant itself a tool");
         }
+    }
+
+    /// Code-only is the editor's to set and nobody else's to lose: a language switches it on,
+    /// an empty string switches it off, a save that does not mention it keeps it — and a language
+    /// nobody has heard of is refused before anything is written, not stored as "off".
+    #[test]
+    fn a_save_sets_code_only_by_language_and_one_that_omits_it_keeps_it() {
+        let store = scratch("code-only");
+        let request = |extra: serde_json::Value| {
+            let mut request = serde_json::json!({ "name": "solver", "backend": "pty:claude" });
+            for (key, value) in extra.as_object().expect("an object") {
+                request[key] = value.clone();
+            }
+            save_agent(&store, request.to_string().as_bytes(), None)
+        };
+        let save = |extra: serde_json::Value| {
+            assert_eq!(request(extra).status, 200);
+            saved(&store).code_only
+        };
+
+        assert_eq!(save(serde_json::json!({})), None, "off until somebody says so");
+        assert_eq!(
+            save(serde_json::json!({ "code_only": "typescript" })),
+            Some(CodeOnly::TypeScript)
+        );
+        assert_eq!(
+            save(serde_json::json!({ "tags": ["x"] })),
+            Some(CodeOnly::TypeScript),
+            "a save about something else keeps it"
+        );
+        assert_eq!(save(serde_json::json!({ "code_only": "python" })), Some(CodeOnly::Python));
+
+        let refused = request(serde_json::json!({ "code_only": "ruby" }));
+        assert_eq!(refused.status, 400, "{}", refused.body);
+        assert!(refused.body.contains("typescript"), "it says what it could have been: {}", refused.body);
+        assert_eq!(saved(&store).code_only, Some(CodeOnly::Python), "and nothing was written");
+
+        // The editor is told what the agent has, and offers the choice as one — not as a box.
+        let state: AgentsState = serde_json::from_str(&agents(&store).body).expect("json");
+        let dto = state.agents.iter().find(|a| a.name == "solver").expect("listed");
+        assert_eq!(dto.code_only.as_deref(), Some("python"));
+        let field = state.form.fields.iter().find(|f| f.name == "code_only").expect("a field");
+        assert_eq!(field.kind, AgentFormFieldKind::Select);
+        let values: Vec<&str> = field.options.iter().map(|o| o.value.as_str()).collect();
+        assert_eq!(values, ["", "typescript", "python"]);
+        assert!(!field.run_override, "a run cannot take its own tools away or hand them back");
+
+        assert_eq!(save(serde_json::json!({ "code_only": "" })), None, "empty is off, said out loud");
+        let state: AgentsState = serde_json::from_str(&agents(&store).body).expect("json");
+        let dto = state.agents.iter().find(|a| a.name == "solver").expect("listed");
+        assert_eq!(dto.code_only, None);
     }
 
     /// Tags, star, project and secrets are omit-to-keep for the same reason `unattended` is. The

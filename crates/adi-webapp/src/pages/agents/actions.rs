@@ -4030,8 +4030,19 @@ fn chat_agent_settings(d: &AgentDto) -> AnyView {
             "the Ask tool refuses; the run decides and says what it assumed".to_string(),
             false,
         ))}
+        // Code-only, said first and instead of the switches below: while it is on, they decide
+        // nothing.
+        {d.code_only.clone().map(|language| {
+            let tool = if language == "python" { "PyCode" } else { "TsCode" };
+            kv(
+                "Code only",
+                language,
+                format!("{tool} is its one tool; every other tool is a function its code calls"),
+                false,
+            )
+        })}
         // The languages it may work in, beside the shell every agent has.
-        {(d.pycode || d.tscode).then(|| {
+        {(d.code_only.is_none() && (d.pycode || d.tscode)).then(|| {
             let tools = [(d.pycode, "PyCode"), (d.tscode, "TsCode")]
                 .into_iter()
                 .filter_map(|(on, tool)| on.then_some(tool))

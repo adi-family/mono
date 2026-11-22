@@ -910,6 +910,7 @@ fn submit_onb_agent(state: State, form: OnboardingForm, m: &MetaState) {
         unattended: None,
         pycode: None,
         tscode: None,
+        code_only: None,
         rename_from: None,
         // Absent means human — the wizard is the control panel, and somebody is looking at it.
         created_by: None,

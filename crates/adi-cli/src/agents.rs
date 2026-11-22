@@ -167,6 +167,24 @@ pub(crate) enum AgentsCommand {
         /// Take `TsCode` away again (see `--tscode`).
         #[arg(long, conflicts_with = "tscode")]
         no_tscode: bool,
+        /// Make the agent code-only: its single tool is its interpreter — `TsCode`, or `PyCode`
+        /// with `--code-only=python` — and everything else it could do is a function its code
+        /// calls instead of a tool of its own: the file tools, the shell, `Await`, `Ask`,
+        /// `Report`, and every tool of every MCP server attached to it. Its engine's own tools
+        /// are switched off whatever its tool list says, and `--pycode`/`--tscode` are beside
+        /// the point while it is on. Runs on the Claude backends and on harness:adi. Omit both
+        /// this and `--no-code-only` to leave the setting as it was.
+        #[arg(
+            long,
+            value_name = "LANGUAGE",
+            num_args = 0..=1,
+            require_equals = true,
+            default_missing_value = "typescript"
+        )]
+        code_only: Option<String>,
+        /// Give the agent its ordinary tools back (see `--code-only`).
+        #[arg(long, conflicts_with = "code_only")]
+        no_code_only: bool,
         /// A command every run of this agent really runs before its first message reaches the
         /// model — its standing orientation read. Repeatable, run in order, in the run's own shell
         /// and directory; the real output is carried into the opening message, labelled as the
@@ -558,6 +576,8 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
             no_pycode,
             tscode,
             no_tscode,
+            code_only,
+            no_code_only,
             prelude,
             no_prelude,
             knowledge,
@@ -724,6 +744,13 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
                 unattended: flag(unattended, no_unattended, old.is_some_and(|m| m.unattended)),
                 pycode: flag(pycode, no_pycode, old.is_some_and(|m| m.pycode)),
                 tscode: flag(tscode, no_tscode, old.is_some_and(|m| m.tscode)),
+                code_only: kept(
+                    no_code_only,
+                    code_only
+                        .map(|language| language.parse::<adi_core::CodeOnly>().map(Some))
+                        .transpose()?,
+                    old.map(|m| m.code_only),
+                ),
                 // Kept verbatim, not split on commas the way `--knowledge` is: a shell command
                 // routinely contains one, and a prelude cut in half at `--json,--limit` would run
                 // two commands neither of which was asked for.
@@ -1456,7 +1483,13 @@ fn print_agent(agent: &StoredAgent) {
         .into_iter()
         .filter_map(|(on, tool)| on.then_some(tool))
         .collect();
-    if !code.is_empty() {
+    if let Some(language) = agent.manifest.code_only {
+        // Said instead of the switches, not beside them: while this is on they decide nothing.
+        println!(
+            "  code-only: {language} — {} is its one tool, and every other is a function inside it",
+            language.tool()
+        );
+    } else if !code.is_empty() {
         println!("  code tools: {}", code.join(", "));
     }
     // One line per command rather than a joined list: these are shell commands, and a reader

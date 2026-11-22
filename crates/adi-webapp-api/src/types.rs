@@ -1662,6 +1662,12 @@ pub struct AgentDto {
     /// [`pycode`](Self::pycode): either, both or neither.
     #[serde(default)]
     pub tscode: bool,
+    /// Code-only: the language — `"typescript"` or `"python"` — of the interpreter that is this
+    /// agent's single tool, with every other tool a function its code calls. Absent for an agent
+    /// with its ordinary tools, which is every agent unless somebody switched this on. While it
+    /// is set, [`pycode`](Self::pycode) and [`tscode`](Self::tscode) decide nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_only: Option<String>,
     /// Whether this agent's backend has a run adapter, i.e. whether ▶ Run can work at all.
     #[serde(default)]
     pub runnable: bool,
@@ -1915,6 +1921,11 @@ pub struct SaveAgent {
     /// Whether the agent has `TsCode` (see [`AgentDto::tscode`]). Omit to keep, as above.
     #[serde(default)]
     pub tscode: Option<bool>,
+    /// The agent's code-only language (see [`AgentDto::code_only`]): `"typescript"` or
+    /// `"python"` switches the mode on, `""` switches it off, and **omitting it keeps whatever
+    /// the agent already has** — for the same reason as the two above. Anything else is refused.
+    #[serde(default)]
+    pub code_only: Option<String>,
     /// The agent's previous name when an edit renames it. The manifest is moved first (keeping
     /// `created_at`), then saved under `name`, so no orphan is left behind. Omitted — or equal to
     /// `name` — for a plain create/update.

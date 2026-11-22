@@ -111,8 +111,7 @@ impl DetachedRunner {
                         with_knowledge(spec, with_workspace(spec, config.append_system_prompt)),
                     ),
                 );
-                let mut tools = crate::backends::mcp::scope_tools(config.allowed_tools.as_deref());
-                crate::backends::mcp::grant_servers(&mut tools, &spec.mcp_servers);
+                let tools = crate::backends::mcp::run_scope(spec, config.allowed_tools.as_deref());
                 Ok(process::claude::argv(
                     &config,
                     message,
@@ -226,8 +225,7 @@ impl DetachedRunner {
                 } else {
                     ClaudeContinuation::First { session_id }
                 };
-                let mut tools = crate::backends::mcp::scope_tools(config.allowed_tools.as_deref());
-                crate::backends::mcp::grant_servers(&mut tools, &spec.mcp_servers);
+                let tools = crate::backends::mcp::run_scope(spec, config.allowed_tools.as_deref());
                 Ok(harness::claude_sdk::argv(
                     &config,
                     message,
@@ -340,6 +338,7 @@ impl Runner for DetachedRunner {
         match &self.backend {
             Backend::ProcessClaude => decode::<ProcessClaudeArguments>(&spec.arguments).map(drop),
             Backend::ProcessCodex => {
+                crate::backends::mcp::refuse_code_only(&self.backend, spec.code)?;
                 decode::<ProcessCodexArguments>(&spec.arguments)?;
                 process::codex_mcp::validate(&spec.mcp_servers)
             }
@@ -347,7 +346,12 @@ impl Runner for DetachedRunner {
                 decode::<HarnessClaudeSdkArguments>(&spec.arguments).map(drop)
             }
             Backend::HarnessAdi => {
-                crate::backends::mcp::refuse_unless_supported(&self.backend, &spec.mcp_servers)?;
+                // The adi loop has no engine to hand an agent's MCP servers to — except that a
+                // code-only agent's are never handed to an engine anyway: its scripts call them
+                // through the turn itself (see `backends::code_only`).
+                if !spec.code.only {
+                    crate::backends::mcp::refuse_unless_supported(&self.backend, &spec.mcp_servers)?;
+                }
                 harness::adi_loop::validate(&decode(&spec.arguments)?)
             }
             other => Err(Error::NotRunnable(other.to_string())),
@@ -2340,6 +2344,7 @@ mod tests {
             spawn_note: None,
             marker_note: None,
             mcp_servers: Vec::new(),
+            code: crate::CodeTools::default(),
         }
     }
 
@@ -2445,6 +2450,85 @@ mod tests {
             DetachedRunner::new(Backend::PtyClaude).check(&spec(Value::Null)),
             Err(Error::NotRunnable(_))
         ));
+    }
+
+    /// Code-only is a mode a backend either can make true or must refuse. The adi loop can —
+    /// and for such an agent it takes MCP servers too, which it otherwise has no engine to hand
+    /// to — the Claude engines can, and Codex, which keeps tools of its own, cannot.
+    #[test]
+    fn a_code_only_agent_is_checked_against_what_its_backend_can_make_true() {
+        let server = crate::mcp_servers::ResolvedMcpServer {
+            id: "n8n".to_string(),
+            transport: crate::mcp_servers::ResolvedTransport::Stdio {
+                command: "npx".to_string(),
+                args: Vec::new(),
+                env: std::collections::BTreeMap::new(),
+            },
+        };
+        let with = |arguments: Value, code: crate::CodeTools, servers: bool| RunSpec {
+            mcp_servers: if servers { vec![server.clone()] } else { Vec::new() },
+            code,
+            ..spec(arguments)
+        };
+        let only = crate::CodeTools::ONLY_TYPESCRIPT;
+        let usual = crate::CodeTools::default();
+
+        let adi = DetachedRunner::new(Backend::HarnessAdi);
+        let refused = adi
+            .check(&with(json!({ "provider": "ollama" }), usual, true))
+            .expect_err("no engine to hand the servers to");
+        assert!(refused.to_string().contains("no MCP support"), "{refused}");
+        assert!(
+            adi.check(&with(json!({ "provider": "ollama" }), only, true)).is_ok(),
+            "a code-only agent's servers are reached from its code, through the turn itself"
+        );
+
+        for backend in [Backend::ProcessClaude, Backend::HarnessClaudeSdk] {
+            assert!(DetachedRunner::new(backend).check(&with(json!({}), only, true)).is_ok());
+        }
+
+        let codex = DetachedRunner::new(Backend::ProcessCodex);
+        assert!(codex.check(&with(json!({}), usual, false)).is_ok());
+        if cfg!(unix) {
+            let refused = codex
+                .check(&with(json!({}), only, false))
+                .expect_err("codex cannot be code-only");
+            assert!(refused.to_string().contains("cannot run a code-only agent"), "{refused}");
+        }
+    }
+
+    /// A code-only agent's Claude engine is launched with no built-in at all and with this run's
+    /// server alone, whatever tools and MCP servers its definition names.
+    #[test]
+    fn a_code_only_agents_claude_engine_is_launched_with_one_server_and_no_tools_of_its_own() {
+        let server = crate::mcp_servers::ResolvedMcpServer {
+            id: "n8n".to_string(),
+            transport: crate::mcp_servers::ResolvedTransport::Stdio {
+                command: "npx".to_string(),
+                args: Vec::new(),
+                env: std::collections::BTreeMap::new(),
+            },
+        };
+        for backend in [Backend::ProcessClaude, Backend::HarnessClaudeSdk] {
+            let launched = RunSpec {
+                mcp_servers: vec![server.clone()],
+                code: crate::CodeTools::ONLY_TYPESCRIPT,
+                ..spec(json!({ "allowed_tools": "Read,Edit,WebSearch" }))
+            };
+            let argv = argv_of(backend.clone(), &launched, &FakeSession::new("only"), "go");
+            let after = |flag: &str| -> &str {
+                let at = argv
+                    .iter()
+                    .position(|arg| arg == flag)
+                    .unwrap_or_else(|| panic!("{backend:?} is given {flag}: {argv:?}"));
+                &argv[at + 1]
+            };
+            assert_eq!(after("--tools"), "", "{backend:?}: no built-ins");
+            assert_eq!(after("--allowed-tools"), "mcp__adi", "{backend:?}");
+            let config: Value = serde_json::from_str(after("--mcp-config")).expect("json");
+            let servers: Vec<&String> = config["mcpServers"].as_object().expect("servers").keys().collect();
+            assert_eq!(servers, ["adi"], "{backend:?}: the agent's own servers are not the engine's");
+        }
     }
 
     #[test]

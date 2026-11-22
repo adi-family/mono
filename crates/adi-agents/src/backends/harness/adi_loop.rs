@@ -133,6 +133,7 @@ pub(crate) fn run_turn(
     agent: &StoredAgent,
     sessions_dir: &Path,
     conv_id: &str,
+    mcp_servers: Vec<crate::mcp_servers::ResolvedMcpServer>,
     sink: Sink<'_>,
 ) -> Result<String> {
     let mut args = agent.manifest.typed_arguments::<HarnessAdiArguments>()?;
@@ -170,6 +171,9 @@ pub(crate) fn run_turn(
         &agent.name,
         agent.manifest.unattended,
         agent.manifest.code_tools(),
+        // This loop has no engine to hand an agent's MCP servers to, so the only ones that ever
+        // reach it are a code-only agent's, which its scripts call through this process.
+        crate::backends::mcp_hub::Hub::new(mcp_servers, &cwd),
         &cwd,
         conv_id,
         &agent_dir,
@@ -288,7 +292,7 @@ fn tool_loop(
             max_rounds = round.saturating_sub(1).saturating_add(allowance);
         }
 
-        let run = RunCtx::new(round, max_rounds, Some((ctx.agent_dir, ctx.conv))).offering(ctx.code);
+        let run = RunCtx::new(round, max_rounds, Some((ctx.agent_dir, ctx.conv))).offering(ctx);
         let reply = wire.round(&messages, Calls::Allowed, &run)?;
         metrics.num_turns = Some(round);
         add(&mut metrics.input_tokens, reply.input_tokens);
@@ -347,7 +351,7 @@ fn tool_loop(
         ),
     );
     wire.interject(&mut messages, WRAP_UP);
-    let run = RunCtx::new(max_rounds + 1, max_rounds, Some((ctx.agent_dir, ctx.conv))).offering(ctx.code);
+    let run = RunCtx::new(max_rounds + 1, max_rounds, Some((ctx.agent_dir, ctx.conv))).offering(ctx);
     let reply = wire.round(&messages, Calls::Withheld, &run)?;
     metrics.num_turns = Some(max_rounds + 1);
     add(&mut metrics.input_tokens, reply.input_tokens);
@@ -423,9 +427,10 @@ struct RunCtx<'a> {
     /// This run's agent directory and conversation id, so a failure report has somewhere to write
     /// its untruncated copy — `None` for [`probe`], which is not a session and keeps nothing.
     session: Option<(&'a Path, &'a str)>,
-    /// Which code tools this run's agent has, and so which are declared to the model each round.
-    /// None of them for [`probe`], which is nobody's agent.
-    code: tools::CodeTools,
+    /// The tools declared to the model each round: the table, filtered by which code tools this
+    /// run's agent has — down to the one of them, for a code-only agent. No code tool at all for
+    /// [`probe`], which is nobody's agent.
+    tools: Vec<tools::ToolDeclaration>,
 }
 
 impl<'a> RunCtx<'a> {
@@ -434,13 +439,13 @@ impl<'a> RunCtx<'a> {
             round,
             max_rounds,
             session,
-            code: tools::CodeTools::default(),
+            tools: tools::declarations(tools::CodeTools::default()),
         }
     }
 
-    /// The same round, declared the tools an agent with these switches has.
-    fn offering(mut self, code: tools::CodeTools) -> Self {
-        self.code = code;
+    /// The same round, declared the tools the agent behind `ctx` has.
+    fn offering(mut self, ctx: &tools::Ctx<'_>) -> Self {
+        self.tools = tools::declarations_with(ctx.code, &ctx.mcp.ids());
         self
     }
 
@@ -915,13 +920,14 @@ impl<'a> ImageStore<'a> {
 
 /// The tool set as JSON Schema function declarations — the shape `OpenAI`, Ollama and (nested one
 /// level deeper) Gemini all take.
-fn function_declarations(code: tools::CodeTools) -> Vec<Value> {
-    tools::offered(code)
+fn function_declarations(declared: &[tools::ToolDeclaration]) -> Vec<Value> {
+    declared
+        .iter()
         .map(|t| {
             json!({
                 "name": t.name,
                 "description": t.description,
-                "parameters": (t.schema)(),
+                "parameters": t.schema,
             })
         })
         .collect()
@@ -943,10 +949,10 @@ fn anthropic_round(
         "max_tokens": args.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
         "messages": messages,
         // Anthropic keeps the schema under `input_schema` rather than `parameters`.
-        "tools": tools::offered(run.code).map(|t| json!({
+        "tools": run.tools.iter().map(|t| json!({
             "name": t.name,
             "description": t.description,
-            "input_schema": (t.schema)(),
+            "input_schema": t.schema,
         })).collect::<Vec<_>>(),
     });
     if calls.withheld() {
@@ -1155,7 +1161,7 @@ fn openai_round(
     });
     if !calls.withheld() || dialect.tool_choice_none {
         body["tools"] = json!(
-            function_declarations(run.code)
+            function_declarations(&run.tools)
                 .into_iter()
                 .map(|f| json!({ "type": "function", "function": f }))
                 .collect::<Vec<_>>()
@@ -1312,7 +1318,7 @@ fn gemini_round(
 
     let mut body = json!({
         "contents": messages,
-        "tools": [{ "functionDeclarations": function_declarations(run.code) }],
+        "tools": [{ "functionDeclarations": function_declarations(&run.tools) }],
     });
     if calls.withheld() {
         body["toolConfig"] = json!({ "functionCallingConfig": { "mode": "NONE" } });
@@ -1461,7 +1467,7 @@ fn ollama_round(
     // No tool_choice here, so withholding is literal: declare nothing and there is nothing to call.
     if !calls.withheld() {
         body["tools"] = json!(
-            function_declarations(run.code)
+            function_declarations(&run.tools)
                 .into_iter()
                 .map(|f| json!({ "type": "function", "function": f }))
                 .collect::<Vec<_>>()
@@ -2150,7 +2156,7 @@ mod tests {
                     crate::store::user_turn_with("", vec![attachment]),
                 )
                 .expect("opening turn");
-            let error = run_turn(&agent, store.dir(), &record.id, &mut Vec::new())
+            let error = run_turn(&agent, store.dir(), &record.id, Vec::new(), &mut Vec::new())
                 .expect_err("the deliberately missing credential stops before HTTP");
             assert!(
                 matches!(error, Error::Unsupported(ref message) if message.contains("ADI_TEST=MISSING_KEY")),

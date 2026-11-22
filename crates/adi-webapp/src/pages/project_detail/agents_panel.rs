@@ -110,6 +110,7 @@ pub(crate) fn agents_panel(
                     unattended: None,
                     pycode: None,
                     tscode: None,
+                    code_only: None,
                     rename_from: None,
                     // Absent means human — this is the control panel.
                     created_by: None,

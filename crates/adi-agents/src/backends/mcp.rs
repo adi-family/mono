@@ -23,6 +23,16 @@
 //! [`tools`](super::harness::tools) already documents, and a prompt moves between `harness:adi` and
 //! a Claude backend without learning a second set of names.
 //!
+//! # A code-only agent
+//!
+//! One kind of agent is served a single tool and nothing else: a code-only one
+//! ([`CodeTools::only`]), which gets its interpreter — `TsCode` or `PyCode` — and reaches
+//! everything else from inside it. For that agent the arrangement above is reversed twice over.
+//! Its engine is launched with *none* of its own tools, whatever the agent's list says, and with
+//! none of the agent's own MCP servers ([`run_scope`], [`config`]); and this server, which
+//! everywhere else leaves those servers to the engine, becomes their client ([`Standing::mcp`]),
+//! because the functions a script calls them through are answered from here.
+//!
 //! # The transport
 //!
 //! MCP stdio is newline-delimited JSON-RPC 2.0 — one object per line, no `Content-Length` framing
@@ -46,6 +56,7 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use super::harness::tools::{self, CodeTools, Ctx};
+use super::mcp_hub::Hub;
 use super::shell::Shell;
 use crate::awaits::Awaits;
 use crate::error::{Error, Result};
@@ -98,8 +109,14 @@ pub(crate) fn config(spec: &RunSpec, session: &dyn Session) -> String {
     // `crate::mcp_servers`), so this is only ever a reshape into the CLI's own JSON, never a
     // secret lookup. `--strict-mcp-config` (always alongside this, see `push_mcp_config`) is what
     // keeps the run from also loading whatever else is configured on this machine.
-    for resolved in &spec.mcp_servers {
-        servers.insert(resolved.id.clone(), server_json(resolved));
+    //
+    // Not for a code-only agent: handing its engine the servers would put every one of their
+    // tools in the model's tool list, which is the one thing that agent is defined not to have.
+    // Its scripts reach them through this run's own server instead (see the module docs).
+    if !spec.code.only {
+        for resolved in &spec.mcp_servers {
+            servers.insert(resolved.id.clone(), server_json(resolved));
+        }
     }
     serde_json::json!({ "mcpServers": servers }).to_string()
 }
@@ -163,6 +180,57 @@ pub(crate) fn refuse_unless_supported(
         "{backend} has no MCP support: it cannot be given the MCP server(s) this agent declares          ({}). Run it on harness:claude-sdk, pty:claude, process:claude, or process:codex          instead, or detach the servers with `agents save --no-mcp`",
         servers.iter().map(|s| s.id.as_str()).collect::<Vec<_>>().join(", "),
     )))
+}
+
+/// Refuse a launch outright when the agent is code-only ([`crate::AgentManifest::code_only`]) and
+/// `backend` cannot make it so — the same promise [`refuse_unless_supported`] keeps for MCP
+/// servers, for the same reason. A mode that takes every tool away but one is not a preference a
+/// backend may quietly ignore: an agent launched with its engine's whole tool set, under a
+/// definition that says it has none, is doing something nobody decided to let it do.
+///
+/// What it takes is this run's own server being the engine's only source of tools, which is
+/// true of the Claude engines (see [`scope_tools`]) and of the adi loop, whose tools *are* this
+/// crate's. A Codex engine keeps its own shell and its own file tools whatever it is told, and
+/// has no door for ours.
+///
+/// # Errors
+/// [`Error::Launch`] naming `backend`, when the agent is code-only and the backend is not one of
+/// those — or this is not a machine the interpreters run on at all.
+pub(crate) fn refuse_code_only(backend: &crate::backend::Backend, code: CodeTools) -> Result<()> {
+    if !code.only {
+        return Ok(());
+    }
+    if cfg!(not(unix)) {
+        return Err(Error::Launch(
+            "this agent is code-only, and the code tools it would run on are not available on \
+             this platform. Run it on a Unix machine, or switch the mode off with `agents save \
+             --no-code-only`"
+                .to_string(),
+        ));
+    }
+    Err(Error::Launch(format!(
+        "{backend} cannot run a code-only agent: its engine keeps tools of its own that cannot \
+         be taken away, and has no way to be given the interpreter. Run it on harness:adi, \
+         harness:claude-sdk, process:claude, or pty:claude instead, or switch the mode off with \
+         `agents save --no-code-only`"
+    )))
+}
+
+/// The tool surface of one Claude-engine run of this agent: [`scope_tools`] over its own list,
+/// with its MCP servers granted ([`grant_servers`]) — or, for a code-only agent, nothing at all
+/// but this run's own server.
+///
+/// One function rather than the two calls at each launch site, because the code-only case is the
+/// kind of rule that is kept in three places until the day it is kept in two.
+pub(crate) fn run_scope(spec: &RunSpec, allowed: Option<&str>) -> ToolScope {
+    if spec.code.only {
+        // Deliberately blind to `allowed`: the mode is "one tool", and a list of built-ins on
+        // the same agent is what it had before the mode was switched on, not an exception to it.
+        return scope_tools(None);
+    }
+    let mut scope = scope_tools(allowed);
+    grant_servers(&mut scope, &spec.mcp_servers);
+    scope
 }
 
 /// One run's tool surface: what exists, and what it may use without stopping to ask.
@@ -296,14 +364,17 @@ fn tool_name(entry: &str) -> &str {
     entry.split('(').next().unwrap_or(entry).trim()
 }
 
-/// What an agent's definition says about the tools this server hands out: the two things that
-/// are the agent's to decide rather than the conversation's.
-#[derive(Debug, Clone, Copy, Default)]
+/// What an agent's definition says about the tools this server hands out: the things that are
+/// the agent's to decide rather than the conversation's.
+#[derive(Clone, Default)]
 pub(crate) struct Standing {
     /// Nobody is watching this agent, so `Ask` refuses.
     pub(crate) unattended: bool,
     /// Which code tools it switched on.
     pub(crate) code: CodeTools,
+    /// The agent's own MCP servers, when this server is their client: a code-only agent's (see
+    /// the module docs). Empty for every other agent, whose engine was handed them.
+    pub(crate) mcp: Hub,
 }
 
 /// Serve one run's tools until the client closes the pipe.
@@ -342,6 +413,7 @@ pub(crate) fn serve(
         agent_dir: &agent_dir,
         unattended: standing.unattended,
         code: standing.code,
+        mcp: standing.mcp,
     };
 
     for line in input.lines() {
@@ -373,7 +445,7 @@ fn answer(request: &Value, ctx: &Ctx<'_>) -> Option<String> {
     let result = match method {
         "initialize" => Ok(initialize(request)),
         "ping" => Ok(json!({})),
-        "tools/list" => Ok(json!({ "tools": served_tools(ctx.code) })),
+        "tools/list" => Ok(json!({ "tools": served_tools(ctx.code, &ctx.mcp.ids()) })),
         "tools/call" => call(request, ctx),
         other => Err(format!("no method {other}")),
     };
@@ -408,15 +480,17 @@ fn initialize(request: &Value) -> Value {
 
 /// What of [`SERVED`] an agent with these switches has, in MCP's shape. The description and schema
 /// are the ones the adi loop advertises, untouched — the whole point of serving the shared table
-/// rather than a second one.
-fn served_tools(code: CodeTools) -> Vec<Value> {
-    tools::offered(code)
-        .filter(|spec| SERVED.contains(&spec.name))
-        .map(|spec| {
+/// rather than a second one. `servers` are the agent's MCP servers this process is the client of,
+/// which is something only a code-only agent's one tool has anything to say about.
+fn served_tools(code: CodeTools, servers: &[String]) -> Vec<Value> {
+    tools::declarations_with(code, servers)
+        .into_iter()
+        .filter(|tool| SERVED.contains(&tool.name.as_str()))
+        .map(|tool| {
             json!({
-                "name": spec.name,
-                "description": spec.description,
-                "inputSchema": (spec.schema)(),
+                "name": tool.name,
+                "description": tool.description,
+                "inputSchema": tool.schema,
             })
         })
         .collect()
@@ -488,6 +562,7 @@ mod tests {
             Standing {
                 unattended: false,
                 code,
+                mcp: Hub::default(),
             },
             std::io::Cursor::new(requests.as_bytes()),
             &mut out,
@@ -671,8 +746,8 @@ mod tests {
                 .map(|t| t["name"].as_str().expect("name").to_string())
                 .collect()
         };
-        let python = CodeTools { python: true, typescript: false };
-        let typescript = CodeTools { python: false, typescript: true };
+        let python = CodeTools { python: true, ..CodeTools::default() };
+        let typescript = CodeTools { typescript: true, ..CodeTools::default() };
         assert_eq!(names(python), ["Bash", "PyCode", "Await", "Ask"]);
         assert_eq!(names(typescript), ["Bash", "TsCode", "Await", "Ask"]);
         assert_eq!(names(CodeTools::BOTH), SERVED);
@@ -688,6 +763,110 @@ mod tests {
         assert_eq!(refused[0]["error"]["code"], -32601, "{:?}", refused[0]);
         let refused = talk(&call("PyCode"));
         assert_eq!(refused[0]["error"]["code"], -32601, "{:?}", refused[0]);
+    }
+
+    /// A code-only agent is served exactly one tool, whose description is where it learns what
+    /// the others became — and the others really are gone: calling one is calling a tool that
+    /// does not exist, while the same thing asked for from inside the code is done.
+    #[cfg(unix)]
+    #[test]
+    fn a_code_only_agent_is_served_its_interpreter_and_reaches_the_rest_through_it() {
+        let call = |id: u32, name: &str, arguments: Value| {
+            json!({
+                "jsonrpc": "2.0", "id": id, "method": "tools/call",
+                "params": { "name": name, "arguments": arguments },
+            })
+            .to_string()
+        };
+        let replies = talk_as(
+            CodeTools::ONLY_TYPESCRIPT,
+            &[
+                r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#.to_string(),
+                call(2, "Bash", json!({ "command": "echo hi" })),
+                call(3, "TsCode", json!({ "code": "const wrote = await Write({ path: 'served.txt', content: 'through the door' });\nawait Read({ path: 'served.txt' });" })),
+            ]
+            .join("\n"),
+        );
+
+        let listed = replies[0]["result"]["tools"].as_array().expect("tools");
+        assert_eq!(listed.len(), 1, "{listed:?}");
+        assert_eq!(listed[0]["name"], "TsCode");
+        let description = listed[0]["description"].as_str().expect("description");
+        assert!(description.contains("This is the only tool you have"), "{description}");
+        assert!(
+            description.contains("`await Bash({ command, background?, timeout_ms? })`"),
+            "the shell is a function now: {description}"
+        );
+
+        assert_eq!(replies[1]["error"]["code"], -32601, "the shell is not a tool: {:?}", replies[1]);
+        assert_eq!(replies[2]["result"]["isError"], false, "{:?}", replies[2]);
+        assert_eq!(replies[2]["result"]["content"][0]["text"], "through the door");
+    }
+
+    /// What a code-only agent's engine is launched with: none of its own tools, whatever the
+    /// agent's list names, and none of the agent's MCP servers — the same agent without the mode
+    /// gets both, which is the whole difference.
+    #[test]
+    fn a_code_only_run_is_launched_with_no_tools_of_the_engines_and_none_of_the_agents_servers() {
+        let server = crate::mcp_servers::ResolvedMcpServer {
+            id: "n8n".to_string(),
+            transport: crate::mcp_servers::ResolvedTransport::Stdio {
+                command: "npx".to_string(),
+                args: vec!["n8n-mcp".to_string()],
+                env: std::collections::BTreeMap::new(),
+            },
+        };
+        let spec = |code: CodeTools| RunSpec {
+            credential: None,
+            cwd: std::env::temp_dir(),
+            path: String::new(),
+            env: Vec::new(),
+            inherited_strip: Vec::new(),
+            arguments: Value::Null,
+            tools: Vec::new(),
+            tool_help: None,
+            system_prompt: None,
+            workspace_note: None,
+            knowledge_note: None,
+            spawn_note: None,
+            marker_note: None,
+            mcp_servers: vec![server.clone()],
+            code,
+        };
+        let session = FakeSession { log: std::env::temp_dir().join("conv-1.log") };
+        let servers = |spec: &RunSpec| -> Vec<String> {
+            let config: Value = serde_json::from_str(&config(spec, &session)).expect("json");
+            config["mcpServers"].as_object().expect("servers").keys().cloned().collect()
+        };
+
+        let usual = spec(CodeTools::default());
+        let scope = run_scope(&usual, Some("Read,Edit,WebSearch"));
+        assert_eq!(scope.builtins, "Read,Edit,WebSearch");
+        assert_eq!(scope.allowed, "Read,Edit,WebSearch,mcp__adi,mcp__n8n");
+        assert_eq!(servers(&usual), ["adi", "n8n"]);
+
+        let only = spec(CodeTools::ONLY_TYPESCRIPT);
+        let scope = run_scope(&only, Some("Read,Edit,WebSearch"));
+        assert_eq!(scope.builtins, "", "not one built-in, whatever its list says");
+        assert_eq!(scope.allowed, "mcp__adi", "and only this run's own server");
+        assert_eq!(servers(&only), ["adi"], "its servers are reached from code, not by the engine");
+    }
+
+    /// A backend that cannot take every tool but one away refuses a code-only agent, rather than
+    /// launching it with tools its definition says it does not have.
+    #[cfg(unix)]
+    #[test]
+    fn a_backend_that_cannot_be_code_only_refuses_such_an_agent() {
+        use crate::backend::Backend;
+        for backend in [Backend::ProcessCodex, Backend::PtyCodex] {
+            assert!(refuse_code_only(&backend, CodeTools::default()).is_ok(), "{backend}");
+            assert!(refuse_code_only(&backend, CodeTools::BOTH).is_ok(), "{backend}: the switches are not the mode");
+            let refused = refuse_code_only(&backend, CodeTools::ONLY_PYTHON)
+                .expect_err("codex keeps its own tools")
+                .to_string();
+            assert!(refused.contains("cannot run a code-only agent"), "{refused}");
+            assert!(refused.contains("--no-code-only"), "and how to get out of it: {refused}");
+        }
     }
 
     /// `TsCode` crosses the wire the same way, with an interpreter of its own: what a cell
@@ -886,6 +1065,7 @@ mod tests {
             spawn_note: None,
             marker_note: None,
             mcp_servers: resolved,
+            code: CodeTools::default(),
         };
 
         let mcp_config_json = config(&spec, &session);

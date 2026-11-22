@@ -23,6 +23,7 @@ use crate::awaits::{self, Awaits, Request};
 #[cfg(unix)]
 use crate::backends::interpreter::Language;
 use crate::backends::jobs;
+use crate::backends::mcp_hub::Hub;
 use crate::backends::shell::Shell;
 use crate::store::{AskRequest, Choice, MAX_QUESTIONS, SessionStore};
 
@@ -64,6 +65,10 @@ pub(crate) struct Ctx<'a> {
     pub unattended: bool,
     /// Which of the code tools this agent has switched on — see [`CodeTools`].
     pub code: CodeTools,
+    /// The agent's own MCP servers, for the one kind of agent whose engine is not their client:
+    /// a code-only one, whose scripts call them (see [`crate::backends::mcp_hub`]). Empty for
+    /// every other agent — an engine that was handed the servers talks to them itself.
+    pub mcp: Hub,
 }
 
 /// Which of the code tools — `PyCode`, `TsCode` — an agent has.
@@ -77,12 +82,23 @@ pub(crate) struct Ctx<'a> {
 ///
 /// A tool that is off is *absent*: not declared to the model, not listed over MCP, and answered
 /// as any unknown name is if called anyway.
+///
+/// # Code-only
+///
+/// [`only`](Self::only) turns the arrangement inside out: the one code tool that is on is the
+/// *only* tool the agent has, and every other row of the table is a function its code calls
+/// rather than a tool the model is declared (see [`crate::backends::code_only`]). It is the
+/// agent's [`code_only`](crate::AgentManifest::code_only) setting, which also picks the language
+/// — so with it set, exactly one of the two switches above is on, whatever the agent's own
+/// `pycode` and `tscode` say.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CodeTools {
     /// `PyCode`.
     pub python: bool,
     /// `TsCode`.
     pub typescript: bool,
+    /// The code tool that is on is the only tool there is.
+    pub only: bool,
 }
 
 impl CodeTools {
@@ -91,18 +107,48 @@ impl CodeTools {
     pub(crate) const BOTH: Self = Self {
         python: true,
         typescript: true,
+        only: false,
     };
 
-    /// Whether an agent with these switches has the tool called `name`. Every tool that is not a
-    /// code tool is one it has.
+    /// Code-only, in TypeScript.
+    pub const ONLY_TYPESCRIPT: Self = Self {
+        python: false,
+        typescript: true,
+        only: true,
+    };
+
+    /// Code-only, in Python.
+    pub const ONLY_PYTHON: Self = Self {
+        python: true,
+        typescript: false,
+        only: true,
+    };
+
+    /// Whether an agent with these switches has the tool called `name`. A code tool is one it
+    /// has when it is switched on; every other tool is one it has unless it is code-only, where
+    /// the others are functions and not tools.
     #[must_use]
     pub fn offers(self, name: &str) -> bool {
         match name {
             "PyCode" => self.python,
             "TsCode" => self.typescript,
-            _ => true,
+            _ => !self.only,
         }
     }
+}
+
+/// Whether `name` is one of the code tools — the two rows of the table that run code rather
+/// than being called from it.
+#[cfg(unix)]
+fn is_code_tool(name: &str) -> bool {
+    matches!(name, "PyCode" | "TsCode")
+}
+
+/// The tools code can call as functions: every row of the table but the code tools themselves.
+/// What a code-only agent has instead of a tool list.
+#[cfg(unix)]
+pub(crate) fn inner() -> impl Iterator<Item = &'static ToolSpec> {
+    TOOLS.iter().filter(|spec| !is_code_tool(spec.name))
 }
 
 /// The tools an agent with these switches has, in the order they are advertised.
@@ -110,18 +156,34 @@ pub(crate) fn offered(code: CodeTools) -> impl Iterator<Item = &'static ToolSpec
     TOOLS.iter().filter(move |spec| code.offers(spec.name))
 }
 
+/// The one sentence of [`BASH`] that is not true from inside code: there, the file tools resolve
+/// where the code stands, which is where the shell stands. A macro only because `concat!` takes
+/// literals; [`BASH_PATHS`] is the same text for whoever needs to take it back out.
+#[cfg(unix)]
+macro_rules! bash_paths {
+    () => {
+        "Only the shell moves: Read, Write, Edit, Glob and Grep go on resolving relative paths \
+         against the run's own directory. "
+    };
+}
+/// See [`bash_paths`].
+#[cfg(unix)]
+pub(crate) const BASH_PATHS: &str = bash_paths!();
+
 /// What `Bash` is, told in the terms that decide how a command gets written: the shell is the
 /// conversation's, not the call's. Two texts because that is only true where [`super::shell`] can
 /// keep it — a model on Windows told it could name a path once would name it into nothing.
 #[cfg(unix)]
-const BASH: &str = "Run a shell command and return its output (stdout and stderr together, with \
+const BASH: &str = concat!(
+    "Run a shell command and return its output (stdout and stderr together, with \
                     the exit status when it is not zero). It is one shell across the whole \
                     conversation: `cd` moves it until you move it again, and an **exported** \
                     variable is still set on your next call. So name a long path once — `export \
                     FE=/long/path/to/a/checkout` — and use `$FE` from then on, rather than writing \
                     it out on command after command. A bare `FE=…` is not exported and does not \
-                    carry. Only the shell moves: Read, Write, Edit, Glob and Grep go on resolving \
-                    relative paths against the run's own directory. Set \
+                    carry. ",
+    bash_paths!(),
+    "Set \
                     `background` for a command that will outlast the turn: it is started and you \
                     get a job id back straight away, then **end your turn** — you are woken when it \
                     exits, carrying its exit status and the tail of its output. That is how to run \
@@ -129,7 +191,8 @@ const BASH: &str = "Run a shell command and return its output (stdout and stderr
                     poll a job you started; being woken is the whole point. Never `background` \
                     `adi-mono agents run` — it already returns in about a second and hands you its \
                     own await for the run it started; backgrounding it only adds a second, \
-                    redundant wake for the launcher exiting.";
+                    redundant wake for the launcher exiting."
+);
 #[cfg(windows)]
 const BASH: &str = "Run a shell command in the working directory and return its output (stdout \
                     and stderr together, with the exit status when it is not zero). Each call is \
@@ -538,13 +601,44 @@ pub struct ToolDeclaration {
 /// can fall behind.
 #[must_use]
 pub fn declarations(code: CodeTools) -> Vec<ToolDeclaration> {
+    declarations_with(code, &[])
+}
+
+/// [`declarations`], for an agent with these MCP servers attached.
+///
+/// The servers matter to exactly one kind of agent: a code-only one, whose single tool's
+/// description is where it learns they are there (see [`described`]). Every caller that declares
+/// tools to a model comes through here — the adi loop, the MCP server, the simulator — so what
+/// that description says cannot differ between them.
+#[must_use]
+pub fn declarations_with(code: CodeTools, servers: &[String]) -> Vec<ToolDeclaration> {
     offered(code)
         .map(|t| ToolDeclaration {
             name: t.name.to_string(),
-            description: t.description.to_string(),
+            description: described(t, code, servers),
             schema: (t.schema)(),
         })
         .collect()
+}
+
+/// What a tool is told to the model as, for an agent with these switches.
+///
+/// Its own description — except for a code-only agent's one tool, which also has to say
+/// everything the tools it replaced would have said, because nothing else will.
+fn described(spec: &ToolSpec, code: CodeTools, servers: &[String]) -> String {
+    #[cfg(unix)]
+    if code.only {
+        let language = match spec.name {
+            "PyCode" => Some(Language::Python),
+            "TsCode" => Some(Language::TypeScript),
+            _ => None,
+        };
+        if let Some(language) = language {
+            return crate::backends::code_only::describe(spec.description, language, servers);
+        }
+    }
+    let _ = (code, servers);
+    spec.description.to_string()
 }
 
 impl<'a> Ctx<'a> {
@@ -555,10 +649,13 @@ impl<'a> Ctx<'a> {
     /// would silently give a run a fresh shell — no `cd`, no exports — and the tools would keep
     /// working while quietly meaning something else. The adi loop and the simulator both come
     /// through here, which is what makes a call made by a person the same call the model makes.
+    #[allow(clippy::too_many_arguments)] // each is a different fact about the conversation, and
+    // a struct to carry them here would be this struct
     pub(crate) fn for_conversation(
         agent: &'a str,
         unattended: bool,
         code: CodeTools,
+        mcp: Hub,
         cwd: &'a Path,
         conv: &'a str,
         agent_dir: &'a Path,
@@ -574,6 +671,7 @@ impl<'a> Ctx<'a> {
             agent_dir,
             unattended,
             code,
+            mcp,
         }
     }
 }
@@ -588,27 +686,89 @@ pub(crate) fn execute(
     input: &Value,
     ctx: &Ctx<'_>,
 ) -> std::result::Result<String, String> {
+    // Only what this agent has. A code tool that is switched off, and every tool but the code
+    // tool for a code-only agent, is answered as any name it was never given is — which is what
+    // these are to it.
+    let absent = || {
+        format!(
+            "no tool named {name} — the tools you have are: {}",
+            offered(ctx.code).map(|t| t.name).collect::<Vec<_>>().join(", ")
+        )
+    };
+    if !ctx.code.offers(name) {
+        return Err(absent());
+    }
     match name {
+        #[cfg(unix)]
+        "PyCode" => cell(Language::Python, input, ctx),
+        #[cfg(unix)]
+        "TsCode" => cell(Language::TypeScript, input, ctx),
+        _ => plain(name, input, ctx).unwrap_or_else(|| Err(absent())),
+    }
+}
+
+/// Run one tool call that code made — a function of a code-only agent's cell (see
+/// [`crate::backends::code_only`]).
+///
+/// The same tools, by the same code, with two differences. The code tools are not among them:
+/// the interpreter is busy running the cell that is asking. And nothing called from a cell may
+/// outlast it, so a command started through `Bash` is given what is left of the cell's own
+/// `deadline` rather than a deadline of its own.
+///
+/// # Errors
+/// The tool's own answer when it fails, exactly as [`execute`] hands it to a model — here it
+/// becomes the exception the function raises.
+#[cfg(unix)]
+pub(crate) fn execute_inner(
+    name: &str,
+    input: &Value,
+    ctx: &Ctx<'_>,
+    deadline: std::time::Instant,
+) -> std::result::Result<String, String> {
+    if is_code_tool(name) {
+        return Err(format!(
+            "{name} cannot be called from code: it is the tool your code is already running in"
+        ));
+    }
+    let answered = if name == "Bash" && !flag(input, "background") {
+        let left = u64::try_from(
+            deadline
+                .saturating_duration_since(std::time::Instant::now())
+                .as_millis(),
+        )
+        .unwrap_or(u64::MAX)
+        .max(1);
+        let asked = arg_u64(input, "timeout_ms").unwrap_or(DEFAULT_TIMEOUT_MS);
+        let mut input = input.clone();
+        if let Some(arguments) = input.as_object_mut() {
+            arguments.insert("timeout_ms".to_string(), json!(asked.min(left)));
+        }
+        plain(name, &input, ctx)
+    } else {
+        plain(name, input, ctx)
+    };
+    answered.unwrap_or_else(|| {
+        Err(format!(
+            "no tool named {name} — the functions there are: {}",
+            inner().map(|t| t.name).collect::<Vec<_>>().join(", ")
+        ))
+    })
+}
+
+/// Run a tool that is not a code tool, or `None` when `name` is not one of them.
+fn plain(name: &str, input: &Value, ctx: &Ctx<'_>) -> Option<std::result::Result<String, String>> {
+    Some(match name {
         "Read" => read(input, ctx.cwd),
         "Write" => write(input, ctx.cwd),
         "Edit" => edit(input, ctx.cwd),
         "Bash" => bash(input, ctx),
-        // Only for an agent that has them. One that does not is answered below, as for any name
-        // it was never given — which is what these are to it.
-        #[cfg(unix)]
-        "PyCode" if ctx.code.python => cell(Language::Python, input, ctx),
-        #[cfg(unix)]
-        "TsCode" if ctx.code.typescript => cell(Language::TypeScript, input, ctx),
         "Glob" => glob(input, ctx.cwd),
         "Grep" => grep(input, ctx.cwd),
         "Await" => await_wake(input, ctx),
         "Ask" => ask(input, ctx),
         "Report" => report(input, ctx),
-        other => Err(format!(
-            "no tool named {other} — the tools you have are: {}",
-            offered(ctx.code).map(|t| t.name).collect::<Vec<_>>().join(", ")
-        )),
-    }
+        _ => return None,
+    })
 }
 
 fn read(input: &Value, cwd: &Path) -> std::result::Result<String, String> {
@@ -814,7 +974,14 @@ fn cell(language: Language, input: &Value, ctx: &Ctx<'_>) -> std::result::Result
     let code = arg_str(input, "code")?;
     let interpreter = Interpreter::new(language, ctx.agent_dir, ctx.conv);
     if flag(input, "background") {
-        let command = interpreter.job_command(code)?;
+        // A code-only agent's script is told which names are the tools it has in a cell and
+        // not here, so that reaching for one explains itself.
+        let absent: Vec<&str> = if ctx.code.only {
+            inner().map(|spec| spec.name).collect()
+        } else {
+            Vec::new()
+        };
+        let command = interpreter.job_command(code, &absent)?;
         let shown: String = code.chars().take(WAKE_CODE_CHARS).collect();
         let more = if shown.len() < code.len() { "\n[…]" } else { "" };
         let note = format!(
@@ -826,14 +993,17 @@ fn cell(language: Language, input: &Value, ctx: &Ctx<'_>) -> std::result::Result
 
     let timeout = arg_u64(input, "timeout_ms").unwrap_or(DEFAULT_TIMEOUT_MS);
     let start = ctx.shell.start_dir(ctx.cwd);
-    let ran = interpreter.run(
-        &ctx.shell,
-        ctx.cwd,
-        code,
-        timeout,
-        MAX_OUTPUT,
-        flag(input, "restart"),
-    )?;
+    let restart = flag(input, "restart");
+    let run = |offered: Option<&Value>| {
+        interpreter.run(&ctx.shell, ctx.cwd, code, timeout, MAX_OUTPUT, restart, offered)
+    };
+    let ran = if ctx.code.only {
+        // The cell's functions are this agent's other tools, answered from here for as long as
+        // the cell runs.
+        crate::backends::code_only::serving(ctx, timeout, |offered| run(Some(offered)))??
+    } else {
+        run(None)?
+    };
     let moved = ctx
         .shell
         .moved_from(&start)
@@ -1579,6 +1749,7 @@ mod tests {
             agent_dir: cwd,
             unattended: false,
             code: CodeTools::BOTH,
+            mcp: Hub::default(),
         }
     }
 
@@ -1623,6 +1794,7 @@ mod tests {
                 agent_dir: &self.root,
                 unattended: false,
                 code: CodeTools::BOTH,
+                mcp: Hub::default(),
             }
         }
     }
@@ -1733,14 +1905,14 @@ mod tests {
         let neither = names(CodeTools::default());
         assert!(neither.contains(&"Bash".to_string()), "{neither:?}");
         assert!(!neither.iter().any(|name| name == "PyCode" || name == "TsCode"), "{neither:?}");
-        let python = names(CodeTools { python: true, typescript: false });
+        let python = names(CodeTools { python: true, ..CodeTools::default() });
         assert!(python.contains(&"PyCode".to_string()) && !python.contains(&"TsCode".to_string()), "{python:?}");
         let both = names(CodeTools::BOTH);
         assert!(both.contains(&"PyCode".to_string()) && both.contains(&"TsCode".to_string()), "{both:?}");
 
         let dir = scratch("code-off");
         let mut ctx = ctx_in(&dir, "code-off");
-        ctx.code = CodeTools { python: false, typescript: true };
+        ctx.code = CodeTools { typescript: true, ..CodeTools::default() };
         let refused = execute("PyCode", &json!({ "code": "1" }), &ctx).expect_err("it has no PyCode");
         assert!(refused.starts_with("no tool named PyCode"), "{refused}");
         assert!(refused.contains("TsCode"), "what it does have is named: {refused}");
@@ -2455,5 +2627,374 @@ mod tests {
                 .pending_question("watcher", &chat.conv)
                 .is_none()
         );
+    }
+
+    /// A code-only agent's context: the scratch stores of [`ctx_in`], the one code tool, and
+    /// whatever MCP servers the test attaches.
+    #[cfg(unix)]
+    fn only_in<'a>(cwd: &'a Path, tag: &str, code: CodeTools, mcp: Hub) -> Ctx<'a> {
+        Ctx {
+            code,
+            mcp,
+            ..ctx_in(cwd, tag)
+        }
+    }
+
+    /// The mode in one test: such an agent is declared one tool, calling any other is calling a
+    /// name it was never given — and from inside the one it has, the others are functions that do
+    /// exactly what the tools do, on the files the code itself can see.
+    #[cfg(unix)]
+    #[test]
+    fn a_code_only_agent_has_one_tool_and_calls_the_others_from_inside_it() {
+        let dir = scratch("only-ts");
+        let ctx = only_in(&dir, "only-ts", CodeTools::ONLY_TYPESCRIPT, Hub::default());
+        let typescript = crate::backends::interpreter::Interpreter::new(Language::TypeScript, ctx.agent_dir, ctx.conv);
+
+        let declared = declarations_with(ctx.code, &ctx.mcp.ids());
+        let names: Vec<&str> = declared.iter().map(|tool| tool.name.as_str()).collect();
+        assert_eq!(names, ["TsCode"], "one tool, and it is the interpreter");
+        assert!(
+            declared[0].description.contains("This is the only tool you have")
+                && declared[0].description.contains("`await Edit({ new_string, old_string, path, replace_all? })`"),
+            "which says what the rest became: {}",
+            declared[0].description
+        );
+
+        for gone in ["Read", "Bash", "Await", "PyCode"] {
+            let refused = execute(gone, &json!({ "path": "x", "command": "true", "code": "1" }), &ctx)
+                .expect_err("it is not a tool this agent has");
+            assert_eq!(refused, format!("no tool named {gone} — the tools you have are: TsCode"));
+        }
+
+        let ran = execute(
+            "TsCode",
+            &json!({ "code": "
+                const wrote = await Write({ path: 'notes/a.txt', content: 'one\\ntwo\\n' });
+                const edited = await Edit({ path: 'notes/a.txt', old_string: 'two', new_string: 'three' });
+                const text = await Read({ path: 'notes/a.txt' });
+                const found = await Glob({ pattern: '**/*.txt' });
+                const hits = await Grep({ pattern: 'thr+ee' });
+                console.log(text);
+                console.log(fs.readFileSync('notes/a.txt', 'utf8') === 'one\\nthree\\n', found.endsWith('notes/a.txt'), hits.includes('a.txt:2: three'));
+            " }),
+            &ctx,
+        )
+        .expect("the cell runs");
+        assert_eq!(ran, "one\nthree\ntrue true true", "assigned, so nothing was shown but what was printed");
+
+        // A call on a line of its own shows what the tool answered, wherever in the cell it
+        // stands and as the tool said it — a file's text is not shown quoted and escaped.
+        let shown = execute(
+            "TsCode",
+            &json!({ "code": "await Write({ path: 'notes/b.txt', content: 'x' });\nconst kept = 1;\nawait Read({ path: 'notes/a.txt' });" }),
+            &ctx,
+        )
+        .expect("a cell of bare calls");
+        let lines: Vec<&str> = shown.lines().collect();
+        assert_eq!(lines.len(), 3, "{shown}");
+        assert!(lines[0].starts_with("wrote ") && lines[0].ends_with("notes/b.txt (1 bytes)"), "{shown}");
+        assert_eq!(&lines[1..], ["one", "three"], "{shown}");
+
+        // What an earlier cell kept is still there, and so are the tools: the door is opened for
+        // each cell, not once.
+        let again = execute(
+            "TsCode",
+            &json!({ "code": "const now = await Read({ path: 'notes/a.txt' }); now === text;" }),
+            &ctx,
+        )
+        .expect("a second cell");
+        assert_eq!(again, "true");
+
+        // A tool that fails is an exception the code may catch…
+        let caught = execute(
+            "TsCode",
+            &json!({ "code": "try { await Read({ path: 'no-such-file' }); } catch (error) { console.log(error.name, '|', error.tool, '|', error.message); }" }),
+            &ctx,
+        )
+        .expect("caught, so the cell succeeds");
+        assert!(caught.starts_with("ToolError | Read | couldn't read "), "{caught}");
+        // …and one it does not catch fails the call, with the tool's own words and the cell's line.
+        let thrown = execute(
+            "TsCode",
+            &json!({ "code": "const before = 1;\nawait Edit({ path: 'notes/a.txt', old_string: 'nowhere', new_string: 'x' });" }),
+            &ctx,
+        )
+        .expect_err("uncaught, so the call fails");
+        assert!(thrown.contains("ToolError: old_string is not in "), "{thrown}");
+        assert!(thrown.contains("at <cell 5>: await Edit("), "{thrown}");
+
+        // Several at once are several connections, each answered.
+        let together = execute(
+            "TsCode",
+            &json!({ "code": "(await Promise.all([1, 2, 3, 4, 5, 6].map((n) => Write({ path: `p${n}.txt`, content: String(n) })))).length;" }),
+            &ctx,
+        )
+        .expect("six writes");
+        assert_eq!(together, "6");
+        assert_eq!(std::fs::read_to_string(dir.join("p6.txt")).expect("written"), "6");
+
+        typescript.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The same mode in the other language: keyword arguments or one dict, a `ToolError` to
+    /// catch, and nothing else different.
+    #[cfg(unix)]
+    #[test]
+    fn a_code_only_agent_in_python_calls_the_same_tools_as_functions() {
+        let dir = scratch("only-py");
+        let ctx = only_in(&dir, "only-py", CodeTools::ONLY_PYTHON, Hub::default());
+        let python = crate::backends::interpreter::Interpreter::new(Language::Python, ctx.agent_dir, ctx.conv);
+
+        let declared = declarations_with(ctx.code, &ctx.mcp.ids());
+        assert_eq!(declared.len(), 1);
+        assert_eq!(declared[0].name, "PyCode");
+        assert!(declared[0].description.contains("`Read(path=…, limit=None, offset=None)`"), "{}", declared[0].description);
+        let refused = execute("TsCode", &json!({ "code": "1" }), &ctx).expect_err("the other language is not its tool");
+        assert_eq!(refused, "no tool named TsCode — the tools you have are: PyCode");
+
+        let ran = execute(
+            "PyCode",
+            &json!({ "code": "
+wrote = Write(path='notes/a.txt', content='one\\ntwo\\n')
+edited = Edit({'path': 'notes/a.txt', 'old_string': 'two', 'new_string': 'three'})
+text = Read(path='notes/a.txt')
+try:
+    Read(path='no-such-file')
+except ToolError as error:
+    failed = '%s | %s' % (error.tool, str(error)[:13])
+print(text)
+print(failed, '|', open('notes/a.txt').read() == 'one\\nthree\\n', '|', 'a.txt:2: three' in Grep(pattern='thr+ee'))
+" }),
+            &ctx,
+        )
+        .expect("the cell runs");
+        assert_eq!(ran, "one\nthree\nRead | couldn't read | True | True");
+
+        // A call on a line of its own shows what the tool answered, as the tool said it.
+        let shown = execute(
+            "PyCode",
+            &json!({ "code": "Write(path='notes/b.txt', content='x')\nkept = 1\nRead(path='notes/a.txt')" }),
+            &ctx,
+        )
+        .expect("a cell of bare calls");
+        let lines: Vec<&str> = shown.lines().collect();
+        assert_eq!(lines.len(), 3, "{shown}");
+        assert!(lines[0].starts_with("wrote ") && lines[0].ends_with("notes/b.txt (1 bytes)"), "{shown}");
+        assert_eq!(&lines[1..], ["one", "three"], "{shown}");
+
+        let raised = execute(
+            "PyCode",
+            &json!({ "code": "Edit(path='notes/a.txt', old_string='nowhere', new_string='x')" }),
+            &ctx,
+        )
+        .expect_err("uncaught, so the call fails");
+        assert!(raised.contains("ToolError: old_string is not in "), "{raised}");
+        assert!(raised.contains("<cell 3>"), "{raised}");
+
+        python.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// One directory, whoever is asked: a relative path means to `Write` what it means to the
+    /// code calling it, and a `cd` or an `export` inside `Bash` has moved the code by the time
+    /// the call returns — as the code's own had moved `Bash` before it started.
+    #[cfg(unix)]
+    #[test]
+    fn code_and_the_tools_it_calls_stand_in_one_place() {
+        for (code, name, tag, moves) in [
+            (
+                CodeTools::ONLY_TYPESCRIPT,
+                "TsCode",
+                "only-place-ts",
+                "process.chdir('sub');
+                 process.env.FROM_CODE = 'code';
+                 const wrote = await Write({ path: 'here.txt', content: 'x' });
+                 const out = await Bash({ command: 'pwd; echo $FROM_CODE; cd ..; export FROM_BASH=bash' });
+                 const said = out.split('\\n');
+                 console.log(said[0].endsWith('/sub'), said[1], process.cwd().endsWith('/sub'), process.env.FROM_BASH, process.env.FROM_CODE);",
+            ),
+            (
+                CodeTools::ONLY_PYTHON,
+                "PyCode",
+                "only-place-py",
+                "os.chdir('sub')\nos.environ['FROM_CODE'] = 'code'\nwrote = Write(path='here.txt', content='x')\nsaid = Bash(command='pwd; echo $FROM_CODE; cd ..; export FROM_BASH=bash').split('\\n')\nprint(str(said[0].endswith('/sub')).lower(), said[1], str(os.getcwd().endswith('/sub')).lower(), os.environ.get('FROM_BASH'), os.environ.get('FROM_CODE'))",
+            ),
+        ] {
+            let dir = scratch(tag);
+            std::fs::create_dir_all(dir.join("sub")).expect("mkdir");
+            let ctx = only_in(&dir, tag, code, Hub::default());
+            let language = if name == "TsCode" { Language::TypeScript } else { Language::Python };
+            let interpreter = crate::backends::interpreter::Interpreter::new(language, ctx.agent_dir, ctx.conv);
+
+            let ran = execute(name, &json!({ "code": moves }), &ctx).expect("the cell runs");
+            assert_eq!(ran, "true code false bash code", "{name}");
+            assert!(dir.join("sub/here.txt").exists(), "{name}: written where the code stood");
+
+            interpreter.stop();
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// The tools that are not about files work from code as they do for a model: a wake
+    /// registered from a cell is a wake of this conversation's.
+    #[cfg(unix)]
+    #[test]
+    fn a_wake_asked_for_from_code_is_this_conversations() {
+        let dir = scratch("only-await");
+        let ctx = only_in(&dir, "only-await", CodeTools::ONLY_TYPESCRIPT, Hub::default());
+        let typescript = crate::backends::interpreter::Interpreter::new(Language::TypeScript, ctx.agent_dir, ctx.conv);
+
+        let said = execute(
+            "TsCode",
+            &json!({ "code": "await Await({ after_seconds: 3600, note: 'look at the build again' });" }),
+            &ctx,
+        )
+        .expect("registered");
+        let pending = ctx.awaits.for_conversation("watcher", "conv-1");
+        assert_eq!(pending.len(), 1, "{said}");
+        assert_eq!(pending[0].note, "look at the build again");
+        assert!(said.contains(&pending[0].id), "the cell ended with the call, so its answer is shown: {said}");
+
+        typescript.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An MCP server attached to the agent is an object in the code: asked what it offers, called
+    /// by name either way, answering with its structured result where it has one — and failing
+    /// as an exception where the server says the call failed. From both languages.
+    #[cfg(unix)]
+    #[test]
+    fn code_reaches_the_agents_mcp_servers() {
+        let dir = scratch("only-mcp");
+        let hub = crate::backends::mcp_hub::fake::stdio_hub(&dir);
+        let ctx = only_in(&dir, "only-mcp", CodeTools::ONLY_TYPESCRIPT, hub.clone());
+        let typescript = crate::backends::interpreter::Interpreter::new(Language::TypeScript, ctx.agent_dir, ctx.conv);
+
+        let declared = declarations_with(ctx.code, &ctx.mcp.ids());
+        assert!(declared[0].description.contains("`mcp.fake`"), "the server is named: {}", declared[0].description);
+
+        let ran = execute(
+            "TsCode",
+            &json!({ "code": "
+                const offered = await mcp.fake.tools();
+                const said = await mcp.fake.echo({ text: 'hi' });
+                const counted = await mcp.fake.call('count', {});
+                let failed = '';
+                try { await mcp.fake.fail({}); } catch (error) { failed = `${error.name}: ${error.message}`; }
+                console.log(offered.map((tool) => tool.name).join(','), '|', said.split('\\n')[0], '|', counted.calls, '|', failed, '|', Object.keys(mcp).join(','));
+            " }),
+            &ctx,
+        )
+        .expect("the cell runs");
+        assert_eq!(ran, "echo,count | you said hi | 2 | ToolError: no such workflow | fake");
+
+        // The same server, from Python, in the same turn: it is the process's connection, not
+        // the interpreter's — the count goes on from where TypeScript left it.
+        let ctx = Ctx {
+            code: CodeTools::ONLY_PYTHON,
+            ..ctx
+        };
+        let python = crate::backends::interpreter::Interpreter::new(Language::Python, ctx.agent_dir, ctx.conv);
+        let ran = execute(
+            "PyCode",
+            &json!({ "code": "
+offered = [tool['name'] for tool in mcp.fake.tools()]
+said = mcp.fake.echo(text='hi')
+counted = mcp['fake'].call('count')
+try:
+    mcp.fake.fail()
+except ToolError as error:
+    failed = 'ToolError: %s' % error
+print(','.join(offered), '|', said.split('\\n')[0], '|', counted['calls'], '|', failed, '|', ','.join(mcp))
+" }),
+            &ctx,
+        )
+        .expect("the cell runs");
+        assert_eq!(ran, "echo,count | you said hi | 5 | ToolError: no such workflow | fake");
+
+        typescript.stop();
+        python.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Nothing a cell calls outlasts the cell. A command started through `Bash` from code is
+    /// stopped at the cell's own deadline, the call comes back about then rather than when the
+    /// command would have ended, and the interpreter — with what it held — is still there.
+    #[cfg(unix)]
+    #[test]
+    fn a_tool_called_from_code_ends_with_the_cells_deadline() {
+        for (code, name, tag, kept, slow, look) in [
+            (CodeTools::ONLY_TYPESCRIPT, "TsCode", "only-deadline-ts", "const kept = 7;", "await Bash({ command: 'sleep 30' });", "kept;"),
+            (CodeTools::ONLY_PYTHON, "PyCode", "only-deadline-py", "kept = 7", "Bash(command='sleep 30')", "kept"),
+        ] {
+            let dir = scratch(tag);
+            let ctx = only_in(&dir, tag, code, Hub::default());
+            let language = if name == "TsCode" { Language::TypeScript } else { Language::Python };
+            let interpreter = crate::backends::interpreter::Interpreter::new(language, ctx.agent_dir, ctx.conv);
+            execute(name, &json!({ "code": kept }), &ctx).expect("a first cell");
+
+            let began = std::time::Instant::now();
+            let said = execute(name, &json!({ "code": slow, "timeout_ms": 700 }), &ctx)
+                .expect_err("a timeout fails the call");
+            assert!(began.elapsed() < std::time::Duration::from_secs(12), "{name}: took {:?}", began.elapsed());
+            assert!(said.contains("still running after 700ms"), "{name}: {said}");
+            assert!(said.contains("variables are intact"), "{name}: {said}");
+
+            let after = execute(name, &json!({ "code": look }), &ctx).expect("the interpreter survived");
+            assert_eq!(after, "7", "{name}");
+
+            interpreter.stop();
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// The interpreter cannot be called from inside itself, and a name that is no tool at all is
+    /// answered with the functions there are — not with the one-tool list a model is declared.
+    #[cfg(unix)]
+    #[test]
+    fn from_code_the_code_tools_are_not_functions_and_an_unknown_name_lists_the_ones_that_are() {
+        let dir = scratch("only-inner");
+        let ctx = only_in(&dir, "only-inner", CodeTools::ONLY_TYPESCRIPT, Hub::default());
+        let soon = std::time::Instant::now() + std::time::Duration::from_secs(5);
+
+        let own = execute_inner("TsCode", &json!({ "code": "1" }), &ctx, soon).expect_err("refused");
+        assert!(own.contains("already running in"), "{own}");
+        let unknown = execute_inner("Fetch", &json!({}), &ctx, soon).expect_err("no such tool");
+        assert_eq!(
+            unknown,
+            "no tool named Fetch — the functions there are: Read, Write, Edit, Bash, Glob, Grep, Await, Ask, Report"
+        );
+        assert!(
+            !dir.join("conv-1.ts-kernel").exists(),
+            "and no interpreter was started to say so"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A background script outlives the turn that could have answered its tool calls, so it has
+    /// none — and a script that reaches for one is told that, in words, rather than that the name
+    /// does not exist.
+    #[cfg(unix)]
+    #[test]
+    fn a_background_script_of_a_code_only_agent_is_told_its_tools_are_not_there() {
+        for (language, script) in [
+            (Language::TypeScript, "try { await Read({ path: 'x' }); } catch (error) { console.log(error.name, '-', error.message); }"),
+            (Language::Python, "try:\n    Read(path='x')\nexcept ToolError as error:\n    print('ToolError', '-', error)"),
+        ] {
+            let dir = scratch(&format!("only-job-{}", language.name()));
+            let interpreter = crate::backends::interpreter::Interpreter::new(language, &dir, "conv-1");
+            let names: Vec<&str> = inner().map(|spec| spec.name).collect();
+            let command = interpreter.job_command(script, &names).expect("command");
+            let out = Command::new("sh").arg("-c").arg(command).current_dir(&dir).output().expect("sh");
+            let said = String::from_utf8_lossy(&out.stdout);
+            assert!(
+                said.starts_with("ToolError - Read can only be called while a cell of yours is running"),
+                "{}: {said}{}",
+                language.name(),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 }

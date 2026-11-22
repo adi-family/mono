@@ -124,6 +124,10 @@ pub(crate) enum AgentsCommand {
         tscode: bool,
         #[arg(long, conflicts_with = "tscode")]
         no_tscode: bool,
+        #[arg( long, value_name = "LANGUAGE", num_args = 0..=1, require_equals = true, default_missing_value = "typescript" )]
+        code_only: Option<String>,
+        #[arg(long, conflicts_with = "code_only")]
+        no_code_only: bool,
         #[arg(long = "prelude", value_name = "COMMAND")]
         prelude: Vec<String>,
         #[arg(long, conflicts_with = "prelude")]

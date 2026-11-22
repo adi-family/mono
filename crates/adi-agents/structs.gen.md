@@ -4,11 +4,11 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-165 structs · 48 enums · 5 type aliases across 64 files.
+172 structs · 51 enums · 5 type aliases across 66 files.
 
 ## Index
 
-- [`src/agent.rs`](#srcagentrs) — `RawAgentArguments`, `StoredAgentManifest`, `StoredAgent`, `SecretAttachment`, `AgentManifest`, `Agent`
+- [`src/agent.rs`](#srcagentrs) — `RawAgentArguments`, `CodeOnly`, `StoredAgentManifest`, `StoredAgent`, `SecretAttachment`, `AgentManifest`, `Agent`
 - [`src/analytics/mod.rs`](#srcanalyticsmodrs) — `PromptToken`, `Source`, `Shape`, `Site`, `Repeat`, `NearDuplicates`, `TokenReport`, `Options`, `Segment`
 - [`src/analytics/suffix.rs`](#srcanalyticssuffixrs) — `RawRepeat`
 - [`src/arguments.rs`](#srcargumentsrs) — `PtyClaudeArguments`, `ProcessClaudeArguments`, `PtyCodexArguments`, `ProcessCodexArguments`, `HarnessClaudeSdkArguments`, `HarnessAdiArguments`, `AgentSummaryArguments`, `Boolish`, `U64ish`, `F64ish`
@@ -16,6 +16,7 @@
 - [`src/awaits.rs`](#srcawaitsrs) — `Await`, `Cause`, `Woken`, `Retired`, `Awaits`, `Request`, `Caller`, `Change`, `CheckOutcome`
 - [`src/backend.rs`](#srcbackendrs) — `Backend`
 - [`src/backends/adi_events.rs`](#srcbackendsadi_eventsrs) — `Sink`
+- [`src/backends/code_only.rs`](#srcbackendscode_onlyrs) — `Door`
 - [`src/backends/codex_stream.rs`](#srcbackendscodex_streamrs) — `Failure`
 - [`src/backends/detached.rs`](#srcbackendsdetachedrs) — `Spawned`
 - [`src/backends/harness/adi_loop.rs`](#srcbackendsharnessadi_looprs) — `ToolCall`, `ToolResult`, `Reply`, `Calls`, `RunCtx`, `Wire`, `Said`, `Encoded`, `ImageStore`, `OpenAiDialect`, `HttpCtx`, `ContextLimit`, `FailureReport`
@@ -25,6 +26,7 @@
 - [`src/backends/interpreter.rs`](#srcbackendsinterpreterrs) — `Language`, `Interpreter`, `Ended`, `Ran`, `Live`, `Unanswered`
 - [`src/backends/jobs.rs`](#srcbackendsjobsrs) — `Job`
 - [`src/backends/mcp.rs`](#srcbackendsmcprs) — `ToolScope`, `Standing`
+- [`src/backends/mcp_hub.rs`](#srcbackendsmcp_hubrs) — `Hub`, `Inner`, `Outcome`, `Client`, `Link`, `Failed`, `StdioLink`, `HttpLink`
 - [`src/backends/process/codex.rs`](#srcbackendsprocesscodexrs) — `Continuation`
 - [`src/backends/shell.rs`](#srcbackendsshellrs) — `Shell`
 - [`src/dispatch.rs`](#srcdispatchrs) — `Dispatched`
@@ -81,6 +83,20 @@
 
 ```rust
 pub type RawAgentArguments = BTreeMap<String, serde_json::Value>;
+```
+
+### enum `CodeOnly`
+
+The language a code-only agent writes — see `AgentManifest::code_only`.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CodeOnly {
+    #[default]
+    TypeScript,
+    Python,
+}
 ```
 
 ### type `StoredAgentManifest`
@@ -152,6 +168,8 @@ pub struct AgentManifest<Args> {
     pub pycode: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub tscode: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_only: Option<CodeOnly>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub created_by: String,
     pub created_at: u64,
@@ -783,6 +801,22 @@ pub(crate) type Sink<'a> = &'a mut dyn Write;
 
 ---
 
+## `src/backends/code_only.rs`
+
+### struct `Door`
+
+The socket a cell's tool functions connect to, in a directory of its own.
+
+```rust
+struct Door {
+    dir: PathBuf,
+    path: PathBuf,
+    listener: UnixListener,
+}
+```
+
+---
+
 ## `src/backends/codex_stream.rs`
 
 ### struct `Failure`
@@ -879,7 +913,7 @@ struct RunCtx<'a> {
     round: u64,
     max_rounds: u64,
     session: Option<(&'a Path, &'a str)>,
-    code: tools::CodeTools,
+    tools: Vec<tools::ToolDeclaration>,
 }
 ```
 
@@ -1078,6 +1112,7 @@ pub(crate) struct Ctx<'a> {
     pub agent_dir: &'a Path,
     pub unattended: bool,
     pub code: CodeTools,
+    pub mcp: Hub,
 }
 ```
 
@@ -1090,6 +1125,7 @@ Which of the code tools — `PyCode`, `TsCode` — an agent has.
 pub struct CodeTools {
     pub python: bool,
     pub typescript: bool,
+    pub only: bool,
 }
 ```
 
@@ -1234,13 +1270,114 @@ pub(crate) struct ToolScope {
 
 ### struct `Standing`
 
-What an agent's definition says about the tools this server hands out: the two things that are the agent's to decide rather than the conversation's.
+What an agent's definition says about the tools this server hands out: the things that are the agent's to decide rather than the conversation's.
 
 ```rust
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Clone, Default)]
 pub(crate) struct Standing {
     pub(crate) unattended: bool,
     pub(crate) code: CodeTools,
+    pub(crate) mcp: Hub,
+}
+```
+
+---
+
+## `src/backends/mcp_hub.rs`
+
+### struct `Hub`
+
+The MCP servers one conversation's scripts may call. Cheap to clone — every clone is the same set of connections.
+
+```rust
+#[derive(Clone, Default)]
+pub(crate) struct Hub {
+    inner: Arc<Inner>,
+}
+```
+
+### struct `Inner`
+
+```rust
+#[derive(Default)]
+struct Inner {
+    servers: Vec<ResolvedMcpServer>,
+    cwd: PathBuf,
+    live: Mutex<BTreeMap<String, Arc<Mutex<Client>>>>,
+}
+```
+
+### struct `Outcome`
+
+What a `tools/call` came to.
+
+```rust
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Outcome {
+    pub(crate) text: String,
+    pub(crate) value: Option<Value>,
+    pub(crate) is_error: bool,
+}
+```
+
+### struct `Client`
+
+One server, and the connection to it once there is one.
+
+```rust
+struct Client {
+    server: ResolvedMcpServer,
+    cwd: PathBuf,
+    link: Option<Link>,
+}
+```
+
+### enum `Link`
+
+```rust
+enum Link {
+    Stdio(StdioLink),
+    Http(HttpLink),
+}
+```
+
+### enum `Failed`
+
+Why a request got no result.
+
+```rust
+enum Failed {
+    Refused(String),
+    Broken(String),
+}
+```
+
+### struct `StdioLink`
+
+A server that is a child process.
+
+```rust
+struct StdioLink {
+    child: Child,
+    stdin: ChildStdin,
+    incoming: mpsc::Receiver<Value>,
+    stderr: Arc<Mutex<String>>,
+    next: u64,
+}
+```
+
+### struct `HttpLink`
+
+A server reached over Streamable HTTP.
+
+```rust
+struct HttpLink {
+    client: reqwest::blocking::Client,
+    url: String,
+    headers: Vec<(String, String)>,
+    session: Option<String>,
+    protocol: Option<String>,
+    next: u64,
 }
 ```
 
@@ -1270,6 +1407,7 @@ pub(crate) enum Continuation<'a> {
 One conversation's shell state, as the two files holding it.
 
 ```rust
+#[derive(Clone)]
 pub(crate) struct Shell {
     cwd: PathBuf,
     env: PathBuf,
@@ -3188,6 +3326,7 @@ pub struct RunSpec {
     pub spawn_note: Option<String>,
     pub marker_note: Option<String>,
     pub mcp_servers: Vec<crate::mcp_servers::ResolvedMcpServer>,
+    pub code: crate::CodeTools,
 }
 ```
 

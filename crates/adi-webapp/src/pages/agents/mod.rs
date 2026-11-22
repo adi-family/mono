@@ -337,6 +337,9 @@ pub(crate) fn agent_detail_view(state: State, form: AgentsForm, route: RwSignal<
                     // both, on or off.
                     pycode: Some(form.pycode.get()),
                     tscode: Some(form.tscode.get()),
+                    // …and the mode over them, stated the same way: empty is "off", said out
+                    // loud, where a form that never offered it would say nothing.
+                    code_only: Some(form.code_only.get()),
                     // The ordered backend list — this agent's whole model configuration, and this
                     // is the form that owns it, so it states the list even when it is empty. An
                     // agent that lists none falls back to its runtime's own settings, which is what

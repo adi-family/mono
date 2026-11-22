@@ -101,4 +101,10 @@ pub struct RunSpec {
     /// MCP reads this to build its own `--mcp-config`; one that does not refuses to launch at all
     /// rather than launch with the servers silently missing (`Runner::check`).
     pub mcp_servers: Vec<crate::mcp_servers::ResolvedMcpServer>,
+    /// Which code tools the agent has, and whether one of them is all it has
+    /// ([`CodeTools::only`](crate::CodeTools)). Read by a runner for that second fact alone: a
+    /// code-only agent's engine is launched with none of its own tools and none of
+    /// [`mcp_servers`](Self::mcp_servers), because for such an agent those are functions its code
+    /// calls rather than tools its model is declared.
+    pub code: crate::CodeTools,
 }

@@ -1432,6 +1432,9 @@ pub(crate) struct AgentsForm {
     pub(crate) pycode: RwSignal<bool>,
     /// Whether the agent has `TsCode` — the same in TypeScript. Independent of `pycode`.
     pub(crate) tscode: RwSignal<bool>,
+    /// The agent's code-only language — `typescript`, `python`, or empty for an agent with its
+    /// ordinary tools. A select's value, hence a string rather than a switch.
+    pub(crate) code_only: RwSignal<String>,
     /// The agent's ordered LLM backend list — its whole model configuration. Row 1 is what a new
     /// conversation starts on, the rest are where it goes when one runs out. The agent itself
     /// carries no model, provider or login: those are the backend's, named here in order.
@@ -1485,6 +1488,7 @@ impl AgentsForm {
             unattended: RwSignal::new(false),
             pycode: RwSignal::new(false),
             tscode: RwSignal::new(false),
+            code_only: RwSignal::new(String::new()),
             llm_rows: RwSignal::new(Vec::new()),
             llm_drag_from: RwSignal::new(None),
             llm_row_open: RwSignal::new(None),

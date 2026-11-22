@@ -62,8 +62,7 @@ impl PtyRunner {
                         with_knowledge(spec, with_workspace(spec, config.append_system_prompt)),
                     ),
                 );
-                let mut tools = crate::backends::mcp::scope_tools(config.allowed_tools.as_deref());
-                crate::backends::mcp::grant_servers(&mut tools, &spec.mcp_servers);
+                let tools = crate::backends::mcp::run_scope(spec, config.allowed_tools.as_deref());
                 Ok(pty::claude::argv(
                     &config,
                     Some(&crate::backends::mcp::config(spec, session)),
@@ -92,6 +91,7 @@ impl Runner for PtyRunner {
         match &self.backend {
             Backend::PtyClaude => decode::<PtyClaudeArguments>(&spec.arguments).map(drop),
             Backend::PtyCodex => {
+                crate::backends::mcp::refuse_code_only(&self.backend, spec.code)?;
                 crate::backends::mcp::refuse_unless_supported(&self.backend, &spec.mcp_servers)?;
                 decode::<PtyCodexArguments>(&spec.arguments).map(drop)
             }
@@ -342,6 +342,7 @@ mod tests {
             spawn_note: None,
             marker_note: None,
             mcp_servers: Vec::new(),
+            code: crate::CodeTools::default(),
         }
     }
 

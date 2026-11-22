@@ -93,7 +93,11 @@ use super::shell::Shell;
 /// 2: a Python cell shows its last expression rather than every one, and both interpreters have
 /// `share`/`shared`. Nothing on the wire moved, but a conversation whose interpreter outlived an
 /// upgrade would otherwise keep the old behaviour under a description of the new one.
-const PROTOCOL: u64 = 2;
+///
+/// 3: a request may carry `tools` — where the cell's tool functions are answered, for a code-only
+/// agent (see [`super::code_only`]). An interpreter that predates it would run such a cell with
+/// none of the functions its description promises.
+const PROTOCOL: u64 = 3;
 
 /// How long an interpreter nobody calls stays up. An hour is a conversation still in progress —
 /// a build awaited, a person answering — while anything longer is most likely a conversation that
@@ -269,13 +273,17 @@ impl Interpreter {
     /// Run `code` in the conversation's interpreter, starting one if there is none.
     ///
     /// `home` is the run's own directory, where a conversation that has not moved stands.
-    /// `max_output` is how many bytes of what the cell printed may come back.
+    /// `max_output` is how many bytes of what the cell printed may come back. `tools` is what a
+    /// code-only agent's cell is told about the functions it may call — where they are answered,
+    /// and what they are called (see [`super::code_only::serving`]); `None` for every other
+    /// agent, whose cells have none.
     ///
     /// # Errors
     /// A message for the model when there is no interpreter to be had (its program is not on the
     /// machine, or it would not start), or when the one that ran the cell had to be ended or died
     /// under it. A cell that *raised* is not an error here — it ran, and [`Ran::ended`] says how
     /// it went.
+    #[allow(clippy::too_many_arguments)] // one cell's whole request, each part from somewhere else
     pub(crate) fn run(
         &self,
         shell: &Shell,
@@ -284,6 +292,7 @@ impl Interpreter {
         timeout_ms: u64,
         max_output: usize,
         restart: bool,
+        tools: Option<&Value>,
     ) -> Result<Ran, String> {
         let name = self.language.name();
         // Asked before anything is started or stopped: a state file with nobody behind it is the
@@ -298,12 +307,15 @@ impl Interpreter {
         };
         let replaced = started && had && !restart;
 
-        let request = json!({
+        let mut request = json!({
             "code": code,
             "timeout_ms": timeout_ms,
             "max_output": max_output,
             "env": launch_environment(),
         });
+        if let Some(tools) = tools {
+            request["tools"] = tools.clone();
+        }
         let sent = writeln!(live.stream, "{request}").and_then(|()| live.stream.flush());
         if let Err(e) = sent {
             return Err(format!("couldn't reach the {name} interpreter: {e}"));
@@ -377,9 +389,13 @@ impl Interpreter {
     /// echoing of top-level expressions; it does not get the conversation's variables, and the
     /// tool's description says so.
     ///
+    /// `absent` names the tool functions the script does *not* have — a code-only agent's, which
+    /// exist only while a cell runs (see [`super::code_only`]). They are named so that calling
+    /// one says why it is not there, rather than that nothing by that name was ever defined.
+    ///
     /// # Errors
     /// A message for the model if the script cannot be written.
-    pub(crate) fn job_command(&self, code: &str) -> Result<String, String> {
+    pub(crate) fn job_command(&self, code: &str, absent: &[&str]) -> Result<String, String> {
         self.install()
             .map_err(|e| format!("couldn't write the interpreter's source: {e}"))?;
         let tag = self.language.tag();
@@ -394,11 +410,20 @@ impl Interpreter {
         // A job cannot see the conversation's variables, so what it shares is how its result
         // gets back: it is given the same place to put it.
         let shared = quote(&self.shared_prefix().display().to_string());
+        let absent = if absent.is_empty() {
+            String::new()
+        } else {
+            format!(" --absent {}", quote(&absent.join(",")))
+        };
         Ok(match self.language {
             // `-u`: a job's output is a log somebody may read while it runs, so it is written
             // through as it happens rather than when a buffer fills.
-            Language::Python => format!("exec {program} -u {script} run {cell} --shared {shared}"),
-            Language::TypeScript => format!("exec {program} {script} run {cell} --shared {shared}"),
+            Language::Python => {
+                format!("exec {program} -u {script} run {cell} --shared {shared}{absent}")
+            }
+            Language::TypeScript => {
+                format!("exec {program} {script} run {cell} --shared {shared}{absent}")
+            }
         })
     }
 
@@ -695,13 +720,13 @@ mod tests {
 
         fn run_for(&self, code: &str, timeout_ms: u64) -> Ran {
             self.code
-                .run(&self.shell, &self.home, code, timeout_ms, 32_000, false)
+                .run(&self.shell, &self.home, code, timeout_ms, 32_000, false, None)
                 .expect("the interpreter runs the cell")
         }
 
         /// A cell through the interpreter's background door: the command a job would run, run.
         fn job(&self, code: &str) -> std::process::Output {
-            let command = self.code.job_command(code).expect("command");
+            let command = self.code.job_command(code, &[]).expect("command");
             Command::new("sh")
                 .arg("-c")
                 .arg(command)
@@ -787,7 +812,7 @@ mod tests {
         let conv = Conversation::new("share");
         let ts = Interpreter::new(Language::TypeScript, &conv.home, "conv");
         let in_ts = |code: &str| {
-            ts.run(&conv.shell, &conv.home, code, 30_000, 32_000, false)
+            ts.run(&conv.shell, &conv.home, code, 30_000, 32_000, false, None)
                 .expect("typescript")
         };
 
@@ -827,7 +852,7 @@ mod tests {
         let ts_job = Command::new("sh")
             .arg("-c")
             .arg(
-                ts.job_command("share('from-ts-job', (shared('totals') as any).top);")
+                ts.job_command("share('from-ts-job', (shared('totals') as any).top);", &[])
                     .expect("command"),
             )
             .current_dir(&conv.home)
@@ -853,6 +878,7 @@ mod tests {
                 30_000,
                 32_000,
                 true,
+                None,
             )
             .expect("run");
         assert_eq!(after.output.trim(), "(False, 59409)");
@@ -869,7 +895,7 @@ mod tests {
         let conv = Conversation::new("share-errors");
         let ts = Interpreter::new(Language::TypeScript, &conv.home, "conv");
         let in_ts = |code: &str| {
-            ts.run(&conv.shell, &conv.home, code, 30_000, 32_000, false)
+            ts.run(&conv.shell, &conv.home, code, 30_000, 32_000, false, None)
                 .expect("typescript")
         };
 
@@ -1117,6 +1143,7 @@ mod tests {
                 30_000,
                 32_000,
                 true,
+                None,
             )
             .expect("run");
         assert!(!asked.replaced, "it asked for this one");
@@ -1136,6 +1163,7 @@ mod tests {
                 30_000,
                 2_000,
                 false,
+                None,
             )
             .expect("run");
         assert!(ran.output.starts_with("row 0\n"), "{}", ran.output);
@@ -1345,6 +1373,7 @@ mod tests {
                 30_000,
                 32_000,
                 false,
+                None,
             )
             .expect("python");
         assert_eq!(seen.output, format!("{awkward}\n"));
@@ -1410,6 +1439,7 @@ mod tests {
                 300,
                 32_000,
                 false,
+                None,
             )
             .expect_err("a cell that will not stop is an error");
         assert!(
@@ -1516,7 +1546,7 @@ mod tests {
         let conv = Conversation::ts("long");
         let ran = conv
             .code
-            .run(&conv.shell, &conv.home, "for (let i = 0; i < 5000; i++) console.log('row', i);\nthrow new Error('at the end');", 30_000, 2_000, false)
+            .run(&conv.shell, &conv.home, "for (let i = 0; i < 5000; i++) console.log('row', i);\nthrow new Error('at the end');", 30_000, 2_000, false, None)
             .expect("run");
         assert!(ran.output.starts_with("row 0\n"), "{}", ran.output);
         assert!(ran.output.contains("bytes omitted here"), "{}", ran.output);

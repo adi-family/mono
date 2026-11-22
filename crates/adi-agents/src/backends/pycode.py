@@ -7,7 +7,7 @@ Two ways in, one namespace:
       a namespace that outlives the call, and exits when it has been idle too long or when its
       state file is gone (the session was deleted) or names another kernel (it was replaced).
 
-  pycode.py run SCRIPT [--shared PREFIX]
+  pycode.py run SCRIPT [--shared PREFIX] [--absent NAMES]
       One cell in a fresh interpreter, for a background job: same helpers, same display of
       what it evaluates, nothing kept afterwards.
 
@@ -17,6 +17,10 @@ nowhere to install a dependency from.
 
 The Rust half is `interpreter.rs`, shared with `tscode.ts`; the wire is one JSON object per line, one request and
 one reply per connection.
+
+For a code-only agent a request also says where the cell's *tools* are answered, and the
+platform's other tools become functions for as long as the cell runs — see "the platform's
+tools, as functions" below.
 """
 
 import ast
@@ -316,6 +320,190 @@ def _tail(result, limit=4000):
     return "\n" + text
 
 
+# ───────────────────────────── the platform's tools, as functions ─────────────────────────────
+
+# A code-only agent has one tool — this interpreter — and reaches every other from inside a cell:
+# `Read(path=...)`, `mcp.n8n.call("list", {})`. The tools themselves are not here. They are code
+# in whoever is serving the turn (`code_only.rs`), which listens on a socket for as long as a cell
+# runs and says where in the cell's request. A call is one connection: a line of JSON out, a line
+# of JSON back.
+
+
+class ToolError(Exception):
+    """A tool called from code failed, or could not be reached. The message is what the tool
+    said."""
+
+    def __init__(self, message, tool=None):
+        super().__init__(message)
+        self.tool = tool
+
+
+# What the cell now running was told about its tools — where they are answered, what they are
+# called — or `None` between cells and for an agent that is not code-only.
+_DOOR = None
+
+# Around a tool that moves the conversation's shell: two functions, called before and after.
+# `Bash` starts where the shell was last recorded and records where it ends, so the cell's own
+# position is written down before the call and read back after it — a `cd` in either is then a
+# `cd` in both, mid-cell as between cells.
+_SHELL_SYNC = None
+
+
+class ToolText(str):
+    """What a tool answered with. A string in every way; a class of its own so that a call
+    standing on a line of its own shows what the tool said — as a bare `sh(...)` shows what a
+    command printed — rather than the quoted and escaped `repr` of it."""
+
+    __slots__ = ()
+
+
+def _ask(tool, message):
+    """Send one call through the door and return its answer."""
+    door = _DOOR
+    if door is None:
+        raise ToolError(
+            "%s can only be called while a cell of yours is running: not from a background "
+            "script, and not from a thread that outlived its cell" % tool,
+            tool,
+        )
+    try:
+        payload = json.dumps(message).encode("utf-8") + b"\n"
+    except (TypeError, ValueError) as error:
+        raise ToolError("%s: its arguments are not something JSON can hold (%s)" % (tool, error), tool) from None
+    conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    chunks = []
+    try:
+        # Blocking, and deliberately: the call's deadline arrives as an interrupt, which ends a
+        # wait here exactly as it ends one on a command.
+        conn.connect(door["socket"])
+        conn.sendall(payload)
+        while True:
+            chunk = conn.recv(1 << 16)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    except OSError as error:
+        raise ToolError("couldn't reach the platform for %s: %s" % (tool, error), tool) from None
+    finally:
+        conn.close()
+    try:
+        reply = json.loads(b"".join(chunks).decode("utf-8"))
+    except ValueError:
+        raise ToolError("%s got no answer" % tool, tool) from None
+    if not reply.get("ok"):
+        raise ToolError(str(reply.get("text") or "%s failed" % tool), tool)
+    return reply
+
+
+def _arguments(what, args, kwargs):
+    """A call's arguments: keywords, or one dict of them, or both."""
+    if len(args) > 1 or (args and not isinstance(args[0], dict)):
+        raise TypeError("%s takes keyword arguments, or one dict of them" % what)
+    given = dict(args[0]) if args else {}
+    given.update(kwargs)
+    return given
+
+
+def _tool(name):
+    """The platform tool called `name`, as a function of keyword arguments."""
+
+    def call(*args, **kwargs):
+        given = _arguments(name, args, kwargs)
+        sync = _SHELL_SYNC if name == "Bash" else None
+        if sync:
+            sync[0]()
+        try:
+            return ToolText(_ask(name, {"tool": name, "input": given, "cwd": os.getcwd()}).get("text") or "")
+        finally:
+            if sync:
+                sync[1]()
+
+    call.__name__ = call.__qualname__ = name
+    call.__doc__ = "The platform's %s tool: returns the text it answers with, raises ToolError when it fails." % name
+    return call
+
+
+class _McpServer:
+    """One MCP server attached to the agent: `tools()` lists what it offers, `call(name, {...})`
+    calls one, and any other attribute is that call — `mcp.n8n.list_workflows(active=True)`."""
+
+    def __init__(self, id):
+        self._id = id
+
+    def tools(self):
+        return _ask("mcp.%s.tools" % self._id, {"mcp": self._id, "list": True}).get("value") or []
+
+    def call(self, tool, *args, **kwargs):
+        if not isinstance(tool, str) or not tool:
+            raise TypeError("mcp.%s.call takes the tool's name first: call('name', {...})" % self._id)
+        what = "mcp.%s.%s" % (self._id, tool)
+        reply = _ask(what, {"mcp": self._id, "tool": tool, "input": _arguments(what, args, kwargs)})
+        value = reply.get("value")
+        return value if value is not None else ToolText(reply.get("text") or "")
+
+    def __getattr__(self, tool):
+        if tool.startswith("_"):
+            raise AttributeError(tool)
+        return lambda *args, **kwargs: self.call(tool, *args, **kwargs)
+
+    def __repr__(self):
+        return "<MCP server %s: .tools() lists what it offers, .call(name, {...}) calls one>" % self._id
+
+
+class _Mcp:
+    """The MCP servers attached to the agent, by id: `mcp.n8n`, `mcp["my-server"]`."""
+
+    def __init__(self, ids):
+        self._servers = {id: _McpServer(id) for id in ids}
+
+    def _missing(self, id):
+        return "no MCP server named %s is attached to you — %s" % (
+            id,
+            ("the ones that are: " + ", ".join(self._servers)) if self._servers else "none is",
+        )
+
+    def __getattr__(self, id):
+        if id.startswith("_"):
+            raise AttributeError(id)
+        try:
+            return self._servers[id]
+        except KeyError:
+            raise AttributeError(self._missing(id)) from None
+
+    def __getitem__(self, id):
+        try:
+            return self._servers[id]
+        except KeyError:
+            raise KeyError(self._missing(id)) from None
+
+    def __iter__(self):
+        return iter(self._servers)
+
+    def __len__(self):
+        return len(self._servers)
+
+    def __dir__(self):
+        return list(self._servers)
+
+    def __repr__(self):
+        return "<MCP servers: %s>" % (", ".join(self._servers) or "none")
+
+
+def _offer(ns, tools, sync=None):
+    """Put a cell's tools in reach, or take them away again. The functions are names in the
+    cell's namespace, set afresh for every cell that is offered them, so a cell that happened to
+    define a `Read` of its own does not cost the next one the tool."""
+    global _DOOR, _SHELL_SYNC
+    _DOOR = tools or None
+    _SHELL_SYNC = sync if tools else None
+    if not tools:
+        return
+    for name in tools.get("names") or []:
+        ns[name] = _tool(name)
+    ns["ToolError"] = ToolError
+    ns["mcp"] = _Mcp(tools.get("servers") or [])
+
+
 # ───────────────────────────── running one cell ─────────────────────────────
 
 
@@ -530,6 +718,11 @@ class Cells:
             text = repr(value)
             if text:
                 print(text)
+            return
+        if isinstance(value, ToolText):
+            # What a tool answered, standing on a line of its own: shown as the tool said it.
+            if value.strip():
+                print(value.rstrip("\n"))
             return
         if not last or value is None:
             return
@@ -884,7 +1077,16 @@ class Kernel:
         os.dup2(out, 2)
         try:
             watcher.start()
-            status = self.cells.run(request.get("code") or "", timeout / 1000.0 if timeout else None)
+            # A code-only agent's cell is told where its tools are answered. For as long as it runs.
+            _offer(
+                self.cells.ns,
+                request.get("tools"),
+                (lambda: self.shared.save(base), lambda: self.shared.load(base)),
+            )
+            try:
+                status = self.cells.run(request.get("code") or "", timeout / 1000.0 if timeout else None)
+            finally:
+                _offer(self.cells.ns, None)
         finally:
             os.dup2(saved[0], 1)
             os.dup2(saved[1], 2)
@@ -924,10 +1126,17 @@ def _options(argv):
 def main(argv):
     if len(argv) >= 2 and argv[0] == "run":
         global _SHARED
-        _SHARED = _options(argv[2:]).get("shared")
+        given = _options(argv[2:])
+        _SHARED = given.get("shared")
         with open(argv[1]) as f:
             code = f.read()
         cells = Cells()
+        # A code-only agent's tools are functions only while a cell runs. Here they are names
+        # that say so when called, which is more use than a `NameError`.
+        if given.get("absent"):
+            for name in given["absent"].split(","):
+                cells.ns[name] = _tool(name)
+            cells.ns["ToolError"] = ToolError
         signal.signal(signal.SIGINT, cells.on_sigint)
         return 0 if cells.run(code) == "ok" else 1
     if argv and argv[0] == "kernel":

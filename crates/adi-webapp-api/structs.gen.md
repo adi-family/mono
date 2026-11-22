@@ -1909,6 +1909,8 @@ pub struct AgentDto {
     pub pycode: bool,
     #[serde(default)]
     pub tscode: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_only: Option<String>,
     #[serde(default)]
     pub runnable: bool,
     #[serde(default)]
@@ -2098,6 +2100,8 @@ pub struct SaveAgent {
     pub pycode: Option<bool>,
     #[serde(default)]
     pub tscode: Option<bool>,
+    #[serde(default)]
+    pub code_only: Option<String>,
     #[serde(default)]
     pub rename_from: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

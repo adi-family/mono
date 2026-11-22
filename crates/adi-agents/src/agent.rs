@@ -43,6 +43,60 @@ pub const RUNTIME_FROM_CHAIN: u32 = 3;
 /// different facts, and only one of them is something the store recorded.
 pub const UNVERSIONED: u32 = 0;
 
+/// The language a code-only agent writes — see [`AgentManifest::code_only`].
+///
+/// Stored as its lowercase name (`code_only = "typescript"`). TypeScript comes first because it
+/// is what the mode means when nobody says which: its interpreter runs on the one JavaScript
+/// runtime the platform itself puts on every machine, where Python has to already be there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CodeOnly {
+    #[default]
+    TypeScript,
+    Python,
+}
+
+impl CodeOnly {
+    /// The name it is stored and spoken under: `typescript`, `python`.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::TypeScript => "typescript",
+            Self::Python => "python",
+        }
+    }
+
+    /// The code tool an agent in this mode has, and has nothing else but.
+    #[must_use]
+    pub fn tool(self) -> &'static str {
+        match self {
+            Self::TypeScript => "TsCode",
+            Self::Python => "PyCode",
+        }
+    }
+}
+
+impl std::str::FromStr for CodeOnly {
+    type Err = String;
+
+    /// The stored name, or what somebody typing a flag is likely to write instead of it.
+    fn from_str(text: &str) -> std::result::Result<Self, String> {
+        match text.trim().to_ascii_lowercase().as_str() {
+            "typescript" | "ts" | "tscode" => Ok(Self::TypeScript),
+            "python" | "py" | "pycode" => Ok(Self::Python),
+            other => Err(format!(
+                "unknown code-only language `{other}` — it is `typescript` or `python`"
+            )),
+        }
+    }
+}
+
+impl std::fmt::Display for CodeOnly {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 pub type StoredAgentManifest = AgentManifest<RawAgentArguments>;
 
 pub type StoredAgent = Agent<RawAgentArguments>;
@@ -238,6 +292,22 @@ pub struct AgentManifest<Args> {
     /// [`pycode`](Self::pycode): an agent may have either, both or neither.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub tscode: bool,
+    /// Code-only: this agent's single tool is its interpreter, in the language named here, and
+    /// everything else it can do is a function its code calls.
+    ///
+    /// Set, the agent is declared exactly one tool — `TsCode` or `PyCode` — whatever
+    /// [`pycode`](Self::pycode) and [`tscode`](Self::tscode) say, and none of its engine's own:
+    /// no `Read`, no `Bash`, no web search, none of the tools of its MCP servers. All of those
+    /// that are the platform's — the file tools, the shell, `Await`, `Ask`, `Report`, and every
+    /// tool of every server in [`mcp`](Self::mcp) — are instead functions inside the code (see
+    /// the crate's `backends::code_only`). What an engine ships of its own and the platform
+    /// cannot run for it — a Claude engine's web tools, to begin with — is simply gone: an agent
+    /// that needs the web fetches it from code.
+    ///
+    /// Absent — the default — is every agent as it was. A capability like the switches above,
+    /// and for the same reason not something a run can give itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_only: Option<CodeOnly>,
     /// Who created this definition, in [`crate::launcher`]'s vocabulary (`human`, `agent:<name>`,
     /// `automation`) — or `""` for every agent that exists without ever having said, which today is
     /// every agent: this field has no backfill.
@@ -268,13 +338,19 @@ pub struct Agent<Args> {
 }
 
 impl<Args> AgentManifest<Args> {
-    /// Which code tools this agent has switched on — [`pycode`](Self::pycode) and
-    /// [`tscode`](Self::tscode), in the shape the tool table filters by.
+    /// Which code tools this agent has — [`pycode`](Self::pycode) and [`tscode`](Self::tscode),
+    /// or the one [`code_only`](Self::code_only) names and nothing beside it — in the shape the
+    /// tool table filters by.
     #[must_use]
     pub fn code_tools(&self) -> crate::CodeTools {
-        crate::CodeTools {
-            python: self.pycode,
-            typescript: self.tscode,
+        match self.code_only {
+            Some(CodeOnly::TypeScript) => crate::CodeTools::ONLY_TYPESCRIPT,
+            Some(CodeOnly::Python) => crate::CodeTools::ONLY_PYTHON,
+            None => crate::CodeTools {
+                python: self.pycode,
+                typescript: self.tscode,
+                only: false,
+            },
         }
     }
 
@@ -324,6 +400,7 @@ impl<Args> AgentManifest<Args> {
             unattended: self.unattended,
             pycode: self.pycode,
             tscode: self.tscode,
+            code_only: self.code_only,
             created_by: self.created_by.clone(),
             created_at: self.created_at,
             updated_at: self.updated_at,

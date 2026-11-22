@@ -9,12 +9,19 @@ pub(crate) mod jobs;
 // The MCP door into [`harness::tools`], for the Claude engines whose loop — and whose tool set — is
 // their own. A sibling of `harness` rather than a child: it serves that table, it is not part of it.
 pub(crate) mod mcp;
+// The MCP *client*: an agent's own servers, reached from this process for the one kind of agent
+// whose engine is not handed them — a code-only one, whose scripts call them.
+pub(crate) mod mcp_hub;
 pub(crate) mod process;
 pub(crate) mod pty;
 // The interpreters a conversation keeps between `PyCode` and `TsCode` calls. Beside `shell` because
 // they share that state, and for the same reason not under one engine: every engine reaches them.
 #[cfg(unix)]
 pub(crate) mod interpreter;
+// Code-only: what the one tool of such an agent says about the tools it replaced, and the door a
+// cell calls them through. Unix only because the interpreters are.
+#[cfg(unix)]
+pub(crate) mod code_only;
 // The shell a conversation keeps between commands. Here rather than under one engine because two
 // engines reach it: the adi loop's own `Bash` runs through it, and the Claude CLI's `Bash` is bent
 // through it by the hook the runner installs.

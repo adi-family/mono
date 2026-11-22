@@ -257,6 +257,7 @@ fn submit_setup(state: State, form: MetaForm) {
         unattended: None,
         pycode: None,
         tscode: None,
+        code_only: None,
         rename_from: None,
         // Absent means human — this is the control panel.
         created_by: None,

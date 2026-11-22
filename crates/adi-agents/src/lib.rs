@@ -71,8 +71,8 @@ use adi_config::{Config, ConfigFile, now_unix};
 use adi_events::Event as _;
 
 pub use agent::{
-    Agent, AgentManifest, MANIFEST_VERSION, RawAgentArguments, SecretAttachment, StoredAgent,
-    StoredAgentManifest, UNVERSIONED, contains_json_null,
+    Agent, AgentManifest, CodeOnly, MANIFEST_VERSION, RawAgentArguments, SecretAttachment,
+    StoredAgent, StoredAgentManifest, UNVERSIONED, contains_json_null,
 };
 pub use auto_title::AutoTitleSettings;
 pub use backend::Backend;
@@ -2754,7 +2754,23 @@ impl Agents {
             )));
         }
         let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
-        backends::harness::run_adi_turn(&agent, &sessions_dir, conv_id, sink)
+        let servers = self.code_only_servers(&agent);
+        backends::harness::run_adi_turn(&agent, &sessions_dir, conv_id, servers, sink)
+    }
+
+    /// The MCP servers this process must itself be the client of, for `agent`: all of its own
+    /// when it is code-only, and none otherwise.
+    ///
+    /// Every other agent's servers are handed to its engine, which talks to them (see
+    /// [`runner::RunSpec::mcp_servers`]). A code-only agent's engine is told about one tool and
+    /// nothing else, so the functions its scripts call a server through are answered by whoever
+    /// serves that turn's tool calls — and that process resolves them here, by the same rule and
+    /// against the same attached secrets a launch does.
+    fn code_only_servers(&self, agent: &StoredAgent) -> Vec<mcp_servers::ResolvedMcpServer> {
+        if !agent.manifest.code_tools().only {
+            return Vec::new();
+        }
+        mcp_servers::resolve(&self.config, &agent.manifest.mcp, &agent.manifest.secrets)
     }
 
     /// Serve this conversation's ADI tools to a Claude engine over MCP, until the engine's CLI
@@ -2790,13 +2806,23 @@ impl Agents {
             .as_ref()
             .map(|a| a.manifest.code_tools())
             .unwrap_or_default();
+        // A code-only agent's MCP servers are this process's to talk to: its engine was told
+        // about none of them (see `backends::mcp`'s module docs).
+        let servers = definition
+            .as_ref()
+            .map(|a| self.code_only_servers(a))
+            .unwrap_or_default();
         let stdin = std::io::stdin();
         backends::mcp::serve(
             agent,
             conv,
             cwd,
             &store,
-            backends::mcp::Standing { unattended, code },
+            backends::mcp::Standing {
+                unattended,
+                code,
+                mcp: backends::mcp_hub::Hub::new(servers, cwd),
+            },
             stdin.lock(),
             std::io::stdout().lock(),
         )
@@ -2980,6 +3006,7 @@ impl Agents {
             // them, and a section naming all five costs less than one run misreading one of them.
             marker_note: Some(crate::marker::block()),
             mcp_servers,
+            code: agent.manifest.code_tools(),
         }
     }
 
@@ -3842,6 +3869,7 @@ impl Agents {
             name,
             agent.manifest.unattended,
             agent.manifest.code_tools(),
+            backends::mcp_hub::Hub::new(self.code_only_servers(&agent), &cwd),
             &cwd,
             run_id,
             &agent_dir,
@@ -7603,6 +7631,7 @@ mod tests {
             spawn_note: None,
             marker_note: None,
             mcp_servers: Vec::new(),
+            code: crate::CodeTools::default(),
         }
     }
 

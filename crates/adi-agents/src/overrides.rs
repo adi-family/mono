@@ -172,6 +172,7 @@ mod tests {
                 unattended: false,
                 pycode: false,
                 tscode: false,
+                code_only: None,
                 created_by: String::new(),
                 created_at: 0,
                 updated_at: 0,
