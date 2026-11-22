@@ -17,6 +17,7 @@ describe("highlightCode", () => {
     sh: '#!/bin/sh\n# poll forever\nwhile true; do\n  url="${ADI_URL:-http://x}"\n  curl -fsS "$url" | head -c 3500 > "$ADI_PAYLOAD_FILE"\n  count=$((count + 1))\n  sleep 21600 # six hours\ndone\n',
     ts: '// watch\nconst every = Number(process.env.ADI_INTERVAL_SECS ?? 300) * 1000;\n/* block\n comment */\nfor (;;) {\n  const body = await (await fetch(url)).text();\n  console.log(`changed: ${body.length}`, \'x\', true);\n}\n',
     json: '{ "name": "deploy", "retries": 3, "ok": true, "tags": ["a", null], "ratio": -0.5 }\n',
+    py: '# tally\nimport json\n@cache\ndef load(path, strict=True):\n    """Read\n    it."""\n    rows = json.loads(open(path).read())\n    return [r for r in rows if r["n"] >= 1.5]\nprint(f"{len(load(\'a.json\'))} rows", r\'\\d+\')\n',
   };
 
   test("the runs always reproduce the source exactly, for every language and for odd input", () => {
@@ -43,6 +44,20 @@ describe("highlightCode", () => {
       "kw:const", "kw:await", "func:fetch", "punct:(", "punct:);", "comment:// go", "punct:.", "func:env", "punct:.", "func:X", "str:`t${n}`",
     ]);
     expect(tokens(highlightCode("ts", "/* a\n b */ 42"))).toEqual(["comment:/* a\n b */", "num:42"]);
+  });
+
+  test("python: comments, strings with prefixes and triple quotes, keywords, calls, bindings and decorators", () => {
+    expect(tokens(highlightCode("py", 'rows = sh("ls", check=False).lines  # all\nfor r in rows:\n    print(f"{r}", 2)'))).toEqual([
+      "key:rows", "func:sh", "punct:(", 'str:"ls"', "punct:,", "key:check", "kw:False", "punct:).", "func:lines", "comment:# all",
+      "kw:for", "kw:in", "punct::", "func:print", "punct:(", 'str:f"{r}"', "punct:,", "num:2", "punct:)",
+    ]);
+    // A triple-quoted string spans lines; a comparison is not a binding; `@` opens a decorator only at the start of a line.
+    expect(tokens(highlightCode("py", '"""a\nb""" if x == 1 else a @ b'))).toEqual(['str:"""a\nb"""', "kw:if", "num:1", "kw:else"]);
+    expect(tokens(highlightCode("py", "@app.route\ndef f(): pass"))).toEqual(["func:@app.route", "kw:def", "func:f", "punct:():", "kw:pass"]);
+    // An annotation is not what gets bound.
+    expect(tokens(highlightCode("py", "def f(n: int = 3): ..."))).toEqual(["kw:def", "func:f", "punct:(", "punct::", "num:3", "punct:):", "punct:..."]);
+    // An apostrophe left open costs its own line, not the rest of the cell.
+    expect(tokens(highlightCode("py", "x = 'open\ny = 2"))).toEqual(["key:x", "str:'open", "key:y", "num:2"]);
   });
 
   test("json: keys are told from string values", () => {

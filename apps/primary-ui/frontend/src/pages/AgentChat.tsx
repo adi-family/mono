@@ -45,7 +45,7 @@ export function AgentChat() {
         <ChatMessage from="assistant">
           <div className="min-w-0">
             <ChatMessageMeta>Layout reviewer</ChatMessageMeta>
-            <ChatMessageContent className="whitespace-normal"><ChatMarkdown>{"The message spacing is consistent and the conversation fits mobile screens.\n\nKeyboard focus reaches the tool calls and composer in order. Expanded details stay within the conversation width."}</ChatMarkdown></ChatMessageContent>
+            <ChatMessageContent className="whitespace-normal"><ChatMarkdown>{"The message spacing is consistent and the conversation fits mobile screens.\n\nKeyboard focus reaches the tool calls and composer in order. Expanded details stay within the conversation width.\n\nRun the browser checks again after the next spacing change:\n\n```sh\nbun run test:chat:browser\n```"}</ChatMarkdown></ChatMessageContent>
           </div>
         </ChatMessage>
       </ChatThread>

@@ -79,8 +79,25 @@ for (const commit of payload.commits ?? []) {
   "events": ["adi.tasks.*", null]
 }
 `,
+  py: `# Report the slowest tests of the last run.
+import json
+from pathlib import Path
+
+report = json.loads(Path("target/test-report.json").read_text())
+slow = [t for t in report["tests"] if t["seconds"] > 1.5]
+
+@dataclass
+class Row:
+    name: str
+    seconds: float = 0.0
+
+for test in sorted(slow, key=lambda t: -t["seconds"])[:10]:
+    print(f"{test['seconds']:6.2f}s  {test['name']}")
+if not slow:
+    print('nothing slower than 1.5s')
+`,
 };
-const editorLanguages = [["sh", "Shell"], ["ts", "TypeScript"], ["json", "JSON"]] as const;
+const editorLanguages = [["sh", "Shell"], ["ts", "TypeScript"], ["json", "JSON"], ["py", "Python"]] as const;
 
 const settingsCode = `<SettingsLayout
   title="Settings"

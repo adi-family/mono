@@ -101,7 +101,7 @@
   text-align: start;
 }
 
-.chat-markdown :where(p, ul, ol, blockquote, pre, hr, [data-slot="chat-markdown-table"]) {
+.chat-markdown :where(p, ul, ol, blockquote, hr, [data-slot="chat-markdown-code"], [data-slot="chat-markdown-table"]) {
   margin-block: 0.75rem;
 }
 
@@ -152,9 +152,10 @@
   white-space: break-spaces;
 }
 
-/* Only sideways overscroll is contained: a block with nothing left to scroll vertically hands the wheel to the transcript. */
+/* Only sideways overscroll is contained: a block with nothing left to scroll vertically hands the wheel to the transcript.
+   Where the copy button is always shown (no hover to reveal it), the end of a long first line scrolls clear of it. */
 .chat-markdown pre {
-  @apply bg-background/70 text-foreground max-h-96 max-w-full overflow-auto overscroll-x-contain rounded-md border p-3 font-mono text-xs leading-5 whitespace-pre outline-none focus-visible:ring-2 focus-visible:ring-ring/50;
+  @apply bg-background/70 text-foreground max-h-96 max-w-full overflow-auto overscroll-x-contain rounded-md border p-3 font-mono text-xs leading-5 whitespace-pre outline-none focus-visible:ring-2 focus-visible:ring-ring/50 pointer-coarse:pr-12;
   overflow-wrap: normal;
   word-break: normal;
 }

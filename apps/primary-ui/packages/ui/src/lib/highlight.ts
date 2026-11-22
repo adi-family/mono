@@ -2,7 +2,7 @@
  * A small syntax highlighter — everything CodeEditor knows about language.
  *
  * Hand-rolled on purpose: a grammar library would outweigh the rest of the component library,
- * and what gets edited here is a handful of formats. Each language is a scanner, good enough to
+ * and what gets edited or shown here is a handful of formats. Each language is a scanner, good enough to
  * make structure visible — not a parser, and never one that can fail on odd input.
  *
  * Every scanner is total: an unterminated string or comment runs to the end of input and is
@@ -10,7 +10,7 @@
  * reproduces the source exactly, which is what keeps the painted layer under the caret.
  */
 
-export type CodeLanguage = "sh" | "ts" | "json" | "plain";
+export type CodeLanguage = "sh" | "ts" | "json" | "py" | "plain";
 
 /** What a run of characters is, which is all the renderer needs to pick a colour. */
 export type CodeToken =
@@ -28,7 +28,23 @@ export type CodeToken =
 
 export type CodeRun = readonly [token: CodeToken, text: string];
 
-export const codeLanguageLabels: Record<CodeLanguage, string> = { sh: "Shell", ts: "TypeScript", json: "JSON", plain: "Plain text" };
+/**
+ * Ink per token. Colour only — never a weight or a style, which would change glyph advances
+ * and pull the editor's paint out from under its caret. Here rather than in a component, so
+ * code reads the same wherever it is shown.
+ */
+export const codeTokenInk: Record<CodeToken, string> = {
+  plain: "",
+  comment: "text-muted-foreground",
+  str: "text-emerald-700 dark:text-emerald-300",
+  num: "text-orange-700 dark:text-orange-300",
+  key: "text-sky-700 dark:text-sky-300",
+  kw: "text-violet-700 dark:text-violet-300",
+  func: "text-blue-700 dark:text-blue-300",
+  punct: "text-muted-foreground",
+};
+
+export const codeLanguageLabels: Record<CodeLanguage, string> = { sh: "Shell", ts: "TypeScript", json: "JSON", py: "Python", plain: "Plain text" };
 
 const TS_KEYWORDS = new Set([
   "as", "async", "await", "break", "case", "catch", "class", "const", "continue", "default", "delete", "do", "else", "enum", "export",
@@ -40,6 +56,14 @@ const SH_KEYWORDS = new Set([
   "case", "do", "done", "elif", "else", "esac", "exit", "export", "fi", "for", "function", "if", "in", "local", "read", "return", "select",
   "shift", "then", "until", "while",
 ]);
+
+// The soft keywords (`match`, `case`, `type`) are left out: each is far more often a variable.
+const PY_KEYWORDS = new Set([
+  "False", "None", "True", "and", "as", "assert", "async", "await", "break", "class", "continue", "def", "del", "elif", "else", "except",
+  "finally", "for", "from", "global", "if", "import", "in", "is", "lambda", "nonlocal", "not", "or", "pass", "raise", "return", "try",
+  "while", "with", "yield",
+]);
+const PY_STRING_PREFIXES = new Set(["r", "b", "f", "u", "t", "rb", "br", "fr", "rf", "tr", "rt"]);
 
 const isDigit = (c: string) => c >= "0" && c <= "9";
 const isAlpha = (c: string) => (c >= "a" && c <= "z") || (c >= "A" && c <= "Z");
@@ -194,7 +218,84 @@ function scanSh(source: string, emit: Emit) {
   }
 }
 
-const scanners: Record<Exclude<CodeLanguage, "plain">, (source: string, emit: Emit) => void> = { sh: scanSh, ts: scanTs, json: scanJson };
+/**
+ * The index just past the Python string whose opening quote is at `i`. Three quotes open a
+ * string that runs across lines to the same three; one quote opens a string that ends with its
+ * line, so an apostrophe left open colours a line instead of the rest of the cell.
+ */
+function pastPyString(source: string, i: number): number {
+  const quote = source[i];
+  const triple = source.startsWith(quote.repeat(3), i);
+  i += triple ? 3 : 1;
+  while (i < source.length) {
+    const c = source[i];
+    if (c === "\\" && i + 1 < source.length) i += 2;
+    else if (triple && source.startsWith(quote.repeat(3), i)) return i + 3;
+    else if (!triple && c === quote) return i + 1;
+    else if (!triple && c === "\n") return i;
+    else i += 1;
+  }
+  return i;
+}
+
+/**
+ * Python. What a cell is skimmed for is what it calls and what it binds, so a called or dotted
+ * name is a `func` and a name being assigned — a variable or a keyword argument — is a `key`.
+ */
+function scanPy(source: string, emit: Emit) {
+  let i = 0;
+  while (i < source.length) {
+    const c = source[i];
+    if (c === "#") {
+      const next = past(source, i, (ch) => ch !== "\n");
+      emit("comment", i, next);
+      i = next;
+    } else if (c === '"' || c === "'") {
+      const next = pastPyString(source, i);
+      emit("str", i, next);
+      i = next;
+    } else if (isDigit(c) || (c === "." && isDigit(source[i + 1] ?? ""))) {
+      const next = past(source, i, (ch) => isWord(ch) || ch === ".");
+      emit("num", i, next);
+      i = next;
+    } else if (c === "@" && isAlpha(source[i + 1] ?? "") && source.slice(source.lastIndexOf("\n", i - 1) + 1, i).trim() === "") {
+      // A decorator: an `@` that opens its line. Anywhere else it is matrix multiplication.
+      const next = past(source, i + 1, (ch) => isWord(ch) || ch === ".");
+      emit("func", i, next);
+      i = next;
+    } else if (isAlpha(c) || c === "_") {
+      const next = past(source, i, isWord);
+      const word = source.slice(i, next);
+      const quote = source[next];
+      if ((quote === '"' || quote === "'") && PY_STRING_PREFIXES.has(word.toLowerCase())) {
+        // `f"…"`, `rb'…'`: the prefix is part of the string.
+        const end = pastPyString(source, next);
+        emit("str", i, end);
+        i = end;
+        continue;
+      }
+      let token: CodeToken = "plain";
+      if (PY_KEYWORDS.has(word)) token = "kw";
+      else {
+        const after = past(source, next, (ch) => ch === " " || ch === "\t");
+        if (source[after] === "(" || (i > 0 && source[i - 1] === ".")) token = "func";
+        else if (source[after] === "=" && source[after + 1] !== "=") {
+          // In `retries: int = 3` the name before the `=` is the annotation; what is bound came before the colon.
+          let before = i - 1;
+          while (before >= 0 && (source[before] === " " || source[before] === "\t")) before -= 1;
+          if (source[before] !== ":") token = "key";
+        }
+      }
+      emit(token, i, next);
+      i = next;
+    } else {
+      emit("{}[]();,.:".includes(c) ? "punct" : "plain", i, i + 1);
+      i += 1;
+    }
+  }
+}
+
+const scanners: Record<Exclude<CodeLanguage, "plain">, (source: string, emit: Emit) => void> = { sh: scanSh, ts: scanTs, json: scanJson, py: scanPy };
 
 /** Beyond this the text is painted plain: highlighting is an enhancement, never a gate. */
 export const highlightLimit = 400_000;
