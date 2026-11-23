@@ -10,8 +10,10 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 pub enum Backend {
     PtyClaude,
     PtyCodex,
+    PtyAntigravity,
     ProcessClaude,
     ProcessCodex,
+    ProcessAntigravity,
     /// The `claude` CLI driven headless by ADI's harness (a turn-capped, adi-scoped print run).
     HarnessClaudeSdk,
     /// ADI's own answering loop; the model provider is the manifest's `provider` argument. Runnable
@@ -28,8 +30,10 @@ impl Backend {
         match self {
             Self::PtyClaude => "pty:claude",
             Self::PtyCodex => "pty:codex",
+            Self::PtyAntigravity => "pty:antigravity",
             Self::ProcessClaude => "process:claude",
             Self::ProcessCodex => "process:codex",
+            Self::ProcessAntigravity => "process:antigravity",
             Self::HarnessClaudeSdk => "harness:claude-sdk",
             Self::HarnessAdi => "harness:adi",
             Self::Other(value) => value,
@@ -48,8 +52,8 @@ impl Backend {
     /// [`Other`](Self::Other) backend with no `:` (or the empty default) has no executor: `""`.
     pub(crate) fn executor(&self) -> &str {
         match self {
-            Self::PtyClaude | Self::PtyCodex => "pty",
-            Self::ProcessClaude | Self::ProcessCodex => "process",
+            Self::PtyClaude | Self::PtyCodex | Self::PtyAntigravity => "pty",
+            Self::ProcessClaude | Self::ProcessCodex | Self::ProcessAntigravity => "process",
             Self::HarnessClaudeSdk | Self::HarnessAdi => "harness",
             Self::Other(value) => value.split_once(':').map_or("", |(executor, _)| executor),
         }
@@ -67,12 +71,14 @@ impl From<&str> for Backend {
         match value {
             "pty:claude" => Self::PtyClaude,
             "pty:codex" => Self::PtyCodex,
+            "pty:antigravity" => Self::PtyAntigravity,
             // Back-compat: manifests written before the tmux→pty rename still carry the old wire
             // strings; map them onto the pty backends so stored agents keep running.
             "tmux:claude" => Self::PtyClaude,
             "tmux:codex" => Self::PtyCodex,
             "process:claude" => Self::ProcessClaude,
             "process:codex" => Self::ProcessCodex,
+            "process:antigravity" => Self::ProcessAntigravity,
             "harness:claude-sdk" => Self::HarnessClaudeSdk,
             "harness:adi" => Self::HarnessAdi,
             other => Self::Other(other.to_string()),
@@ -85,10 +91,12 @@ impl From<String> for Backend {
         match value.as_str() {
             "pty:claude" => Self::PtyClaude,
             "pty:codex" => Self::PtyCodex,
+            "pty:antigravity" => Self::PtyAntigravity,
             "tmux:claude" => Self::PtyClaude,
             "tmux:codex" => Self::PtyCodex,
             "process:claude" => Self::ProcessClaude,
             "process:codex" => Self::ProcessCodex,
+            "process:antigravity" => Self::ProcessAntigravity,
             "harness:claude-sdk" => Self::HarnessClaudeSdk,
             "harness:adi" => Self::HarnessAdi,
             _ => Self::Other(value),
@@ -124,8 +132,10 @@ mod tests {
         for wire in [
             "pty:claude",
             "pty:codex",
+            "pty:antigravity",
             "process:claude",
             "process:codex",
+            "process:antigravity",
             "harness:claude-sdk",
             "harness:adi",
         ] {
@@ -173,7 +183,9 @@ mod tests {
     #[test]
     fn executor_is_the_prefix_before_the_colon() {
         assert_eq!(Backend::PtyClaude.executor(), "pty");
+        assert_eq!(Backend::PtyAntigravity.executor(), "pty");
         assert_eq!(Backend::ProcessCodex.executor(), "process");
+        assert_eq!(Backend::ProcessAntigravity.executor(), "process");
         assert_eq!(Backend::HarnessClaudeSdk.executor(), "harness");
         assert_eq!(Backend::HarnessAdi.executor(), "harness");
         assert_eq!(Backend::from("harness:plugin").executor(), "harness");

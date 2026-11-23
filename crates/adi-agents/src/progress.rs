@@ -246,12 +246,20 @@ mod tests {
                 [true, false, false, true, false, false, false, false],
             ),
             (
+                "pty:antigravity",
+                [true, false, false, true, false, false, false, false],
+            ),
+            (
                 "process:claude",
                 [false, true, false, true, true, true, true, true],
             ),
             (
                 "process:codex",
                 [false, true, true, true, true, false, true, true],
+            ),
+            (
+                "process:antigravity",
+                [false, true, true, true, true, true, true, true],
             ),
             (
                 "harness:claude-sdk",

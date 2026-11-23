@@ -75,7 +75,7 @@ struct RuntimeGuide {
 /// a backend in the server's form spec, so picking one drops straight into the select. The two
 /// common answers are presets of their own now, so this is what is left: the runtimes no preset
 /// covers, and the CLIs someone may prefer to the headless loop.
-const RUNTIME_GUIDE: [RuntimeGuide; 4] = [
+const RUNTIME_GUIDE: [RuntimeGuide; 5] = [
     RuntimeGuide {
         question: "I have a Claude subscription (Pro / Max), or the Claude CLI already logged in",
         note: "Uses your existing Claude login — no API key needed. Same credentials either way:",
@@ -91,6 +91,20 @@ const RUNTIME_GUIDE: [RuntimeGuide; 4] = [
         question: "I have a ChatGPT / Codex subscription",
         note: "Uses your Codex login.",
         options: &[("pty:codex", "the Codex CLI in a live terminal session")],
+    },
+    RuntimeGuide {
+        question: "I have Google Antigravity (`agy`) logged in",
+        note: "Uses your existing Google Antigravity login — no API key needed. Same credentials either way:",
+        options: &[
+            (
+                "process:antigravity",
+                "Google Antigravity CLI, headless, with resumable threads",
+            ),
+            (
+                "pty:antigravity",
+                "Google Antigravity CLI in a live terminal session",
+            ),
+        ],
     },
     RuntimeGuide {
         question: "I have an Anthropic API key",

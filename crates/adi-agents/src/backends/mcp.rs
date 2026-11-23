@@ -177,7 +177,7 @@ pub(crate) fn refuse_unless_supported(
         return Ok(());
     }
     Err(Error::Launch(format!(
-        "{backend} has no MCP support: it cannot be given the MCP server(s) this agent declares          ({}). Run it on harness:claude-sdk, pty:claude, process:claude, or process:codex          instead, or detach the servers with `agents save --no-mcp`",
+        "{backend} has no MCP support: it cannot be given the MCP server(s) this agent declares          ({}). Run it on harness:claude-sdk, pty:claude, process:claude, process:codex, or          process:antigravity instead, or detach the servers with `agents save --no-mcp`",
         servers.iter().map(|s| s.id.as_str()).collect::<Vec<_>>().join(", "),
     )))
 }
@@ -211,8 +211,8 @@ pub(crate) fn refuse_code_only(backend: &crate::backend::Backend, code: CodeTool
     Err(Error::Launch(format!(
         "{backend} cannot run a code-only agent: its engine keeps tools of its own that cannot \
          be taken away, and has no way to be given the interpreter. Run it on harness:adi, \
-         harness:claude-sdk, process:claude, or pty:claude instead, or switch the mode off with \
-         `agents save --no-code-only`"
+         harness:claude-sdk, process:claude, pty:claude, or process:antigravity instead, or switch \
+         the mode off with `agents save --no-code-only`"
     )))
 }
 

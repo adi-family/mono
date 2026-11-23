@@ -39,9 +39,12 @@ pub fn runner_of(record: &SessionRecord) -> Option<Box<dyn Runner>> {
 #[must_use]
 pub fn runner_for(backend: &Backend) -> Option<Box<dyn Runner>> {
     match backend {
-        Backend::PtyClaude | Backend::PtyCodex => Some(Box::new(PtyRunner::new(backend.clone()))),
+        Backend::PtyClaude | Backend::PtyCodex | Backend::PtyAntigravity => {
+            Some(Box::new(PtyRunner::new(backend.clone())))
+        }
         Backend::ProcessClaude
         | Backend::ProcessCodex
+        | Backend::ProcessAntigravity
         | Backend::HarnessClaudeSdk
         | Backend::HarnessAdi => Some(Box::new(DetachedRunner::new(backend.clone()))),
         Backend::Other(_) => None,
@@ -57,8 +60,10 @@ mod tests {
         for wire in [
             "pty:claude",
             "pty:codex",
+            "pty:antigravity",
             "process:claude",
             "process:codex",
+            "process:antigravity",
             "harness:claude-sdk",
             "harness:adi",
         ] {

@@ -237,6 +237,9 @@ fn carries_history(from: &Backend, to: &Backend, same_credential: bool) -> bool 
             matches!(from, Backend::HarnessClaudeSdk) && same_credential
         }
         Backend::ProcessCodex => matches!(from, Backend::ProcessCodex) && same_credential,
+        Backend::ProcessAntigravity => {
+            matches!(from, Backend::ProcessAntigravity) && same_credential
+        }
         _ => false,
     }
 }

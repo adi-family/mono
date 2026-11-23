@@ -51,7 +51,7 @@ fn intro() -> AnyView {
         <p class="adi-meta__lead">
             <b>"adi-agent"</b>
             " is your environment's default agent — a meta-agent that helps you set up and run
-             this ADI stack. Pick a backend (Claude, Codex, the ADI loop, …); it comes preloaded
+             this ADI stack. Pick a backend (Claude, Codex, Antigravity, the ADI loop, …); it comes preloaded
              with a system prompt that teaches it how ADI works — projects, hive services,
              dashboards, ports, and DNS — and with every tool in your store enabled on it.
              Edit the prompt to taste, then run it right here."

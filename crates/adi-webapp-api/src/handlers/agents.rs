@@ -2774,6 +2774,18 @@ const CLAUDE_BACKENDS: &[&str] = &["pty:claude", "process:claude", "harness:clau
 /// The backends whose engine is the Codex CLI.
 const CODEX_BACKENDS: &[&str] = &["pty:codex", "process:codex"];
 
+/// The backends whose engine is the Google Antigravity CLI (`agy`).
+const ANTIGRAVITY_BACKENDS: &[&str] = &["pty:antigravity", "process:antigravity"];
+
+/// Backends that share the `effort` (`low|medium|high|xhigh|max`) reasoning-depth dial.
+const EFFORT_BACKENDS: &[&str] = &[
+    "pty:claude",
+    "process:claude",
+    "harness:claude-sdk",
+    "pty:antigravity",
+    "process:antigravity",
+];
+
 /// The built-in Claude Code tools offered as one-tap toggles on the tool picker. Since the engine's
 /// surface is deny-by-default (see `adi_agents`'s `backends::mcp`), this list is a *grant*: an agent
 /// gets exactly the tools ticked here, and nothing else the CLI happens to ship.
@@ -2807,6 +2819,13 @@ const CLAUDE_TOOLS: &[&str] = &[
 const CLAUDE_CLI_MODELS: &[&str] = &["opus", "sonnet", "haiku", "fable"];
 const CLAUDE_SDK_MODELS: &[&str] = &["claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"];
 const CODEX_MODELS: &[&str] = &["gpt-5-codex"];
+const ANTIGRAVITY_MODELS: &[&str] = &[
+    "gemini-4-neon-high",
+    "gemini-4-argon-high",
+    "gemini-3.8-flash-high",
+    "claude-opus-5-5-medium",
+    "claude-sonnet-5-5-medium",
+];
 const ADI_MODELS: &[&str] = &[
     "kimi-k3",
     "kimi-k2.6",
@@ -2896,7 +2915,7 @@ fn agent_form_spec() -> AgentFormSpec {
         overridable(sel_field(
             "effort",
             "Effort",
-            CLAUDE_BACKENDS,
+            EFFORT_BACKENDS,
             opts(&[
                 ("", "— default —"),
                 ("low", "low"),
@@ -3004,7 +3023,13 @@ fn agent_form_spec() -> AgentFormSpec {
     fields.push(txt_field(
         "working_dir",
         "Working dir",
-        &["pty:codex", "process:codex", "harness:claude-sdk"],
+        &[
+            "pty:codex",
+            "process:codex",
+            "pty:antigravity",
+            "process:antigravity",
+            "harness:claude-sdk",
+        ],
         "/path/to/repo",
         "where the agent starts (default: its project's directory, else the store root)",
     ));
@@ -3017,7 +3042,7 @@ fn agent_form_spec() -> AgentFormSpec {
     let mut settings = txt_field(
         "settings",
         "Settings file",
-        &["harness:claude-sdk"],
+        &["harness:claude-sdk", "pty:antigravity", "process:antigravity"],
         "~/.claude/settings.glm.json",
         "engine settings JSON (path or inline) — its `env` block chooses the account and models",
     );
@@ -3033,6 +3058,63 @@ fn agent_form_spec() -> AgentFormSpec {
     // No `json_events` field: `codex exec --json` is unconditional now, because it is the only
     // shape ADI can read a Codex run's log in. Offering it as a choice offered "show me the raw
     // CLI log as the answer", which is the bug it used to cause.
+
+    // ---- antigravity engines (any executor) ----
+    fields.push(overridable(sel_field(
+        "mode",
+        "Mode",
+        ANTIGRAVITY_BACKENDS,
+        opts(&[
+            ("", "— default —"),
+            ("accept-edits", "accept-edits"),
+            ("auto", "auto"),
+            ("plan", "plan"),
+        ]),
+        "approval / autonomy mode (auto is recommended for headless runs)",
+    )));
+
+    let mut skip_perms = chk_field(
+        "dangerously_skip_permissions",
+        "Skip permission prompts",
+        ANTIGRAVITY_BACKENDS,
+    );
+    skip_perms.hint =
+        "allow tool calls without confirmation (--dangerously-skip-permissions)".into();
+    fields.push(overridable(skip_perms));
+
+    let mut term_sandbox = chk_field(
+        "terminal_sandbox",
+        "Terminal sandbox",
+        ANTIGRAVITY_BACKENDS,
+    );
+    term_sandbox.hint =
+        "run shell commands inside the Antigravity terminal sandbox (--sandbox)".into();
+    fields.push(term_sandbox);
+
+    fields.push(txt_field(
+        "agent",
+        "Agent profile",
+        ANTIGRAVITY_BACKENDS,
+        "profile name",
+        "named Antigravity agent profile (--agent)",
+    ));
+
+    fields.push(txt_field(
+        "print_timeout",
+        "Print timeout",
+        &["process:antigravity"],
+        "e.g. 5m0s",
+        "optional duration limit for headless runs (--print-timeout)",
+    ));
+
+    let mut disable_slash = chk_field(
+        "disable_slash_commands",
+        "Disable slash commands",
+        &["process:antigravity"],
+    );
+    disable_slash.hint =
+        "disable slash command and skill expansion in print mode (--disable-slash-commands)".into();
+    fields.push(disable_slash);
 
     // ---- pty/process shared (a vendor CLI runs either way) ----
     let mut add_dir = field_executors(
@@ -3255,7 +3337,7 @@ fn agent_form_spec() -> AgentFormSpec {
     let mut pycode = agent_field("pycode", "Python (PyCode)", AgentFormFieldKind::Checkbox);
     pycode.hint = "a Python interpreter the conversation keeps between calls, beside Bash — what \
                    one call read or worked out is still in a variable on the next. Needs python3 \
-                   on the machine; reaches Claude engines and harness:adi"
+                   on the machine; reaches Claude engines, process:antigravity, and harness:adi"
         .into();
     fields.push(pycode);
     let mut tscode = agent_field("tscode", "TypeScript (TsCode)", AgentFormFieldKind::Checkbox);
@@ -3270,7 +3352,10 @@ fn agent_form_spec() -> AgentFormSpec {
         ("typescript", "TypeScript"),
         ("python", "Python"),
     ]);
-    code_only.hint = "the agent's single tool is its interpreter, in this language; the file                       tools, the shell, Await, Ask and every tool of its MCP servers become                       functions its code calls. Its engine's own tools are switched off. Claude                       engines and harness:adi"
+    code_only.hint = "the agent's single tool is its interpreter, in this language; the file \
+                      tools, the shell, Await, Ask and every tool of its MCP servers become \
+                      functions its code calls. Its engine's own tools are switched off. Claude \
+                      engines, process:antigravity, and harness:adi"
         .into();
     fields.push(code_only);
 
@@ -3324,6 +3409,13 @@ fn agent_form_spec() -> AgentFormSpec {
                 CODEX_MODELS,
             ),
             agent_backend(
+                "pty:antigravity",
+                "pty · Google Antigravity CLI",
+                "pty",
+                "gemini-4-neon-high / gemini-3.8-flash-high",
+                ANTIGRAVITY_MODELS,
+            ),
+            agent_backend(
                 "process:claude",
                 "process · Claude CLI",
                 "process",
@@ -3336,6 +3428,13 @@ fn agent_form_spec() -> AgentFormSpec {
                 "process",
                 "gpt-5-codex",
                 CODEX_MODELS,
+            ),
+            agent_backend(
+                "process:antigravity",
+                "process · Google Antigravity CLI",
+                "process",
+                "gemini-4-neon-high / gemini-3.8-flash-high",
+                ANTIGRAVITY_MODELS,
             ),
             agent_backend(
                 "harness:claude-sdk",
@@ -3365,6 +3464,7 @@ fn agent_form_spec() -> AgentFormSpec {
 /// model, which is the one knob people change on day one. Everything else it pins from what the
 /// backend already knows (the provider's endpoint, the variable its key is read from), because a
 /// question with one right answer is not a question.
+#[allow(clippy::too_many_lines)]
 fn setup_presets() -> Vec<AgentSetupPreset> {
     vec![
         AgentSetupPreset {
@@ -3383,6 +3483,32 @@ fn setup_presets() -> Vec<AgentSetupPreset> {
                 label: "Anthropic API key".into(),
                 hint: "Optional — leave blank to use the Claude login on this machine.".into(),
                 placeholder: "sk-ant-…".into(),
+                required: false,
+            }),
+            manual: false,
+        },
+        AgentSetupPreset {
+            id: "antigravity".into(),
+            label: "Antigravity".into(),
+            blurb: "Runs Google Antigravity (`agy`) headless on your Google login, or on a \
+                    Gemini API key."
+                .into(),
+            backend: "process:antigravity".into(),
+            // Headless `agy` denies tool calls that need confirmation unless `mode` is `auto` (or
+            // `--dangerously-skip-permissions`), so prefill `mode = "auto"` while keeping it
+            // editable in the preset form.
+            arguments: [("mode".to_string(), "auto".to_string())]
+                .into_iter()
+                .collect(),
+            fields: strings(&["model", "mode"]),
+            // The `agy` CLI's own Google login is the primary path, so an API key is optional.
+            secret: Some(AgentSetupSecret {
+                env: "GEMINI_API_KEY".into(),
+                label: "Gemini API key".into(),
+                hint: "Optional — leave blank to use your Google Antigravity (`agy`) login on \
+                       this machine."
+                    .into(),
+                placeholder: "AIza…".into(),
                 required: false,
             }),
             manual: false,
@@ -3999,6 +4125,15 @@ mod tests {
             )
             .expect("create Codex session")
             .id;
+        let antigravity = sessions
+            .create(
+                "solver",
+                adi_agents::Backend::ProcessAntigravity,
+                "/tmp",
+                "continue me too",
+            )
+            .expect("create Antigravity session")
+            .id;
         let claude = sessions
             .create(
                 "solver",
@@ -4025,6 +4160,7 @@ mod tests {
                 .expect("the run carries its own capabilities")
         };
         assert!(caps_of(&codex).answerable);
+        assert!(caps_of(&antigravity).answerable);
         assert!(!caps_of(&claude).answerable);
 
         let peek = |run_id: &str| {
@@ -4036,6 +4172,9 @@ mod tests {
         let codex_peek = peek(&codex);
         assert!(codex_peek.answerable);
         assert!(codex_peek.caps.answerable);
+        let agy_peek = peek(&antigravity);
+        assert!(agy_peek.answerable);
+        assert!(agy_peek.caps.answerable);
         let claude_peek = peek(&claude);
         assert!(!claude_peek.answerable);
         assert!(!claude_peek.caps.answerable);
@@ -4818,6 +4957,18 @@ mod tests {
         let key = claude.secret.expect("an API key is offered");
         assert_eq!(key.env, "ANTHROPIC_API_KEY");
         assert!(!key.required, "the CLI login is the other way in");
+
+        let antigravity = preset("antigravity");
+        assert_eq!(antigravity.backend, "process:antigravity");
+        assert_eq!(
+            antigravity.arguments.get("mode").map(String::as_str),
+            Some("auto")
+        );
+        assert!(antigravity.fields.iter().any(|f| f == "model"));
+        assert!(antigravity.fields.iter().any(|f| f == "mode"));
+        let key = antigravity.secret.expect("a Gemini API key is offered");
+        assert_eq!(key.env, "GEMINI_API_KEY");
+        assert!(!key.required, "the agy Google login is the other way in");
 
         let kimi = preset("kimi");
         assert_eq!(kimi.backend, ADI_HARNESS);

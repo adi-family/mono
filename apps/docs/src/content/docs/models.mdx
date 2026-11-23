@@ -24,7 +24,8 @@ An [[Agents|agent]]'s backend says which CLI or engine answers its turns — see
   machine, or the [[secrets|secret]] carrying `CLAUDE_CODE_OAUTH_TOKEN` for a run that isn't your
   own terminal. You hold no separate key for these; billing runs on the account already logged
   in. `pty:codex` / `process:codex` are the same shape for Codex, against a ChatGPT login or
-  `OPENAI_API_KEY`.
+  `OPENAI_API_KEY`, and `pty:antigravity` / `process:antigravity` run the Google Antigravity
+  (`agy`) CLI against your Google login or `GEMINI_API_KEY`.
 - **`harness:adi`** is ADI's own multi-provider agent loop, and it needs a credential of its
   own: a **backend** — a named runtime, model, and where the key comes from — is what you define
   to point an agent at a second Anthropic account, OpenAI, or anything else `harness:adi` can
@@ -40,6 +41,7 @@ shows the same list with live hold state.
 | --- | --- | --- |
 | `pty:claude` / `process:claude` / `harness:claude-sdk` | Claude, via the `claude` CLI | its own login, or a secret carrying `CLAUDE_CODE_OAUTH_TOKEN` |
 | `pty:codex` / `process:codex` | ChatGPT, via the Codex CLI | its own login, or `OPENAI_API_KEY` |
+| `pty:antigravity` / `process:antigravity` | Google Antigravity, via the `agy` CLI | its own Google login, or `GEMINI_API_KEY` |
 | `harness:adi` with `provider: anthropic` | Anthropic, your own key | an API-key secret |
 | `harness:adi` with `provider: openai` | OpenAI, your own key | an API-key secret |
 | `harness:adi` with `provider: monshoot` | Moonshot / Kimi, your own key | an API-key secret |

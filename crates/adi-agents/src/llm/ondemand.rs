@@ -274,6 +274,21 @@ fn ask(
                 Err(error) => Err((credential.description, error)),
             }
         }
+        // Likewise for Google Antigravity (`agy`): read-only `plan` mode with `stream-json` so a
+        // probe cannot modify files or block on interactive permissions.
+        Backend::PtyAntigravity | Backend::ProcessAntigravity => {
+            let credential = match resolve_credential(config, manifest, asker) {
+                Ok(credential) => credential,
+                Err(message) => return Err((String::new(), message)),
+            };
+            let argv = antigravity_argv(model, manifest.settings.as_deref(), prompt);
+            let env: Vec<(String, String)> = credential.env.into_iter().collect();
+            let outcome = run_with_env(&argv, &env).and_then(|output| read_antigravity(&output));
+            match outcome {
+                Ok(()) => Ok(credential.description),
+                Err(error) => Err((credential.description, error)),
+            }
+        }
         Backend::Other(other) => Err((
             String::new(),
             format!(
@@ -313,6 +328,7 @@ pub(crate) fn ambient_credential_env(runtime: &Backend) -> Option<&'static str> 
             Some("CLAUDE_CODE_OAUTH_TOKEN")
         }
         Backend::PtyCodex | Backend::ProcessCodex => Some("OPENAI_API_KEY"),
+        Backend::PtyAntigravity | Backend::ProcessAntigravity => Some("GEMINI_API_KEY"),
         Backend::HarnessAdi | Backend::Other(_) => None,
     }
 }
@@ -474,6 +490,42 @@ fn read_codex(output: &std::process::Output) -> std::result::Result<(), String> 
         _ if output.status.success() => Ok(()),
         _ => Err(if content.text.trim().is_empty() {
             command_error("codex", output)
+        } else {
+            content.text.clone()
+        }),
+    }
+}
+
+/// The `agy` CLI in read-only `plan` mode with `stream-json` so a probe cannot edit anything or
+/// hang waiting for interactive approval.
+fn antigravity_argv(model: &str, settings: Option<&str>, prompt: &str) -> Vec<String> {
+    crate::backends::process::antigravity::probe_argv(
+        &crate::arguments::ProcessAntigravityArguments {
+            model: (!model.trim().is_empty()).then(|| model.to_string()),
+            mode: Some(crate::arguments::AntigravityMode::Plan),
+            settings: settings
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ToString::to_string),
+            ..Default::default()
+        },
+        &run_prompt(prompt),
+    )
+}
+
+fn read_antigravity(output: &std::process::Output) -> std::result::Result<(), String> {
+    let combined: Vec<u8> = output
+        .stdout
+        .iter()
+        .chain(output.stderr.iter())
+        .copied()
+        .collect();
+    let content = crate::backends::antigravity_stream::parse(&combined);
+    match &content.metrics {
+        Some(metrics) if metrics.is_error => Err(content.text.clone()),
+        _ if output.status.success() => Ok(()),
+        _ => Err(if content.text.trim().is_empty() {
+            command_error("agy", output)
         } else {
             content.text.clone()
         }),
@@ -926,6 +978,37 @@ mod tests {
         assert_eq!(
             credential.description,
             "ambient process:codex login (no OPENAI_API_KEY secret set)"
+        );
+    }
+
+    #[test]
+    fn an_antigravity_backend_naming_nothing_checks_gemini_api_key_and_allows_ambient_login() {
+        let credential = resolve_credential(
+            &scratch_config("antigravity-ambient"),
+            &manifest(Backend::ProcessAntigravity),
+            None,
+        )
+        .expect("ambient login is a legitimate credential");
+        assert_eq!(
+            credential.description,
+            "ambient process:antigravity login (no GEMINI_API_KEY secret set)"
+        );
+        assert!(credential.env.is_none());
+
+        let with_secret = scratch_config("antigravity-secret");
+        Secrets::with_config(with_secret.clone())
+            .set(None, "GEMINI_API_KEY", "AIza-test", None)
+            .expect("set");
+        let resolved = resolve_credential(
+            &with_secret,
+            &manifest(Backend::ProcessAntigravity),
+            None,
+        )
+        .expect("global secret resolves");
+        assert_eq!(resolved.description, "global secret GEMINI_API_KEY");
+        assert_eq!(
+            resolved.env,
+            Some(("GEMINI_API_KEY".to_string(), "AIza-test".to_string()))
         );
     }
 

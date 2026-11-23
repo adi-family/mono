@@ -332,8 +332,10 @@ mod tests {
     fn only_implemented_backends_are_runnable() {
         assert!(is_runnable(&manifest("pty:claude")));
         assert!(is_runnable(&manifest("pty:codex")));
+        assert!(is_runnable(&manifest("pty:antigravity")));
         assert!(is_runnable(&manifest("process:claude")));
         assert!(is_runnable(&manifest("process:codex")));
+        assert!(is_runnable(&manifest("process:antigravity")));
         assert!(is_runnable(&manifest("harness:claude-sdk")));
         for backend in [
             "pty:unknown",

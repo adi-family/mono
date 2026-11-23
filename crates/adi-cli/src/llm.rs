@@ -51,7 +51,7 @@ pub(crate) enum LlmCommand {
         #[arg(long = "member")]
         members: Vec<String>,
         /// Which runner answers the turn: `harness:adi`, `harness:claude-sdk`, `pty:claude`,
-        /// `process:codex`, … Required for `--kind single`; a group has none of its own.
+        /// `process:codex`, `process:antigravity`, … Required for `--kind single`; a group has none of its own.
         #[arg(long)]
         runtime: Option<String>,
         /// What a human calls it, shown in the panel.

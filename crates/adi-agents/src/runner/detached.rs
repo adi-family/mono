@@ -35,14 +35,17 @@ use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
 use crate::arguments::{
-    HarnessAdiArguments, HarnessClaudeSdkArguments, ProcessClaudeArguments, ProcessCodexArguments,
+    HarnessAdiArguments, HarnessClaudeSdkArguments, ProcessAntigravityArguments,
+    ProcessClaudeArguments, ProcessCodexArguments,
 };
 use crate::backend::Backend;
 use crate::backends::detached::Spawned;
 use crate::backends::harness::claude_sdk::Continuation as ClaudeContinuation;
+use crate::backends::process::antigravity::Continuation as AntigravityContinuation;
 use crate::backends::process::codex::Continuation as CodexContinuation;
 use crate::backends::{
-    adi_events, claude_stream, codex_stream, detached, harness, process, quiet_codex_env,
+    adi_events, antigravity_stream, claude_stream, codex_stream, detached, harness, process,
+    quiet_codex_env,
 };
 use crate::error::{Error, Result};
 use crate::progress::{self, MAX_PARSE_BYTES, MAX_WHOLE_PARSE_BYTES, TurnContent};
@@ -206,6 +209,25 @@ impl DetachedRunner {
                     &spec.mcp_servers,
                 ))
             }
+            Backend::ProcessAntigravity => {
+                let mut config = decode::<ProcessAntigravityArguments>(&spec.arguments)?;
+                let system_prompt = compose(spec, config.system_prompt.take());
+                let cont = if !session_id.trim().is_empty() {
+                    AntigravityContinuation::Resume {
+                        conversation_id: session_id,
+                    }
+                } else {
+                    AntigravityContinuation::First
+                };
+                Ok(process::antigravity::argv(
+                    &config,
+                    spec,
+                    session,
+                    system_prompt.as_deref(),
+                    message,
+                    &cont,
+                ))
+            }
             Backend::HarnessClaudeSdk => {
                 let mut config = decode::<HarnessClaudeSdkArguments>(&spec.arguments)?;
                 config.system_prompt = own_prompt(spec, config.system_prompt);
@@ -253,13 +275,14 @@ impl DetachedRunner {
     fn engine_session_id(&self, state: &State, session: &dyn Session, spec: &RunSpec) -> String {
         let codex_identity =
             matches!(self.backend, Backend::ProcessCodex).then(|| CodexIdentity::of(spec));
-        self.engine_session_id_with_identity(state, session, codex_identity.as_ref())
+        self.engine_session_id_with_identity(state, session, spec, codex_identity.as_ref())
     }
 
     fn engine_session_id_with_identity(
         &self,
         state: &State,
         session: &dyn Session,
+        spec: &RunSpec,
         codex_identity: Option<&CodexIdentity>,
     ) -> String {
         match self.backend {
@@ -284,6 +307,13 @@ impl DetachedRunner {
                     return String::new();
                 }
                 codex_thread(state, session).unwrap_or_default()
+            }
+            Backend::ProcessAntigravity => {
+                let cred = antigravity_credential(spec);
+                if state.antigravity_credential.as_deref() != Some(cred) {
+                    return String::new();
+                }
+                antigravity_conversation(state, session).unwrap_or_default()
             }
             _ => String::new(),
         }
@@ -319,6 +349,7 @@ impl DetachedRunner {
         match self.backend {
             Backend::ProcessClaude | Backend::HarnessClaudeSdk => claude_stream::parse(log),
             Backend::ProcessCodex => codex_stream::parse(log),
+            Backend::ProcessAntigravity => antigravity_stream::parse(log),
             Backend::HarnessAdi => adi_events::parse(log),
             _ => TurnContent {
                 text: progress::text_of(log),
@@ -342,6 +373,12 @@ impl Runner for DetachedRunner {
                 decode::<ProcessCodexArguments>(&spec.arguments)?;
                 process::codex_mcp::validate(&spec.mcp_servers)
             }
+            Backend::ProcessAntigravity => {
+                if spec.code.only && cfg!(not(unix)) {
+                    crate::backends::mcp::refuse_code_only(&self.backend, spec.code)?;
+                }
+                decode::<ProcessAntigravityArguments>(&spec.arguments).map(drop)
+            }
             Backend::HarnessClaudeSdk => {
                 decode::<HarnessClaudeSdkArguments>(&spec.arguments).map(drop)
             }
@@ -363,7 +400,7 @@ impl Runner for DetachedRunner {
         let codex_identity =
             matches!(self.backend, Backend::ProcessCodex).then(|| CodexIdentity::of(spec));
         let session_id =
-            self.engine_session_id_with_identity(&state, session, codex_identity.as_ref());
+            self.engine_session_id_with_identity(&state, session, spec, codex_identity.as_ref());
         // Build the command before spawning anything, so an unrunnable engine or a mistyped
         // argument fails with nothing started and nothing written.
         let argv = self.argv(spec, session, message, &session_id, codex_identity.as_ref())?;
@@ -378,6 +415,7 @@ impl Runner for DetachedRunner {
         // write the ending to the moment there is one.
         let writer = session.state_writer();
         let capture_codex_thread = matches!(self.backend, Backend::ProcessCodex);
+        let capture_antigravity_conv = matches!(self.backend, Backend::ProcessAntigravity);
         let reaper_log = log.to_path_buf();
         let child = detached::spawn_child(
             dir,
@@ -393,7 +431,15 @@ impl Runner for DetachedRunner {
                     let discovered_thread_id = capture_codex_thread
                         .then(|| codex_thread_id(&reaper_log))
                         .flatten();
-                    forget_child(writer.as_ref(), child, discovered_thread_id);
+                    let discovered_antigravity_id = capture_antigravity_conv
+                        .then(|| antigravity_conversation_id(&reaper_log))
+                        .flatten();
+                    forget_child(
+                        writer.as_ref(),
+                        child,
+                        discovered_thread_id,
+                        discovered_antigravity_id,
+                    );
                 }
             },
         )?;
@@ -428,6 +474,10 @@ impl Runner for DetachedRunner {
                 // A credential switch deliberately starts a new thread. Drop the old login's id
                 // immediately; the new one is captured from this child's `thread.started` event.
                 state.codex_thread_id = (!session_id.is_empty()).then_some(session_id);
+            }
+            Backend::ProcessAntigravity => {
+                state.antigravity_credential = Some(antigravity_credential(spec).to_string());
+                state.antigravity_conversation_id = (!session_id.is_empty()).then_some(session_id);
             }
             _ => {}
         }
@@ -512,7 +562,10 @@ impl Runner for DetachedRunner {
     fn resumes(&self) -> bool {
         matches!(
             self.backend,
-            Backend::ProcessCodex | Backend::HarnessClaudeSdk | Backend::HarnessAdi
+            Backend::ProcessCodex
+                | Backend::ProcessAntigravity
+                | Backend::HarnessClaudeSdk
+                | Backend::HarnessAdi
         )
     }
 
@@ -565,27 +618,32 @@ impl Runner for DetachedRunner {
     fn image_delivery(&self) -> ImageDelivery {
         match self.backend {
             Backend::HarnessAdi => ImageDelivery::Inline,
-            Backend::ProcessClaude | Backend::ProcessCodex | Backend::HarnessClaudeSdk => {
-                ImageDelivery::Path
-            }
+            Backend::ProcessClaude
+            | Backend::ProcessCodex
+            | Backend::ProcessAntigravity
+            | Backend::HarnessClaudeSdk => ImageDelivery::Path,
             _ => ImageDelivery::None,
         }
     }
 
     fn emits(&self) -> EventKinds {
         match self.backend {
-            Backend::ProcessClaude | Backend::HarnessClaudeSdk => EventKinds {
+            Backend::ProcessClaude
+            | Backend::HarnessClaudeSdk
+            | Backend::ProcessAntigravity => EventKinds {
                 message: true,
                 tool_call: true,
                 thinking: true,
                 metrics: true,
             },
-            Backend::ProcessCodex | Backend::HarnessAdi => EventKinds {
-                message: true,
-                tool_call: true,
-                thinking: false,
-                metrics: true,
-            },
+            Backend::ProcessCodex | Backend::HarnessAdi => {
+                EventKinds {
+                    message: true,
+                    tool_call: true,
+                    thinking: false,
+                    metrics: true,
+                }
+            }
             _ => EventKinds::default(),
         }
     }
@@ -681,6 +739,14 @@ struct State {
     /// only when it is still looking at the same Codex state and account.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     codex_auth_context: Option<String>,
+    /// Antigravity's generated conversation id (`init.conversation_id`), resumed via
+    /// `--conversation <id>` on follow-up turns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    antigravity_conversation_id: Option<String>,
+    /// Stable identity of the login beside which [`antigravity_conversation_id`](Self::antigravity_conversation_id)
+    /// lives. Never a secret value; this is the pinned LLM backend's credential key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    antigravity_credential: Option<String>,
 }
 
 impl State {
@@ -720,7 +786,12 @@ impl State {
 /// own pid there — and clearing it would leave a live child that nothing lists and nothing can
 /// stop. The comparison and write are atomic: re-reading and then blindly writing would still let
 /// turn N+1 land in the narrow gap between those operations.
-fn forget_child(writer: &dyn StateWriter, child: Spawned, codex_thread_id: Option<String>) {
+fn forget_child(
+    writer: &dyn StateWriter,
+    child: Spawned,
+    codex_thread_id: Option<String>,
+    antigravity_conversation_id: Option<String>,
+) {
     let Some(observed) = writer.state() else {
         return;
     };
@@ -734,6 +805,9 @@ fn forget_child(writer: &dyn StateWriter, child: Spawned, codex_thread_id: Optio
     state.started = None;
     if let Some(thread_id) = codex_thread_id {
         state.codex_thread_id = Some(thread_id);
+    }
+    if let Some(conv_id) = antigravity_conversation_id {
+        state.antigravity_conversation_id = Some(conv_id);
     }
     let _ = writer.compare_and_set_state(&observed, state.into_value());
 }
@@ -770,6 +844,32 @@ fn codex_credential(spec: &RunSpec) -> &str {
     spec.credential
         .as_deref()
         .unwrap_or("runtime:process:codex")
+}
+
+fn antigravity_conversation_id(path: &Path) -> Option<String> {
+    let mut bytes = Vec::new();
+    File::open(path)
+        .ok()?
+        .take(MAX_PARSE_BYTES)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    antigravity_stream::conversation_id(&bytes)
+}
+
+fn antigravity_conversation(state: &State, session: &dyn Session) -> Option<String> {
+    state
+        .antigravity_conversation_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(ToString::to_string)
+        .or_else(|| antigravity_conversation_id(session.log_path()))
+}
+
+fn antigravity_credential(spec: &RunSpec) -> &str {
+    spec.credential
+        .as_deref()
+        .unwrap_or("runtime:process:antigravity")
 }
 
 /// The two names a Codex thread has to stay under: ADI's logical backend credential and the
@@ -2384,10 +2484,14 @@ mod tests {
         let runner = DetachedRunner::new(backend);
         let codex_identity =
             matches!(runner.backend, Backend::ProcessCodex).then(|| CodexIdentity::of(spec));
-        let session_id = if matches!(runner.backend, Backend::ProcessCodex) {
+        let session_id = if matches!(
+            runner.backend,
+            Backend::ProcessCodex | Backend::ProcessAntigravity
+        ) {
             runner.engine_session_id_with_identity(
                 &State::read(session),
                 session,
+                spec,
                 codex_identity.as_ref(),
             )
         } else {
@@ -2996,7 +3100,8 @@ mod tests {
             .expect("record a thread id for turn 2");
 
         let identity = CodexIdentity::of(&run);
-        let session_id = runner.engine_session_id_with_identity(&state, &session, Some(&identity));
+        let session_id =
+            runner.engine_session_id_with_identity(&state, &session, &run, Some(&identity));
         assert!(
             matches!(
                 runner.argv(&run, &session, "continue", &session_id, Some(&identity)),
@@ -4294,6 +4399,7 @@ mod tests {
                 started: Some(111),
             },
             None,
+            None,
         );
         assert_eq!(State::read(&session).pid, None);
 
@@ -4743,6 +4849,7 @@ mod tests {
                 started: Some(111),
             },
             Some("codex-thread".to_string()),
+            Some("agy-conv".to_string()),
         );
 
         let state = State::read(&session);
@@ -4757,6 +4864,11 @@ mod tests {
             state.codex_thread_id.as_deref(),
             Some("codex-thread"),
             "Codex's generated id is captured before the child is forgotten",
+        );
+        assert_eq!(
+            state.antigravity_conversation_id.as_deref(),
+            Some("agy-conv"),
+            "Antigravity's generated conversation id is captured before the child is forgotten",
         );
     }
 
@@ -4781,6 +4893,7 @@ mod tests {
                 started: Some(111),
             },
             Some("stale-thread".to_string()),
+            Some("stale-agy-conv".to_string()),
         );
 
         let state = State::read(&session);
@@ -4790,6 +4903,10 @@ mod tests {
             state.codex_thread_id, None,
             "an old reaper cannot replace the live turn's thread"
         );
+        assert_eq!(
+            state.antigravity_conversation_id, None,
+            "an old reaper cannot replace the live turn's Antigravity conversation"
+        );
 
         // A pid that matches but an incarnation that does not is still somebody else's ending.
         forget_child(
@@ -4798,6 +4915,7 @@ mod tests {
                 pid: 999,
                 started: Some(111),
             },
+            None,
             None,
         );
         assert_eq!(State::read(&session).pid, Some(999));
@@ -4859,6 +4977,7 @@ mod tests {
                 started: Some(111),
             },
             Some("stale-thread".to_string()),
+            None,
         );
 
         assert_eq!(
@@ -4898,5 +5017,99 @@ mod tests {
             std::thread::sleep(POLL);
         }
         std::thread::sleep(Duration::from_millis(50));
+    }
+
+    #[test]
+    fn process_antigravity_first_turn_resumes_and_resets_on_credential_change() {
+        let session = FakeSession::new("agy-resume");
+        let mut run = spec(json!({ "model": "gemini-4-neon-high", "mode": "auto" }));
+        run.system_prompt = Some("be concise".into());
+
+        // Turn 1: fresh ACP session, no conversation_id, composed system prompt included.
+        let first = argv_of(Backend::ProcessAntigravity, &run, &session, "hello");
+        assert_eq!(first[0], "python3");
+        let opts1: Value = serde_json::from_str(&first[4]).expect("options json");
+        assert_eq!(opts1["command"], json!(["agy", "acp"]));
+        assert_eq!(opts1["model"], "gemini-4-neon-high");
+        assert_eq!(opts1["mode"], "auto");
+        assert!(opts1.get("conversation_id").is_none());
+        assert_eq!(opts1["system_prompt"], "be concise");
+        assert_eq!(first.last().map(String::as_str), Some("hello"));
+
+        // Turn 2 on the same credential: resumes via session/load with the captured conversation id.
+        let resumed_session = FakeSession::new("agy-resume-2").started().with_state(json!({
+            "antigravity_conversation_id": "conv-abc-123",
+            "antigravity_credential": "runtime:process:antigravity",
+        }));
+        let second = argv_of(Backend::ProcessAntigravity, &run, &resumed_session, "follow up");
+        let opts2: Value = serde_json::from_str(&second[4]).expect("options json");
+        assert_eq!(opts2["conversation_id"], "conv-abc-123");
+        assert_eq!(second.last().map(String::as_str), Some("follow up"));
+
+        // Turn 3 after switching to a different credential: starts a fresh conversation rather
+        // than handing another login's conversation id to `session/load`.
+        run.credential = Some("secret:GEMINI_API_KEY".into());
+        let switched = argv_of(Backend::ProcessAntigravity, &run, &resumed_session, "after failover");
+        let opts3: Value = serde_json::from_str(&switched[4]).expect("options json");
+        assert!(
+            opts3.get("conversation_id").is_none(),
+            "credential switch must not resume the previous account's conversation: {opts3:?}"
+        );
+        assert_eq!(opts3["system_prompt"], "be concise");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_antigravity_supports_code_only_and_mcp_servers() {
+        let runner = DetachedRunner::new(Backend::ProcessAntigravity);
+        let session = FakeSession::new("agy-code-only");
+        let mut run = spec(json!({ "model": "gemini-3.8-flash-low" }));
+        run.system_prompt = Some("Solve tasks with code.".into());
+        run.code = crate::CodeTools::ONLY_TYPESCRIPT;
+        run.mcp_servers = vec![crate::mcp_servers::ResolvedMcpServer {
+            id: "n8n".into(),
+            transport: crate::mcp_servers::ResolvedTransport::Stdio {
+                command: "npx".into(),
+                args: Vec::new(),
+                env: std::collections::BTreeMap::new(),
+            },
+        }];
+
+        runner.check(&run).expect("code_only + mcp_servers accepted on process:antigravity");
+        let argv = argv_of(Backend::ProcessAntigravity, &run, &session, "run it");
+        let opts: Value = serde_json::from_str(&argv[4]).expect("options json");
+        assert_eq!(opts["code_only"], "TsCode");
+        let prompt = opts["system_prompt"].as_str().expect("composed system prompt");
+        assert!(prompt.contains("Solve tasks with code."));
+        assert!(prompt.contains("# What your code can call"), "{prompt}");
+        assert!(prompt.contains("`mcp.n8n`"), "{prompt}");
+        let mcps = opts["mcp_servers"].as_array().expect("mcp_servers");
+        assert_eq!(mcps.len(), 1, "code-only agent routes MCP servers through adi mcp-serve");
+        assert_eq!(mcps[0]["name"], "adi");
+    }
+
+    #[test]
+    fn process_antigravity_events_parse_stream_json_log() {
+        let session = FakeSession::new("agy-events").started();
+        session.write_log(concat!(
+            r#"{"event":"init","conversation_id":"conv-1","init":{"model":"gemini-4-neon-high"}}"#,
+            "
+",
+            r#"{"event":"step_update","step_update":{"conversation_id":"conv-1","step_index":1,"state":"DONE","step_type":"tool","tool_name":"Bash","tool_info":{"name":"Bash","parameters":{"command":"pwd"},"output":"/tmp"}}}"#,
+            "
+",
+            r#"{"event":"step_update","step_update":{"conversation_id":"conv-1","step_index":2,"state":"DONE","step_type":"agent_response","text_delta":"All set."}}"#,
+            "
+",
+            r#"{"event":"result","result":{"conversation_id":"conv-1","status":"SUCCESS","response":"All set.","usage":{"input_tokens":10,"output_tokens":5}}}"#,
+            "
+",
+        ));
+
+        let runner = DetachedRunner::new(Backend::ProcessAntigravity);
+        let batch = runner.events(&session, None).expect("events");
+        assert!(batch.events.iter().any(|e| matches!(e, RunEvent::Step(crate::progress::Step::Tool { name, .. }) if name == "Bash")));
+        assert!(batch.events.iter().any(|e| matches!(e, RunEvent::Answer { text } if text == "All set.")));
+        assert!(batch.events.iter().any(|e| matches!(e, RunEvent::Finished { ok: true, error: None })));
     }
 }

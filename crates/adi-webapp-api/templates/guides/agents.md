@@ -5,9 +5,10 @@ optional secrets — stored under `~/.adi/mono/agents/`. `adi-agent` is the defa
 environment's root agent); everything else is an ordinary definition.
 
 ## Backends (runtimes)
-- `pty:claude` / `pty:codex` — the CLI in a live terminal session (uses your subscription login).
+- `pty:claude` / `pty:codex` / `pty:antigravity` — the CLI in a live terminal session (uses your subscription/account login).
 - `process:claude` — the Claude CLI headless, one `--print` turn.
 - `process:codex` — the Codex CLI headless, with replies resuming the same thread.
+- `process:antigravity` — the Google Antigravity (`agy`) CLI headless, with replies resuming the same conversation.
 - `harness:claude-sdk` — `claude --print` under ADI's harness (a turn cap + scoped tools).
 - `harness:adi` — ADI's own agent loop, multi-provider (needs a provider API key).
 
@@ -70,9 +71,10 @@ rule tools follow: create it with `{{cli}} mcp save`, then attach it to the agen
   (the same allowlist `env`/secrets already follow). A server naming one the agent never attached,
   or that has no value anywhere on this machine, is dropped **whole** at launch — never started
   half-authenticated — so a server you attached but see no tools from is usually a missing secret.
-- Not every backend can reach one: `harness:claude-sdk`, `pty:claude`, `process:claude`, and
-  `process:codex` can; `harness:adi` and `pty:codex` refuse to launch an agent that lists any,
-  rather than silently dropping them.
+- Not every backend can reach one: `harness:claude-sdk`, `pty:claude`, `process:claude`,
+  `process:codex`, and `process:antigravity` can; `harness:adi` (unless `code_only`), `pty:codex`,
+  and `pty:antigravity` refuse to launch an agent that lists any, rather than silently dropping
+  them.
 
 ## The run environment (`path` / `env`)
 A run is started by the daemon, so it inherits launchd's minimal environment — a bare `PATH` like
@@ -208,7 +210,8 @@ bugbounty = 2             # …and at most 2 of those may be this project's (0 =
   **Agents** panel (that project's).
 
 ## Notes
-- pty backends keep no run history — their live session *is* the run. Harness backends and
-  `process:codex` produce answerable conversations; `process:claude` produces one finished turn.
+- pty backends keep no run history — their live session *is* the run. Harness backends,
+  `process:codex`, and `process:antigravity` produce answerable conversations; `process:claude`
+  produces one finished turn.
   Only an answerable backend can ask you anything: a backend with no thread to continue has nowhere
   to deliver an answer into.

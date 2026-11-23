@@ -93,6 +93,15 @@ string_enum! {
 }
 
 string_enum! {
+    /// Google Antigravity (`agy`) agent execution mode (`--mode`).
+    AntigravityMode {
+        AcceptEdits => "accept-edits",
+        Auto => "auto",
+        Plan => "plan",
+    }
+}
+
+string_enum! {
     /// The model provider the `harness:adi` loop calls; provider-specific knobs are keyed off it.
     HarnessProvider {
         Anthropic => "anthropic",
@@ -157,6 +166,8 @@ pub(crate) fn validate_builtin(manifest: &StoredAgentManifest) -> AgentResult<()
         Backend::ProcessClaude,
         Backend::PtyCodex,
         Backend::ProcessCodex,
+        Backend::PtyAntigravity,
+        Backend::ProcessAntigravity,
         Backend::HarnessClaudeSdk,
         Backend::HarnessAdi,
     ];
@@ -199,6 +210,8 @@ fn recognised_keys(runtime: &Backend, value: &serde_json::Value) -> AgentResult<
         Backend::ProcessClaude => keys_of::<ProcessClaudeArguments>(value),
         Backend::PtyCodex => keys_of::<PtyCodexArguments>(value),
         Backend::ProcessCodex => keys_of::<ProcessCodexArguments>(value),
+        Backend::PtyAntigravity => keys_of::<PtyAntigravityArguments>(value),
+        Backend::ProcessAntigravity => keys_of::<ProcessAntigravityArguments>(value),
         Backend::HarnessClaudeSdk => keys_of::<HarnessClaudeSdkArguments>(value),
         Backend::HarnessAdi => keys_of::<HarnessAdiArguments>(value),
         Backend::Other(_) => Ok(Vec::new()),
@@ -315,6 +328,77 @@ pub struct ProcessCodexArguments {
     /// so a manifest written while it was a choice still loads under `deny_unknown_fields`.
     #[serde(default, deserialize_with = "boolish", skip_serializing)]
     pub json_events: bool,
+}
+
+/// Arguments accepted by the `pty:antigravity` backend (`agy` in a live terminal session).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PtyAntigravityArguments {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Reasoning effort (`low|medium|high|xhigh|max`), matching `agy --effort`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<ClaudeEffort>,
+    /// Agent execution mode (`accept-edits`, `auto`, `plan`), matching `agy --mode`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<AntigravityMode>,
+    /// Auto-approve all tool permission requests without prompting (`--dangerously-skip-permissions`).
+    #[serde(default, deserialize_with = "boolish")]
+    pub dangerously_skip_permissions: bool,
+    /// Run in a sandbox with terminal restrictions enabled (`agy --sandbox`). Named separately from
+    /// Codex's string `sandbox` policy so cross-runtime `[arguments]` tables validate cleanly.
+    #[serde(default, deserialize_with = "boolish")]
+    pub terminal_sandbox: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub add_dir: Option<String>,
+    /// Session-only settings JSON (inline JSON or file path), passed as `agy --settings`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settings: Option<String>,
+    /// Antigravity agent profile name (`agy --agent`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+}
+
+/// Arguments accepted by the `process:antigravity` backend (`agy --output-format stream-json -p`).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProcessAntigravityArguments {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Reasoning effort (`low|medium|high|xhigh|max`), matching `agy --effort`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<ClaudeEffort>,
+    /// Agent execution mode (`accept-edits`, `auto`, `plan`), matching `agy --mode`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<AntigravityMode>,
+    /// Auto-approve all tool permission requests without prompting (`--dangerously-skip-permissions`).
+    #[serde(default, deserialize_with = "boolish")]
+    pub dangerously_skip_permissions: bool,
+    /// Run in a sandbox with terminal restrictions enabled (`agy --sandbox`).
+    #[serde(default, deserialize_with = "boolish")]
+    pub terminal_sandbox: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub add_dir: Option<String>,
+    /// Session-only settings JSON (inline JSON or file path), passed as `agy --settings`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settings: Option<String>,
+    /// Antigravity agent profile name (`agy --agent`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    /// Optional time limit for print mode (e.g. `5m0s`), matching `agy --print-timeout`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub print_timeout: Option<String>,
+    /// Disable slash command and skill expansion in print mode (`agy --disable-slash-commands`).
+    #[serde(default, deserialize_with = "boolish")]
+    pub disable_slash_commands: bool,
 }
 
 /// Arguments accepted by the `harness:claude-sdk` backend: the `claude` CLI run headless by ADI's
@@ -637,6 +721,22 @@ mod tests {
         .expect("the Codex struct ignores Claude-only keys");
         assert!(codex.skip_git_repo_check);
         assert_eq!(codex.system_prompt.as_deref(), Some("hi"));
+
+        // ...and the Antigravity struct ignores Claude and Codex keys while keeping its own.
+        let agy: ProcessAntigravityArguments = serde_json::from_value(serde_json::json!({
+            "system_prompt": "hi",
+            "allowed_tools": "Read Edit",
+            "sandbox": "workspace-write",
+            "mode": "auto",
+            "terminal_sandbox": true,
+            "dangerously_skip_permissions": true,
+            "effort": "high",
+        }))
+        .expect("the Antigravity struct ignores Claude/Codex keys");
+        assert_eq!(agy.mode, Some(AntigravityMode::Auto));
+        assert!(agy.terminal_sandbox);
+        assert!(agy.dangerously_skip_permissions);
+        assert_eq!(agy.effort, Some(ClaudeEffort::High));
     }
 
     fn manifest_v3(arguments: serde_json::Value) -> StoredAgentManifest {
@@ -654,14 +754,19 @@ mod tests {
         }
     }
 
-    /// The whole point of the fix: a chained agent carrying one row's Claude key and another row's
-    /// Codex key validates, because each is owned by *some* built-in runtime.
+    /// The whole point of the fix: a chained agent carrying one row's Claude key, another row's
+    /// Codex key, and another row's Antigravity key validates, because each is owned by *some*
+    /// built-in runtime.
     #[test]
     fn validate_builtin_accepts_each_rows_arguments() {
         let agent = manifest_v3(serde_json::json!({
             "system_prompt": "hi",
             "allowed_tools": "Read Edit",
             "skip_git_repo_check": true,
+            "sandbox": "workspace-write",
+            "mode": "auto",
+            "terminal_sandbox": true,
+            "print_timeout": "5m0s",
         }));
         validate_builtin(&agent).expect("cross-runtime arguments are accepted");
     }

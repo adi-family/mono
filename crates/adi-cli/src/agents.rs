@@ -41,7 +41,7 @@ pub(crate) enum AgentsCommand {
     /// Create or replace an agent definition.
     Save {
         name: String,
-        /// The `executor:what` runtime this agent runs on, e.g. `pty:claude`, `process:codex`.
+        /// The `executor:what` runtime this agent runs on, e.g. `pty:claude`, `process:codex`, `process:antigravity`.
         /// **Only for an agent with no `--llm` chain**: one that has a chain takes its runtime from
         /// the backend it starts on, so naming it here is refused rather than quietly ignored.
         #[arg(long)]
@@ -67,7 +67,7 @@ pub(crate) enum AgentsCommand {
         model: Option<String>,
         #[arg(long)]
         permission_mode: Option<String>,
-        /// `harness:claude-sdk` only: the engine settings JSON this agent runs under — a path or an
+        /// `harness:claude-sdk` / `*:antigravity`: the engine settings JSON this agent runs under — a path or an
         /// inline object. Its `env` block picks the account and models, so two agents on one machine
         /// can run the same engine against different APIs.
         #[arg(long)]

@@ -4,14 +4,14 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-172 structs · 51 enums · 5 type aliases across 66 files.
+174 structs · 52 enums · 5 type aliases across 67 files.
 
 ## Index
 
 - [`src/agent.rs`](#srcagentrs) — `RawAgentArguments`, `CodeOnly`, `StoredAgentManifest`, `StoredAgent`, `SecretAttachment`, `AgentManifest`, `Agent`
 - [`src/analytics/mod.rs`](#srcanalyticsmodrs) — `PromptToken`, `Source`, `Shape`, `Site`, `Repeat`, `NearDuplicates`, `TokenReport`, `Options`, `Segment`
 - [`src/analytics/suffix.rs`](#srcanalyticssuffixrs) — `RawRepeat`
-- [`src/arguments.rs`](#srcargumentsrs) — `PtyClaudeArguments`, `ProcessClaudeArguments`, `PtyCodexArguments`, `ProcessCodexArguments`, `HarnessClaudeSdkArguments`, `HarnessAdiArguments`, `AgentSummaryArguments`, `Boolish`, `U64ish`, `F64ish`
+- [`src/arguments.rs`](#srcargumentsrs) — `PtyClaudeArguments`, `ProcessClaudeArguments`, `PtyCodexArguments`, `ProcessCodexArguments`, `PtyAntigravityArguments`, `ProcessAntigravityArguments`, `HarnessClaudeSdkArguments`, `HarnessAdiArguments`, `AgentSummaryArguments`, `Boolish`, `U64ish`, `F64ish`
 - [`src/auto_title.rs`](#srcauto_titlers) — `AutoTitleSettings`
 - [`src/awaits.rs`](#srcawaitsrs) — `Await`, `Cause`, `Woken`, `Retired`, `Awaits`, `Request`, `Caller`, `Change`, `CheckOutcome`
 - [`src/backend.rs`](#srcbackendrs) — `Backend`
@@ -27,6 +27,7 @@
 - [`src/backends/jobs.rs`](#srcbackendsjobsrs) — `Job`
 - [`src/backends/mcp.rs`](#srcbackendsmcprs) — `ToolScope`, `Standing`
 - [`src/backends/mcp_hub.rs`](#srcbackendsmcp_hubrs) — `Hub`, `Inner`, `Outcome`, `Client`, `Link`, `Failed`, `StdioLink`, `HttpLink`
+- [`src/backends/process/antigravity.rs`](#srcbackendsprocessantigravityrs) — `Continuation`
 - [`src/backends/process/codex.rs`](#srcbackendsprocesscodexrs) — `Continuation`
 - [`src/backends/shell.rs`](#srcbackendsshellrs) — `Shell`
 - [`src/dispatch.rs`](#srcdispatchrs) — `Dispatched`
@@ -455,6 +456,72 @@ pub struct ProcessCodexArguments {
 }
 ```
 
+### struct `PtyAntigravityArguments`
+
+Arguments accepted by the `pty:antigravity` backend (`agy` in a live terminal session).
+
+```rust
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PtyAntigravityArguments {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<ClaudeEffort>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<AntigravityMode>,
+    #[serde(default, deserialize_with = "boolish")]
+    pub dangerously_skip_permissions: bool,
+    #[serde(default, deserialize_with = "boolish")]
+    pub terminal_sandbox: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub add_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settings: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+}
+```
+
+### struct `ProcessAntigravityArguments`
+
+Arguments accepted by the `process:antigravity` backend (`agy --output-format stream-json -p`).
+
+```rust
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProcessAntigravityArguments {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<ClaudeEffort>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<AntigravityMode>,
+    #[serde(default, deserialize_with = "boolish")]
+    pub dangerously_skip_permissions: bool,
+    #[serde(default, deserialize_with = "boolish")]
+    pub terminal_sandbox: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub add_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settings: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub print_timeout: Option<String>,
+    #[serde(default, deserialize_with = "boolish")]
+    pub disable_slash_commands: bool,
+}
+```
+
 ### struct `HarnessClaudeSdkArguments`
 
 Arguments accepted by the `harness:claude-sdk` backend: the `claude` CLI run headless by ADI's harness. It shares the Claude engine knobs with the pty/process Claude backends, but adds a harness turn cap (`max_turns`) and the adi-mono command scope (`tools`), and drops the process-only options (`output_format`, `max_budget_usd`, `add_dir`).
@@ -779,8 +846,10 @@ struct CheckOutcome {
 pub enum Backend {
     PtyClaude,
     PtyCodex,
+    PtyAntigravity,
     ProcessClaude,
     ProcessCodex,
+    ProcessAntigravity,
     HarnessClaudeSdk,
     HarnessAdi,
     Other(String),
@@ -1378,6 +1447,23 @@ struct HttpLink {
     session: Option<String>,
     protocol: Option<String>,
     next: u64,
+}
+```
+
+---
+
+## `src/backends/process/antigravity.rs`
+
+### enum `Continuation`
+
+Whether this turn starts a new Antigravity conversation or continues one established by an earlier turn (`session/load`).
+
+```rust
+pub(crate) enum Continuation<'a> {
+    First,
+    Resume {
+        conversation_id: &'a str,
+    },
 }
 ```
 
@@ -3058,6 +3144,10 @@ struct State {
     codex_credential: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     codex_auth_context: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    antigravity_conversation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    antigravity_credential: Option<String>,
 }
 ```
 

@@ -642,6 +642,16 @@ mod tests {
         assert!(
             backends
                 .iter()
+                .any(|b| b["id"] == "pty:antigravity" && b["executor"] == "pty")
+        );
+        assert!(
+            backends
+                .iter()
+                .any(|b| b["id"] == "process:antigravity" && b["executor"] == "process")
+        );
+        assert!(
+            backends
+                .iter()
                 .any(|b| b["id"] == "harness:adi" && b["executor"] == "harness")
         );
         // The retired wasm employee backend is gone from the catalog.
@@ -659,6 +669,9 @@ mod tests {
         }));
         for name in [
             "effort",
+            "mode",
+            "dangerously_skip_permissions",
+            "terminal_sandbox",
             "sandbox",
             "approval",
             "thinking",
@@ -694,6 +707,7 @@ mod tests {
         let store = temp_agents();
         let _ = save_agent(&store, br#"{"name":"solver","backend":"pty:claude"}"#, None);
         let _ = save_agent(&store, br#"{"name":"reviewer","backend":"process:codex"}"#, None);
+        let _ = save_agent(&store, br#"{"name":"agy-runner","backend":"process:antigravity"}"#, None);
         let _ = save_agent(&store, br#"{"name":"looper","backend":"harness:adi"}"#, None);
 
         let Response { status, body } = agents(&store);
@@ -703,9 +717,11 @@ mod tests {
         let looper = list.iter().find(|a| a["name"] == "looper").unwrap();
         let reviewer = list.iter().find(|a| a["name"] == "reviewer").unwrap();
         let solver = list.iter().find(|a| a["name"] == "solver").unwrap();
+        let agy_runner = list.iter().find(|a| a["name"] == "agy-runner").unwrap();
         assert_eq!(looper["runnable"], false);
         assert_eq!(reviewer["runnable"], true);
         assert_eq!(solver["runnable"], true);
+        assert_eq!(agy_runner["runnable"], true);
         assert_eq!(looper["running"], false);
         assert_eq!(reviewer["running"], false);
     }

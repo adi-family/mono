@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::arguments::{PtyClaudeArguments, PtyCodexArguments};
+use crate::arguments::{PtyAntigravityArguments, PtyClaudeArguments, PtyCodexArguments};
 use crate::backend::Backend;
 use crate::backends::{pty, quiet_codex_env};
 use crate::error::{Error, Result};
@@ -77,6 +77,11 @@ impl PtyRunner {
                 config.system_prompt = own_prompt(spec, config.system_prompt);
                 Ok(pty::codex::argv(&config, spec.cwd.to_str()))
             }
+            Backend::PtyAntigravity => {
+                let mut config = decode::<PtyAntigravityArguments>(&spec.arguments)?;
+                config.system_prompt = own_prompt(spec, config.system_prompt);
+                Ok(pty::antigravity::argv(&config))
+            }
             other => Err(Error::NotRunnable(other.to_string())),
         }
     }
@@ -94,6 +99,11 @@ impl Runner for PtyRunner {
                 crate::backends::mcp::refuse_code_only(&self.backend, spec.code)?;
                 crate::backends::mcp::refuse_unless_supported(&self.backend, &spec.mcp_servers)?;
                 decode::<PtyCodexArguments>(&spec.arguments).map(drop)
+            }
+            Backend::PtyAntigravity => {
+                crate::backends::mcp::refuse_code_only(&self.backend, spec.code)?;
+                crate::backends::mcp::refuse_unless_supported(&self.backend, &spec.mcp_servers)?;
+                decode::<PtyAntigravityArguments>(&spec.arguments).map(drop)
             }
             other => Err(Error::NotRunnable(other.to_string())),
         }
@@ -428,6 +438,15 @@ mod tests {
         assert_eq!(codex.last().map(String::as_str), Some("You are a solver."));
         let cd = codex.iter().position(|arg| arg == "--cd").expect("--cd");
         assert_eq!(codex[cd + 1], spec.cwd.display().to_string());
+
+        let agy = PtyRunner::new(Backend::PtyAntigravity)
+            .argv(&spec, &FakeSession::new("solver"))
+            .expect("argv");
+        assert_eq!(agy[0], "agy");
+        assert_eq!(
+            agy.last().map(String::as_str),
+            Some("--prompt-interactive=You are a solver.")
+        );
     }
 
     /// A pane gets the same tool surface a headless run does: ADI's shell in, the engine's own out.

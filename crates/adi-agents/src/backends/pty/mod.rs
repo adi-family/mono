@@ -4,6 +4,7 @@
 //! which reaches [`adi_pty`] itself. What stays here is the part that is *not* about one session:
 //! how an agent's name becomes a session name, and the sweep over every live one.
 
+pub(crate) mod antigravity;
 pub(crate) mod claude;
 pub(crate) mod codex;
 

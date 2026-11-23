@@ -162,7 +162,7 @@ pub(crate) fn agents_view(
             "Run starts a pty backend in an interactive " <code>"adi-agent-<name>"</code>
             " session you type into. A headless backend starts from a task you give it. "
             <code>"process:claude"</code>" is an independent one-shot run; "
-            <code>"process:codex"</code>" and the "<code>"harness"</code>
+            <code>"process:codex"</code>", "<code>"process:antigravity"</code>", and the "<code>"harness"</code>
             " backends start an answerable "<strong>"conversation"</strong>": Chat… sends a first \
              message, the agent answers, and you reply to continue the same thread. Several can run \
              at once, and each keeps its own log and transcript under "
