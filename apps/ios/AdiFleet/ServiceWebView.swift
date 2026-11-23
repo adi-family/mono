@@ -26,6 +26,11 @@ struct ServiceView: View {
     @State private var failure: String?
     @State private var asking = false
     @State private var challenge = AuthChallenge()
+    /// Counts the tries at opening this service. Changing it is what runs the opening again.
+    @State private var attempt = 0
+    /// True once the node has agreed to share the service, so a second try does not ask again —
+    /// and does not wait out the node's grant window a second time.
+    @State private var granted = false
 
     var body: some View {
         Group {
@@ -50,6 +55,12 @@ struct ServiceView: View {
                         .foregroundStyle(ADI.ink2)
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: 320)
+                    // The way back from a failure that has passed. Without it the only one was
+                    // leaving the screen and tapping the same row again.
+                    Button("Try again") { retry() }
+                        .buttonStyle(.adi(.normal))
+                        .padding(.top, 8)
+                        .accessibilityIdentifier("retry")
                 }
                 .padding(32)
             } else {
@@ -84,7 +95,13 @@ struct ServiceView: View {
         // swipe — a gesture a person has to already know, that a page handling its own horizontal
         // drags can swallow, and that nothing on screen suggests. Whatever is behind that bar, the
         // app has to remain obviously escapable from it.
-        .task {
+
+        // The mesh has just looked for a connection again — the phone changed network, or came
+        // back from a long while away. Whatever failed before that failed on the old one.
+        .onChange(of: model.reconnects) {
+            if failure != nil { retry() }
+        }
+        .task(id: attempt) {
             #if DEBUG
             if let panel = DevPanel.current, panel.node.petname == node.petname {
                 await panel.wake(service)
@@ -93,7 +110,7 @@ struct ServiceView: View {
                 return
             }
             #endif
-            if share {
+            if share, !granted {
                 asking = true
                 let refusal = await model.share(service, on: node)
                 if let refusal {
@@ -117,6 +134,7 @@ struct ServiceView: View {
                 // won and the iPad usually lost, which is the worst kind: it looks like a flake.
                 try? await Task.sleep(for: .seconds(6))
                 asking = false
+                granted = true
             }
             do {
                 port = try await Mesh.shared.open(node: node.petname, service: service)
@@ -134,6 +152,13 @@ struct ServiceView: View {
         } message: {
             Text("This node asks for a password. It was shown once on the node when it paired.")
         }
+    }
+
+    /// Open the service again from the top: the port is asked for again, and the page — a new
+    /// web view, since the old one is gone with the failure screen — is loaded again.
+    private func retry() {
+        failure = nil
+        attempt += 1
     }
 }
 

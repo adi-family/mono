@@ -216,14 +216,62 @@ services" call, and dashboards are only listed because the control panel knows t
 For the rest, the app shows what the node's grants name: `http:app` lists one service; `http:*` lists
 what it can and offers a field to name another. Nothing here guesses.
 
+## Losing the connection, and finding it again
+
+A phone changes network all day — out of the door onto cellular, back onto Wi-Fi, a tunnel, a long
+while in a pocket — and none of it may need a person to pull anything down or relaunch the app.
+Three things can go stale, each with its own repair, and all three live in the core
+(`crates/adi-mesh-ffi/src/viewer.rs`):
+
+| what | when it goes | the repair |
+| --- | --- | --- |
+| the pooled connections | every time the app is frozen | a new pool; the next request dials (`resume`) |
+| the loopback listeners | the system takes a suspended app's sockets back, and a listener that lost its socket *"will no longer be listening … even after it has been resumed"* (Apple TN2277) | every listener binds its own port again (`resume`) |
+| the endpoint itself — its UDP sockets, its relay session, its idea of the network | the network changed, changed and changed back, or changed while the process could not watch | a new endpoint on the same identity (`reconnect`) |
+
+The third is the one a new pool cannot fix: it dials again over the *same* endpoint. iroh repairs
+an endpoint in place when it sees the network change, but it compares interface lists to decide
+whether anything happened — so the same Wi-Fi after a detour through cellular reads as nothing —
+its "did I just wake up?" check is switched off on iOS, and it re-binds a socket only on the two
+errors it knows, where a socket the system took back mostly answers `EBADF`.
+
+Who asks for which:
+
+- **Back in the foreground** → `adi_mesh_resume`, and `adi_mesh_reconnect` as well when the app was
+  away for 20 seconds or more (`FleetModel.resume(after:)`). Under that the connections are
+  probably alive, and a page with a socket open should not be cut off for a glance at a message;
+  past it the machines have given up on them anyway.
+- **The network path changed with the app open** → `adi_mesh_reconnect`
+  (`NetworkChangeWatcher` → `FleetModel.networkChanged`), once the new path has held for 600 ms.
+- **Nobody said anything, and requests keep failing** → the core looks into it by itself: two
+  failures in a row, nothing succeeded for 20 seconds, no page still being carried. A machine that
+  is off and a connection that is lost look the same from one request, so it first asks a
+  *witness* — the machine that answered most recently and has not failed since. If that one still
+  answers, the endpoint is fine and is kept; only if it does not, or there is nobody to ask, is
+  the endpoint replaced. It backs off either way (15 s doubling to 5 minutes), because a fleet
+  whose only machine is switched off looks exactly like a lost connection for as long as it is.
+
+A reconnect closes the old endpoint *before* binding the new one — two endpoints alive on one key
+race for the same relay session — and keeps every loopback port, so a page keeps its origin. A
+request that arrives during the swap waits for the new endpoint; one that was in flight on the old
+one starts over on the new one instead of failing (nothing had reached the service yet). Streams
+that were open are cut, which is why a reconnect is not done on every foregrounding.
+
+And the screens ask again on their own afterwards, which is the half that was missing longest: the
+apps grid is re-read on every foregrounding and network change and, for a machine that could not be
+reached, every few seconds while the app is in front (`RootView`); the "node is not reachable" page
+a web view may be showing reloads itself; a service that failed to open has **Try again** and
+takes it by itself when the mesh reconnects. Chats were already polling.
+
 ## What is not built
 
 - **Real `*.n.adi` names in Safari.** That needs an `NEPacketTunnelProvider` to own DNS and TCP
   system-wide, which needs the Network Extension entitlement and a paid membership. The Rust core
   is already the right shape for it — the same viewer, with a packet source instead of a listener.
 - **Serving from the phone.** A viewer hosts nothing, deliberately.
-- **Background operation.** iOS freezes the process; the app retires its connection pool on the way
-  back to the foreground and re-dials. A push-driven wake would be a separate design.
+- **Background operation.** iOS freezes the process, and the app makes good what that cost on the
+  way back to the foreground (see *Losing the connection, and finding it again*). A push-driven
+  wake would be a separate design.
 
 ## Testing against a real node
 

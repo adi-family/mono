@@ -33,6 +33,14 @@ final class FleetModel {
     /// Deliberately not `failure`: one sleeping node must not raise an alert over the whole fleet,
     /// and the sentence belongs next to the node it is about.
     private(set) var listingFailure: [String: String] = [:]
+    /// Petnames whose last listing failed *on the way to the machine* — it was not reached, or did
+    /// not answer. Those are asked again on their own (`retryUnreachable`). A machine this phone
+    /// has no password for is in `listingFailure` and not here: asking again would get the same
+    /// answer until a person does something.
+    private(set) var unreachable: Set<String> = []
+    /// How many times the mesh has been told to look for a connection again. A screen holding a
+    /// failure of its own watches this to know when asking again is worth it.
+    private(set) var reconnects = 0
 
     private var started = false
 
@@ -128,6 +136,7 @@ final class FleetModel {
         guard let credential = Keychain.credential(for: node.petname) else {
             listingFailure[node.petname] =
                 "No password for \(node.petname) on this phone yet — open its control panel once and sign in."
+            unreachable.remove(node.petname)
             EventLog.shared.failed(node.petname, "Apps", listingFailure[node.petname] ?? "")
             return
         }
@@ -138,11 +147,13 @@ final class FleetModel {
                 let catalog = try await Mesh.shared.dashboards(node: node.petname, credential: credential)
                 dashboards[node.petname] = catalog.dashboards
                 listingFailure[node.petname] = nil
+                unreachable.remove(node.petname)
                 EventLog.shared.succeeded(node.petname, "Apps")
                 return
             } catch {
                 guard attempt < attempts else {
                     listingFailure[node.petname] = error.localizedDescription
+                    unreachable.insert(node.petname)
                     EventLog.shared.failed(node.petname, "Apps", error.localizedDescription)
                     return
                 }
@@ -185,14 +196,57 @@ final class FleetModel {
             .contains { $0.service == service && $0.allowed }
     }
 
-    /// Called when the app returns to the foreground: the OS froze the process, so every pooled
-    /// connection is suspect and the node list may have changed under a pairing that landed just
-    /// before suspension.
-    func resume() async {
+    /// How long in the background before the mesh's endpoint is replaced on the way back, rather
+    /// than only its connections.
+    ///
+    /// Past this the old endpoint has nothing left worth keeping: the machines gave up on its
+    /// connections after their idle timeout (30 s, 15 s for a direct path), so every stream is
+    /// dead either way, while its sockets may have been taken back by the system and the network
+    /// under it may be a different one. Under it the connections are probably still alive, and a
+    /// page with a socket open should not be made to reconnect because somebody glanced at a
+    /// message.
+    private static let reconnectAfter: TimeInterval = 20
+
+    /// Called when the app returns to the foreground after `away` seconds in the background.
+    ///
+    /// The OS froze the process, so every pooled connection is suspect, the listeners the screens
+    /// talk to may have been taken away, and the node list may have changed under a pairing that
+    /// landed just before suspension. Everything on screen is asked for again afterwards — a
+    /// listing that failed before the app went away would otherwise still be failing on screen.
+    func resume(after away: TimeInterval) async {
         await Mesh.shared.resume()
+        if away >= Self.reconnectAfter {
+            await Mesh.shared.reconnect()
+            reconnects += 1
+        }
         await refresh()
         if !ready {
             Task { await pollReadiness() }
+        }
+    }
+
+    /// Called when the phone has moved to a different network with the app open.
+    ///
+    /// The mesh looks for a connection again from the socket up, and then everything is asked for
+    /// again — which waits for the new endpoint rather than racing it. Without the second half a
+    /// grid that failed to load on the way out of the door stayed failed in the car: the
+    /// connection came back and nothing was left that would use it.
+    func networkChanged() async {
+        await Mesh.shared.reconnect()
+        reconnects += 1
+        await refresh()
+        if !ready {
+            Task { await pollReadiness() }
+        }
+    }
+
+    /// Ask the machines that could not be reached last time, and only those.
+    func retryUnreachable() async {
+        let again = nodes.filter { unreachable.contains($0.petname) && !listing.contains($0.petname) }
+        await withTaskGroup(of: Void.self) { group in
+            for node in again {
+                group.addTask { @MainActor in await self.list(node) }
+            }
         }
     }
 
@@ -241,6 +295,7 @@ final class FleetModel {
             // a re-used petname that is a different machine.
             dashboards[node.petname] = nil
             listingFailure[node.petname] = nil
+            unreachable.remove(node.petname)
             await reloadNodes()
         } catch {
             failure = error.localizedDescription

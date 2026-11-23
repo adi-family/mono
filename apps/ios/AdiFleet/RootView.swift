@@ -16,6 +16,14 @@ struct RootView: View {
     /// A Home Screen shortcut waiting for the fleet to load. See `ContentView.open`.
     @State private var link: PendingLink?
 
+    @Environment(\.scenePhase) private var scenePhase
+    /// Watches for the phone changing network while the app is open — see `NetworkChangeWatcher`.
+    @State private var network = NetworkChangeWatcher()
+    /// When the app went to the background, until it is back. `nil` while it is in front — which
+    /// is how a mere `inactive` (Control Centre pulled down, the app switcher glanced at) is told
+    /// from having actually been away: nothing was frozen, so there is nothing to make good.
+    @State private var leftAt: Date?
+
     init() {
         // The tab bar is UIKit's, like the navigation bar: chrome on `--bg-side` over a hairline,
         // the chosen tab in ink and the other dimmed — never the accent (§2.4).
@@ -62,6 +70,39 @@ struct RootView: View {
                 .tag(Tab.fleet)
         }
         .task { await model.start() }
+        .onChange(of: scenePhase) { _, phase in
+            switch phase {
+            case .background:
+                if leftAt == nil { leftAt = Date() }
+            case .active:
+                guard let left = leftAt else { return }
+                leftAt = nil
+                // iOS froze the process while it was away. What that costs depends on for how
+                // long, and the model draws that line (`FleetModel.resume(after:)`).
+                Task { await model.resume(after: Date().timeIntervalSince(left)) }
+            default:
+                break
+            }
+        }
+        // The other half of the same problem, and the one a phone actually meets: walking out of
+        // the door with the app open, so the connection moves from Wi-Fi to cellular without the
+        // app ever leaving the foreground.
+        .task { network.start { await model.networkChanged() } }
+        // A machine that could not be reached is asked again without anybody pulling to refresh:
+        // the phone finds a network, the laptop wakes, and the grid should simply fill in. Only
+        // while the app is in front — a backgrounded app asks nobody.
+        .task(id: Retry(front: scenePhase == .active, unreachable: model.unreachable)) {
+            guard scenePhase == .active, !model.unreachable.isEmpty else { return }
+            var pause = Duration.seconds(4)
+            while !Task.isCancelled {
+                try? await Task.sleep(for: pause)
+                guard !Task.isCancelled else { return }
+                await model.retryUnreachable()
+                // Slower each time it changes nothing; a change in who is unreachable restarts
+                // this task, and with it the pace.
+                pause = min(pause * 2, .seconds(30))
+            }
+        }
         // Here rather than on the fleet screen: a tab that has never been shown has no view to
         // receive the link, and a shortcut tapped from a cold start is exactly that case.
         .onOpenURL { url in
@@ -70,6 +111,12 @@ struct RootView: View {
             tab = .fleet
         }
     }
+}
+
+/// What the retry of unreachable machines hangs on: restarted whenever either half changes.
+private struct Retry: Equatable {
+    let front: Bool
+    let unreachable: Set<String>
 }
 
 /// A Home Screen shortcut's target, held until the node it names is known.

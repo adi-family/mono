@@ -109,11 +109,23 @@ actor Mesh {
         (try Self.call { adi_mesh_forget(node) })["removed"] as? Bool ?? false
     }
 
-    /// Retire pooled connections after the app was suspended. Never throws — it is called from a
+    /// Make good what a spell in the background may have cost: the core binds its loopback
+    /// listeners again and retires its pooled connections. Never throws — it is called from a
     /// lifecycle hook, where there is nothing useful to do with a failure and nothing to show.
     func resume() {
         guard started else { return }
         _ = try? Self.call { adi_mesh_resume() }
+    }
+
+    /// Look for a connection again, from the socket up: the core closes its endpoint and binds a
+    /// new one on the same identity. For when the network under the phone changed, or the app was
+    /// away long enough that nothing of the old endpoint is worth keeping.
+    ///
+    /// Returns at once. A request made while the new endpoint is being bound waits for it, so
+    /// there is nothing to await here and nothing to sequence after it.
+    func reconnect() {
+        guard started else { return }
+        _ = try? Self.call { adi_mesh_reconnect() }
     }
 
     // MARK: - The two calls that cross the mesh
