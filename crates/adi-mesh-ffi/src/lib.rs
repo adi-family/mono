@@ -269,12 +269,28 @@ pub unsafe extern "C" fn adi_mesh_forget(node: *const c_char) -> *mut c_char {
     })
 }
 
-/// Retire pooled connections after the app returns to the foreground. See [`Viewer::resume`].
+/// Make good what a spell in the background may have cost: bind every loopback listener again and
+/// retire the pooled connections. Call it when the app returns to the foreground. See
+/// [`Viewer::resume`].
 #[unsafe(no_mangle)]
 pub extern "C" fn adi_mesh_resume() -> *mut c_char {
     with_viewer(|viewer| {
         viewer.resume();
         Ok(serde_json::json!({ "resumed": true }))
+    })
+}
+
+/// Look for a connection again from the socket up: replace the endpoint with a freshly bound one
+/// on the same identity. Call it when the network under the phone changed, or after the app was
+/// away long enough for the old one to be worth nothing. See [`Viewer::reconnect`].
+///
+/// Returns `{"reconnecting": true}` at once — the work happens behind it, and a request made
+/// meanwhile waits for the new endpoint rather than failing on the old.
+#[unsafe(no_mangle)]
+pub extern "C" fn adi_mesh_reconnect() -> *mut c_char {
+    with_viewer(|viewer| {
+        viewer.reconnect();
+        Ok(serde_json::json!({ "reconnecting": true }))
     })
 }
 
@@ -325,6 +341,7 @@ mod tests {
             adi_mesh_nodes(),
             adi_mesh_take_pairings(),
             adi_mesh_resume(),
+            adi_mesh_reconnect(),
             // The argument-taking ones answer the same way, and answer it *before* looking at
             // their arguments: "the mesh is not started" is the fix, not "your node is null".
             unsafe { adi_mesh_dashboards(null, null, null) },

@@ -28,18 +28,21 @@
 //! Both calls are one HTTP request each, and neither ever holds the answer: nothing here is
 //! cached, so what the UI shows is what the node said this second.
 
+use std::sync::Arc;
+
 use adi_mesh::fleet::{Grant, Target};
 use adi_mesh::protocol::{self, HttpStatus};
 use anyhow::Context as _;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
 use iroh::EndpointId;
+use iroh::endpoint::{RecvStream, SendStream};
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt as _;
-use tokio::time::timeout;
+use tokio::time::{Instant, timeout_at};
 use tracing::{debug, info};
 
-use super::{STEP_TIMEOUT, Shared};
+use super::{STEP_TIMEOUT, Shared, Unreachable, open_stream};
 
 /// The service label a node's control panel answers to, on every node.
 const PANEL: &str = "app";
@@ -151,7 +154,7 @@ struct RawPeer {
 /// If the node cannot be reached, refuses the `app` service, rejects the password, or answers
 /// something that is not the listing.
 pub async fn fetch(
-    shared: &Shared,
+    shared: &Arc<Shared>,
     key: EndpointId,
     me: &str,
     credential: (&str, &str),
@@ -191,7 +194,7 @@ pub async fn fetch(
 /// If the node cannot be reached, if its fleet page does not list this phone's key (which means
 /// the pairing is gone on that side), or if the panel refuses the grant.
 pub async fn allow(
-    shared: &Shared,
+    shared: &Arc<Shared>,
     key: EndpointId,
     me: &str,
     service: &str,
@@ -231,6 +234,9 @@ pub async fn allow(
 // One HTTP request, over the mesh
 // ---------------------------------------------------------------------------------------
 
+/// What a caller is told when the node said nothing within [`STEP_TIMEOUT`].
+const NO_ANSWER: &str = "this node did not answer in time";
+
 /// Send one request to the node's control panel and return its body.
 ///
 /// The pool is retired on a *transport* failure and only then. An HTTP status — a `401`, a `404`
@@ -238,31 +244,44 @@ pub async fn allow(
 /// would cost a redial to learn nothing. A timeout is the opposite: it is what a connection the
 /// OS froze looks like from here (see [`STEP_TIMEOUT`]), and leaving that in the pool makes the
 /// next call hang exactly as this one did.
+///
+/// Reaching the node is [`open_stream`]'s, which is also what starts over when the transport is
+/// replaced mid-request. The conversation after it is *not* started over: by then the request has
+/// been sent, and a `POST` the node may already have acted on is not one to repeat unasked.
 async fn request(
-    shared: &Shared,
+    shared: &Arc<Shared>,
     key: EndpointId,
     credential: (&str, &str),
     method: &str,
     path: &str,
     body: Option<&[u8]>,
 ) -> anyhow::Result<Vec<u8>> {
-    let raw = match timeout(
-        STEP_TIMEOUT,
-        exchange(shared, key, credential, method, path, body),
+    // One bound for the whole call, as before — not one for the stream and another for the reply.
+    let deadline = Instant::now() + STEP_TIMEOUT;
+    let opened = match open_stream(shared, key, PANEL).await {
+        Ok(opened) => opened,
+        Err(Unreachable::Failed(e)) => return Err(e.context("reaching the node")),
+        Err(Unreachable::TimedOut) => anyhow::bail!(NO_ANSWER),
+    };
+    match opened.status {
+        HttpStatus::Ok => {}
+        refused => anyhow::bail!("{}", refused.reason()),
+    }
+    let generation = opened.generation;
+    let raw = match timeout_at(
+        deadline,
+        exchange(opened.send, opened.recv, credential, method, path, body),
     )
     .await
     {
         Ok(Ok(raw)) => raw,
         Ok(Err(e)) => {
-            shared.reset_pool();
+            shared.failed(key, generation);
             return Err(e);
         }
         Err(_) => {
-            shared.reset_pool();
-            anyhow::bail!(
-                "this node did not answer in time — if the app has just come back from the \
-                 background, try again: the next attempt dials fresh"
-            );
+            shared.failed(key, generation);
+            anyhow::bail!(NO_ANSWER);
         }
     };
 
@@ -280,27 +299,15 @@ async fn request(
     }
 }
 
-/// The wire half of [`request`]: a bi-stream, the service frame, the head, and the reply.
+/// The wire half of [`request`], on a stream the node has admitted: the head, and the reply.
 async fn exchange(
-    shared: &Shared,
-    key: EndpointId,
+    mut send: SendStream,
+    recv: RecvStream,
     credential: (&str, &str),
     method: &str,
     path: &str,
     body: Option<&[u8]>,
 ) -> anyhow::Result<Vec<u8>> {
-    let conn = shared.pool().get(key).await.context("reaching the node")?;
-    let (mut send, mut recv) = conn
-        .open_bi()
-        .await
-        .context("opening a stream to the node")?;
-
-    protocol::write_http_request(&mut send, PANEL).await?;
-    match protocol::read_http_status(&mut recv).await? {
-        HttpStatus::Ok => {}
-        refused => anyhow::bail!("{}", refused.reason()),
-    }
-
     send.write_all(&head(method, path, credential, body))
         .await?;
     if let Some(body) = body {

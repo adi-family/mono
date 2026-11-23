@@ -4,14 +4,14 @@
 
 > The viewer half of the adi mesh behind a C ABI, so a platform that cannot run adi — an iPhone — can still reach a node by key: pair, then open <service>.<node> on a loopback port.
 
-11 structs · 1 enum · 1 type alias across 4 files.
+15 structs · 4 enums · 1 type alias across 4 files.
 
 ## Index
 
 - [`src/lib.rs`](#srclibrs) — `Reply`
 - [`src/viewer/catalog.rs`](#srcviewercatalogrs) — `Catalog`, `DashboardInfo`, `DashboardsReply`, `RawDashboard`, `FleetReply`, `RawPeer`, `HttpReply`
 - [`src/viewer/ports.rs`](#srcviewerportsrs) — `PortMap`
-- [`src/viewer.rs`](#srcviewerrs) — `NodeInfo`, `Paired`, `Shared`, `Viewer`
+- [`src/viewer.rs`](#srcviewerrs) — `NodeInfo`, `Paired`, `Transport`, `Origin`, `Health`, `Shared`, `LiveSplice`, `Viewer`, `Opened`, `Unreachable`, `Retry`
 
 ---
 
@@ -184,6 +184,48 @@ pub struct Paired {
 }
 ```
 
+### struct `Transport`
+
+What requests travel over: one endpoint, and the pool of connections dialled from it.
+
+```rust
+#[derive(Debug)]
+struct Transport {
+    endpoint: Endpoint,
+    pool: Pool<IrohDialer>,
+    generation: u64,
+    binding: u64,
+}
+```
+
+### enum `Origin`
+
+Where this viewer's endpoints come from — the one it starts with, and each one a `reconnect` replaces it with.
+
+```rust
+enum Origin {
+    Stored,
+    #[cfg(test)]
+    Given(Box<dyn Fn() -> tests::Binding + Send + Sync>),
+}
+```
+
+### struct `Health`
+
+Whether anything is getting through, and what was last done about it when nothing was.
+
+```rust
+#[derive(Debug)]
+struct Health {
+    failures: u32,
+    last_ok: Instant,
+    next_auto: Instant,
+    backoff: Duration,
+    reconnect_asked: Option<Instant>,
+    reconnect_began: Option<Instant>,
+}
+```
+
 ### struct `Shared`
 
 Everything shared with the spawned tasks.
@@ -191,26 +233,78 @@ Everything shared with the spawned tasks.
 ```rust
 #[derive(Debug)]
 struct Shared {
-    endpoint: Endpoint,
+    origin: Origin,
+    transport: watch::Sender<Option<Arc<Transport>>>,
+    generations: AtomicU64,
+    bindings: AtomicU64,
+    reconnecting: tokio::sync::Mutex<()>,
+    health: Mutex<Health>,
+    answered: Mutex<HashMap<EndpointId, Instant>>,
+    splices: AtomicUsize,
+    listeners: watch::Sender<u64>,
+    rebound: AtomicU64,
+    shutdown: watch::Sender<bool>,
     ticket: Mutex<Option<String>>,
     pairings: Mutex<Vec<Paired>>,
-    pool: Mutex<Arc<Pool<IrohDialer>>>,
     open: Mutex<HashMap<(String, String), u16>>,
 }
 ```
 
+### struct `LiveSplice`
+
+Counts one spliced browser connection for as long as it is held.
+
+```rust
+struct LiveSplice<'a>(&'a AtomicUsize);
+```
+
 ### struct `Viewer`
 
-A running viewer: the endpoint, the tasks it spawned, and the runtime they live on.
+A running viewer: the tasks it spawned, the transport they share, and the runtime they live on.
 
 ```rust
 #[derive(Debug)]
 pub struct Viewer {
     rt: tokio::runtime::Runtime,
-    endpoint: Endpoint,
     shared: Arc<Shared>,
-    shutdown: watch::Sender<bool>,
     key: EndpointId,
+}
+```
+
+### struct `Opened`
+
+A stream to one service on one node, with the node's answer to "may I?" already read.
+
+```rust
+struct Opened {
+    send: SendStream,
+    recv: RecvStream,
+    status: HttpStatus,
+    generation: u64,
+}
+```
+
+### enum `Unreachable`
+
+Why a node could not be asked at all. A node that *refuses* is not this: that is an answer.
+
+```rust
+#[derive(Debug)]
+enum Unreachable {
+    Failed(anyhow::Error),
+    TimedOut,
+}
+```
+
+### enum `Retry`
+
+Whether the page that reports a failure should ask again by itself.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Retry {
+    Soon,
+    Never,
 }
 ```
 

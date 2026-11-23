@@ -64,8 +64,16 @@ char *adi_mesh_take_pairings(void);
 // Unpair a node locally. value: {"removed": <bool>}
 char *adi_mesh_forget(const char *node);
 
-// Retire pooled connections after the app returns to the foreground. value: {"resumed": true}
+// Call when the app returns to the foreground. iOS may take a suspended app's sockets back, so
+// this binds every loopback listener again (same ports) and retires the pooled connections.
+// value: {"resumed": true}
 char *adi_mesh_resume(void);
+
+// Call when the network under the device changed, or after a long spell in the background:
+// closes the endpoint and binds a new one on the same identity, so nothing stale survives the
+// move. Returns at once; requests made meanwhile wait for the new endpoint. The core also does
+// this by itself when requests keep failing. value: {"reconnecting": true}
+char *adi_mesh_reconnect(void);
 
 // Release a string returned by any of the above. NULL is a no-op.
 void adi_mesh_free(char *reply);
