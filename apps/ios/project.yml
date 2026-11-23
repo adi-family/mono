@@ -43,8 +43,15 @@ targets:
         # exact string it was minted as. 4 carries the fix for that. `Info.plist` reads both of
         # these through $(...) rather than repeating them. 5 was the last 0.1.0 upload; 6 is the
         # first 0.2.0 — the apps grid and the native chat — and 7 orders the chats as the panel does.
-        CURRENT_PROJECT_VERSION: 7
-        MARKETING_VERSION: 0.2.0
+        # 8 is the reconnect fix: the app finds its fleet again after a change of network.
+        #
+        # The version is 1.0.1 from build 8 on, and that jump is not a release of its own. The App
+        # Store has listed this app as 1.0.0 since 2026-11-18 while the bundle went on saying 0.2.0
+        # — the store's number is typed into App Store Connect, not read from here. An update has
+        # to be numbered above what is on sale *and* above the last approved bundle, and 1.0.1 is
+        # the first number that is both, whichever build the store's 1.0.0 was.
+        CURRENT_PROJECT_VERSION: 8
+        MARKETING_VERSION: 1.0.1
         TARGETED_DEVICE_FAMILY: "1,2"
 
         # App Store Connect refuses a build with no icon, so this is not decoration. One
