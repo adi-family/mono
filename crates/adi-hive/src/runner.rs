@@ -189,15 +189,15 @@ async fn supervise(spec: RunnerSpec, mut rx: watch::Receiver<bool>) {
         info!(service = %spec.name, pid = ?pid, cmd = %spec.run,
               dir = %spec.working_dir.display(), "runner started");
 
-        let exited_cleanly = tokio::select! {
+        let (exited_cleanly, ended) = tokio::select! {
             status = child.wait() => match status {
                 Ok(status) => {
                     info!(service = %spec.name, code = ?status.code(), "runner exited");
-                    status.success()
+                    (status.success(), how_it_ended(status))
                 }
                 Err(e) => {
                     warn!(service = %spec.name, error = %e, "waiting on runner failed");
-                    false
+                    (false, format!("waiting on it failed: {e}"))
                 }
             },
             _ = rx.changed() => {
@@ -219,15 +219,36 @@ async fn supervise(spec: RunnerSpec, mut rx: watch::Receiver<bool>) {
             _ => {}
         }
 
-        if started.elapsed() >= STABLE_RUNTIME {
+        let ran_for = started.elapsed();
+        if ran_for >= STABLE_RUNTIME {
             backoff = INITIAL_BACKOFF;
         }
-        warn!(service = %spec.name, delay = ?backoff, "relaunching runner");
+        // The reason travels on this line and not only on the `info!` above it: warnings are what
+        // the diagnostics store keeps, and a relaunch recorded without its cause is 2,717 rows of
+        // "something restarted" — which is what hetzner-nosh had for two services that each
+        // exited with code 1 a second after starting.
+        warn!(service = %spec.name, reason = %ended, ran_for = ?ran_for, delay = ?backoff,
+              "relaunching runner");
         if sleep_or_shutdown(backoff, &mut rx).await {
             return;
         }
         backoff = next_backoff(backoff);
     }
+}
+
+/// How a runner's process ended, in words: its exit code, or the signal that killed it.
+fn how_it_ended(status: std::process::ExitStatus) -> String {
+    if let Some(code) = status.code() {
+        return format!("exited with code {code}");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt as _;
+        if let Some(signal) = status.signal() {
+            return format!("was killed by signal {signal}");
+        }
+    }
+    "ended without an exit code".to_string()
 }
 
 /// Supervise one **on-demand** runner: nothing is launched until the front door reports a request
@@ -603,6 +624,22 @@ async fn sleep_or_shutdown(dur: Duration, rx: &mut watch::Receiver<bool>) -> boo
 mod tests {
     use super::*;
     use crate::config::StartPolicy;
+
+    /// The relaunch warning names why: an exit code, or the signal.
+    #[cfg(unix)]
+    #[test]
+    fn a_runners_ending_is_put_in_words() {
+        let run = |script: &str| {
+            std::process::Command::new("sh")
+                .arg("-c")
+                .arg(script)
+                .status()
+                .expect("sh")
+        };
+        assert_eq!(how_it_ended(run("exit 1")), "exited with code 1");
+        assert_eq!(how_it_ended(run("exit 0")), "exited with code 0");
+        assert_eq!(how_it_ended(run("kill -9 $$")), "was killed by signal 9");
+    }
 
     /// A spec that runs a command long enough to still be alive when the test inspects it.
     fn spec(name: &str, run: &str) -> RunnerSpec {

@@ -27,6 +27,12 @@ pub struct ServiceReport {
     pub enabled: bool,
     pub running: bool,
     pub detail: String,
+    /// What is wrong with a service that is nonetheless running — each one a sentence, already
+    /// folded into [`detail`](Self::detail). Empty is healthy. "Its port answers" was the whole
+    /// of `running`, and a control panel whose await scheduler had been dead for eleven hours
+    /// answered its port the entire time.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub problems: Vec<String>,
     pub actions: Vec<Action>,
 }
 
@@ -67,6 +73,12 @@ pub trait Service {
     /// Human status line shown when the service is running.
     fn detail(&self, status: Option<&DaemonStatus>) -> String {
         status.map_or_else(String::new, |s| format!("Running · {}", s.bound_addr))
+    }
+
+    /// What is wrong with this service although it is running — see
+    /// [`ServiceReport::problems`]. Asked only of a running service.
+    fn problems(&self) -> Vec<String> {
+        Vec::new()
     }
 
     /// Service-specific actions beyond the universal enable/disable toggle.
@@ -140,8 +152,18 @@ pub trait Service {
         let status = status::read(&self.status_path());
         let running = self.is_running();
 
+        let problems = if running {
+            self.problems()
+        } else {
+            Vec::new()
+        };
         let detail = if running {
-            self.detail(status.as_ref())
+            let detail = self.detail(status.as_ref());
+            if problems.is_empty() {
+                detail
+            } else {
+                format!("{detail} · DEGRADED: {}", problems.join("; "))
+            }
         } else if enabled {
             "Enabled · starting…".to_string()
         } else {
@@ -169,6 +191,7 @@ pub trait Service {
             enabled,
             running,
             detail,
+            problems,
             actions,
         }
     }

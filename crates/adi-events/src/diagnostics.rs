@@ -231,7 +231,7 @@ impl Fields {
 }
 
 impl Fields {
-    fn keep(&mut self, field: &tracing::field::Field, text: String) {
+    fn keep(&mut self, field: &tracing::field::Field, text: &str) {
         let text: String = text.chars().take(FIELD_LIMIT).collect();
         if field.name() == "message" {
             self.message = text;
@@ -243,12 +243,12 @@ impl Fields {
 
 impl tracing::field::Visit for Fields {
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-        self.keep(field, format!("{value:?}"));
+        self.keep(field, &format!("{value:?}"));
     }
 
     // Without this a string field arrives through `record_debug` and is stored in its quotes.
     fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
-        self.keep(field, value.to_string());
+        self.keep(field, value);
     }
 }
 

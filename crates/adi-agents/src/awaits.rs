@@ -750,8 +750,8 @@ impl Scheduler {
             .map(|pid| format!(" (adi-app pid {pid})"))
             .unwrap_or_default();
         format!(
-            "the await scheduler last ticked {ago} ago{who} — NO pending await can fire and no \
-             event is being delivered until adi-app is restarted"
+            "the await scheduler last ticked {ago} ago{who} — no pending await can fire until \
+             adi-app is restarted"
         )
     }
 

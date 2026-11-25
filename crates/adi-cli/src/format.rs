@@ -189,6 +189,7 @@ pub(crate) fn parse_extra(values: Vec<String>) -> Result<BTreeMap<String, String
 
 fn print_human(svc: &ServiceReport) {
     let state = match (svc.enabled, svc.running) {
+        (_, true) if !svc.problems.is_empty() => "running, degraded",
         (_, true) => "running",
         (true, false) => "enabled",
         (false, false) => "stopped",

@@ -4,11 +4,11 @@
 
 > Core shared library for the adi-family workspace.
 
-24 structs · 7 enums across 15 files.
+25 structs · 7 enums across 15 files.
 
 ## Index
 
-- [`src/app.rs`](#srcapprs) — `App`
+- [`src/app.rs`](#srcapprs) — `Loops`, `App`
 - [`src/bun.rs`](#srcbunrs) — `Artifact`, `Outcome`, `Staging`
 - [`src/channels.rs`](#srcchannelsrs) — `ImportDocument`
 - [`src/commands.rs`](#srccommandsrs) — `Report`, `SetupReport`, `Adi`
@@ -27,6 +27,18 @@
 ---
 
 ## `src/app.rs`
+
+### struct `Loops`
+
+The two loops inside the panel that everything waiting depends on, read from what they leave on disk: the await scheduler's heartbeat and the event dispatcher's cursor.
+
+```rust
+struct Loops {
+    scheduler: adi_agents::awaits::Scheduler,
+    dispatch: Option<adi_events::Lag>,
+    now: u64,
+}
+```
 
 ### struct `App`
 
@@ -376,6 +388,8 @@ pub struct ServiceReport {
     pub enabled: bool,
     pub running: bool,
     pub detail: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub problems: Vec<String>,
     pub actions: Vec<Action>,
 }
 ```

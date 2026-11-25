@@ -950,6 +950,17 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
             rows.sort_unstable_by(|a, b| b.started_at.cmp(&a.started_at));
             rows.truncate(limit);
 
+            // "waiting" is a promise that something will wake the run. With the scheduler stopped
+            // nothing will, and a listing that says "waiting" all the same is how runs sat for
+            // hours on 2026-11-24 with their work finished. On stderr, so `--json` stays an array.
+            let scheduler = awaits::Awaits::with_config(store.config().clone()).scheduler();
+            let now = adi_config::now_unix();
+            if scheduler.stalled(now) && rows.iter().any(|row| row.status == "waiting") {
+                eprintln!(
+                    "WARNING: {}. Runs listed as waiting on an await will stay that way.",
+                    scheduler.describe(now)
+                );
+            }
             if json {
                 print_json(&rows);
             } else if rows.is_empty() {
@@ -1754,22 +1765,47 @@ fn run_awaits(store: &Agents, command: AwaitsCommand) -> Result<(), String> {
             let (agent, conv) = awaits_address(agent, session)?;
             let held = pending.for_conversation(&agent, &conv);
             let retired = history.then(|| pending.retired_for_conversation(&agent, &conv));
+            // A list of what is pending means nothing without knowing that something is firing
+            // it: the store lists awaits exactly the same whether or not they can ever fire.
+            let scheduler = pending.scheduler();
+            let now = adi_config::now_unix();
             if json {
                 #[derive(serde::Serialize)]
                 struct Listed<'a> {
                     pending: &'a [awaits::Await],
                     #[serde(skip_serializing_if = "Option::is_none")]
                     retired: Option<&'a Vec<awaits::Retired>>,
+                    scheduler: Liveness,
+                }
+                #[derive(serde::Serialize)]
+                struct Liveness {
+                    #[serde(flatten)]
+                    heartbeat: awaits::Scheduler,
+                    seconds_ago: Option<u64>,
+                    stalled: bool,
                 }
                 print_json(&Listed {
                     pending: &held,
                     retired: retired.as_ref(),
+                    scheduler: Liveness {
+                        heartbeat: scheduler,
+                        seconds_ago: scheduler.age(now),
+                        stalled: scheduler.stalled(now),
+                    },
                 });
             } else if held.is_empty() {
                 println!("{agent}/{conv} is waiting on nothing.");
             } else {
                 for a in &held {
-                    print_await(a);
+                    print_await(a, now);
+                }
+            }
+            if !json {
+                let said = scheduler.describe(now);
+                if scheduler.stalled(now) {
+                    println!("WARNING: {said}.");
+                } else {
+                    println!("({said}.)");
                 }
             }
             if !json && let Some(retired) = &retired {
@@ -1882,13 +1918,24 @@ fn parse_when(values: &[String]) -> Result<BTreeMap<String, String>, String> {
     Ok(fields)
 }
 
-fn print_await(a: &awaits::Await) {
+fn print_await(a: &awaits::Await, now: u64) {
     println!("{}  waking {}", a.id, a.describe());
     if !a.note.trim().is_empty() {
         println!("    note:  {}", title(&a.note));
     }
     if let Some(check) = a.check.as_deref() {
         println!("    check: {}", title(check));
+    }
+    if let Some(last) = &a.last_check {
+        let times = match a.fails {
+            0 | 1 => String::new(),
+            n => format!(", {n} times in a row"),
+        };
+        println!(
+            "    not yet{times} — last asked {} ago: {}",
+            awaits::duration_words(now.saturating_sub(last.at)),
+            title(&last.verdict())
+        );
     }
 }
 
