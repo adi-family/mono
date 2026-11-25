@@ -20,6 +20,8 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.45.1 — 2026-11-25
+
 ### Fixed
 
 - **A full disk no longer stops awaits, event triggers and workflows until the next restart.** When the disk filled, even for a few seconds, the part of the control panel that fires awaits stopped for good, and so did the delivery of events to triggers and awaits and the running of workflows. The panel itself stayed up and every status read as healthy, so nothing said that a conversation which had ended its turn waiting would never be woken, that a background job's result would never be reported, or that an event trigger would not fire; it lasted until the panel was restarted, which then delivered everything overdue at once. The cause was the line that reports a failed write to the log: with the disk full that line could not be written either, and the failure ended whichever loop had tried. Such a failure is now reported without that risk, and each of these loops is started again by itself if it ever fails, with what happened recorded in Diagnostics — once the disk has room again if it could not be recorded at the time. **If your disk has been full since the panel last started, restart the panel after updating**: an already-stopped scheduler does not come back by itself.
