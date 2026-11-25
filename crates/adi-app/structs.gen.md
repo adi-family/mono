@@ -4,11 +4,11 @@
 
 > The adi app: a Rust HTTP backend serving a control-panel SPA at / and a JSON API at /api, fronted by adi-hive at app.adi.
 
-29 structs · 1 enum · 2 type aliases across 11 files.
+30 structs · 1 enum · 2 type aliases across 11 files.
 
 ## Index
 
-- [`src/awaits.rs`](#srcawaitsrs) — `Posted`
+- [`src/awaits.rs`](#srcawaitsrs) — `Posted`, `Isolated`
 - [`src/leases.rs`](#srcleasesrs) — `LeaseGranted`, `LeaseRevoked`, `Lease`, `LeaseTable`, `LeaseSummary`, `SessionInfo`, `SealedEntry`, `UnlockRequest`, `RenewRequest`
 - [`src/live.rs`](#srclivers) — `Watch`, `Topic`, `Inner`, `Hub`
 - [`src/main.rs`](#srcmainrs) — `App`, `MeshCtl`, `Reads`, `EmbeddedHit`
@@ -30,6 +30,17 @@ Owned event name and payload.
 
 ```rust
 type Posted = (String, String);
+```
+
+### struct `Isolated`
+
+One sweep of this loop, run in isolation from its neighbours: a panic inside it (a bug this sweep's own tests missed) is caught, recorded, and answered with "nothing happened" rather than unwinding through `run`'s loop and ending every sweep after it.
+
+```rust
+struct Isolated<'a> {
+    store: &'a Events,
+    label: &'static str,
+}
 ```
 
 ---

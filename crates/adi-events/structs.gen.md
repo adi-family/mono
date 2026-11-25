@@ -4,13 +4,14 @@
 
 > The adi platform's reliable event log: publishers `emit(name, payload)` a named event (e.g. `adi.tasks.created`) as one row in an append-only SQLite log under ~/.adi/mono/events/log.db, under a monotonic seq. A consumer picks a stable subscriber name and `catch_up`/`ack`s its own cursor, so it replays exactly what it missed after downtime, at-least-once. The `outbox` module is the other half: a producer with its own database writes an event in the same transaction as the state change it describes, then relays it into the log. Event names are dotted topics matched with segment-aware glob patterns (`*` = one segment, `**` = the tail).
 
-9 structs · 2 enums · 1 type alias across 3 files.
+12 structs · 2 enums · 1 type alias across 4 files.
 
 ## Index
 
 - [`src/catalog.rs`](#srccatalogrs) — `EventType`
 - [`src/diagnostics.rs`](#srcdiagnosticsrs) — `Level`, `Diagnostic`, `Record`, `Query`, `DiagnosticLayer`, `Fields`
-- [`src/lib.rs`](#srclibrs) — `Result`, `Error`, `EventRecord`, `LoggedEvent`, `Events`
+- [`src/lib.rs`](#srclibrs) — `Result`, `Error`, `EventRecord`, `LoggedEvent`, `Lag`, `Events`
+- [`src/supervise.rs`](#srcsupervisers) — `Incident`, `Caught`
 
 ---
 
@@ -91,7 +92,7 @@ pub struct Query {
 
 ### struct `DiagnosticLayer`
 
-Add to a tracing registry to persist warnings and errors from a service and its libraries. Formatting still goes to the normal process log. Store failures go to stderr, never back through tracing (which would recurse). No tracing output is ever written to MCP stdout.
+Add to a tracing registry to persist warnings and errors from a service and its libraries. Formatting still goes to the normal process log. Store failures go to stderr, never back through tracing (which would recurse) and never through `eprintln!` (see `complain`). No tracing output is ever written to MCP stdout.
 
 ```rust
 #[derive(Debug)]
@@ -107,7 +108,7 @@ pub struct DiagnosticLayer {
 #[derive(Default)]
 struct Fields {
     message: String,
-    error: String,
+    rest: serde_json::Map<String, Value>,
 }
 ```
 
@@ -165,6 +166,19 @@ pub struct LoggedEvent {
 }
 ```
 
+### struct `Lag`
+
+How far one subscriber is behind the log — see `Events::lag`.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct Lag {
+    pub cursor: u64,
+    pub behind: u64,
+    pub oldest_unread_at: Option<u64>,
+}
+```
+
 ### struct `Events`
 
 The event log: appends and reads rows of the shared `events`/`log.db` database. Cheap to clone; all state is on disk.
@@ -174,5 +188,31 @@ The event log: appends and reads rows of the shared `events`/`log.db` database. 
 pub struct Events {
     config: Config,
 }
+```
+
+---
+
+## `src/supervise.rs`
+
+### struct `Incident`
+
+One loop's failures since they were last stored.
+
+```rust
+#[derive(Debug, Clone)]
+struct Incident {
+    message: String,
+    first_at: u64,
+    last_at: u64,
+    count: u64,
+}
+```
+
+### struct `Caught`
+
+A future that resolves to `Err` with the panic's payload instead of unwinding into whatever polled it.
+
+```rust
+struct Caught<T>(Pin<Box<dyn Future<Output = T> + Send>>);
 ```
 

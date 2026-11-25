@@ -2102,6 +2102,7 @@ fn turn_marker(m: &Marker) -> TurnMarker {
                 adi_agents::Woke::Timer => "timer",
                 adi_agents::Woke::Expired => "expired",
                 adi_agents::Woke::Dead => "dead",
+                adi_agents::Woke::Broken => "broken",
             }
             .to_string(),
             event: event.clone(),

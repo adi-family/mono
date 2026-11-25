@@ -63,6 +63,7 @@
 mod catalog;
 pub mod diagnostics;
 pub mod outbox;
+pub mod supervise;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -213,6 +214,25 @@ pub struct LoggedEvent {
     pub seq: u64,
     /// The event.
     pub record: EventRecord,
+}
+
+/// How far one subscriber is behind the log — see [`Events::lag`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct Lag {
+    /// The last `seq` the subscriber acked.
+    pub cursor: u64,
+    /// Events appended past that.
+    pub behind: u64,
+    /// When the oldest of those was emitted, as Unix epoch seconds; `None` when caught up.
+    pub oldest_unread_at: Option<u64>,
+}
+
+impl Lag {
+    /// How long the oldest unread event has been waiting at `now`, or `None` when caught up.
+    #[must_use]
+    pub fn waiting_secs(&self, now: u64) -> Option<u64> {
+        self.oldest_unread_at.map(|at| now.saturating_sub(at))
+    }
 }
 
 /// The event log: appends and reads rows of the shared `events`/`log.db` database. Cheap to
@@ -385,6 +405,30 @@ impl Events {
     pub fn cursor(&self, subscriber: &str) -> Result<u64> {
         let conn = self.connect()?;
         cursor_on(&conn, subscriber)
+    }
+
+    /// How far `subscriber` is behind the log: how many events it has not acked, and when the
+    /// oldest of them was emitted.
+    ///
+    /// The liveness number for whatever drains the log under that name. A cursor that is merely
+    /// behind is a burst being worked through; one whose oldest unread event is minutes old is a
+    /// drainer that has stopped, which no other reading of the log tells from an idle one.
+    ///
+    /// # Errors
+    /// [`Error::Sqlite`] on a read failure.
+    pub fn lag(&self, subscriber: &str) -> Result<Lag> {
+        let conn = self.connect()?;
+        let cursor = cursor_on(&conn, subscriber)?;
+        let (behind, oldest): (i64, Option<i64>) = conn.query_row(
+            "SELECT COUNT(*), MIN(emitted_at) FROM events WHERE seq > ?1",
+            [seq_param(cursor)],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        Ok(Lag {
+            cursor,
+            behind: seq_of(behind),
+            oldest_unread_at: oldest.map(seq_of),
+        })
     }
 
     /// Everything past `seq`, oldest first, capped at `limit` — the same read [`catch_up`]
@@ -781,6 +825,30 @@ mod tests {
         bus.emit("b", "{}").expect("emit");
         let caught = bus.catch_up("sub", 10).expect("catch up");
         assert_eq!(bus.head().expect("head"), caught[1].seq);
+    }
+
+    /// The dispatcher's liveness number: nothing behind when caught up, and the age of the oldest
+    /// unread event when it has stopped draining.
+    #[test]
+    fn lag_counts_what_a_subscriber_has_not_acked_and_how_long_it_has_waited() {
+        let bus = scratch("lag");
+        let idle = bus.lag("sub").expect("lag");
+        assert_eq!((idle.behind, idle.oldest_unread_at), (0, None));
+        assert_eq!(idle.waiting_secs(now_unix()), None);
+
+        bus.emit("a", "{}").expect("emit");
+        bus.emit("b", "{}").expect("emit");
+        let behind = bus.lag("sub").expect("lag");
+        assert_eq!(behind.behind, 2);
+        let emitted = behind.oldest_unread_at.expect("an unread event");
+        assert_eq!(behind.waiting_secs(emitted + 1500), Some(1500));
+
+        let caught = bus.catch_up("sub", 10).expect("catch up");
+        bus.ack("sub", caught[0].seq).expect("ack");
+        assert_eq!(bus.lag("sub").expect("lag").behind, 1);
+        bus.ack("sub", caught[1].seq).expect("ack");
+        assert_eq!(bus.lag("sub").expect("lag").behind, 0);
+        assert_eq!(bus.lag("other").expect("lag").behind, 2, "cursors are independent");
     }
 
     #[test]

@@ -75,6 +75,9 @@ pub enum Woke {
     /// the bug this exists for inverted one — would otherwise have parked the run until
     /// [`Await::expires_at`](crate::awaits::Await::expires_at), which may be days off.
     Dead,
+    /// Its check could not be run at all — a command the scheduler cannot find, a directory that
+    /// is gone — so it was never going to agree and the run is told instead of left waiting.
+    Broken,
 }
 
 impl Woke {
@@ -84,6 +87,7 @@ impl Woke {
             Self::Timer => "timer",
             Self::Expired => "expired",
             Self::Dead => "dead",
+            Self::Broken => "broken",
         }
     }
 
@@ -93,6 +97,7 @@ impl Woke {
             "timer" => Some(Self::Timer),
             "expired" => Some(Self::Expired),
             "dead" => Some(Self::Dead),
+            "broken" => Some(Self::Broken),
             _ => None,
         }
     }

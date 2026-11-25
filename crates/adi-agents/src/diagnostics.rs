@@ -28,7 +28,9 @@ pub(crate) fn capture(config: &adi_config::Config, session: &crate::store::Sessi
                 ));
             }
             if let Err(error) = store.report(&diagnostic) {
-                eprintln!("could not store agent diagnostic: {error}");
+                adi_events::diagnostics::complain(&format!(
+                    "could not store agent diagnostic: {error}"
+                ));
                 return;
             }
         }

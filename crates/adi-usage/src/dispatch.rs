@@ -91,7 +91,15 @@ impl Usage {
             shutdown,
             done,
         });
-        tokio::spawn(Arc::clone(&usage).run_loop(rx));
+        // Supervised for the reason the event dispatcher is: this loop logs on a failed read,
+        // and a panic in it would otherwise end it for the life of the process.
+        let looping = Arc::clone(&usage);
+        tokio::spawn(adi_events::supervise::task(
+            usage.events.clone(),
+            "usage-reporter",
+            move || Arc::clone(&looping).run_loop(rx.clone()),
+            || tokio::time::sleep(adi_events::supervise::RESTART_PAUSE),
+        ));
         usage
     }
 

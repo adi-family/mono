@@ -14,7 +14,7 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::time::{Duration, Instant};
 
 use adi_agents::{Agents, awaits, dispatch, goals, questions};
-use adi_events::EventRecord;
+use adi_events::{EventRecord, Events, supervise};
 use adi_triggers::EventObserver;
 use adi_workflows::{AttemptOutcome, Engine as WorkflowEngine, StartedRun};
 use tracing::{info, warn};
@@ -32,12 +32,23 @@ type Posted = (String, String);
 
 /// Start the worker; dropping every clone of the returned observer stops it (both threads this
 /// spawns — the shared loop and the dedicated workflow-attempt loop).
+///
+/// Both threads are [supervised](supervise::thread): a panic that gets past [`isolated`] starts
+/// the loop again a second later and is recorded. Before that, the only thing that fires awaits
+/// on a machine could end with the process still up and every status green — on 2026-11-24 it
+/// did, for eleven hours, and each `isolated` call's own `tracing::error!` was the second panic
+/// that took the thread. Named, so a thread list shows whether they exist.
 pub fn start(agents: Agents, workflows: WorkflowEngine) -> EventObserver {
     let (tx, rx) = channel::<Posted>();
     let (keepalive_tx, keepalive_rx) = channel::<()>();
     let workflow_attempts = workflows.clone();
-    std::thread::spawn(move || run(&agents, &workflows, &rx));
-    std::thread::spawn(move || run_workflow_attempts(&workflow_attempts, &keepalive_rx));
+    let store = Events::with_config(agents.config().clone());
+    supervise::thread(store.clone(), "adi-awaits", move || {
+        run(&agents, &workflows, &rx);
+    });
+    supervise::thread(store, "adi-workflows", move || {
+        run_workflow_attempts(&workflow_attempts, &keepalive_rx);
+    });
     observer(tx, keepalive_tx)
 }
 
@@ -69,19 +80,29 @@ fn run_workflow_attempts(workflows: &WorkflowEngine, keepalive: &Receiver<()>) {
 
 /// Track deadlines explicitly so a steady event stream cannot starve sweeps.
 fn run(agents: &Agents, workflows: &WorkflowEngine, rx: &Receiver<Posted>) {
+    let store = Events::with_config(agents.config().clone());
+    let isolated = |label: &'static str| Isolated {
+        store: &store,
+        label,
+    };
     let mut next_tick = Instant::now() + TICK;
     loop {
         let wait = next_tick.saturating_duration_since(Instant::now());
         match rx.recv_timeout(wait) {
-            Ok((name, payload)) => report(&awaits::on_event(agents, &name, &payload)),
+            Ok((name, payload)) => report(
+                &isolated("await-events").run(|| awaits::on_event(agents, &name, &payload)),
+            ),
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
         }
         if Instant::now() >= next_tick {
-            report(&isolated("awaits", || awaits::tick(agents)));
-            report_settled(&isolated("questions", || questions::tick(agents)));
+            // Whatever an earlier pass could not record — the store it records into was the
+            // thing failing — is recorded by the first pass that can.
+            supervise::flush(&store);
+            report(&isolated("awaits-tick").run(|| awaits::tick(agents)));
+            report_settled(&isolated("questions-tick").run(|| questions::tick(agents)));
             // Awaits and question defaults may wake a conversation before its goal check.
-            report_nudged(&isolated("goals", || goals::tick(agents)));
+            report_nudged(&isolated("goals-tick").run(|| goals::tick(agents)));
             // Last: a task just finished by a goal check above is exactly the kind of "not
             // working any more" the dispatch tick looks for, so it should see today's freshest
             // state rather than next second's. `isolated` is what actually keeps this promise
@@ -90,35 +111,47 @@ fn run(agents: &Agents, workflows: &WorkflowEngine, rx: &Receiver<Posted>) {
             // way "ran right before" could turn into "never ran again" (ADI-TIKTOK-168 asked this
             // of exactly this pair — they share no lock and nothing here blocks on the other, so
             // today this is a safety net against a future bug rather than a fix for a present one).
-            report_dispatched(&isolated("dispatch", || dispatch::tick(agents)));
+            report_dispatched(&isolated("dispatch-tick").run(|| dispatch::tick(agents)));
             // The workflow engine's two starters — schedule and event — pour a new run's row and
             // root task; `run_workflow_attempts`' own dedicated thread is what actually drives one
             // (spawning a fresh `bun` attempt for every due run), off this shared loop entirely so
             // a waiting run can never delay the ticks above (ADI-MONO-150).
-            report_workflows_started(&isolated("workflows-schedule", || {
-                workflows.schedule_tick(chrono::Utc::now())
-            }));
-            report_workflows_started(&isolated("workflows-event", || workflows.event_tick()));
+            report_workflows_started(
+                &isolated("workflows-schedule-tick")
+                    .run(|| workflows.schedule_tick(chrono::Utc::now())),
+            );
+            report_workflows_started(
+                &isolated("workflows-event-tick").run(|| workflows.event_tick()),
+            );
             next_tick = Instant::now() + TICK;
         }
     }
 }
 
-/// Run one sweep of this loop in isolation from its neighbours: a panic inside `f` (a bug this
-/// sweep's own tests missed) is caught, logged, and answered with "nothing happened" rather than
-/// unwinding through [`run`]'s loop and silently ending every tick after it, forever — the one way
-/// a single bad sweep could turn into the whole dispatch/goals/awaits loop never running again.
-fn isolated<T>(label: &str, f: impl FnOnce() -> Vec<T>) -> Vec<T> {
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
-        Ok(result) => result,
-        Err(payload) => {
-            let message = payload
-                .downcast_ref::<&str>()
-                .map(|s| (*s).to_string())
-                .or_else(|| payload.downcast_ref::<String>().cloned())
-                .unwrap_or_else(|| "panicked with a non-string payload".to_string());
-            tracing::error!(tick = label, %message, "a tick panicked — every other tick still ran");
-            Vec::new()
+/// One sweep of this loop, run in isolation from its neighbours: a panic inside it (a bug this
+/// sweep's own tests missed) is caught, recorded, and answered with "nothing happened" rather
+/// than unwinding through [`run`]'s loop and ending every sweep after it.
+///
+/// Recorded through [`supervise::incident`] and not `tracing::error!`, which is what this used to
+/// call: on a full disk that log line was itself the next panic, outside any `catch_unwind`, and
+/// it ended the thread this exists to protect.
+struct Isolated<'a> {
+    store: &'a Events,
+    label: &'static str,
+}
+
+impl Isolated<'_> {
+    fn run<T>(&self, f: impl FnOnce() -> Vec<T>) -> Vec<T> {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+            Ok(result) => result,
+            Err(payload) => {
+                supervise::incident(
+                    self.store,
+                    self.label,
+                    &supervise::panic_message(payload.as_ref()),
+                );
+                Vec::new()
+            }
         }
     }
 }
@@ -233,11 +266,86 @@ mod tests {
     /// a later call on the same thread still running proves the panic never left this frame.
     #[test]
     fn a_panicking_tick_does_not_stop_the_ones_after_it() {
-        let first = isolated::<u8>("boom", || panic!("simulated failure"));
+        let store = Events::with_config(scratch("isolated"));
+        let isolated = |label: &'static str| Isolated {
+            store: &store,
+            label,
+        };
+        let first = isolated("boom-tick").run::<u8>(|| panic!("simulated failure"));
         assert!(first.is_empty(), "a panicked tick reports nothing happened");
 
-        let second = isolated("ok", || vec![1, 2, 3]);
+        let second = isolated("ok-tick").run(|| vec![1, 2, 3]);
         assert_eq!(second, vec![1, 2, 3], "the next tick on this thread still runs");
+
+        let recorded = store
+            .diagnostics(&adi_events::diagnostics::Query::default())
+            .expect("diagnostics");
+        assert!(
+            recorded
+                .iter()
+                .any(|r| r.diagnostic.message.contains("boom-tick panicked")
+                    && r.diagnostic.message.contains("simulated failure")),
+            "the panic is on record: {recorded:?}"
+        );
+    }
+
+    /// The freeze itself: a panic that escapes every `isolated` call — on 2026-11-24 it was the
+    /// log line inside one — must not be the end of the worker. Before supervision this thread
+    /// was simply gone, and the await below would have stayed pending for ever.
+    #[test]
+    fn the_worker_survives_a_panic_that_escapes_a_tick() {
+        let config = scratch("survives");
+        let store = Awaits::with_config(config.clone());
+        let events = Events::with_config(config.clone());
+        let on_timer = awaits::register(
+            &store,
+            "watcher",
+            "conv-1",
+            &Request {
+                note: "the timer one".into(),
+                after_seconds: Some(1),
+                ..Request::default()
+            },
+        )
+        .expect("register");
+
+        let agents = Agents::with_config(config.clone());
+        let workflows = WorkflowEngine::with_config(config);
+        let (tx, rx) = channel::<Posted>();
+        let mut first = true;
+        let worker = supervise::thread(events.clone(), "adi-awaits-test", move || {
+            assert!(!std::mem::take(&mut first), "failed printing to stderr");
+            run(&agents, &workflows, &rx);
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline && !store.list().is_empty() {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(
+            store.list().is_empty(),
+            "the restarted worker must still fire the await; pending: {:?}",
+            store.list()
+        );
+        assert!(!store.claim(&on_timer.id));
+        assert!(
+            store.scheduler().age(adi_config::now_unix()).is_some_and(|age| age <= 5),
+            "and it leaves a heartbeat: {:?}",
+            store.scheduler()
+        );
+
+        drop(tx);
+        worker.join().expect("the supervisor never panics");
+        let recorded = events
+            .diagnostics(&adi_events::diagnostics::Query::default())
+            .expect("diagnostics");
+        assert!(
+            recorded
+                .iter()
+                .any(|r| r.diagnostic.message.contains("adi-awaits-test panicked")),
+            "the escape is on record: {recorded:?}"
+        );
+        let _ = std::fs::remove_dir_all(store.dir());
     }
 
     // These conversation ids do not exist; failed delivery still claims each await.

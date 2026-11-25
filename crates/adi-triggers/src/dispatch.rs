@@ -74,8 +74,23 @@ impl EventDispatcher {
     #[must_use]
     pub fn start(triggers: Triggers) -> Arc<Self> {
         let (dispatcher, rx) = Self::new(triggers, None);
-        tokio::spawn(Arc::clone(&dispatcher).run_loop(rx));
+        Self::spawn_loop(&dispatcher, rx);
         dispatcher
+    }
+
+    /// Spawn the dispatch loop under [`adi_events::supervise`]: a panic anywhere in it starts it
+    /// again a second later and is recorded, instead of ending event delivery for the life of the
+    /// process with the cursor quietly falling behind — which is what a full disk did on
+    /// 2026-11-24, when the warning about the failed read was itself what panicked.
+    fn spawn_loop(dispatcher: &Arc<Self>, rx: watch::Receiver<bool>) {
+        let store = dispatcher.events.clone();
+        let dispatcher = Arc::clone(dispatcher);
+        tokio::spawn(adi_events::supervise::task(
+            store,
+            "event-dispatcher",
+            move || Arc::clone(&dispatcher).run_loop(rx.clone()),
+            || tokio::time::sleep(adi_events::supervise::RESTART_PAUSE),
+        ));
     }
 
     /// Start the dispatcher with someone listening in: `observer` is handed every drained event
@@ -87,7 +102,7 @@ impl EventDispatcher {
     #[must_use]
     pub fn start_watched(triggers: Triggers, observer: EventObserver) -> Arc<Self> {
         let (dispatcher, rx) = Self::new(triggers, Some(observer));
-        tokio::spawn(Arc::clone(&dispatcher).run_loop(rx));
+        Self::spawn_loop(&dispatcher, rx);
         dispatcher
     }
 

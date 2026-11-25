@@ -139,6 +139,29 @@ const REPLAY_LOOKBACK: u64 = 5_000;
 /// until [`Await::expires_at`], which may be days off.
 const STALE_CHECK_FAILURES: u32 = 50;
 
+/// How many times in a row a check may fail to *run* before the conversation is told.
+///
+/// "Not yet" is an answer; exit 127 is not. A check whose command is not on the scheduler's
+/// `PATH`, or whose directory is gone, was never asked anything and never will be — and until this
+/// existed it polled in silence until [`Await::expires_at`], which is how one await on
+/// hetzner-nosh reached 4,852 consecutive failures with nobody told. More than one, so a binary
+/// being replaced mid-update does not spend a wake.
+const BROKEN_CHECK_LIMIT: u32 = 3;
+
+/// How much of a failing check's output is kept on the record for `agents awaits list`.
+const LAST_CHECK_OUTPUT: usize = 400;
+
+/// Where the scheduler leaves its heartbeat — see [`Scheduler`]. Not `.json`, for the reason
+/// [`RETIRED_FILE`] is not.
+const TICK_FILE: &str = "tick";
+
+/// How long without a heartbeat before the scheduler is called stalled.
+///
+/// A pass over the store runs each due check in turn, each may take [`CHECK_TIMEOUT_MS`], and the
+/// heartbeat is refreshed between awaits — so the longest honest silence is one check plus one
+/// wake's delivery. Three times that is not a slow pass.
+pub const STALLED_AFTER_SECS: u64 = 90;
+
 /// A registered wake: who to wake, on what, and how to be sure.
 ///
 /// Written by the `Await` tool from inside a turn, read by the app. Unknown fields are ignored so
@@ -215,6 +238,26 @@ pub struct Await {
     /// [`expires_at`](Self::expires_at) — see [`STALE_CHECK_FAILURES`].
     #[serde(default, skip_serializing_if = "is_zero")]
     pub fails: u32,
+    /// Consecutive times the check could not be *run* at all — see [`BROKEN_CHECK_LIMIT`].
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub broken: u32,
+    /// What the check last said when it did not agree, so a pending await shows why it is still
+    /// pending instead of only that it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_check: Option<LastCheck>,
+}
+
+/// The most recent "not yet" from an await's check.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LastCheck {
+    /// When it ran, as Unix epoch seconds.
+    pub at: u64,
+    /// Its exit code; `None` when it was killed or never started.
+    #[serde(default)]
+    pub exit: Option<i32>,
+    /// The tail of what it printed.
+    #[serde(default)]
+    pub output: String,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)]
@@ -331,6 +374,9 @@ pub enum Cause<'a> {
         /// The job's id, for the wake message.
         job_id: &'a str,
     },
+    /// Its check cannot be run at all, so it was never going to agree — see
+    /// [`BROKEN_CHECK_LIMIT`].
+    Broken,
 }
 
 impl Cause<'_> {
@@ -342,6 +388,7 @@ impl Cause<'_> {
             Self::Timer => "timer",
             Self::Expired => "expired",
             Self::Dead { .. } => "dead",
+            Self::Broken => "broken",
         }
     }
 }
@@ -426,6 +473,54 @@ impl Awaits {
     #[must_use]
     pub fn event_head(&self) -> u64 {
         Events::with_config(self.config.clone()).head().unwrap_or(0)
+    }
+
+    /// Leave the scheduler's heartbeat: "whatever fires awaits ran just now, in this process".
+    ///
+    /// The app calls this from the loop that calls [`tick`], through [`tick`] itself. It is the
+    /// only evidence that loop exists that another process can read — the store accepts and lists
+    /// awaits whether or not anything will ever fire them, which is what made a dead scheduler
+    /// invisible for eleven hours on 2026-11-24.
+    ///
+    /// The time is the file's own mtime, so a beat on a full disk still lands: it needs no data
+    /// block, only the inode it already has. The pid is written once per process.
+    pub fn beat(&self) {
+        static OWNED: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+        let module = self.config.module(MODULE);
+        let path = module.raw_path(TICK_FILE);
+        let mut owned = OWNED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if owned.as_deref() != Some(path.as_path()) {
+            if module
+                .write_raw(TICK_FILE, std::process::id().to_string().as_bytes())
+                .is_ok()
+            {
+                *owned = Some(path);
+            }
+            return;
+        }
+        let stamped = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .and_then(|file| file.set_modified(std::time::SystemTime::now()));
+        if stamped.is_err() {
+            // Deleted from under us, or never written: start over on the next beat.
+            *owned = None;
+        }
+    }
+
+    /// When the scheduler last ran, read from its heartbeat.
+    #[must_use]
+    pub fn scheduler(&self) -> Scheduler {
+        let path = self.config.module(MODULE).raw_path(TICK_FILE);
+        let last_tick_at = std::fs::metadata(&path)
+            .and_then(|meta| meta.modified())
+            .ok()
+            .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|since| since.as_secs());
+        let pid = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| text.trim().parse().ok());
+        Scheduler { last_tick_at, pid }
     }
 
     /// Every pending await, oldest first. An unreadable or unparseable record is skipped rather
@@ -613,6 +708,78 @@ impl Awaits {
     }
 }
 
+/// The liveness of whatever fires awaits on this machine — see [`Awaits::beat`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct Scheduler {
+    /// When it last ran, as Unix epoch seconds. `None` when no heartbeat was ever written: the
+    /// app has never run against this store, or the one running predates heartbeats.
+    pub last_tick_at: Option<u64>,
+    /// The process that wrote the heartbeat.
+    pub pid: Option<u32>,
+}
+
+impl Scheduler {
+    /// Seconds since the last heartbeat at `now`.
+    #[must_use]
+    pub fn age(&self, now: u64) -> Option<u64> {
+        self.last_tick_at.map(|at| now.saturating_sub(at))
+    }
+
+    /// Whether the heartbeat is old enough that nothing is firing awaits. A store with no
+    /// heartbeat at all is not called stalled: that is "unknown", and an app from before
+    /// heartbeats would otherwise be reported dead by a newer CLI.
+    #[must_use]
+    pub fn stalled(&self, now: u64) -> bool {
+        self.age(now).is_some_and(|age| age > STALLED_AFTER_SECS)
+    }
+
+    /// The liveness number as a sentence: "last ticked 1s ago", or what to do about it when it
+    /// has stopped.
+    #[must_use]
+    pub fn describe(&self, now: u64) -> String {
+        let Some(age) = self.age(now) else {
+            return "the await scheduler has left no heartbeat — adi-app has not run here, or                     the one running predates heartbeats"
+                .to_string();
+        };
+        let ago = duration_words(age);
+        if !self.stalled(now) {
+            return format!("the await scheduler last ticked {ago} ago");
+        }
+        let who = self
+            .pid
+            .map(|pid| format!(" (adi-app pid {pid})"))
+            .unwrap_or_default();
+        format!(
+            "the await scheduler last ticked {ago} ago{who} — NO pending await can fire and no \
+             event is being delivered until adi-app is restarted"
+        )
+    }
+
+    /// What to add to "you will be woken" when that is not true right now, or `None` when it is.
+    #[must_use]
+    pub fn warning(&self, now: u64) -> Option<String> {
+        self.stalled(now).then(|| {
+            format!(
+                "\n\nWARNING: {}. This await is registered but will not wake you while that \
+                 lasts — say so to whoever you are working for instead of ending the turn in \
+                 silence.",
+                self.describe(now)
+            )
+        })
+    }
+}
+
+/// A span of seconds the way a person says it: `42s`, `7m`, `11h 20m`, `3d 4h`.
+#[must_use]
+pub fn duration_words(secs: u64) -> String {
+    match secs {
+        0..=119 => format!("{secs}s"),
+        120..=7199 => format!("{}m", secs / 60),
+        7200..=172_799 => format!("{}h {}m", secs / 3600, secs % 3600 / 60),
+        _ => format!("{}d {}h", secs / 86_400, secs % 86_400 / 3600),
+    }
+}
+
 /// What a run asked for, before it becomes a stored [`Await`]. The tool builds one of these from
 /// the model's arguments; [`register`] is what turns it into a record.
 #[derive(Debug, Clone, Default)]
@@ -728,6 +895,8 @@ pub fn register(store: &Awaits, agent: &str, conv: &str, req: &Request) -> Resul
         created_at: now,
         baseline_seq,
         fails: 0,
+        broken: 0,
+        last_check: None,
     };
     store.save(&record)?;
     Ok(record)
@@ -796,9 +965,10 @@ pub fn follow_up(store: &Awaits, who: &Caller, req: &Request) -> String {
             format!(
                 "Registered await {id} for you — you will be woken here {what}. Finish your turn; \
                  don't poll for it.\n  don't want it:  adi-mono agents awaits ignore {id}\n  change \
-                 it:      adi-mono agents awaits update {id} --note '…'",
+                 it:      adi-mono agents awaits update {id} --note '…'{stalled}",
                 id = registered.id,
                 what = registered.describe(),
+                stalled = store.scheduler().warning(now_unix()).unwrap_or_default(),
             )
         }
         // The work is already running and only the wake is missing. Say which is which, the way a
@@ -905,6 +1075,8 @@ pub fn update(store: &Awaits, agent: &str, conv: &str, id: &str, change: &Change
     // Whatever this await was failing to see is being reconsidered right along with it — a changed
     // check or deadline deserves a fresh count, not one carried over from the condition it replaced.
     record.fails = 0;
+    record.broken = 0;
+    record.last_check = None;
     let now = now_unix();
     if let Some(note) = &change.note {
         record.note = note.trim().to_string();
@@ -1014,12 +1186,41 @@ fn check_pattern(pattern: &str) -> Result<()> {
 pub fn on_event(agents: &Agents, name: &str, payload: &str) -> Vec<Woken> {
     let store = Awaits::with_config(agents.config().clone());
     let cause = Cause::Event { name, payload };
+    let mut pulse = Pulse::start(&store);
     store
         .list()
         .iter()
         .filter(|a| a.wants(name, payload))
-        .filter_map(|a| consider(agents, &store, a, cause))
+        .filter_map(|a| {
+            pulse.keep();
+            consider(agents, &store, a, cause)
+        })
         .collect()
+}
+
+/// Keeps the scheduler's [heartbeat](Awaits::beat) fresh through one pass over the store: once at
+/// the start, and again between awaits whenever a second has gone by — a pass that runs slow
+/// checks is still a scheduler that is running.
+struct Pulse<'a> {
+    store: &'a Awaits,
+    last: std::time::Instant,
+}
+
+impl<'a> Pulse<'a> {
+    fn start(store: &'a Awaits) -> Self {
+        store.beat();
+        Self {
+            store,
+            last: std::time::Instant::now(),
+        }
+    }
+
+    fn keep(&mut self) {
+        if self.last.elapsed() >= std::time::Duration::from_secs(1) {
+            self.store.beat();
+            self.last = std::time::Instant::now();
+        }
+    }
 }
 
 /// Consider every await whose deadline has come due, and retire the ones that have run out of time.
@@ -1036,7 +1237,9 @@ pub fn tick(agents: &Agents) -> Vec<Woken> {
     let store = Awaits::with_config(agents.config().clone());
     let now = now_unix();
     let mut woken = Vec::new();
+    let mut pulse = Pulse::start(&store);
     for a in store.list() {
+        pulse.keep();
         if let Some(job) = dead_job_subject(agents, &a) {
             if let Some(w) = consider_dead_job(agents, &store, &a, &job) {
                 woken.push(w);
@@ -1045,7 +1248,10 @@ pub fn tick(agents: &Agents) -> Vec<Woken> {
         }
         if a.expires_at.is_some_and(|deadline| now >= deadline) {
             if !a.expiry_wakes {
-                let _ = store.claim_current(&a);
+                // Dropped without a wake, as an abandoned conversation's await should be — but
+                // not without a trace: a poll that failed for a week and then vanished is exactly
+                // what `agents awaits list --history` is asked about afterwards.
+                store.retire_quietly(&a, &lifetime_reason(&a));
                 continue;
             }
             if let Some(w) = wake(agents, &store, &a, Cause::Expired, None) {
@@ -1075,6 +1281,22 @@ pub fn tick(agents: &Agents) -> Vec<Woken> {
         }
     }
     woken
+}
+
+/// Why an await with no deadline of its own was dropped at [`DEFAULT_LIFETIME_SECS`], for the
+/// record [`Awaits::retire_quietly`] keeps.
+fn lifetime_reason(a: &Await) -> String {
+    let mut reason = format!(
+        "nothing it waited for happened within {} of its being registered",
+        duration_words(DEFAULT_LIFETIME_SECS)
+    );
+    if a.fails > 0 {
+        let _ = write!(reason, "; its check had said \"not yet\" {} times in a row", a.fails);
+    }
+    if let Some(last) = &a.last_check {
+        let _ = write!(reason, ", the last time {}", last.verdict());
+    }
+    reason
 }
 
 /// The background job `a`'s own [`check`](Await::check) names, if that job has already exited.
@@ -1164,26 +1386,54 @@ fn consider(agents: &Agents, store: &Awaits, a: &Await, cause: Cause<'_>) -> Opt
     match checked {
         None => wake(agents, store, a, cause, None),
         Some(outcome) if outcome.passed => wake(agents, store, a, cause, Some(&outcome.output)),
-        Some(_) => {
-            if let (Cause::Timer, Some(every)) = (cause, a.every) {
-                let mut rearmed = a.clone();
-                rearmed.at = Some(now_unix().saturating_add(every.max(1)));
-                rearmed.fails = rearmed.fails.saturating_add(1);
+        Some(outcome) => {
+            let strikes = if outcome.broken.is_some() {
+                a.broken.saturating_add(1)
+            } else {
+                0
+            };
+            if strikes >= BROKEN_CHECK_LIMIT {
+                let why = outcome.broken.as_deref().unwrap_or_default();
+                let told = format!("{why}\n{}", outcome.output);
+                return wake(agents, store, a, Cause::Broken, Some(told.trim()));
+            }
+            let poll = match (cause, a.every) {
+                (Cause::Timer, Some(every)) => Some(every),
+                _ => None,
+            };
+            // An event's "not yet" changes nothing about the await and is not written down — only
+            // a poll's is, and a check that could not run at all, which has to be counted
+            // whatever asked it.
+            if poll.is_none() && strikes == a.broken {
+                return None;
+            }
+            let now = now_unix();
+            let mut next = a.clone();
+            next.broken = strikes;
+            next.last_check = Some(LastCheck {
+                at: now,
+                exit: outcome.exit,
+                output: tail(&outcome.output, LAST_CHECK_OUTPUT),
+            });
+            if let Some(every) = poll {
+                next.at = Some(now.saturating_add(every.max(1)));
+                next.fails = next.fails.saturating_add(1);
                 // Logged once per await on the way past the threshold, not on every tick after it —
                 // the point is a signal worth a human's attention, not a line repeated for as long as
                 // the await stays stuck.
-                if rearmed.fails == STALE_CHECK_FAILURES {
+                if next.fails == STALE_CHECK_FAILURES {
                     tracing::warn!(
-                        await_id = %rearmed.id,
-                        agent = %rearmed.agent,
-                        conv = %rearmed.conv,
-                        fails = rearmed.fails,
+                        await_id = %next.id,
+                        agent = %next.agent,
+                        conv = %next.conv,
+                        fails = next.fails,
+                        last = %next.last_check.as_ref().map(LastCheck::verdict).unwrap_or_default(),
                         "an await's check has failed repeatedly on its own schedule — whatever it is \
                          waiting for may never come"
                     );
                 }
-                let _ = store.replace_current(a, Some(&rearmed));
             }
+            let _ = store.replace_current(a, Some(&next));
             None
         }
     }
@@ -1231,6 +1481,7 @@ fn wake_marker(a: &Await, cause: Cause<'_>) -> Marker {
             Cause::Timer => Woke::Timer,
             Cause::Expired => Woke::Expired,
             Cause::Dead { .. } => Woke::Dead,
+            Cause::Broken => Woke::Broken,
         },
         event: match cause {
             Cause::Event { name, .. } => name.to_string(),
@@ -1239,7 +1490,7 @@ fn wake_marker(a: &Await, cause: Cause<'_>) -> Marker {
         // An await with a check only ever wakes when the check passed, so this says there *was*
         // one — never that it failed, which is a wake that does not happen. `Dead` is the one
         // exception: the whole point of it is that the check was *not* asked, so it never passed.
-        check: a.check.is_some() && !matches!(cause, Cause::Dead { .. }),
+        check: a.check.is_some() && !matches!(cause, Cause::Dead { .. } | Cause::Broken),
     }
 }
 
@@ -1278,6 +1529,15 @@ fn wake_message(a: &Await, cause: Cause<'_>, check_output: Option<&str>) -> Stri
                  been unable to ever say so itself."
             );
         }
+        Cause::Broken => {
+            let _ = writeln!(
+                text,
+                "Your check could not be run, {BROKEN_CHECK_LIMIT} times in a row — so it was never \
+                 asked, and this await would have waited for ever without telling you. Nothing you \
+                 were waiting for is known to have happened. Fix the command (a check runs with a \
+                 minimal PATH, in the directory you registered it from) and register it again."
+            );
+        }
     }
     if !a.note.is_empty() {
         let _ = write!(text, "\nWhat you asked to be told:\n\n{}\n", a.note);
@@ -1288,7 +1548,12 @@ fn wake_message(a: &Await, cause: Cause<'_>, check_output: Option<&str>) -> Stri
         let _ = write!(text, "\nThe event's payload:\n\n{}\n", truncate(payload));
     }
     if let Some(output) = check_output.map(str::trim).filter(|o| !o.is_empty()) {
-        let _ = write!(text, "\nWhat your check printed:\n\n{output}\n");
+        let heading = if matches!(cause, Cause::Broken) {
+            "What went wrong"
+        } else {
+            "What your check printed"
+        };
+        let _ = write!(text, "\n{heading}:\n\n{output}\n");
     }
     text.push_str(
         "\nThis await is spent. Register another one if you still need to be woken later.",
@@ -1301,6 +1566,35 @@ struct CheckOutcome {
     passed: bool,
     /// Its combined output, capped, for the wake message.
     output: String,
+    /// Its exit code; `None` when it was killed or never started.
+    exit: Option<i32>,
+    /// Why it counts as not having run at all, when it does — see [`BROKEN_CHECK_LIMIT`].
+    broken: Option<String>,
+}
+
+impl LastCheck {
+    /// One line on how the check ended: "exit 1", "exit 127: sh: adi-mono: not found".
+    #[must_use]
+    pub fn verdict(&self) -> String {
+        let how = self
+            .exit
+            .map_or_else(|| "did not finish".to_string(), |code| format!("exit {code}"));
+        let said = self.output.lines().rev().find(|line| !line.trim().is_empty());
+        match said {
+            Some(line) => format!("{how}: {}", line.trim()),
+            None => how,
+        }
+    }
+}
+
+/// The exit codes a POSIX shell reserves for "I could not run that": found but not executable,
+/// and not found. Neither is the command's own answer.
+fn shell_could_not_run(code: i32) -> Option<&'static str> {
+    match code {
+        126 => Some("the shell found the command but could not execute it (exit 126)"),
+        127 => Some("the shell could not find the command (exit 127)"),
+        _ => None,
+    }
 }
 
 /// Run an await's check in the directory the registering turn worked in, telling it why it is being
@@ -1339,16 +1633,42 @@ fn run_check(a: &Await, check: &str, cause: Cause<'_>, timeout_ms: u64) -> Check
                 }
                 text.push_str(&stderr);
             }
+            let exit = output.status.code();
             CheckOutcome {
                 passed: output.status.success(),
                 output: truncate(&text),
+                exit,
+                broken: exit
+                    .filter(|_| !cfg!(windows))
+                    .and_then(shell_could_not_run)
+                    .map(str::to_string),
             }
         }
+        // Outstaying the budget is slow, not broken: the command ran. Failing to start is the
+        // other thing `wait_with_timeout` reports, and that one never ran — most often because
+        // the directory the await was registered from no longer exists.
         Err(e) => CheckOutcome {
             passed: false,
+            broken: (!e.contains("still running"))
+                .then(|| format!("it could not be started in {:?}", a.cwd)),
             output: e,
+            exit: None,
         },
     }
+}
+
+/// The last `limit` bytes of `text`, on a character boundary — a failing command's reason is at
+/// the end of what it printed.
+fn tail(text: &str, limit: usize) -> String {
+    let text = text.trim();
+    if text.len() <= limit {
+        return text.to_string();
+    }
+    let mut cut = text.len() - limit;
+    while cut < text.len() && !text.is_char_boundary(cut) {
+        cut += 1;
+    }
+    format!("…{}", &text[cut..])
 }
 
 /// Cut over-long text down for the wake message, saying so where the model will see it.
@@ -1571,6 +1891,8 @@ mod tests {
             created_at: 0,
             baseline_seq: 0,
             fails: 0,
+            broken: 0,
+            last_check: None,
         };
         assert!(!a.wants(AgentRunFinished::NAME, "not json at all"));
         assert!(!a.wants(AgentRunFinished::NAME, "[]"));
@@ -2099,6 +2421,8 @@ mod tests {
             created_at: 0,
             baseline_seq: 0,
             fails: 0,
+            broken: 0,
+            last_check: None,
         };
         let outcome = run_check(&a, "sleep 30", Cause::Timer, 200);
         assert!(!outcome.passed, "a killed check must never wake a run");
@@ -2127,6 +2451,8 @@ mod tests {
             created_at: 0,
             baseline_seq: 0,
             fails: 0,
+            broken: 0,
+            last_check: None,
         };
         let text = wake_message(
             &a,
@@ -2350,6 +2676,229 @@ mod tests {
         }
 
         let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// The record keeps what the check last said, so a poll that is still pending shows why.
+    #[test]
+    #[cfg(unix)]
+    fn a_polls_failing_check_leaves_its_last_verdict_on_the_record() {
+        let store = scratch("last-check");
+        let agents = Agents::with_config(store.config().clone());
+        let saved = register(
+            &store,
+            "watcher",
+            "conv-1",
+            &Request {
+                every_seconds: Some(60),
+                check: Some("echo build still running; exit 3".into()),
+                ..Request::default()
+            },
+        )
+        .expect("register");
+
+        assert!(consider(&agents, &store, &saved, Cause::Timer).is_none());
+        let pending = store.get(&saved.id).expect("still pending");
+        let last = pending.last_check.expect("the verdict was kept");
+        assert_eq!(last.exit, Some(3));
+        assert_eq!(last.verdict(), "exit 3: build still running");
+        assert_eq!(pending.broken, 0, "exit 3 is the command's own answer");
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// The 4,852-failure await: a check the scheduler cannot run is not saying "not yet". After
+    /// [`BROKEN_CHECK_LIMIT`] such results the conversation is woken and told, instead of polling
+    /// in silence until the await expires.
+    #[test]
+    #[cfg(unix)]
+    fn a_check_that_cannot_run_wakes_its_conversation_instead_of_polling_for_ever() {
+        let store = scratch("broken-check");
+        let agents = Agents::with_config(store.config().clone());
+        let saved = register(
+            &store,
+            "watcher",
+            "conv-1",
+            &Request {
+                note: "the deploy finished".into(),
+                every_seconds: Some(60),
+                check: Some("adi-no-such-command-anywhere --done".into()),
+                ..Request::default()
+            },
+        )
+        .expect("register");
+
+        for strike in 1..BROKEN_CHECK_LIMIT {
+            let current = store.get(&saved.id).expect("still pending");
+            assert!(consider(&agents, &store, &current, Cause::Timer).is_none());
+            let pending = store.get(&saved.id).expect("one bad result does not spend the await");
+            assert_eq!(pending.broken, strike);
+            assert_eq!(pending.last_check.as_ref().and_then(|l| l.exit), Some(127));
+        }
+        let current = store.get(&saved.id).expect("still pending");
+        let woken = consider(&agents, &store, &current, Cause::Timer).expect("told at the limit");
+        assert_eq!(woken.cause, "broken");
+        assert!(store.get(&saved.id).is_none(), "the await is spent");
+
+        let message = wake_message(&current, Cause::Broken, Some("exit 127: not found"));
+        assert!(message.contains("could not be run"), "{message}");
+        assert!(message.contains("What went wrong"), "{message}");
+        assert!(message.contains("the deploy finished"), "{message}");
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// An event's check that cannot run is counted too: with no timer there is nothing else that
+    /// would ever write the failure down.
+    #[test]
+    #[cfg(unix)]
+    fn a_broken_check_on_an_event_is_counted_and_a_working_one_resets_it() {
+        let store = scratch("broken-event");
+        let agents = Agents::with_config(store.config().clone());
+        let saved = register(
+            &store,
+            "watcher",
+            "conv-1",
+            &Request {
+                events: vec!["adi.tasks.*".into()],
+                check: Some("adi-no-such-command-anywhere".into()),
+                ..Request::default()
+            },
+        )
+        .expect("register");
+        let event = Cause::Event {
+            name: "adi.tasks.created",
+            payload: "{}",
+        };
+
+        assert!(consider(&agents, &store, &saved, event).is_none());
+        let struck = store.get(&saved.id).expect("still pending");
+        assert_eq!(struck.broken, 1);
+
+        // The command starts existing — an install finishing — and merely says "not yet".
+        let mut fixed = struck.clone();
+        fixed.check = Some("exit 1".into());
+        store.save(&fixed).unwrap();
+        assert!(consider(&agents, &store, &fixed, event).is_none());
+        assert_eq!(store.get(&saved.id).expect("still pending").broken, 0);
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// A check that outstays its budget ran; it is slow, not broken, and keeps polling.
+    #[test]
+    #[cfg(unix)]
+    fn a_check_that_times_out_is_not_called_broken() {
+        let store = scratch("slow-not-broken");
+        let saved = register(
+            &store,
+            "watcher",
+            "conv-1",
+            &Request {
+                every_seconds: Some(60),
+                check: Some("sleep 5".into()),
+                ..Request::default()
+            },
+        )
+        .expect("register");
+        let outcome = run_check(&saved, "sleep 5", Cause::Timer, 50);
+        assert!(!outcome.passed);
+        assert!(outcome.broken.is_none(), "{:?}", outcome.broken);
+
+        let gone = Await {
+            cwd: "/adi/no/such/directory".into(),
+            ..saved.clone()
+        };
+        let outcome = run_check(&gone, "true", Cause::Timer, 5_000);
+        assert!(outcome.broken.is_some(), "a check with no directory never ran");
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// The liveness number: a store nothing ticks says so, and one that is ticked reads fresh.
+    #[test]
+    fn the_scheduler_heartbeat_is_fresh_after_a_tick_and_stalled_when_it_stops() {
+        let store = scratch("heartbeat");
+        let agents = Agents::with_config(store.config().clone());
+        let now = now_unix();
+
+        let never = store.scheduler();
+        assert_eq!(never.last_tick_at, None);
+        assert!(!never.stalled(now), "no heartbeat is unknown, not stalled");
+        assert!(never.warning(now).is_none());
+
+        let _ = tick(&agents);
+        let beating = store.scheduler();
+        assert_eq!(beating.pid, Some(std::process::id()));
+        assert!(beating.age(now_unix()).expect("a heartbeat") <= 2);
+        assert!(!beating.stalled(now_unix()));
+        assert!(beating.describe(now_unix()).contains("last ticked"));
+
+        // Eleven hours and twenty minutes later, with nothing having ticked since.
+        let later = now_unix() + 11 * 3600 + 20 * 60;
+        assert!(beating.stalled(later));
+        let said = beating.describe(later);
+        assert!(said.contains("11h 20m ago"), "{said}");
+        assert!(said.contains("restarted"), "{said}");
+        assert!(beating.warning(later).expect("a warning").contains("WARNING"));
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// A second and third beat only move the file's time; they are what a full disk still allows.
+    #[test]
+    fn a_heartbeat_is_refreshed_in_place() {
+        let store = scratch("heartbeat-refresh");
+        store.beat();
+        let path = store.config().module(MODULE).raw_path(TICK_FILE);
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .and_then(|f| f.set_modified(old))
+            .unwrap();
+        assert!(store.scheduler().age(now_unix()).unwrap() >= 3599);
+
+        store.beat();
+        assert!(store.scheduler().age(now_unix()).unwrap() <= 2, "refreshed");
+        assert_eq!(store.scheduler().pid, Some(std::process::id()));
+        assert!(store.list().is_empty(), "the heartbeat is never read as an await");
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// "You will be woken" is not said without the caveat when nothing is firing awaits.
+    #[test]
+    fn registering_while_the_scheduler_is_stalled_says_so() {
+        let store = scratch("register-stalled");
+        store.beat();
+        let path = store.config().module(MODULE).raw_path(TICK_FILE);
+        let who = Caller {
+            agent: "watcher".into(),
+            conv: "conv-1".into(),
+        };
+        let fresh = follow_up(&store, &who, &request("first"));
+        assert!(!fresh.contains("WARNING"), "{fresh}");
+
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .and_then(|f| f.set_modified(old))
+            .unwrap();
+        let stalled = follow_up(&store, &who, &request("second"));
+        assert!(stalled.contains("WARNING"), "{stalled}");
+        assert!(stalled.contains("2h 0m ago"), "{stalled}");
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    #[test]
+    fn spans_of_time_are_worded_for_a_person() {
+        assert_eq!(duration_words(1), "1s");
+        assert_eq!(duration_words(119), "119s");
+        assert_eq!(duration_words(420), "7m");
+        assert_eq!(duration_words(11 * 3600 + 20 * 60), "11h 20m");
+        assert_eq!(duration_words(3 * 86_400 + 4 * 3600), "3d 4h");
     }
 
     /// ADI-MONO-216: the race Igor reported, for a background job. `background` starts the job

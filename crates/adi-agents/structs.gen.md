@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-174 structs · 52 enums · 5 type aliases across 67 files.
+177 structs · 52 enums · 5 type aliases across 67 files.
 
 ## Index
 
@@ -13,7 +13,7 @@
 - [`src/analytics/suffix.rs`](#srcanalyticssuffixrs) — `RawRepeat`
 - [`src/arguments.rs`](#srcargumentsrs) — `PtyClaudeArguments`, `ProcessClaudeArguments`, `PtyCodexArguments`, `ProcessCodexArguments`, `PtyAntigravityArguments`, `ProcessAntigravityArguments`, `HarnessClaudeSdkArguments`, `HarnessAdiArguments`, `AgentSummaryArguments`, `Boolish`, `U64ish`, `F64ish`
 - [`src/auto_title.rs`](#srcauto_titlers) — `AutoTitleSettings`
-- [`src/awaits.rs`](#srcawaitsrs) — `Await`, `Cause`, `Woken`, `Retired`, `Awaits`, `Request`, `Caller`, `Change`, `CheckOutcome`
+- [`src/awaits.rs`](#srcawaitsrs) — `Await`, `LastCheck`, `Cause`, `Woken`, `Retired`, `Awaits`, `Scheduler`, `Request`, `Caller`, `Change`, `Pulse`, `CheckOutcome`
 - [`src/backend.rs`](#srcbackendrs) — `Backend`
 - [`src/backends/adi_events.rs`](#srcbackendsadi_eventsrs) — `Sink`
 - [`src/backends/code_only.rs`](#srcbackendscode_onlyrs) — `Door`
@@ -715,6 +715,25 @@ pub struct Await {
     pub baseline_seq: u64,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub fails: u32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub broken: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_check: Option<LastCheck>,
+}
+```
+
+### struct `LastCheck`
+
+The most recent "not yet" from an await's check.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LastCheck {
+    pub at: u64,
+    #[serde(default)]
+    pub exit: Option<i32>,
+    #[serde(default)]
+    pub output: String,
 }
 ```
 
@@ -734,6 +753,7 @@ pub enum Cause<'a> {
     Dead {
         job_id: &'a str,
     },
+    Broken,
 }
 ```
 
@@ -775,6 +795,18 @@ The await store: one JSON record per pending wake under `~/.adi/mono/awaits`. Ch
 #[derive(Debug, Clone)]
 pub struct Awaits {
     config: Config,
+}
+```
+
+### struct `Scheduler`
+
+The liveness of whatever fires awaits on this machine — see `Awaits::beat`.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct Scheduler {
+    pub last_tick_at: Option<u64>,
+    pub pid: Option<u32>,
 }
 ```
 
@@ -826,12 +858,25 @@ pub struct Change {
 }
 ```
 
+### struct `Pulse`
+
+Keeps the scheduler's heartbeat fresh through one pass over the store: once at the start, and again between awaits whenever a second has gone by — a pass that runs slow checks is still a scheduler that is running.
+
+```rust
+struct Pulse<'a> {
+    store: &'a Awaits,
+    last: std::time::Instant,
+}
+```
+
 ### struct `CheckOutcome`
 
 ```rust
 struct CheckOutcome {
     passed: bool,
     output: String,
+    exit: Option<i32>,
+    broken: Option<String>,
 }
 ```
 
@@ -2546,6 +2591,7 @@ pub enum Woke {
     Timer,
     Expired,
     Dead,
+    Broken,
 }
 ```
 

@@ -591,7 +591,9 @@ impl App {
                     event_key: None,
                 };
                 if let Err(error) = app.events.report(&record) {
-                    eprintln!("could not store API error: {error}");
+                    adi_events::diagnostics::complain(&format!(
+                        "could not store API error: {error}"
+                    ));
                 }
             }
             response

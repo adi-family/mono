@@ -149,9 +149,23 @@ impl Events {
     }
 }
 
+/// Say something on stderr without ever panicking over it.
+///
+/// `eprintln!` panics when stderr cannot be written, and a service's stderr is its log file — so
+/// on a full disk the line reporting a failed write was itself a failed write, and it took the
+/// calling thread with it. That is how one `eprintln!` in [`DiagnosticLayer`] ended the await
+/// worker, the workflow worker, the event dispatcher and the usage reporter in the same second on
+/// 2026-11-24: each logged a warning about the disk, each warning panicked, and the panic message
+/// had nowhere to go either. Anything a long-lived process says about a failure goes through this.
+pub fn complain(line: &str) {
+    use std::io::Write as _;
+    let _ = writeln!(std::io::stderr().lock(), "{line}");
+}
+
 /// Add to a tracing registry to persist warnings and errors from a service and its libraries.
 /// Formatting still goes to the normal process log. Store failures go to stderr, never back
-/// through tracing (which would recurse). No tracing output is ever written to MCP stdout.
+/// through tracing (which would recurse) and never through `eprintln!` (see [`complain`]). No
+/// tracing output is ever written to MCP stdout.
 #[derive(Debug)]
 pub struct DiagnosticLayer {
     store: Events,
@@ -186,28 +200,55 @@ impl<S: tracing::Subscriber> Layer<S> for DiagnosticLayer {
             } else {
                 fields.message.chars().take(16000).collect()
             },
-            context: json!({"error": fields.error.chars().take(16000).collect::<String>(), "pid": std::process::id(),
-                "file": metadata.file(), "line": metadata.line()}),
+            context: fields.into_context(metadata),
             event_key: None,
         };
         if let Err(error) = self.store.report(&diagnostic) {
-            eprintln!("diagnostic storage failed: {error}");
+            complain(&format!("diagnostic storage failed: {error}"));
         }
     }
 }
 
+/// How much of one field's text a diagnostic keeps.
+const FIELD_LIMIT: usize = 16000;
+
 #[derive(Default)]
 struct Fields {
     message: String,
-    error: String,
+    /// Every other field the event carried, by name. A record that keeps only `error` reads as
+    /// "failed, with an empty error" for an event whose reason sits in a field called anything
+    /// else — `relaunching runner` named its service and its delay and showed neither.
+    rest: serde_json::Map<String, Value>,
 }
+
+impl Fields {
+    fn into_context(mut self, metadata: &tracing::Metadata<'_>) -> Value {
+        self.rest.insert("pid".into(), json!(std::process::id()));
+        self.rest.insert("file".into(), json!(metadata.file()));
+        self.rest.insert("line".into(), json!(metadata.line()));
+        Value::Object(self.rest)
+    }
+}
+
+impl Fields {
+    fn keep(&mut self, field: &tracing::field::Field, text: String) {
+        let text: String = text.chars().take(FIELD_LIMIT).collect();
+        if field.name() == "message" {
+            self.message = text;
+        } else {
+            self.rest.insert(field.name().into(), Value::String(text));
+        }
+    }
+}
+
 impl tracing::field::Visit for Fields {
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-        match field.name() {
-            "message" => self.message = format!("{value:?}"),
-            "error" => self.error = format!("{value:?}"),
-            _ => {}
-        }
+        self.keep(field, format!("{value:?}"));
+    }
+
+    // Without this a string field arrives through `record_debug` and is stored in its quotes.
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        self.keep(field, value.to_string());
     }
 }
 
@@ -285,13 +326,42 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].diagnostic.level, Level::Warning);
         assert!(rows[0].diagnostic.message.contains("upstream unavailable"));
-        assert!(
-            rows[0].diagnostic.context["error"]
-                .as_str()
-                .unwrap()
-                .contains("connection refused")
+        assert_eq!(
+            rows[0].diagnostic.context["error"].as_str(),
+            Some("connection refused")
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The hive's `relaunching runner` carried its reason in fields this layer dropped, so 2,717
+    /// records of it read as a failure with an empty error.
+    #[test]
+    fn every_field_of_a_warning_is_kept_not_only_error() {
+        use tracing_subscriber::prelude::*;
+        let dir = std::env::temp_dir().join(format!(
+            "adi-diagnostics-fields-{}",
+            std::process::id()
+        ));
+        let store = Events::with_config(adi_config::Config::with_root(&dir));
+        let subscriber = tracing_subscriber::registry()
+            .with(DiagnosticLayer::new(store.clone(), "test-service"));
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::warn!(service = %"frontend", attempts = 3, "relaunching runner");
+        });
+        let rows = store.diagnostics(&Query::default()).unwrap();
+        let context = &rows[0].diagnostic.context;
+        assert_eq!(context["service"].as_str(), Some("frontend"));
+        assert_eq!(context["attempts"].as_str(), Some("3"));
+        assert!(context.get("error").is_none(), "no error field was logged: {context}");
+        assert!(context["line"].is_number());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// `complain` is what a failed store write is reported with; it must return whatever stderr
+    /// does with the line.
+    #[test]
+    fn complaining_never_panics() {
+        complain("diagnostic storage failed: disk I/O error");
     }
 
     #[test]

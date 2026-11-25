@@ -987,8 +987,12 @@ fn background(command: &str, note: String, ctx: &Ctx<'_>) -> std::result::Result
         Ok(_) => Ok(format!(
             "Started {} in the background.\n  log: {log}\n\nIt is running now and this call is \
              done. Finish your turn — you will be woken with its exit status and the tail of that \
-             log when it ends. Don't poll it.",
-            job.id
+             log when it ends. Don't poll it.{}",
+            job.id,
+            ctx.awaits
+                .scheduler()
+                .warning(adi_config::now_unix())
+                .unwrap_or_default()
         )),
         // The job is real and running; only the wake is missing. Say which is which.
         Err(e) => Ok(format!(
@@ -1222,9 +1226,13 @@ fn await_wake(input: &Value, ctx: &Ctx<'_>) -> std::result::Result<String, Strin
     let registered =
         awaits::register(&ctx.awaits, ctx.agent, ctx.conv, &req).map_err(|e| e.to_string())?;
     Ok(format!(
-        "registered await {} — waking {}. Finish this turn; you will be woken with your note.",
+        "registered await {} — waking {}. Finish this turn; you will be woken with your note.{}",
         registered.id,
-        registered.describe()
+        registered.describe(),
+        ctx.awaits
+            .scheduler()
+            .warning(adi_config::now_unix())
+            .unwrap_or_default()
     ))
 }
 
