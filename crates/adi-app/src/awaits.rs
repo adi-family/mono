@@ -21,6 +21,9 @@ use tracing::{info, warn};
 
 const TICK: Duration = Duration::from_secs(1);
 
+/// How often [`watch`] looks at the scheduler's heartbeat.
+const WATCH_EVERY: Duration = Duration::from_secs(30);
+
 /// How many workflow runs [`run_workflow_attempts`] will attempt at once — spec ADI-MONO-150's
 /// own "e.g. 2 bun processes at a time". A run waiting on a 48-hour review and a run waiting on a
 /// 5-minute sleep must never queue behind each other indefinitely; two in flight is enough
@@ -41,25 +44,67 @@ type Posted = (String, String);
 pub fn start(agents: Agents, workflows: WorkflowEngine) -> EventObserver {
     let (tx, rx) = channel::<Posted>();
     let (keepalive_tx, keepalive_rx) = channel::<()>();
+    let (watch_tx, watch_rx) = channel::<()>();
     let workflow_attempts = workflows.clone();
     let store = Events::with_config(agents.config().clone());
+    let pending = awaits::Awaits::with_config(agents.config().clone());
     supervise::thread(store.clone(), "adi-awaits", move || {
         run(&agents, &workflows, &rx);
     });
-    supervise::thread(store, "adi-workflows", move || {
+    supervise::thread(store.clone(), "adi-workflows", move || {
         run_workflow_attempts(&workflow_attempts, &keepalive_rx);
     });
-    observer(tx, keepalive_tx)
+    let events = store.clone();
+    supervise::thread(store, "adi-liveness", move || {
+        watch(&pending, &events, &watch_rx);
+    });
+    observer(tx, (keepalive_tx, watch_tx))
 }
 
-fn observer(tx: Sender<Posted>, keepalive: Sender<()>) -> EventObserver {
+fn observer(tx: Sender<Posted>, keepalive: (Sender<()>, Sender<()>)) -> EventObserver {
     Arc::new(move |record: &EventRecord| {
         let _ = tx.send((record.name.clone(), record.payload.clone()));
-        // Held only so its matching receiver disconnects — and `run_workflow_attempts` stops —
-        // the moment every clone of this very closure (the `EventObserver` this crate hands out)
-        // is dropped, exactly like `tx` already does for `run`'s own loop.
+        // Held only so their matching receivers disconnect — and `run_workflow_attempts` and
+        // `watch` stop — the moment every clone of this very closure (the `EventObserver` this
+        // crate hands out) is dropped, exactly like `tx` already does for `run`'s own loop.
         let _ = &keepalive;
     })
+}
+
+/// Say so when the scheduler stops ticking without having panicked.
+///
+/// Supervision restarts a loop that panics; it can do nothing for one that is blocked — in a
+/// lock, in a delivery that never returns. That loop leaves no incident, only a
+/// [heartbeat](awaits::Awaits::beat) that stops moving. This thread reads it and records the
+/// stall once, as an error in the log and the diagnostics store, and once more when it ends. It
+/// restarts nothing: the remedy for a blocked thread is a restart of the process, and that is an
+/// operator's decision, not a watchdog's.
+fn watch(pending: &awaits::Awaits, events: &Events, keepalive: &Receiver<()>) {
+    let mut told = false;
+    loop {
+        match keepalive.recv_timeout(WATCH_EVERY) {
+            Ok(()) | Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
+        supervise::flush(events);
+        let now = adi_config::now_unix();
+        let scheduler = pending.scheduler();
+        match stall_change(scheduler.stalled(now), &mut told) {
+            Some(true) => tracing::error!("{}", scheduler.describe(now)),
+            Some(false) => info!("the await scheduler is ticking again"),
+            None => {}
+        }
+    }
+}
+
+/// Whether a stall just began (`Some(true)`) or just ended (`Some(false)`), given whether the
+/// last one was already reported — so a stall is one line, however long it lasts.
+fn stall_change(stalled: bool, told: &mut bool) -> Option<bool> {
+    if stalled == *told {
+        return None;
+    }
+    *told = stalled;
+    Some(stalled)
 }
 
 /// Drives workflow execution on its own thread and cadence, independent of [`run`]'s shared
@@ -287,6 +332,16 @@ mod tests {
                     && r.diagnostic.message.contains("simulated failure")),
             "the panic is on record: {recorded:?}"
         );
+    }
+
+    #[test]
+    fn a_stall_is_reported_once_when_it_begins_and_once_when_it_ends() {
+        let mut told = false;
+        assert_eq!(stall_change(false, &mut told), None, "ticking, nothing to say");
+        assert_eq!(stall_change(true, &mut told), Some(true), "it stopped");
+        assert_eq!(stall_change(true, &mut told), None, "still stopped: said already");
+        assert_eq!(stall_change(false, &mut told), Some(false), "it came back");
+        assert_eq!(stall_change(false, &mut told), None);
     }
 
     /// The freeze itself: a panic that escapes every `isolated` call — on 2026-11-24 it was the

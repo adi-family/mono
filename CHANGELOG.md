@@ -20,6 +20,16 @@ extraction script cares about.
 
 ## Unreleased
 
+### Fixed
+
+- **A full disk no longer stops awaits, event triggers and workflows until the next restart.** When the disk filled, even for a few seconds, the part of the control panel that fires awaits stopped for good, and so did the delivery of events to triggers and awaits and the running of workflows. The panel itself stayed up and every status read as healthy, so nothing said that a conversation which had ended its turn waiting would never be woken, that a background job's result would never be reported, or that an event trigger would not fire; it lasted until the panel was restarted, which then delivered everything overdue at once. The cause was the line that reports a failed write to the log: with the disk full that line could not be written either, and the failure ended whichever loop had tried. Such a failure is now reported without that risk, and each of these loops is started again by itself if it ever fails, with what happened recorded in Diagnostics — once the disk has room again if it could not be recorded at the time. **If your disk has been full since the panel last started, restart the panel after updating**: an already-stopped scheduler does not come back by itself.
+- **An await whose check cannot be run tells you, instead of polling in silence.** A check that the shell cannot find or execute (exit 127 or 126 — most often a command that is not on the minimal `PATH` a check runs with), or whose directory no longer exists, was read as "not yet" and asked again for as long as the await lived: up to seven days, without a word. After three such results in a row the conversation is now woken and told what went wrong, so it can register a check that works. A check that runs and says "not yet", or runs out of time, keeps polling as before.
+- **The Hive's "relaunching runner" warning says why.** It now names how the service ended — its exit code or the signal that killed it — and how long it had run. Before, the reason was only on a line Diagnostics does not keep, so a service restarting every thirty seconds was recorded as thousands of warnings that said nothing about what failed. Diagnostics also keeps every detail a warning carries, not only one named `error`.
+
+### Added
+
+- **Status says whether awaits are actually being fired.** `adi-mono status` shows when the scheduler last ran — `awaits ticked 1s ago` — on the App line. If it has not run for ninety seconds, or an event has gone undelivered for two minutes, the App service is shown as *running, degraded* with the reason and for how long, and the same is in `--json` as `problems`. `adi-mono agents awaits list` ends with the same number, as a warning when the scheduler has stopped; `agents runs` warns when a run it lists as waiting is waiting on a scheduler that has stopped; and registering an await at such a moment says that it will not fire, rather than "you will be woken". A poll in `agents awaits list` also shows how many times in a row its check has said "not yet" and what it last printed, and an await dropped at the end of its seven-day lifetime is kept in `--history` with that count.
+
 ## 1.45.0 — 2026-11-24
 
 ### Added
