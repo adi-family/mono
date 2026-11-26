@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { ArrowLeft, ExternalLink, LoaderCircle, RefreshCw, Square } from "lucide-react";
 import { Link } from "react-router-dom";
-import { Button, ChatComposer, ChatQueuedMessage, ChatThread, ChatWaitingStatus } from "@design-system/ui";
+import { Button, ChatComposer, ChatQueue, ChatQueuedMessage, ChatThread, ChatWaitingStatus } from "@design-system/ui";
 
 import { ChatMicrophone } from "../components/ChatMicrophone";
 import { NewChatSetup } from "../components/NewChatSetup";
@@ -203,7 +203,8 @@ export function Interface() {
           onCancel={(id) => { void cancelWaiting(id); }}
           cancellingIds={cancellingWaits}
         />
-        {queued.length > 0 && <div aria-label="Queued messages" className="mb-2 max-h-52 space-y-1 overflow-y-auto">
+        {/* Only a server that batches its queue is said to: an older one still asks one message per turn. */}
+        <ChatQueue count={queued.length} caption={snapshot?.caps.batches === true ? undefined : null} className="mb-2 max-h-52 overflow-y-auto">
           {queued.map((turn, position) => <ChatQueuedMessage
             key={`${selectionKey}:${turn.seq}`}
             data-queued="true"
@@ -214,7 +215,7 @@ export function Interface() {
           >
             <AppChatAttachments turn={turn} source={activeSource} />
           </ChatQueuedMessage>)}
-        </div>}
+        </ChatQueue>
         {imageError && <p role="alert" className="text-destructive mb-2 text-xs">{imageError}</p>}
         <ChatComposer
           key={selectionKey}

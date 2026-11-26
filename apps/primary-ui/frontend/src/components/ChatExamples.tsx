@@ -10,6 +10,7 @@ import {
   CardHeader,
   CardTitle,
   ChatComposer,
+  ChatQueue,
   ChatQueuedMessage,
   ChatWaitingStatus,
   ChatMessage,
@@ -194,7 +195,11 @@ const composerCode = `const [draft, setDraft] = useState("");
 />
 
 <ChatWaitingStatus items={waits} onCancel={(id) => cancelWait(id)} cancellingIds={cancellingIds} />
-<ChatQueuedMessage text={message.text} onCancel={() => cancelQueued(message)} cancelling={message.cancelling} />`;
+<ChatQueue count={queued.length}>
+  {queued.map((message) => (
+    <ChatQueuedMessage key={message.id} text={message.text} onCancel={() => cancelQueued(message)} cancelling={message.cancelling} />
+  ))}
+</ChatQueue>`;
 
 const toolsCode = `<ChatToolCall kind="terminal" title="exec_command" description="bun run typecheck" status="running">
   <ChatToolOutput label="Terminal output">{output}</ChatToolOutput>
@@ -501,16 +506,18 @@ export function ChatExamples() {
             {lastSent ? `Message sent: ${lastSent}` : ""}
           </p>
           <ChatWaitingStatus items={waits} onCancel={(id) => setWaits((current) => current.filter((item) => item.id !== id))} />
-          {queued.map((message) => (
-            <ChatQueuedMessage
-              key={message.id}
-              text={message.text}
-              label={message.label}
-              onCancel={() => setQueued((current) => current.filter((item) => item.id !== message.id))}
-            />
-          ))}
+          <ChatQueue count={queued.length}>
+            {queued.map((message) => (
+              <ChatQueuedMessage
+                key={message.id}
+                text={message.text}
+                label={message.label}
+                onCancel={() => setQueued((current) => current.filter((item) => item.id !== message.id))}
+              />
+            ))}
+          </ChatQueue>
           <p className="text-muted-foreground text-xs">
-            Queued messages stay compact until expanded, and each one can be cancelled before it is sent. Expand the waiting status to cancel a task the agent is waiting on. In the live Interface, attach images using the paperclip, paste, or drag and drop.
+            Queued messages stay compact until expanded, and each one can be cancelled before it is sent. When more than one is waiting they are sent together, as one batch, once the agent finishes its answer. Expand the waiting status to cancel a task the agent is waiting on. In the live Interface, attach images using the paperclip, paste, or drag and drop.
           </p>
           {(waits.length < sampleWaits.length || queued.length < sampleQueued.length) && (
             <Button type="button" size="sm" variant="outline" onClick={() => { setWaits(sampleWaits); setQueued(sampleQueued); }}>

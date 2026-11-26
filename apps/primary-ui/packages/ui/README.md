@@ -743,6 +743,14 @@ Pass `onCancel` to put a Cancel button beside the row (outside the expandable su
 `cancelling` while the request is in flight. The row is wrapped in a `chat-queued-row` element
 that receives `className`; every other prop still reaches the `details` element.
 
+`ChatQueue` groups the queued rows. Give it `count` (the number of waiting messages) and the
+rows as children: it renders nothing at zero, is a labelled group (“Queued messages”), and from
+two messages up shows the caption “N messages will be sent together”, because the app hands a
+finished agent everything that waited as one batch. `caption` replaces that text, and
+`caption={null}` removes it. `className` and other props reach the group element. The live
+Interface shows the caption only when the conversation’s server reports `caps.batches`, so a
+machine that still asks one queued message per turn is not said to batch.
+
 The live Interface cancels regular and ASAP queued messages through the app’s
 `POST /api/agents/run/unqueue`. That endpoint addresses the queue by position, so the client
 reads the queue again immediately before the write and cancels the message only if it is still

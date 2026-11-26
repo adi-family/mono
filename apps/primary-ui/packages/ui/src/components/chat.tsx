@@ -373,9 +373,35 @@ function ChatQueuedMessage({ text, label = "Queued", onCancel, cancelling = fals
   );
 }
 
+type ChatQueueProps = React.ComponentProps<"div"> & {
+  /** How many messages are waiting. The group renders nothing at zero, and a caption from two. */
+  count: number;
+  /** Replaces the default caption; `null` removes it. */
+  caption?: React.ReactNode;
+};
+
+/**
+ * The messages still waiting to be sent, as one group.
+ * Queued messages are delivered together, so from two rows up the group says so.
+ */
+function ChatQueue({ count, caption, children, className, ...props }: ChatQueueProps) {
+  if (count <= 0) return null;
+  const shown = caption === undefined ? `${count} messages will be sent together` : caption;
+  return (
+    <div data-slot="chat-queue" role="group" aria-label="Queued messages" className={cn("space-y-1", className)} {...props}>
+      {count > 1 && shown !== null && (
+        <p data-slot="chat-queue-caption" className="text-muted-foreground px-1 text-xs">{shown}</p>
+      )}
+      {children}
+    </div>
+  );
+}
+
 export {
   ChatWaitingStatus,
   type ChatWaitingStatusProps,
+  ChatQueue,
+  type ChatQueueProps,
   ChatQueuedMessage,
   type ChatQueuedMessageProps,
   ChatThread,

@@ -19,6 +19,8 @@ export interface AgentCapabilities {
   images?: boolean;
   /** The conversation can be cut back to an earlier message and continued from there. */
   rewind?: boolean;
+  /** Messages that queue behind an answer are asked together when it ends; absent from an older server. */
+  batches?: boolean;
   [key: string]: unknown;
 }
 
@@ -617,6 +619,16 @@ export async function stopConversation(ref: ConversationRef, signal?: AbortSigna
 /** The queued turns of a snapshot, in the order the app counts its queue. */
 export function queuedTurns(snapshot: AgentPeek): AgentTurn[] {
   return snapshot.turns.filter((turn) => turn.queued);
+}
+
+/**
+ * Whether the user message at `index` was asked in the same turn as the message before it.
+ * Messages that queued up are handed to the agent together, as one message, so the app can cut a
+ * conversation back to the first of them only and refuses the rest.
+ */
+export function sentWithPrevious(turns: AgentTurn[], index: number): boolean {
+  const [before, turn] = [turns[index - 1], turns[index]];
+  return Boolean(before && turn) && turn.role === "user" && !turn.queued && before.role === "user" && !before.queued;
 }
 
 function sameQueuedMessage(left: AgentTurn, right: AgentTurn): boolean {

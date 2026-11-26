@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import {
   AppChatError, answerQuestion, getAgents, getConversation, getConversationIndex, getConversations, getFleetNodes, getSteps,
   replyToConversation, startConversation, stopConversation, uploadImage, attachmentUrl, renameConversation, starConversation, hideConversation, getVoice, transcribeAudio,
-  cancelAwait, cancelQueuedMessage, queuedPosition, queuedTurns, rewindConversation, type AgentPeek, type AgentTurn,
+  cancelAwait, cancelQueuedMessage, queuedPosition, queuedTurns, rewindConversation, sentWithPrevious, type AgentPeek, type AgentTurn,
   savedAgents, savedConversation, savedConversationIndex, savedFleetNodes, savedVoice,
 } from "./app-chat";
 import { groupErrorCount } from "./app-chat-activity";
@@ -411,6 +411,24 @@ async function queuedOf(...turns: unknown[]): Promise<{ peek: AgentPeek; queue: 
   calls.length = 0;
   return { peek, queue: queuedTurns(peek) };
 }
+
+test("only the first message of a batch is one the conversation can be cut back to", async () => {
+  // Three messages that queued behind the first answer were handed to the agent as one batch.
+  const { peek } = await queuedOf(
+    answered,
+    { role: "assistant", text: "Earlier answer" },
+    { role: "user", text: "Fix the header" },
+    { role: "user", text: "Make the button blue" },
+    { role: "user", text: "No, green" },
+    { role: "assistant", text: "Green it is" },
+    { role: "user", text: "Thanks" },
+    queuedTurn("Still waiting"),
+    queuedTurn("Also waiting"),
+  );
+  const together = peek.turns.map((_, index) => sentWithPrevious(peek.turns, index));
+  assert.deepEqual(together, [false, false, false, true, true, false, false, false, false]);
+  assert.equal(sentWithPrevious(peek.turns, 99), false, "an index past the end is not a message");
+});
 
 test("cancelling a queued message re-reads the queue and drops it by its current position", async () => {
   const { queue } = await queuedOf(answered, queuedTurn("First"), queuedTurn("Second"), queuedTurn("Third"));

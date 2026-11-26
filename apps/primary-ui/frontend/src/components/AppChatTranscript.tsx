@@ -10,7 +10,7 @@ import {
   ChatToolOutput,
   ChatTypingIndicator,
 } from "@design-system/ui";
-import { attachmentUrl, getSteps, type AgentPeek, type AgentStep, type AgentTurn, type Conversation, type ConversationRef } from "../lib/app-chat";
+import { attachmentUrl, getSteps, sentWithPrevious, type AgentPeek, type AgentStep, type AgentTurn, type Conversation, type ConversationRef } from "../lib/app-chat";
 import { activityStatus, agentLaunches, conversationHref, toolArguments, toolCode, toolDisplayName, toolSummary, transcriptParts } from "../lib/app-chat-transcript";
 import { groupErrorCount } from "../lib/app-chat-activity";
 import { ChatMarkdown } from "./ChatMarkdown";
@@ -201,7 +201,7 @@ export function appChatTranscriptEntries({ conversation, snapshot, conversations
   const entries: ReactNode[] = [];
   // An answer in flight belongs to the newest message, so nothing can be cut out from under it.
   const editable = onEditMessage && snapshot.caps.rewind === true && !snapshot.running && !snapshot.turns.some((turn) => turn.pending);
-  snapshot.turns.forEach((turn) => {
+  snapshot.turns.forEach((turn, index) => {
     if (turn.queued) return;
     const key = JSON.stringify([conversation.agent, conversation.runId, turn.seq]);
     if (turn.role === "user") {
@@ -213,7 +213,8 @@ export function appChatTranscriptEntries({ conversation, snapshot, conversations
             {turn.text && <ChatMessageContent className="whitespace-normal"><ChatMarkdown>{turn.text}</ChatMarkdown></ChatMessageContent>}
             <AppChatAttachments turn={turn} source={conversation.source} />
           </div>
-          {editable && !note && <Button
+          {/* Messages sent as one batch reached the agent as one message: only the first can be cut back to. */}
+          {editable && !note && !sentWithPrevious(snapshot.turns, index) && <Button
             type="button" size="icon" variant="ghost" aria-label="Edit message" title="Edit message"
             data-slot="chat-message-edit"
             className="text-muted-foreground shrink-0 self-end opacity-0 transition-opacity group-focus-within/chat-message:opacity-100 group-hover/chat-message:opacity-100 pointer-coarse:opacity-100"

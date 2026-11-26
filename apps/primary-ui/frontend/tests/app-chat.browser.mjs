@@ -74,7 +74,7 @@ const markdownText = [
   markdownOneLiner,
   "```",
 ].join("\n");
-const capabilities = { answerable: true, interactive: false, history: true, images: false, tool_steps: true };
+const capabilities = { answerable: true, interactive: false, history: true, images: false, tool_steps: true, batches: true };
 const snapshots = new Map();
 const titles = new Map();
 const requests = [];
@@ -422,7 +422,8 @@ try {
     if (message.method === "Fetch.requestPaused") void intercept(message.params).catch((error) => mockErrors.push(error.message));
     if (message.method === "Runtime.exceptionThrown") errors.push(message.params.exceptionDetails.exception?.description ?? message.params.exceptionDetails.text);
     if (message.method === "Runtime.consoleAPICalled" && message.params.type === "error") errors.push(message.params.args.map((item) => item.value ?? item.description).join(" "));
-    if (message.method === "Log.entryAdded" && message.params.entry.level === "error") errors.push(message.params.entry.text);
+    // A failed resource load says nothing without the address it failed for.
+    if (message.method === "Log.entryAdded" && message.params.entry.level === "error") errors.push(message.params.entry.url ? `${message.params.entry.text} (${message.params.entry.url})` : message.params.entry.text);
   };
   evaluate = async (expression) => {
     const result = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
@@ -1159,6 +1160,9 @@ try {
     assert.equal(mutations("run/reply").at(-1).body.mode, "regular");
     await until(() => evaluate(`${q(chat)}.querySelector('[data-queued="true"]') !== null`), "queued turn renders");
     assert.equal(await evaluate(`${q('[data-slot="chat-queued-message"]')}.open`), false);
+    const queueCaption = `document.querySelector('[data-slot="chat-queue"] [data-slot="chat-queue-caption"]')`;
+    assert.equal(await evaluate(`${q('[data-slot="chat-queue"]')}.getAttribute('aria-label')`), "Queued messages");
+    assert.equal(await evaluate(queueCaption), null, "one queued message is not a batch");
     if (process.env.BROWSER_SCREENSHOTS_DIR) {
       await mkdir(process.env.BROWSER_SCREENSHOTS_DIR, { recursive: true });
       const capture = await send("Page.captureScreenshot", {format:"png"});
@@ -1173,6 +1177,15 @@ try {
     await key("Enter");
     const queuedRows = `document.querySelectorAll('[data-slot="chat-queued-row"]')`;
     await until(() => evaluate(`${queuedRows}.length === 2`), "second queued turn renders");
+    assert.equal(await evaluate(`${queueCaption}?.textContent`), "2 messages will be sent together", "two queued messages say they go as one batch");
+    snapshot.caps = { ...capabilities, batches: false };
+    await until(() => evaluate(`${queuedRows}.length === 2 && ${queueCaption} === null`), "a server that asks one message per turn is not said to batch");
+    snapshot.caps = capabilities;
+    await until(() => evaluate(`${queueCaption} !== null`), "the caption follows the server's capability");
+    if (process.env.BROWSER_SCREENSHOTS_DIR) {
+      const capture = await send("Page.captureScreenshot", {format:"png"});
+      await writeFile(resolve(process.env.BROWSER_SCREENSHOTS_DIR,"queued-batch.png"),Buffer.from(capture.data,"base64"));
+    }
     const cancelQueued = '[data-slot="chat-queued-cancel"]';
     assert.equal(await evaluate(`${q(cancelQueued)}.closest('summary')`), null, "Cancel is not nested in the disclosure control");
     assert.equal(await evaluate(`${q(cancelQueued)}.getAttribute('aria-label')`), "Cancel queued message: Queued fixture follow-up");
@@ -1180,9 +1193,11 @@ try {
     await until(() => mutations("run/unqueue").length === 1, "queued message cancel request");
     assert.deepEqual(mutations("run/unqueue")[0].body, { name: main.agent, run_id: main.runId, index: 0, limit: 20, fold: true });
     await until(() => evaluate(`${queuedRows}.length === 1 && ${queuedRows}[0].textContent.includes('Second queued follow-up')`), "only the cancelled message leaves the queue");
+    assert.equal(await evaluate(queueCaption), null, "the caption goes when one message is left");
     assert.equal(await evaluate(`${q('[data-slot="chat-thread"]')}.textContent.includes('Queued fixture follow-up')`), false, "a cancelled message never reaches the transcript");
     await click(cancelQueued);
     await until(() => evaluate(`${queuedRows}.length === 0`), "the last queued message can be cancelled too");
+    assert.equal(await evaluate(`document.querySelector('[data-slot="chat-queue"]')`), null, "an empty queue renders no group");
     assert.equal(mutations("run/unqueue").length, 2);
     assert.equal(mutations("run/reply").length, before + 2, "cancelling never resends a message");
     await click(`${chat} [aria-label="Stop response"]`);
