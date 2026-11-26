@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-177 structs · 52 enums · 5 type aliases across 67 files.
+177 structs · 53 enums · 5 type aliases across 67 files.
 
 ## Index
 
@@ -19,7 +19,7 @@
 - [`src/backends/code_only.rs`](#srcbackendscode_onlyrs) — `Door`
 - [`src/backends/codex_stream.rs`](#srcbackendscodex_streamrs) — `Failure`
 - [`src/backends/detached.rs`](#srcbackendsdetachedrs) — `Spawned`
-- [`src/backends/harness/adi_loop.rs`](#srcbackendsharnessadi_looprs) — `ToolCall`, `ToolResult`, `Reply`, `Calls`, `RunCtx`, `Wire`, `Said`, `Encoded`, `ImageStore`, `OpenAiDialect`, `HttpCtx`, `ContextLimit`, `FailureReport`
+- [`src/backends/harness/adi_loop.rs`](#srcbackendsharnessadi_looprs) — `ToolCall`, `ToolResult`, `Reply`, `Calls`, `RunCtx`, `Wire`, `Said`, `Among`, `Encoded`, `ImageStore`, `OpenAiDialect`, `HttpCtx`, `ContextLimit`, `FailureReport`
 - [`src/backends/harness/claude_rewind.rs`](#srcbackendsharnessclaude_rewindrs) — `Entry`
 - [`src/backends/harness/claude_sdk.rs`](#srcbackendsharnessclaude_sdkrs) — `Continuation`
 - [`src/backends/harness/tools.rs`](#srcbackendsharnesstoolsrs) — `ToolSpec`, `Ctx`, `CodeTools`, `ToolDeclaration`, `Drain`
@@ -1066,6 +1066,18 @@ struct Said<'a> {
     role: &'a str,
     text: String,
     images: Vec<Attachment>,
+}
+```
+
+### enum `Among`
+
+Whether a turn's words go to the model on their own or as one message of several.
+
+```rust
+#[derive(Clone, Copy)]
+enum Among {
+    Alone,
+    Others,
 }
 ```
 

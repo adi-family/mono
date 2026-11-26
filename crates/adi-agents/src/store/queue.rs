@@ -16,8 +16,17 @@
 //!
 //! It is also a door only [`QueueMode::Asap`] gets to use. A [`Regular`](QueueMode::Regular)
 //! message means "when the chat ends", so [`take_as_turn`] answers only from the asap messages and
-//! leaves every regular one exactly where it was — [`dequeue`], the plain head a *finished* turn
-//! reads next, is what eventually gets to them, in the same `seq` order they were typed in.
+//! leaves every regular one exactly where it was — [`dequeue_batch`], what a *finished* turn reads
+//! next, is what eventually gets to them, in the same `seq` order they were typed in.
+//!
+//! # A finished turn takes the whole line, not its head
+//!
+//! Three things typed while an answer was being written are three parts of one thought, and a
+//! queue that handed them out one per turn had the agent act on the first before it had read the
+//! third — then answer the second against work the third was about to withdraw. So the turn that
+//! starts when one ends is given everything that was waiting ([`dequeue_batch`]), up to a size an
+//! engine can be handed in one piece ([`BATCH_BYTES`]). [`dequeue`] is still the single head, for
+//! the callers that mean exactly one message.
 //!
 //! # The lock is the database's now
 //!
@@ -162,6 +171,75 @@ pub(super) fn dequeue(conn: &Connection, agent: &str, id: &str) -> Result<Option
     Ok(Some(message))
 }
 
+/// How much queued text one turn is handed at once, in bytes.
+///
+/// The ceiling is not about the model. Every engine but the adi loop is handed its message as one
+/// argument on a command line, and Linux caps a single argument at 128 KiB (`MAX_ARG_STRLEN`) — a
+/// spawn over it fails with `E2BIG` before the engine has read a word. Half of that leaves room
+/// for what is added on the way out: the tags, the attachment paths, the envelope a batch travels
+/// in. Messages past the budget are not lost and not refused; they stay queued and are the next
+/// turn's batch.
+pub const BATCH_BYTES: usize = 64 * 1024;
+
+/// What one attachment costs the budget: a line naming where its bytes are on disk.
+const ATTACHMENT_WEIGHT: usize = 320;
+/// What one marker costs it: a tag, with a node name and a user in it at worst.
+const MARKER_WEIGHT: usize = 160;
+/// What every message costs it besides its own words: the block it is wrapped in.
+const MESSAGE_WEIGHT: usize = 48;
+
+/// Roughly what `message` weighs once an engine is handed it — an estimate on the generous side,
+/// because the only thing it decides is where a batch stops.
+fn weight(message: &QueuedMessage) -> usize {
+    message.text.len()
+        + message.images.len() * ATTACHMENT_WEIGHT
+        + message.markers.len() * MARKER_WEIGHT
+        + MESSAGE_WEIGHT
+}
+
+/// Take everything waiting, oldest first, as far as `budget` bytes go — what a turn that has just
+/// ended is asked next. Empty when nothing is waiting.
+///
+/// **The head is always taken**, whatever it weighs: a message too big for the budget on its own
+/// was going to be sent alone anyway, and a budget that could refuse it would leave it at the head
+/// of its queue for ever. Past the head, the batch stops at the first message that would not fit —
+/// never skipping over it to a smaller one behind, because the order they were typed in is the
+/// order they have to be read in.
+///
+/// One transaction, for the reason [`dequeue`] commits before it returns: either every message
+/// handed back has left the queue, or none has.
+///
+/// # Errors
+/// Returns the database error, with the queue left as it was — the caller must not start a turn
+/// whose removals were not recorded, or the same things are asked twice.
+pub(super) fn dequeue_batch(
+    conn: &Connection,
+    agent: &str,
+    id: &str,
+    budget: usize,
+) -> Result<Vec<QueuedMessage>> {
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| sql_err("take from the queue of", e))?;
+    let mut taken: Vec<QueuedMessage> = Vec::new();
+    let mut spent = 0_usize;
+    while let Some((seq, message)) = peek_head(&tx, agent, id, false)? {
+        let cost = weight(&message);
+        if !taken.is_empty() && spent.saturating_add(cost) > budget {
+            break;
+        }
+        remove(&tx, agent, id, seq)?;
+        spent = spent.saturating_add(cost);
+        taken.push(message);
+    }
+    if taken.is_empty() {
+        return Ok(taken);
+    }
+    tx.commit()
+        .map_err(|e| sql_err("take from the queue of", e))?;
+    Ok(taken)
+}
+
 /// Take the oldest **asap** message and record it as a question in the same breath, returning what
 /// was taken. `None` when nothing asap is waiting — a queue holding nothing but regular messages
 /// is left entirely alone, because a regular message means "when the chat ends" and this is
@@ -209,6 +287,21 @@ fn take_head(
     id: &str,
     only_asap: bool,
 ) -> Result<Option<QueuedMessage>> {
+    let Some((seq, message)) = peek_head(tx, agent, id, only_asap)? else {
+        return Ok(None);
+    };
+    remove(tx, agent, id, seq)?;
+    Ok(Some(message))
+}
+
+/// The oldest message and the `seq` it sits at, left where it is — the half of [`take_head`] a
+/// batch needs on its own, because it has to weigh a message before deciding to take it.
+fn peek_head(
+    tx: &Connection,
+    agent: &str,
+    id: &str,
+    only_asap: bool,
+) -> Result<Option<(i64, QueuedMessage)>> {
     let sql = if only_asap {
         "SELECT seq, message, images, marker, mode FROM queue
          WHERE agent = ?1 AND session = ?2 AND mode = 'asap'
@@ -230,20 +323,27 @@ fn take_head(
         })
         .optional()
         .map_err(|e| sql_err("take from the queue of", e))?;
-    let Some((seq, text, images, marker, mode)) = head else {
-        return Ok(None);
-    };
+    Ok(head.map(|(seq, text, images, marker, mode)| {
+        (
+            seq,
+            QueuedMessage {
+                text,
+                images: decode(images.as_deref()),
+                markers: decode_markers(marker.as_deref()),
+                mode: decode_mode(mode.as_deref()),
+            },
+        )
+    }))
+}
+
+/// Drop the message at `seq`, inside the caller's transaction.
+fn remove(tx: &Connection, agent: &str, id: &str, seq: i64) -> Result<()> {
     tx.execute(
         "DELETE FROM queue WHERE agent = ?1 AND session = ?2 AND seq = ?3",
         rusqlite::params![agent, id, seq],
     )
     .map_err(|e| sql_err("take from the queue of", e))?;
-    Ok(Some(QueuedMessage {
-        text,
-        images: decode(images.as_deref()),
-        markers: decode_markers(marker.as_deref()),
-        mode: decode_mode(mode.as_deref()),
-    }))
+    Ok(())
 }
 
 /// How many messages are waiting.

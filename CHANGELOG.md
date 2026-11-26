@@ -20,6 +20,10 @@ extraction script cares about.
 
 ## Unreleased
 
+### Changed
+
+- **Messages that queued up behind an answer are now asked together, in one turn.** Type three messages while an agent is still working and it used to answer them one at a time: the first got a whole turn before the second was even read, so the agent acted on an instruction the third message was about to correct, and each answer cost a turn of its own. Now, when the answer in flight ends, everything that was waiting — messages you typed, awaits that fired, an answered question — goes to the agent at once, oldest first, and it is told to read all of it before acting. In the chat nothing is merged: each message stays its own bubble with its own attachments and its own sender, followed by the one answer to all of them. A message sent to an idle conversation still starts at once, and "send now" on `harness:adi` is still heard mid-answer as before. A very large backlog is split: one turn takes about 64 KB of queued text and the rest follows in the next. Because the agent received the batch as a single message, **only the first message of a batch can be edited** (rewound to); editing it removes the rest of the batch with it, as editing any message removes what came after.
+
 ## 1.45.1 — 2026-11-25
 
 ### Fixed

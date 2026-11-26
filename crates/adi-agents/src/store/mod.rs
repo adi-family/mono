@@ -1126,6 +1126,20 @@ impl SessionStore {
         queue::dequeue(&conn, agent, id)
     }
 
+    /// Take everything waiting, oldest first — what a turn that has just ended is asked next, as
+    /// one turn rather than one per message. Empty when nothing is waiting.
+    ///
+    /// Bounded by [`queue::BATCH_BYTES`]: what does not fit stays queued, in order, and is the
+    /// batch after this one. The head is taken whatever it weighs, so this is empty only for an
+    /// empty queue.
+    ///
+    /// # Errors
+    /// Returns database errors, with the queue left as it was.
+    pub fn dequeue_batch(&self, agent: &str, id: &str) -> Result<Vec<QueuedMessage>> {
+        let conn = self.conn()?;
+        queue::dequeue_batch(&conn, agent, id, queue::BATCH_BYTES)
+    }
+
     /// Take the oldest **asap** message and record it as a question, or `None` when the queue holds
     /// no asap message — how a turn that is still running hears something said to it since it
     /// began. A regular message is left exactly where it is: it means "when the chat ends", and
@@ -2478,6 +2492,84 @@ mod tests {
             ["elsewhere"],
             "clearing one queue leaves the other",
         );
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// A turn that has just ended is asked everything that waited behind it at once, in the order
+    /// it was typed — asap or regular, because by then both are simply due — and one session's
+    /// batch never reaches into another's queue.
+    #[test]
+    fn a_finished_turn_takes_the_whole_line_in_order() {
+        let store = scratch("dequeue-batch");
+        let a = store
+            .create("chat", Backend::HarnessAdi, "/tmp", "first chat")
+            .expect("create");
+        let b = store
+            .create("chat", Backend::HarnessAdi, "/tmp", "second chat")
+            .expect("create");
+        assert!(
+            store.dequeue_batch("chat", &a.id).expect("batch").is_empty(),
+            "nothing waiting is an empty batch, not an error"
+        );
+
+        for (text, mode) in [
+            ("one", QueueMode::Regular),
+            ("two", QueueMode::Asap),
+            ("three", QueueMode::Regular),
+        ] {
+            store
+                .enqueue("chat", &a.id, text, &[], &[], mode)
+                .expect("enqueue");
+        }
+        store
+            .enqueue("chat", &b.id, "elsewhere", &[], &[], QueueMode::Regular)
+            .expect("enqueue");
+
+        let batch = store.dequeue_batch("chat", &a.id).expect("batch");
+        assert_eq!(texts(batch.clone()), ["one", "two", "three"]);
+        assert_eq!(batch[1].mode, QueueMode::Asap, "each keeps what it was queued as");
+        assert_eq!(store.queue_len("chat", &a.id), 0, "and all of them have left");
+        assert_eq!(
+            texts(store.queued("chat", &b.id)),
+            ["elsewhere"],
+            "one session's batch is not another's",
+        );
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// The budget is where a batch stops, never a reason to refuse or reorder: the head goes
+    /// whatever it weighs, and what does not fit behind it keeps its place for the next turn.
+    #[test]
+    fn a_batch_stops_at_its_budget_and_leaves_the_rest_queued_in_order() {
+        let store = scratch("dequeue-batch-budget");
+        let session = store
+            .create("chat", Backend::HarnessAdi, "/tmp", "start")
+            .expect("create");
+        let id = &session.id;
+        let big = "x".repeat(queue::BATCH_BYTES);
+        for text in [big.as_str(), "small", big.as_str(), "after", "last"] {
+            store
+                .enqueue("chat", id, text, &[], &[], QueueMode::Regular)
+                .expect("enqueue");
+        }
+
+        let first = store.dequeue_batch("chat", id).expect("batch");
+        assert_eq!(first.len(), 1, "a message over the budget still goes, alone");
+        assert_eq!(first[0].text.len(), queue::BATCH_BYTES);
+
+        let second = store.dequeue_batch("chat", id).expect("batch");
+        assert_eq!(
+            texts(second),
+            ["small"],
+            "the batch ends at the message that would not fit, rather than skipping past it"
+        );
+
+        let third = store.dequeue_batch("chat", id).expect("batch");
+        assert_eq!(third.len(), 1, "which then heads its own batch");
+        assert_eq!(texts(store.dequeue_batch("chat", id).expect("batch")), ["after", "last"]);
+        assert_eq!(store.queue_len("chat", id), 0);
 
         let _ = std::fs::remove_dir_all(store.dir());
     }

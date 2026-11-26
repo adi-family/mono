@@ -2078,32 +2078,28 @@ impl Agents {
             let place = store.enqueue(name, conv_id, message, images, markers, mode)?;
             return Ok(Sent::Queued { place });
         }
-        // Idle, but with a queue no read has drained yet: join the back of the line and start its
-        // head instead, so messages are always answered in the order they were typed.
+        // Idle, but with a queue no read has drained yet: join the back of the line and start the
+        // line instead, so messages are always answered in the order they were typed — and, since
+        // one turn is handed everything waiting, this one is answered with them rather than after.
+        let own = || store::QueuedMessage {
+            text: message.to_string(),
+            images: images.to_vec(),
+            markers: markers.to_vec(),
+            mode,
+        };
         let next = if store.queue_len(name, conv_id) > 0 {
             store.enqueue(name, conv_id, message, images, markers, mode)?;
-            store
-                .dequeue(name, conv_id)?
-                .unwrap_or_else(|| store::QueuedMessage {
-                    text: message.to_string(),
-                    images: images.to_vec(),
-                    markers: markers.to_vec(),
-                    mode,
-                })
+            let batch = store.dequeue_batch(name, conv_id)?;
+            if batch.is_empty() { vec![own()] } else { batch }
         } else {
-            store::QueuedMessage {
-                text: message.to_string(),
-                images: images.to_vec(),
-                markers: markers.to_vec(),
-                mode,
-            }
+            vec![own()]
         };
 
         let launch = self.start_turn(&agent, &store, runner.as_ref(), &record, &next)?;
         // No sessions.db write left to bundle this with — `start_turn` already made its own and
         // returned — so this is `f: || Ok(())`, same durability `with_event` gives every event
         // (ADI-MONO-149), just with nothing else to make atomic with it.
-        self.with_event(|| Ok(((), Some(AgentRunStarted::of(name, &next.text, &launch)))))?;
+        self.with_event(|| Ok(((), Some(AgentRunStarted::of(name, &said_in(&next), &launch)))))?;
         Ok(Sent::Started(launch))
     }
 
@@ -2345,10 +2341,14 @@ impl Agents {
     /// it was written expecting answers that no longer exist. Refused while an answer is in flight:
     /// stop it first.
     ///
+    /// Messages asked in one turn are cut together or not at all, so of several sent as a batch
+    /// only the first can be the target — it takes the rest of the batch with it, as it takes
+    /// everything else after it.
+    ///
     /// # Errors
     /// Returns [`Error::NotFound`] for an unknown agent, conversation or turn, [`Error::Busy`]
-    /// while a turn is running, and [`Error::Unsupported`] for a turn that is not a user message or
-    /// an engine that cannot be rewound.
+    /// while a turn is running, and [`Error::Unsupported`] for a turn that is not a user message,
+    /// one that shared its turn with the message before it, or an engine that cannot be rewound.
     pub fn rewind(&self, name: &str, conv_id: &str, seq: usize) -> Result<Turn> {
         validate_name(name)?;
         if self.get(name)?.is_none() {
@@ -2389,15 +2389,38 @@ impl Agents {
                 "only a message you sent can be edited".into(),
             ));
         }
+        // A message asked in the same turn as the one before it — a queue handed over whole, or
+        // something heard mid-answer — has no "just before" to cut back to: the engine was given
+        // them as one, so it cannot be made to forget the second and keep the first, and cutting
+        // the transcript there would leave the first as a question whose answer the next read
+        // files from a turn that also answered what was just removed. The first of them is the
+        // one place the cut is clean.
+        if seq > 0
+            && store
+                .turn(name, conv_id, seq - 1)
+                .is_some_and(|before| before.role == store::ROLE_USER)
+        {
+            return Err(Error::Unsupported(
+                "this message was sent together with the one before it — edit the first of them \
+                 instead"
+                    .into(),
+            ));
+        }
         runner.rewind(&session, target.at)?;
         store.truncate_turns(name, conv_id, seq)?;
         store.clear_queue(name, conv_id)?;
         Ok(target)
     }
 
-    /// Start a conversation's next queued message, if it is idle and one is waiting; reports whether
-    /// a turn started. The cheap gate comes first so an idle poll — which is nearly every poll —
-    /// costs one `exists` rather than the tool sync a launch context pays for.
+    /// Start a conversation's next turn from its queue, if it is idle and anything is waiting;
+    /// reports whether a turn started. The cheap gate comes first so an idle poll — which is nearly
+    /// every poll — costs one `exists` rather than the tool sync a launch context pays for.
+    ///
+    /// **The turn is handed everything that was waiting, not the head alone**
+    /// ([`SessionStore::dequeue_batch`]). Three messages typed while an answer was being written
+    /// used to be three turns, each started only when the one before it had finished — so the agent
+    /// acted on the first without having read the correction in the third. Now they are one turn:
+    /// each still its own message in the transcript, all of them read before anything is done.
     ///
     /// This is the platform starting a run by itself, so the [run cap](RunLimits) binds absolutely:
     /// at capacity the message stays at the head of its queue and the next poll asks again.
@@ -2454,32 +2477,40 @@ impl Agents {
                 return false;
             }
             lease::Readiness::Fail { names, .. } => {
-                let Ok(Some(message)) = store.dequeue(&agent.name, conv_id) else {
+                let messages = store.dequeue_batch(&agent.name, conv_id).unwrap_or_default();
+                if messages.is_empty() {
                     return false;
-                };
-                let _ = self.fail_turn_for_missing_lease(&store, &agent.name, conv_id, &message, &names);
+                }
+                let _ = self.fail_turn_for_missing_lease(&store, &agent.name, conv_id, &messages, &names);
                 return true;
             }
         }
         // Dropped from the queue *before* the turn starts: a message that fails to launch has still
         // had its turn, and leaving it at the head would retry it on every poll for ever.
-        let Ok(Some(message)) = store.dequeue(&agent.name, conv_id) else {
+        let messages = store.dequeue_batch(&agent.name, conv_id).unwrap_or_default();
+        if messages.is_empty() {
             return false;
-        };
-        let Ok(launch) = self.start_turn(agent, &store, runner.as_ref(), &record, &message) else {
+        }
+        let Ok(launch) = self.start_turn(agent, &store, runner.as_ref(), &record, &messages) else {
             return false;
         };
         let _ = self.with_event(|| {
             Ok((
                 (),
-                Some(AgentRunStarted::of(&agent.name, &message.text, &launch)),
+                Some(AgentRunStarted::of(&agent.name, &said_in(&messages), &launch)),
             ))
         });
         true
     }
 
-    /// Ask `message` in an existing session: settle whatever the last turn left behind, record the
-    /// question, and send it.
+    /// Ask `messages` in an existing session, as one turn: settle whatever the last turn left
+    /// behind, record each message as the question it is, and send them together.
+    ///
+    /// One message is the ordinary case and goes out exactly as it always has. More than one is a
+    /// queue being handed over whole: **the transcript still gets a turn per message** — each was
+    /// said separately, by whoever said it, with its own attachments — and only the engine-facing
+    /// copy is one piece ([`for_engine_batch`]). `messages` is never empty; every caller has
+    /// either built it from a message in hand or checked what the queue gave back.
     ///
     /// The session's own directory is re-used verbatim — an engine's session store is keyed by the
     /// directory it ran in, so re-resolving on turn five would make the thread unresumable and put
@@ -2490,11 +2521,11 @@ impl Agents {
         store: &SessionStore,
         runner: &dyn Runner,
         record: &SessionRecord,
-        message: &store::QueuedMessage,
+        messages: &[store::QueuedMessage],
     ) -> Result<Launch> {
         let session = store.session(&agent.name, &record.id);
         // Commit the previous turn's answer before the next question goes in, so the transcript
-        // stays a clean question/answer sequence rather than two questions in a row. Nothing is in
+        // never files that answer under a question it was not given. Nothing is in
         // flight here — every caller has taken the turn gate and found the session idle — so that
         // answer is whole.
         settle(
@@ -2538,16 +2569,12 @@ impl Agents {
         // previous turn's answer onto this one (ADI-MONO-218, now covering replies too). After
         // `runner.check`, so an unrunnable spec still leaves nothing dangling.
         store.mark_launching(&agent.name, &record.id)?;
-        let mut turn = store::user_turn_with(&message.text, message.images.clone());
-        turn.markers.clone_from(&message.markers);
-        store.append_turn(&agent.name, &record.id, turn)?;
-        let sent = for_engine(
-            runner,
-            store,
-            &message.markers,
-            &message.text,
-            &message.images,
-        );
+        for message in messages {
+            let mut turn = store::user_turn_with(&message.text, message.images.clone());
+            turn.markers.clone_from(&message.markers);
+            store.append_turn(&agent.name, &record.id, turn)?;
+        }
+        let sent = for_engine_batch(runner, store, messages);
         self.send_or_note_failure(runner, &spec, store, &agent.name, &record.id, &sent)?;
         Ok(launch_of(agent, runner, &session))
     }
@@ -2663,21 +2690,25 @@ impl Agents {
     /// Refuse a turn whose lease has no live value for a name it needs, under `missing = "fail"`
     /// (ADI-MONO-181 P2.7) — written into the transcript the way
     /// [`send_or_note_failure`](Self::send_or_note_failure) writes a real launch failure, since
-    /// nothing here ever reaches a runner to fail on its own: the user's own message is recorded
+    /// nothing here ever reaches a runner to fail on its own: the user's own messages are recorded
     /// first (nothing else ever will, since this never reaches `start_turn`), then the refusal as
-    /// the answer, then the same `is_error` outcome a dead launch gets. Always returns `Err` —
+    /// the answer, then the same `is_error` outcome a dead launch gets. Every message that was
+    /// waiting, because that is what the turn it refuses would have been handed — one refusal
+    /// answers them all, rather than one per poll until the queue runs dry. Always returns `Err` —
     /// there is no `Ok` shape for "refused before it ever started".
     fn fail_turn_for_missing_lease(
         &self,
         store: &SessionStore,
         agent: &str,
         run_id: &str,
-        message: &store::QueuedMessage,
+        messages: &[store::QueuedMessage],
         names: &[String],
     ) -> Result<()> {
-        let mut turn = store::user_turn_with(&message.text, message.images.clone());
-        turn.markers.clone_from(&message.markers);
-        store.append_turn(agent, run_id, turn)?;
+        for message in messages {
+            let mut turn = store::user_turn_with(&message.text, message.images.clone());
+            turn.markers.clone_from(&message.markers);
+            store.append_turn(agent, run_id, turn)?;
+        }
 
         let failure = format!("{} isn't unlocked on this server", names.join(", "));
         let _ = store.append_turn(
@@ -4129,6 +4160,53 @@ pub(crate) fn marked(markers: &[Marker], text: &str) -> String {
         return text.to_string();
     }
     marker::stamp(markers, text)
+}
+
+/// Everything one turn is being asked, as *this engine* has to receive it.
+///
+/// One message is [`for_engine`] and nothing more — byte for byte what it was before a turn could
+/// carry several, which is every turn of every conversation nobody typed ahead in. More than one is
+/// each message rendered the same way and then framed as a batch ([`marker::batch`]), so the engine
+/// can tell where one stops and whose each one is.
+///
+/// The adi loop never reads this — it replays the transcript, where the same messages sit as turns
+/// in a row — and frames them with the same function (`merged` there), so a batch reads the same
+/// whichever engine is answering.
+fn for_engine_batch(
+    runner: &dyn Runner,
+    store: &SessionStore,
+    messages: &[store::QueuedMessage],
+) -> String {
+    if let [only] = messages {
+        return for_engine(runner, store, &only.markers, &only.text, &only.images);
+    }
+    let parts: Vec<String> = messages
+        .iter()
+        .map(|message| {
+            let text = with_attachment_paths(
+                store,
+                &message.text,
+                &message.images,
+                runner.image_delivery(),
+            );
+            marker::part(&message.markers, &text)
+        })
+        .collect();
+    marker::batch(&parts)
+}
+
+/// What was said in a turn, for the event that announces it: the words alone, a blank line between
+/// messages when the turn was handed more than one.
+///
+/// Not the engine-facing copy. A trigger matching on a run's opening message, or a listing showing
+/// what a run was asked, wants what people typed — not the frame a batch travels in.
+fn said_in(messages: &[store::QueuedMessage]) -> String {
+    messages
+        .iter()
+        .map(|message| message.text.trim())
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 /// The words with everything attached to them named by path, as one `delivery` needs it.
@@ -6421,16 +6499,20 @@ mod tests {
         sessions
             .enqueue("watcher", &conv, "do it", &[], &[], QueueMode::Regular)
             .expect("enqueue");
+        sessions
+            .enqueue("watcher", &conv, "and that", &[], &[], QueueMode::Regular)
+            .expect("enqueue");
 
         let _ = store.runs(&agent);
-        assert_eq!(sessions.queue_len("watcher", &conv), 0, "the message has had its turn");
+        assert_eq!(sessions.queue_len("watcher", &conv), 0, "the messages have had their turn");
         let turns = sessions.turns("watcher", &conv);
-        assert_eq!(turns.len(), 2, "the question and the refusal");
+        assert_eq!(turns.len(), 3, "both questions, and one refusal for the turn they shared");
         assert_eq!(turns[0].text, "do it");
+        assert_eq!(turns[1].text, "and that");
         assert!(
-            turns[1].text.contains("K isn't unlocked on this server"),
+            turns[2].text.contains("K isn't unlocked on this server"),
             "{}",
-            turns[1].text
+            turns[2].text
         );
         let outcome = sessions.get("watcher", &conv).expect("get").outcome.expect("recorded");
         assert!(outcome.is_error);
@@ -10038,6 +10120,194 @@ mod tests {
                 "a real run refuses the seat: {outcome:?}",
             );
         }
+    }
+
+    /// The point of the whole thing. Three messages typed while an answer was being written used
+    /// to be three turns, each started when the one before had finished. They are one turn now:
+    /// the queue is empty the moment the answer lands, every message is in the transcript as the
+    /// separate thing it was, and there is one answer to all of them.
+    #[test]
+    fn everything_queued_behind_an_answer_is_asked_as_one_turn() {
+        let store = scratch("queue-batch");
+        store.save("talker", spec("harness:adi")).expect("save");
+        let Launch::Process { run_id, .. } = store.simulate("talker", "first").expect("simulate") else {
+            panic!("expected a headless run");
+        };
+        let agent = store.get("talker").expect("get").expect("present");
+        let sessions = store.sessions();
+
+        for (place, text) in ["fix the header", "make the button blue", "no — green"].into_iter().enumerate() {
+            assert_eq!(
+                store.reply("talker", &run_id, text).expect("reply"),
+                Sent::Queued { place: place + 1 },
+                "a turn is in flight, so {text:?} waits"
+            );
+        }
+        assert_eq!(sessions.queue_len("talker", &run_id), 3);
+        let before: Vec<Turn> = store.transcript(&agent, &run_id);
+        assert_eq!(
+            before.iter().filter(|t| t.queued).count(),
+            3,
+            "reading a conversation that is still answering starts nothing"
+        );
+
+        store
+            .simulate_turn("talker", &run_id, &[SimBlock::Text("done".into())])
+            .expect("the first turn ends");
+
+        // The read is the clock: the answer has landed, so what waited behind it starts here.
+        let turns = store.transcript(&agent, &run_id);
+        assert_eq!(sessions.queue_len("talker", &run_id), 0, "the whole line went at once");
+        let said: Vec<(&str, &str)> = turns
+            .iter()
+            .filter(|t| !t.pending)
+            .map(|t| (t.role.as_str(), t.text.as_str()))
+            .collect();
+        assert_eq!(
+            said,
+            [
+                ("user", "first"),
+                ("assistant", "done"),
+                ("user", "fix the header"),
+                ("user", "make the button blue"),
+                ("user", "no — green"),
+            ],
+            "each message is still its own turn, in the order it was typed"
+        );
+        assert!(turns.iter().all(|t| !t.queued), "nothing is left waiting: {turns:?}");
+        assert!(
+            store.runs(&agent).iter().any(|r| r.run_id == run_id && r.running),
+            "and one turn is answering all three"
+        );
+
+        store
+            .simulate_turn("talker", &run_id, &[SimBlock::Text("green it is".into())])
+            .expect("the batch's turn ends");
+        let turns = store.transcript(&agent, &run_id);
+        assert_eq!(turns.len(), 6, "one answer for the three of them: {turns:?}");
+        assert_eq!(turns[5].role, store::ROLE_ASSISTANT);
+        assert_eq!(turns[5].text, "green it is");
+        assert!(
+            !store.runs(&agent).iter().any(|r| r.run_id == run_id && r.running),
+            "with nothing queued, nothing else starts"
+        );
+    }
+
+    /// A message sent to an idle conversation whose queue no read has drained yet joins the back
+    /// of that line — and the turn it starts is handed the line, itself included, rather than the
+    /// head alone with the rest (and this message) left for later turns.
+    #[test]
+    fn a_reply_to_an_idle_conversation_takes_the_waiting_line_with_it() {
+        let store = scratch("queue-batch-reply");
+        store.save("talker", spec("harness:adi")).expect("save");
+        let Launch::Process { run_id, .. } = store.simulate("talker", "first").expect("simulate") else {
+            panic!("expected a headless run");
+        };
+        store
+            .simulate_turn("talker", &run_id, &[SimBlock::Text("done".into())])
+            .expect("the first turn ends");
+        let sessions = store.sessions();
+        // Written straight into the store, so nothing has read the conversation since.
+        for text in ["one", "two"] {
+            sessions
+                .enqueue("talker", &run_id, text, &[], &[], QueueMode::Regular)
+                .expect("enqueue");
+        }
+
+        assert!(
+            matches!(store.reply("talker", &run_id, "three").expect("reply"), Sent::Started(_)),
+            "an idle conversation starts"
+        );
+        assert_eq!(sessions.queue_len("talker", &run_id), 0);
+        let asked: Vec<String> = sessions
+            .turns("talker", &run_id)
+            .into_iter()
+            .skip(2)
+            .map(|t| t.text)
+            .collect();
+        assert_eq!(asked, ["one", "two", "three"], "in the order they were said");
+    }
+
+    /// What an engine that is *handed* its message receives for a batch: every message, framed,
+    /// each with its own stamp and its own attachments named — while one message alone is exactly
+    /// what it always was.
+    #[test]
+    fn a_batch_reaches_a_handed_engine_as_one_framed_message() {
+        let store = scratch("queue-batch-engine");
+        let sessions = store.sessions();
+        let file = store
+            .store_attachment("Q3 report.pdf", "application/pdf", b"%PDF-1.7")
+            .expect("store the file");
+        let runner = runner_for(&Backend::HarnessClaudeSdk).expect("a runner");
+        let peer = Marker::From { node: "laptop-b".into(), user: "igor".into() };
+        let messages = [
+            store::QueuedMessage::text("summarise this"),
+            store::QueuedMessage {
+                text: "and send it to finance".into(),
+                images: vec![file.clone()],
+                markers: vec![peer.clone()],
+                mode: QueueMode::Asap,
+            },
+        ];
+
+        let alone = for_engine_batch(runner.as_ref(), &sessions, &messages[..1]);
+        assert_eq!(alone, "summarise this", "one message is not framed");
+        assert_eq!(
+            for_engine_batch(runner.as_ref(), &sessions, &messages[1..]),
+            for_engine(runner.as_ref(), &sessions, &messages[1].markers, &messages[1].text, &messages[1].images),
+            "and is byte for byte what a single send has always been"
+        );
+
+        let sent = for_engine_batch(runner.as_ref(), &sessions, &messages);
+        assert!(sent.starts_with("<queued count=\"2\"/>\n"), "{sent}");
+        assert!(sent.contains("<message n=\"1\">\nsummarise this\n</message>"), "{sent}");
+        assert!(
+            sent.contains(&format!("<message n=\"2\">\n{} and send it to finance", peer.tag())),
+            "the second opens with its sender's stamp: {sent}"
+        );
+        let path = sessions.attachment_path(&file).display().to_string();
+        let second = sent.split("<message n=\"2\">").nth(1).expect("the second block");
+        assert!(second.contains(&path), "its file is named inside its own block: {sent}");
+        assert!(sent.ends_with("</message>"), "{sent}");
+
+        assert_eq!(
+            said_in(&messages),
+            "summarise this\n\nand send it to finance",
+            "the event that announces the turn carries what was typed, not the frame"
+        );
+    }
+
+    /// Messages asked in one turn are cut together or not at all. The engine was handed them as
+    /// one, so the second cannot be un-said while the first stays — only the first can be edited,
+    /// and it takes the batch with it.
+    #[test]
+    fn only_the_first_message_of_a_batch_can_be_rewound_to() {
+        let agents = scratch("rewind-batch");
+        agents.save("chat", spec("harness:adi")).expect("save");
+        let sessions = agents.sessions();
+        let id = sessions
+            .create("chat", Backend::HarnessAdi, "/tmp", "one")
+            .expect("create")
+            .id;
+        for turn in [
+            store::user_turn("one"),
+            store::assistant_turn(&TurnContent { text: "first answer".into(), ..TurnContent::default() }),
+            store::user_turn("two"),
+            store::user_turn("three"),
+            store::assistant_turn(&TurnContent { text: "answer to both".into(), ..TurnContent::default() }),
+        ] {
+            sessions.append_turn("chat", &id, turn).expect("append");
+        }
+
+        let refused = agents.rewind("chat", &id, 3).expect_err("the second of a batch");
+        assert!(matches!(refused, Error::Unsupported(_)), "{refused}");
+        assert!(refused.to_string().contains("sent together"), "{refused}");
+        assert_eq!(sessions.turn_count("chat", &id), 5, "a refusal drops nothing");
+
+        let edited = agents.rewind("chat", &id, 2).expect("the first of the batch");
+        assert_eq!(edited.text, "two");
+        let kept: Vec<String> = sessions.turns("chat", &id).into_iter().map(|t| t.text).collect();
+        assert_eq!(kept, ["one", "first answer"], "and the rest of the batch goes with it");
     }
 
     #[test]
