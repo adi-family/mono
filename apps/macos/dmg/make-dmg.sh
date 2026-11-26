@@ -88,7 +88,24 @@ MOUNT="$(hdiutil attach "$TMP/rw.dmg" -readwrite -noverify -nobrowse -noautoopen
 [ -n "$MOUNT" ] || { echo "error: could not mount the staging image" >&2; exit 1; }
 SetFile -a C "$MOUNT"
 sync
-hdiutil detach "$MOUNT" >/dev/null
+# Retried for the reason `create` above is. On a CI runner something is still reading the
+# volume the moment it is mounted, and `detach` answers "couldn't eject … Resource busy":
+# v1.46.0's macOS job died on exactly this line, after thirty-five minutes of building and
+# signing. A second later the volume lets go. If it never does, the last try forces it —
+# everything written to the volume was synced just above, so a forced detach loses nothing.
+for attempt in 1 2 3 4 5; do
+    if hdiutil detach "$MOUNT" >/dev/null 2>"$TMP/detach.err"; then
+        break
+    fi
+    cat "$TMP/detach.err" >&2
+    if [ "$attempt" = 5 ]; then
+        hdiutil detach "$MOUNT" -force >/dev/null \
+            || { echo "error: could not detach the staging image" >&2; exit 1; }
+        break
+    fi
+    echo "    retrying hdiutil detach in ${attempt}s ($attempt/5)" >&2
+    sleep "$attempt"
+done
 MOUNT=""
 
 rm -f "$OUT"
