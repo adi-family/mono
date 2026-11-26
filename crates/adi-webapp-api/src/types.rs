@@ -2883,6 +2883,12 @@ pub struct AgentCapabilities {
     /// from there — what decides whether a sent message offers to be edited.
     #[serde(default)]
     pub rewind: bool,
+    /// Whether messages that queue up behind an answer are asked together, in one turn, when it
+    /// ends — rather than one per turn. True wherever `answerable` is on a server that does
+    /// this at all; absent, and so false, from one too old to. What lets a client say "these will
+    /// be sent together" only to somebody for whom it is true.
+    #[serde(default)]
+    pub batches: bool,
 }
 
 /// The richer lifecycle behind a plain `running` flag (ADI-MONO-101). Mirrors
@@ -3169,6 +3175,7 @@ fn default_caps() -> AgentCapabilities {
         asks: false,
         images: false,
         rewind: false,
+        batches: false,
     }
 }
 

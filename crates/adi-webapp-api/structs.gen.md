@@ -2773,6 +2773,8 @@ pub struct AgentCapabilities {
     pub images: bool,
     #[serde(default)]
     pub rewind: bool,
+    #[serde(default)]
+    pub batches: bool,
 }
 ```
 

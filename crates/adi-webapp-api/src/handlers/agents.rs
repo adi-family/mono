@@ -1984,6 +1984,9 @@ fn wire_caps(c: adi_agents::BackendCapabilities) -> AgentCapabilities {
         asks: c.answerable,
         images: c.images,
         rewind: c.rewind,
+        // A fact about the queue rather than about any one engine: whatever can be replied to has
+        // a queue, and a finished turn is handed all of it (`Agents::advance_queue`).
+        batches: c.answerable,
     }
 }
 
@@ -5023,6 +5026,7 @@ mod tests {
                 asks: true,
                 images: true,
                 rewind: true,
+                batches: true,
             },
             runs: when
                 .iter()
