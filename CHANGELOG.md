@@ -20,7 +20,7 @@ extraction script cares about.
 
 ## Unreleased
 
-## 1.48.1 — 2026-11-27
+## 1.48.2 — 2026-11-27
 
 ### Security
 

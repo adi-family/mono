@@ -65,7 +65,7 @@ libraries = [{ path = "lints/adi-clone-lint" }]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.92"
+rust-version = "1.94"
 # Business Source License 1.1 (see LICENSE); BUSL-1.1 is its SPDX identifier.
 license = "BUSL-1.1"
 authors = ["mgorunuch <alkudel.ui@gmail.com>"]

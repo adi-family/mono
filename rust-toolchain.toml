@@ -11,8 +11,9 @@
 # `--default-toolchain none` so that this line — not the container's idea of stable — chooses
 # the compiler there too.
 #
-# Bumping it is the operator's call, and it is one commit: change the version here, let CI
-# cold-start once on the new prefix, and confirm the machine's own `rustc --version` matches
-# (it is 1.92.0 today, `ded5c06cf 2025-12-08`).
-channel = "1.92.0"
+# Candle 0.11.1 calls __cpuid_count without unsafe on x86_64; that intrinsic became
+# safe in Rust 1.94. Pin the patched 1.94.1 release so Windows, Linux and Intel macOS
+# compile the same dependency graph as Apple Silicon. Keep workspace rust-version aligned.
+# Upstream: https://github.com/huggingface/candle/pull/4097
+channel = "1.94.1"
 components = ["rustfmt", "clippy"]
