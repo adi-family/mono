@@ -20,6 +20,21 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.48.1 — 2026-11-27
+
+### Security
+
+- Updated dependencies to address published advisories in networking, TLS, archive handling, SQLite, and the web tooling. Replaced the unmaintained date/time and YAML dependencies with maintained libraries.
+
+### Added
+
+- Every CLI command group now supports `llm` and `llm help`. Agents receive guidance and command arguments automatically instead of a bare list of commands.
+- Find hidden conversations with *Include hidden* in the chat filter menu, and restore them with *Unhide* in a chat's context menu. This works across the selected paired machines too.
+
+### Fixed
+
+- Expanded tool-call details stay open as an answer grows and new calls arrive. A failed refresh keeps the existing details visible and offers *Retry*.
+
 ## 1.48.0 — 2026-11-27
 
 This release also includes the chat improvements prepared for 1.47.0, which was not published:
