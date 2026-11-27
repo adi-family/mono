@@ -20,6 +20,11 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.48.0 — 2026-11-27
+
+This release also includes the chat improvements prepared for 1.47.0, which was not published:
+find and restore hidden chats, and keep opened tool calls in place while an answer grows.
+
 ### Added
 
 - **Every command group answers `llm`.** `adi-mono dns llm`, `adi-mono tasks llm`, and the same under every other group now print help written for an agent: what the group is for, the rules that keep a caller out of trouble, and every command with its arguments. Before, this worked only for `facts` and `workflows` and was an error everywhere else. Agents benefit without any change on their side: the built-in tools (`adi-tasks`, `adi-knowledge`, `adi-agents`, `adi-dns`, …) now give each agent this help instead of a bare list of command names, so it no longer has to run `--help` on every command before it can start.
