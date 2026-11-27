@@ -40,9 +40,8 @@ ed25519-dalek = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
-# Only for `today()`'s `registrations_by_ip.day` string — a stable UTC calendar date, not
-# wall-clock scheduling, so no `chrono-tz` here.
-chrono = { workspace = true }
+# Supplies `today()`'s `registrations_by_ip.day` string as a stable UTC calendar date.
+jiff = { workspace = true }
 base64 = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }

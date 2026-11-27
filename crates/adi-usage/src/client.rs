@@ -137,9 +137,9 @@ fn build_body(install_id: &str, items: &[QueuedEvent]) -> String {
 }
 
 fn to_rfc3339(ms: u64) -> String {
-    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(i64::try_from(ms).unwrap_or(0))
-        .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH)
-        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+    let timestamp = jiff::Timestamp::from_millisecond(i64::try_from(ms).unwrap_or(0))
+        .unwrap_or(jiff::Timestamp::UNIX_EPOCH);
+    format!("{timestamp:.3}")
 }
 
 #[cfg(test)]

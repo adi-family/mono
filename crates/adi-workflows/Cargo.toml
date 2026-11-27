@@ -14,7 +14,7 @@ adi-events = { workspace = true }
 adi-schedules = { workspace = true }
 adi-tasks = { workspace = true }
 rusqlite = { workspace = true }
-chrono = { workspace = true }
+jiff = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 schemars = { workspace = true }

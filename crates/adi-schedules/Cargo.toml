@@ -11,9 +11,8 @@ repository.workspace = true
 [dependencies]
 adi-config = { workspace = true }
 rusqlite = { workspace = true }
-chrono = { workspace = true }
-chrono-tz = { workspace = true }
-cron = { workspace = true }
+jiff = { workspace = true }
+croner = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 

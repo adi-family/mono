@@ -3,7 +3,7 @@
 set -euo pipefail
 shopt -s nullglob
 
-ESBUILD_VERSION="0.28.0" # what CI installs; locally, whichever esbuild is on PATH
+ESBUILD_VERSION="0.28.2" # what CI installs; locally, whichever esbuild is on PATH
 TYPESCRIPT_VERSION="7.0.2"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

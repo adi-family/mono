@@ -80,8 +80,8 @@ What one evaluation resolved for a rule.
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Resolved {
-    pub fire: Option<DateTime<Utc>>,
-    pub advance_to: Option<DateTime<Utc>>,
+    pub fire: Option<Timestamp>,
+    pub advance_to: Option<Timestamp>,
 }
 ```
 
@@ -97,7 +97,7 @@ One claimed, due-to-fire slot — `run_key` already belongs to this call and no 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Due {
     pub workflow: String,
-    pub slot: DateTime<Utc>,
+    pub slot: Timestamp,
     pub run_key: String,
 }
 ```

@@ -31,7 +31,7 @@ env:
   RUST_BACKTRACE: 1
   # Matches `release.yml`'s webapp job, which pins the same tool for the same reason.
   TRUNK_VERSION: v0.21.14
-  WRANGLER_VERSION: 4.129.0
+  WRANGLER_VERSION: 4.169.0
 
 jobs:
   deploy:

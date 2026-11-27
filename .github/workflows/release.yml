@@ -34,10 +34,10 @@ env:
   # class of surprise worth spending one line to avoid.
   TRUNK_VERSION: v0.21.14
   # Match scripts/elements.sh, which compiles TypeScript and inlines CSS before Trunk builds.
-  ESBUILD_VERSION: 0.28.0
+  ESBUILD_VERSION: 0.28.2
   # Same reasoning, and matched to apps/docs's own devDependency pin so the two Cloudflare
   # publishers on this repo behave identically.
-  WRANGLER_VERSION: 4.129.0
+  WRANGLER_VERSION: 4.169.0
 
 jobs:
   # ── the version, resolved once and reused ────────────────────────────────────────────────

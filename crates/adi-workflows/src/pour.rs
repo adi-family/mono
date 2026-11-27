@@ -158,7 +158,7 @@ impl adi_schedules::RunPourer for WorkflowRunPourer {
             &serde_json::Value::Object(serde_json::Map::new()),
             &serde_json::json!({
                 "kind": "schedule",
-                "slot": due.slot.to_rfc3339(),
+                "slot": due.slot.display_with_offset(jiff::tz::Offset::UTC).to_string(),
             }),
             // A schedule has no causer of its own — see the crate's causation module doc.
             None,
@@ -176,7 +176,7 @@ fn hash_file(path: &Path) -> std::io::Result<String> {
 mod tests {
     use super::*;
     use adi_schedules::Due;
-    use chrono::Utc;
+    use jiff::Timestamp;
 
     fn scratch(tag: &str) -> Config {
         let root = std::env::temp_dir().join(format!(
@@ -211,7 +211,7 @@ mod tests {
 
         let due = Due {
             workflow: "weekly".into(),
-            slot: Utc::now(),
+            slot: Timestamp::now(),
             run_key: "weekly@2026-01-01T00:00:00Z".into(),
         };
         adi_schedules::RunPourer::pour(&pourer, &due);
@@ -243,7 +243,7 @@ mod tests {
         let pourer = pourer(&config);
         let due = Due {
             workflow: "ghost".into(),
-            slot: Utc::now(),
+            slot: Timestamp::now(),
             run_key: "ghost@2026-01-01T00:00:00Z".into(),
         };
         adi_schedules::RunPourer::pour(&pourer, &due);
@@ -259,7 +259,7 @@ mod tests {
         let pourer = pourer(&config);
         let due = Due {
             workflow: "weekly".into(),
-            slot: Utc::now(),
+            slot: Timestamp::now(),
             run_key: "weekly@2026-01-01T00:00:00Z".into(),
         };
         adi_schedules::RunPourer::pour(&pourer, &due);
@@ -282,7 +282,7 @@ mod tests {
         let pourer = pourer(&config);
         let due = Due {
             workflow: "weekly".into(),
-            slot: Utc::now(),
+            slot: Timestamp::now(),
             run_key: "weekly@2026-01-01T00:00:00Z".into(),
         };
         adi_schedules::RunPourer::pour(&pourer, &due);
@@ -343,7 +343,7 @@ mod tests {
         let pourer = pourer(&config);
         let due = Due {
             workflow: "typed".into(),
-            slot: Utc::now(),
+            slot: Timestamp::now(),
             run_key: "typed@2026-01-01T00:00:00Z".into(),
         };
         adi_schedules::RunPourer::pour(&pourer, &due);

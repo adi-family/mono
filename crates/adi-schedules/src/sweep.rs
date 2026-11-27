@@ -3,7 +3,7 @@
 //! see the crate docs for why the seam sits here rather than this crate reading `.ts` files or
 //! owning a run row of its own.
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 
 use crate::rule::ScheduleRule;
 use crate::store::{Due, ScheduleStore};
@@ -35,7 +35,7 @@ pub fn tick(
     store: &ScheduleStore,
     source: &dyn ScheduleSource,
     pourer: &dyn RunPourer,
-    now: DateTime<Utc>,
+    now: Timestamp,
 ) -> Vec<Due> {
     let mut fired = Vec::new();
     for rule in source.schedules() {
@@ -60,7 +60,6 @@ pub fn tick(
 mod tests {
     use super::*;
     use adi_config::Config;
-    use chrono::TimeZone;
     use std::cell::RefCell;
 
     fn scratch(tag: &str) -> ScheduleStore {
@@ -73,9 +72,9 @@ mod tests {
         ScheduleStore::with_config(Config::with_root(root))
     }
 
-    fn utc(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(y, mo, d, h, mi, s)
-            .single()
+    fn utc(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> Timestamp {
+        format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z")
+            .parse()
             .expect("valid instant")
     }
 

@@ -15,7 +15,7 @@
 
 use std::path::PathBuf;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
 
 use adi_config::Config;
@@ -53,16 +53,13 @@ CREATE INDEX IF NOT EXISTS poured_runs_workflow ON poured_runs (workflow);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Due {
     pub workflow: String,
-    pub slot: DateTime<Utc>,
+    pub slot: Timestamp,
     /// `${workflow}@${slot}` — spec section D's run key, RFC 3339 UTC to the second.
     pub run_key: String,
 }
 
-fn run_key(workflow: &str, slot: DateTime<Utc>) -> String {
-    format!(
-        "{workflow}@{}",
-        slot.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
-    )
+fn run_key(workflow: &str, slot: Timestamp) -> String {
+    format!("{workflow}@{slot:.0}")
 }
 
 /// The schedule sweep's own store: the cursor every rule resolves against, and the claim that
@@ -128,7 +125,7 @@ impl ScheduleStore {
     ///
     /// # Errors
     /// [`Error::Store`] on a read failure.
-    pub fn cursor(&self, workflow: &str) -> Result<Option<DateTime<Utc>>> {
+    pub fn cursor(&self, workflow: &str) -> Result<Option<Timestamp>> {
         let conn = self.connect()?;
         cursor_on(&conn, workflow)
     }
@@ -179,7 +176,7 @@ impl ScheduleStore {
     /// # Errors
     /// [`Error::InvalidCron`] / [`Error::UnknownTimezone`] if `rule` itself doesn't parse,
     /// [`Error::Store`] on a read/write failure.
-    pub fn resolve(&self, rule: &ScheduleRule, now: DateTime<Utc>) -> Result<Option<Due>> {
+    pub fn resolve(&self, rule: &ScheduleRule, now: Timestamp) -> Result<Option<Due>> {
         let mut conn = self.connect()?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -194,11 +191,7 @@ impl ScheduleStore {
                  VALUES (?1, ?2, ?3) \
                  ON CONFLICT (workflow) DO UPDATE SET \
                      last_slot_utc = excluded.last_slot_utc, updated_at = excluded.updated_at",
-                rusqlite::params![
-                    rule.workflow,
-                    advance_to.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                    now.timestamp(),
-                ],
+                rusqlite::params![rule.workflow, format!("{advance_to:.0}"), now.as_second(),],
             )
             .map_err(|e| Error::Store(anyhow::anyhow!("couldn't advance the cursor: {e}")))?;
         }
@@ -214,8 +207,8 @@ impl ScheduleStore {
                         rusqlite::params![
                             key,
                             rule.workflow,
-                            slot.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                            now.timestamp(),
+                            format!("{slot:.0}"),
+                            now.as_second(),
                         ],
                     )
                     .map_err(|e| Error::Store(anyhow::anyhow!("couldn't claim a run key: {e}")))?;
@@ -236,7 +229,7 @@ impl ScheduleStore {
     }
 }
 
-fn cursor_on(conn: &Connection, workflow: &str) -> Result<Option<DateTime<Utc>>> {
+fn cursor_on(conn: &Connection, workflow: &str) -> Result<Option<Timestamp>> {
     let stored: Option<String> = conn
         .query_row(
             "SELECT last_slot_utc FROM schedule_cursor WHERE workflow = ?1",
@@ -248,16 +241,14 @@ fn cursor_on(conn: &Connection, workflow: &str) -> Result<Option<DateTime<Utc>>>
     stored.map(|s| parse_slot(&s)).transpose()
 }
 
-fn parse_slot(s: &str) -> Result<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(s)
-        .map(|dt| dt.with_timezone(&Utc))
+fn parse_slot(s: &str) -> Result<Timestamp> {
+    s.parse::<Timestamp>()
         .map_err(|e| Error::Store(anyhow::anyhow!("couldn't parse a stored slot {s:?}: {e}")))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeZone;
 
     fn scratch(tag: &str) -> ScheduleStore {
         let root = std::env::temp_dir().join(format!(
@@ -269,10 +260,19 @@ mod tests {
         ScheduleStore::with_config(Config::with_root(root))
     }
 
-    fn utc(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(y, mo, d, h, mi, s)
-            .single()
+    fn utc(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> Timestamp {
+        format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z")
+            .parse()
             .expect("valid instant")
+    }
+
+    #[test]
+    fn existing_cursor_strings_and_run_keys_keep_their_wire_format() {
+        let expected = utc(2026, 1, 1, 12, 0, 0);
+        assert_eq!(parse_slot("2026-01-01T12:00:00Z").unwrap(), expected);
+        assert_eq!(parse_slot("2026-01-01T13:00:00+01:00").unwrap(), expected);
+        let fractional = parse_slot("2026-01-01T12:00:00.123456789Z").unwrap();
+        assert_eq!(run_key("wf", fractional), "wf@2026-01-01T12:00:00Z");
     }
 
     #[test]
@@ -305,7 +305,7 @@ mod tests {
         let conn = store.connect().expect("connect");
         conn.execute(
             "UPDATE schedule_cursor SET last_slot_utc = ?1 WHERE workflow = 'wf'",
-            [utc(2026, 1, 1, 12, 0, 0).to_rfc3339_opts(chrono::SecondsFormat::Secs, true)],
+            [format!("{:.0}", utc(2026, 1, 1, 12, 0, 0))],
         )
         .expect("rewind");
         assert_eq!(

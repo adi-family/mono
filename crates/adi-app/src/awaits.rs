@@ -163,7 +163,7 @@ fn run(agents: &Agents, workflows: &WorkflowEngine, rx: &Receiver<Posted>) {
             // a waiting run can never delay the ticks above (ADI-MONO-150).
             report_workflows_started(
                 &isolated("workflows-schedule-tick")
-                    .run(|| workflows.schedule_tick(chrono::Utc::now())),
+                    .run(|| workflows.schedule_tick(jiff::Timestamp::now())),
             );
             report_workflows_started(
                 &isolated("workflows-event-tick").run(|| workflows.event_tick()),

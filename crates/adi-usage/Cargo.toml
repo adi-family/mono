@@ -13,7 +13,7 @@ adi-agents = { workspace = true }
 adi-config = { workspace = true }
 adi-events = { workspace = true }
 adi-projects = { workspace = true }
-chrono = { workspace = true }
+jiff = { workspace = true }
 reqwest = { workspace = true }
 rustls = { workspace = true }
 serde = { workspace = true }

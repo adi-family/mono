@@ -111,8 +111,8 @@ pub fn now_secs() -> u64 {
 #[must_use]
 pub fn today(now: u64) -> String {
     let secs = i64::try_from(now).unwrap_or(0);
-    chrono::DateTime::from_timestamp(secs, 0)
-        .unwrap_or_default()
-        .format("%Y-%m-%d")
+    jiff::Timestamp::from_second(secs)
+        .unwrap_or(jiff::Timestamp::UNIX_EPOCH)
+        .strftime("%Y-%m-%d")
         .to_string()
 }

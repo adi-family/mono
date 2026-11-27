@@ -1,7 +1,7 @@
 //! Pure due-slot computation — no I/O, no store, nothing but a rule, a cursor, and a clock.
 //! [`due`] is the one function the store ([`crate::store`]) and every test here go through.
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 
 use crate::error::Result;
 use crate::rule::{CatchUp, ScheduleRule};
@@ -11,10 +11,10 @@ use crate::rule::{CatchUp, ScheduleRule};
 pub struct Resolved {
     /// The one slot to actually pour a run for, if any. Never more than one, however many slots
     /// were missed — see the module docs on why.
-    pub fire: Option<DateTime<Utc>>,
+    pub fire: Option<Timestamp>,
     /// What the workflow's cursor should become after this evaluation, fire or not. `None` only
     /// when nothing was due at all, which leaves the cursor exactly where it was.
-    pub advance_to: Option<DateTime<Utc>>,
+    pub advance_to: Option<Timestamp>,
 }
 
 /// Every slot `rule`'s cron owes since `last`, collapsed to at most one fire.
@@ -38,22 +38,19 @@ pub struct Resolved {
 /// # Timezone and DST
 ///
 /// Resolution happens entirely in `rule`'s own IANA zone (`rule.tz`, parsed and handled by
-/// `chrono-tz`), then converted back to UTC for comparison and for the returned slots — so a
+/// Jiff), then converted back to UTC for comparison and for the returned slots — so a
 /// "9am daily" rule keeps meaning 9am local through a DST transition, landing on two different UTC
-/// instants either side of it, rather than drifting by an hour. The underlying `cron` crate
-/// resolves each wall-clock candidate as it goes: a spring-forward gap (no such local time) is
-/// skipped outright, and a fall-back repeat (the same local time occurring twice) resolves to its
-/// earlier occurrence — both deterministic, neither this module's own logic to get right.
+/// instants either side of it, rather than drifting by an hour. Croner generates civil-time
+/// candidates and Jiff resolves each in that zone: a spring-forward gap is skipped outright,
+/// and a fall-back repeat yields both occurrences, earlier then later. The next search starts
+/// one absolute second after the last yielded instant, preserving the previous parser's order
+/// even inside a repeated hour. Civil iteration also avoids Croner's fixed-job gap catch-up.
 ///
 /// # Errors
 ///
 /// [`crate::Error::InvalidCron`] or [`crate::Error::UnknownTimezone`] if `rule` itself doesn't
 /// parse.
-pub fn due(
-    rule: &ScheduleRule,
-    last: Option<DateTime<Utc>>,
-    now: DateTime<Utc>,
-) -> Result<Resolved> {
+pub fn due(rule: &ScheduleRule, last: Option<Timestamp>, now: Timestamp) -> Result<Resolved> {
     let (schedule, tz) = rule.parsed()?;
     let Some(anchor) = last else {
         return Ok(Resolved {
@@ -62,21 +59,57 @@ pub fn due(
         });
     };
 
-    let anchor_local = anchor.with_timezone(&tz);
-    let now_local = now.with_timezone(&tz);
-    let occurrences: Vec<DateTime<Utc>> = schedule
-        .after(&anchor_local)
-        .take_while(|slot| *slot <= now_local)
-        .map(|slot| slot.with_timezone(&Utc))
-        .collect();
+    let mut latest = None;
+    let mut multiple = false;
+    let mut previous = anchor;
+    let mut pending_later = None;
+    loop {
+        let slot = if let Some(later) = pending_later.take() {
+            later
+        } else {
+            // cron 0.17 advanced the absolute clock by one second, then used its local fields
+            // (without subseconds). This matters at the exact instant the clock falls back.
+            let Some(start) = previous
+                .as_second()
+                .checked_add(1)
+                .and_then(|second| Timestamp::from_second(second).ok())
+            else {
+                break;
+            };
+            let Some(ambiguous) = schedule
+                .iter_from(tz.to_datetime(start), croner::Direction::Forward)
+                .map(|candidate| tz.to_ambiguous_timestamp(candidate))
+                .find(|candidate| {
+                    !matches!(candidate.offset(), jiff::tz::AmbiguousOffset::Gap { .. })
+                })
+            else {
+                break;
+            };
+            if matches!(ambiguous.offset(), jiff::tz::AmbiguousOffset::Fold { .. }) {
+                pending_later =
+                    Some(ambiguous.clone().later().map_err(|e| {
+                        crate::Error::InvalidCron(rule.cron.clone(), e.to_string())
+                    })?);
+            }
+            ambiguous
+                .earlier()
+                .map_err(|e| crate::Error::InvalidCron(rule.cron.clone(), e.to_string()))?
+        };
+        if slot > now {
+            break;
+        }
+        previous = slot;
+        multiple |= latest.is_some();
+        latest = Some(slot);
+    }
 
-    let Some(&latest) = occurrences.last() else {
+    let Some(latest) = latest else {
         return Ok(Resolved {
             fire: None,
             advance_to: None,
         });
     };
-    let fire = if occurrences.len() > 1 && rule.catch_up == CatchUp::Skip {
+    let fire = if multiple && rule.catch_up == CatchUp::Skip {
         None
     } else {
         Some(latest)
@@ -90,7 +123,6 @@ pub fn due(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeZone;
 
     /// Every minute, at second 0 — easy to reason about in test fixtures without pulling in real
     /// wall-clock dates.
@@ -98,9 +130,9 @@ mod tests {
         ScheduleRule::new("wf", "0 * * * * *", "UTC")
     }
 
-    fn utc(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(y, mo, d, h, mi, s)
-            .single()
+    fn utc(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> Timestamp {
+        format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z")
+            .parse()
             .expect("valid instant")
     }
 
@@ -214,6 +246,186 @@ mod tests {
             Some(utc(2026, 11, 1, 14, 0, 0)),
             "9am EST on Nov 1 is 14:00 UTC"
         );
+    }
+
+    #[test]
+    fn a_time_in_the_spring_forward_gap_is_skipped() {
+        let rule = ScheduleRule::new("wf", "0 30 2 * * *", "America/New_York");
+        let resolved = due(
+            &rule,
+            Some(utc(2026, 3, 8, 5, 0, 0)),
+            utc(2026, 3, 8, 12, 0, 0),
+        )
+        .expect("due");
+        assert_eq!(resolved.fire, None, "02:30 never occurs on this day");
+        assert_eq!(resolved.advance_to, None);
+    }
+
+    #[test]
+    fn individual_ticks_keep_the_existing_cursor_behavior_in_a_repeated_hour() {
+        let rule = ScheduleRule::new("wf", "0 30 1 * * *", "America/New_York");
+        let first = due(
+            &rule,
+            Some(utc(2026, 11, 1, 4, 0, 0)),
+            utc(2026, 11, 1, 5, 30, 0),
+        )
+        .expect("due");
+        assert_eq!(first.fire, Some(utc(2026, 11, 1, 5, 30, 0)));
+        let repeat = due(&rule, first.advance_to, utc(2026, 11, 1, 6, 30, 0)).expect("due");
+        assert_eq!(repeat.fire, None);
+    }
+
+    #[test]
+    fn a_fall_back_backlog_keeps_the_existing_earlier_then_later_iteration_order() {
+        let rule = ScheduleRule::new("wf", "0 * * * * *", "America/New_York");
+        let resolved = due(
+            &rule,
+            Some(utc(2026, 11, 1, 5, 5, 0)),
+            utc(2026, 11, 1, 6, 10, 0),
+        )
+        .expect("due");
+        // The old iterator yields 01:06 EDT, 01:06 EST, 01:07 EDT, ... . It stops when
+        // 01:11 EST is in the future, leaving 01:11 EDT as the final consumed occurrence.
+        assert_eq!(resolved.fire, Some(utc(2026, 11, 1, 5, 11, 0)));
+    }
+
+    #[test]
+    fn a_backlog_contains_both_occurrences_of_a_repeated_fixed_time() {
+        let rule = ScheduleRule::new("wf", "0 30 1 * * *", "America/New_York");
+        let last = Some(utc(2026, 11, 1, 4, 0, 0));
+        let now = utc(2026, 11, 1, 7, 0, 0);
+        assert_eq!(
+            due(&rule, last, now).unwrap().fire,
+            Some(utc(2026, 11, 1, 6, 30, 0))
+        );
+        let skipped = due(&rule.skip_catch_up(), last, now).unwrap();
+        assert_eq!(skipped.fire, None, "both occurrences constitute a backlog");
+        assert_eq!(skipped.advance_to, Some(utc(2026, 11, 1, 6, 30, 0)));
+    }
+
+    #[test]
+    fn a_cursor_in_the_second_repeated_hour_preserves_the_previous_iteration_order() {
+        let rule = ScheduleRule::new("wf", "0 * * * * *", "America/New_York");
+        let resolved = due(
+            &rule,
+            Some(utc(2026, 11, 1, 6, 5, 0)),
+            utc(2026, 11, 1, 6, 40, 0),
+        )
+        .unwrap();
+        assert_eq!(resolved.fire, Some(utc(2026, 11, 1, 5, 41, 0)));
+    }
+
+    #[test]
+    fn the_fall_back_boundary_advances_one_absolute_second_before_reading_local_fields() {
+        let rule = ScheduleRule::new("wf", "0 * * * * *", "America/New_York");
+        let resolved = due(
+            &rule,
+            Some(utc(2026, 11, 1, 5, 59, 59)),
+            utc(2026, 11, 1, 6, 0, 0),
+        )
+        .unwrap();
+        assert_eq!(resolved.fire, Some(utc(2026, 11, 1, 5, 1, 0)));
+    }
+
+    #[test]
+    fn point_steps_and_year_step_phase_keep_the_previous_field_bounds() {
+        for expression in ["0 5/10 * * * *", "0 5-59/10 * * * *"] {
+            let rule = ScheduleRule::new("wf", expression, "UTC");
+            assert_eq!(
+                due(
+                    &rule,
+                    Some(utc(2026, 1, 1, 12, 4, 0)),
+                    utc(2026, 1, 1, 12, 26, 0)
+                )
+                .unwrap()
+                .fire,
+                Some(utc(2026, 1, 1, 12, 25, 0))
+            );
+        }
+        for years in ["*/2", "2026/2", "2026-2100/2"] {
+            let rule = ScheduleRule::new("wf", format!("0 0 0 1 1 * {years}"), "UTC");
+            assert_eq!(
+                due(
+                    &rule,
+                    Some(utc(2025, 12, 31, 0, 0, 0)),
+                    utc(2028, 1, 2, 0, 0, 0)
+                )
+                .unwrap()
+                .fire,
+                Some(utc(2028, 1, 1, 0, 0, 0)),
+                "{years}"
+            );
+            assert_eq!(
+                due(
+                    &rule,
+                    Some(utc(2100, 1, 1, 0, 0, 0)),
+                    utc(2104, 1, 2, 0, 0, 0)
+                )
+                .unwrap()
+                .fire,
+                None
+            );
+        }
+        let unbounded = ScheduleRule::new("wf", "0 0 0 1 1 *", "UTC");
+        assert_eq!(
+            due(
+                &unbounded,
+                Some(utc(2100, 1, 1, 0, 0, 0)),
+                utc(2101, 1, 2, 0, 0, 0)
+            )
+            .unwrap()
+            .fire,
+            None
+        );
+    }
+
+    #[test]
+    fn numeric_weekdays_years_and_day_intersection_keep_their_existing_meaning() {
+        // Sunday is 1, and both the date and weekday must match. November 1, 2026 is Sunday.
+        let rule = ScheduleRule::new("wf", "0 0 9 1 * 1 2026", "UTC");
+        let resolved = due(
+            &rule,
+            Some(utc(2026, 10, 1, 0, 0, 0)),
+            utc(2026, 11, 2, 0, 0, 0),
+        )
+        .expect("due");
+        assert_eq!(resolved.fire, Some(utc(2026, 11, 1, 9, 0, 0)));
+        let finished = due(&rule, resolved.advance_to, utc(2027, 11, 2, 0, 0, 0)).expect("due");
+        assert_eq!(finished.fire, None, "the explicit year is honored");
+    }
+
+    #[test]
+    fn the_weekly_alias_still_means_sunday_midnight() {
+        let rule = ScheduleRule::new("wf", "@weekly", "UTC");
+        let resolved = due(
+            &rule,
+            Some(utc(2026, 10, 31, 0, 0, 0)),
+            utc(2026, 11, 1, 12, 0, 0),
+        )
+        .expect("due");
+        assert_eq!(resolved.fire, Some(utc(2026, 11, 1, 0, 0, 0)));
+    }
+
+    #[test]
+    fn named_months_weekday_ranges_and_lists_keep_their_existing_meaning() {
+        for expression in [
+            "0 0 9 * NOV MON-WED",
+            "0 0 9 * November Monday-Wednesday",
+            "0 0 9 * November MON,Tues,Wednesday",
+        ] {
+            let rule = ScheduleRule::new("wf", expression, "UTC");
+            let resolved = due(
+                &rule,
+                Some(utc(2026, 11, 1, 0, 0, 0)),
+                utc(2026, 11, 5, 12, 0, 0),
+            )
+            .expect("due");
+            assert_eq!(
+                resolved.fire,
+                Some(utc(2026, 11, 4, 9, 0, 0)),
+                "{expression}"
+            );
+        }
     }
 
     #[test]

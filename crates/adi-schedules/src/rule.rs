@@ -3,8 +3,6 @@
 //! it came from — building a [`ScheduleRule`] out of a workflow file is WF-5's job; this is just
 //! what the sweep needs once that's done.
 
-use std::str::FromStr;
-
 use crate::error::{Error, Result};
 
 /// What happens when more than one slot is due at once — a gap the sweep was down through, not an
@@ -30,7 +28,7 @@ pub enum CatchUp {
 pub struct ScheduleRule {
     /// The workflow this rule pours runs for — half of the `wf@slot` run key.
     pub workflow: String,
-    /// `sec min hour day-of-month month day-of-week [year]` — [`cron::Schedule`]'s own dialect,
+    /// `sec min hour day-of-month month day-of-week [year]` — seconds are required,
     /// not the 5-field unix one. `"0 0 9 * * Mon-Fri"` is "9am every weekday".
     pub cron: String,
     /// An IANA zone name (`"America/New_York"`), never a bare offset — the whole point is that it
@@ -64,13 +62,115 @@ impl ScheduleRule {
     /// Parse and validate both halves at once — a rule with a bad cron expression or an unknown
     /// zone name is refused here, every time it is resolved, rather than scheduled once and then
     /// silently never firing.
-    pub(crate) fn parsed(&self) -> Result<(cron::Schedule, chrono_tz::Tz)> {
-        let schedule = cron::Schedule::from_str(&self.cron)
+    pub(crate) fn parsed(&self) -> Result<(croner::Cron, jiff::tz::TimeZone)> {
+        // Preserve the dialect existing rules were saved with: Sunday is 1 and Saturday 7,
+        // and a constrained day-of-month and weekday must both match.
+        let schedule = croner::parser::CronParser::builder()
+            .seconds(croner::parser::Seconds::Required)
+            .year(croner::parser::Year::Optional)
+            .alternative_weekdays(true)
+            .dom_and_dow(true)
+            .build()
+            .parse(&normalize_expression(&self.cron)?)
             .map_err(|e| Error::InvalidCron(self.cron.clone(), e.to_string()))?;
-        let tz = self
-            .tz
-            .parse::<chrono_tz::Tz>()
+        let tz = jiff::tz::TimeZone::get(&self.tz)
             .map_err(|_| Error::UnknownTimezone(self.tz.clone()))?;
         Ok((schedule, tz))
     }
+}
+
+/// Preserve the previous parser's bounded fields and point/step shorthand. In particular,
+/// years run from 1970 through 2100: Croner's wider year range would change the phase of */N.
+fn normalize_expression(expression: &str) -> Result<String> {
+    let expression = normalize_names(expression);
+    let expanded = match expression.trim() {
+        "@yearly" => "0 0 0 1 1 *",
+        "@monthly" => "0 0 0 1 * *",
+        "@weekly" => "0 0 0 * * 1",
+        "@daily" => "0 0 0 * * *",
+        "@hourly" => "0 0 * * * *",
+        other => other,
+    };
+    let mut fields: Vec<String> = expanded.split_whitespace().map(str::to_owned).collect();
+    if fields.len() == 6 {
+        fields.push("*".to_owned());
+    }
+    if fields.len() != 7 {
+        return Err(Error::InvalidCron(
+            expression,
+            "expected 6 or 7 fields".into(),
+        ));
+    }
+    for (index, field) in fields.iter_mut().enumerate() {
+        let max = [59, 59, 23, 31, 12, 7, 2100][index];
+        let mut normalized = Vec::new();
+        for part in field.split(',') {
+            let (base, step) = part
+                .split_once('/')
+                .map_or((part, None), |(base, step)| (base, Some(step)));
+            if index == 6 && base != "*" {
+                for year in base.split('-') {
+                    if !year
+                        .parse::<u32>()
+                        .is_ok_and(|year| (1970..=2100).contains(&year))
+                    {
+                        return Err(Error::InvalidCron(
+                            expression,
+                            "years must be between 1970 and 2100".into(),
+                        ));
+                    }
+                }
+            }
+            let base = if index == 6 && base == "*" {
+                "1970-2100".to_owned()
+            } else if step.is_some() && base.parse::<u32>().is_ok() {
+                format!("{base}-{max}")
+            } else {
+                base.to_owned()
+            };
+            normalized.push(match step {
+                Some(step) => format!("{base}/{step}"),
+                None => base,
+            });
+        }
+        *field = normalized.join(",");
+    }
+    Ok(fields.join(" "))
+}
+
+/// The previous parser also accepted full month/day names, plus `Tues` and `Thurs`.
+/// Croner expects three-letter names; normalize whole alphabetic tokens so ranges and lists
+/// retain those existing spellings without accepting arbitrary name prefixes.
+fn normalize_names(expression: &str) -> String {
+    expression
+        .split_inclusive(|c: char| !c.is_ascii_alphabetic())
+        .map(|part| {
+            let end = part
+                .find(|c: char| !c.is_ascii_alphabetic())
+                .unwrap_or(part.len());
+            let name = &part[..end];
+            let short = match name.to_ascii_lowercase().as_str() {
+                "january" => "JAN",
+                "february" => "FEB",
+                "march" => "MAR",
+                "april" => "APR",
+                "june" => "JUN",
+                "july" => "JUL",
+                "august" => "AUG",
+                "september" => "SEP",
+                "october" => "OCT",
+                "november" => "NOV",
+                "december" => "DEC",
+                "sunday" => "SUN",
+                "monday" => "MON",
+                "tues" | "tuesday" => "TUE",
+                "wednesday" => "WED",
+                "thurs" | "thursday" => "THU",
+                "friday" => "FRI",
+                "saturday" => "SAT",
+                _ => name,
+            };
+            format!("{short}{}", &part[end..])
+        })
+        .collect()
 }

@@ -8,10 +8,10 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// A failure from [`crate::ScheduleStore`] or the pure slot computation it wraps.
 #[derive(Debug)]
 pub enum Error {
-    /// The rule's `cron` expression does not parse — see [`cron::Schedule`]'s own dialect (`sec
+    /// The rule's `cron` expression does not parse — see the schedule dialect (`sec
     /// min hour day-of-month month day-of-week [year]`) for what a valid one looks like.
     InvalidCron(String, String),
-    /// The rule's `tz` is not a name in the IANA database (`chrono-tz`), e.g. a made-up zone or an
+    /// The rule's `tz` is not a name in the IANA database (Jiff), e.g. a made-up zone or an
     /// offset (`+02:00`) where a name (`Europe/Berlin`) was wanted.
     UnknownTimezone(String),
     /// Underlying store I/O or SQLite failure.

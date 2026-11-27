@@ -31,7 +31,7 @@
 //!
 //! # Timezones and DST
 //!
-//! Every rule names an IANA zone (`tz`), resolved by `chrono-tz`'s compiled copy of the database —
+//! Every rule names an IANA zone (`tz`), resolved by Jiff's bundled copy of the database —
 //! never a bare UTC offset, which is the one representation that can't carry a DST transition.
 //! Slots are computed, compared, and returned in UTC throughout; only the *evaluation* of "does
 //! 9am mean 13:00 or 14:00 today" happens in the rule's own zone. See `slots`' module tests for the

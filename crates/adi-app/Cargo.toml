@@ -61,7 +61,7 @@ adi-workflows = { workspace = true }
 # collector's allowlist, and flushes to relay.withadi.dev.
 adi-usage = { workspace = true }
 
-chrono = { workspace = true }
+jiff = { workspace = true }
 
 adi-mesh = { workspace = true }
 

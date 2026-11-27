@@ -84,9 +84,9 @@ hex = { workspace = true }
 # --- semantic search (feature `candle`) ---
 # A custom JinaBert with QK-norm (embed/candle.rs) — candle-transformers' jina_bert lacks it,
 # and jina-embeddings-v2-base-code produces wrong attention scores without it.
-candle-core = { version = "0.10", optional = true }
-candle-nn = { version = "0.10", optional = true }
-candle-transformers = { version = "0.10", optional = true }
+candle-core = { version = "0.11.1", optional = true }
+candle-nn = { version = "0.11.1", optional = true }
+candle-transformers = { version = "0.11.1", optional = true }
 tokenizers = { version = "0.22", optional = true, default-features = false, features = ["onig"] }
 # `ureq` alone, never `native-tls`: we only ever call `hf_hub::api::sync` (embed/candle.rs), and
 # ureq's own default is rustls. The `native-tls` feature would additionally pull reqwest with its
@@ -123,8 +123,8 @@ tree-sitter-typescript = { version = "0.23", optional = true }
 # Linux could turn on. Without it `Device::new_metal` errors at runtime and the embedder runs
 # on the CPU.
 [target.'cfg(target_os = "macos")'.dependencies]
-candle-core = { version = "0.10", optional = true, features = ["metal"] }
-candle-nn = { version = "0.10", optional = true, features = ["metal"] }
+candle-core = { version = "0.11.1", optional = true, features = ["metal"] }
+candle-nn = { version = "0.11.1", optional = true, features = ["metal"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }

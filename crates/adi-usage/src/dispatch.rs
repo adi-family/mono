@@ -213,7 +213,7 @@ impl Usage {
     /// Flush `app_daily_active` for the day that just ended, the first tick that notices the
     /// local date has moved on, then start counting the new one from zero.
     fn roll_day_if_needed(&self, module: &Module, state: &mut State) {
-        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let today = jiff::ZonedDateTime::now().date().to_string();
         if state.day.is_empty() {
             state.day = today;
             return;
@@ -673,7 +673,7 @@ mod tests {
         assert_eq!(daily.properties["runs_automation"], 0);
 
         let state = State::load(&h.usage.module());
-        assert_eq!(state.day, chrono::Local::now().format("%Y-%m-%d").to_string());
+        assert_eq!(state.day, jiff::ZonedDateTime::now().date().to_string());
         assert_eq!(state.runs_human, 0, "the new day starts at zero");
     }
 

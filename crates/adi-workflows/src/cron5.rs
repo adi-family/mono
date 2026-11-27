@@ -2,12 +2,12 @@
 //! dialect.
 //!
 //! Igor's decision: a workflow file writes the standard 5-field unix cron the spec's own examples
-//! use (`"0 5 * * MON"` — minute hour day-of-month month day-of-week), not the `cron` crate's
+//! use (`"0 5 * * MON"` — minute hour day-of-month month day-of-week), not the schedule engine's
 //! 6/7-field one `adi-schedules` is built on (`sec min hour dom month dow [year]`). The two share
 //! every field but the leading seconds, so normalizing is exactly prepending `"0 "` — the five
 //! unix fields keep their own order and meaning unchanged. Anything that is not exactly 5
 //! whitespace-separated fields is refused here, with a message naming the field count, rather than
-//! silently handed to `cron::Schedule` one field short (which would parse day-of-month as seconds
+//! silently handed to the schedule parser one field short (which would parse day-of-month as seconds
 //! and shift every other field with it).
 
 use crate::error::{Error, Result};
@@ -87,7 +87,7 @@ mod tests {
     fn the_normalized_expression_parses_as_a_valid_schedule_rule() {
         let normalized = normalize_five_field("0 5 * * MON").unwrap();
         let rule = adi_schedules::ScheduleRule::new("wf", normalized, "UTC");
-        let now = chrono::Utc::now();
+        let now = jiff::Timestamp::now();
         assert!(adi_schedules::due(&rule, None, now).is_ok());
     }
 }

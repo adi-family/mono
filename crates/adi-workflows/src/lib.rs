@@ -232,7 +232,7 @@ impl Engine {
     /// Sweep every workflow's `on: schedule(...)` against `now`, pouring whatever's newly due.
     /// Drop-in for the same once-a-second loop `adi-agents`' dispatch/goals/awaits ticks run on.
     #[must_use]
-    pub fn schedule_tick(&self, now: chrono::DateTime<chrono::Utc>) -> Vec<StartedRun> {
+    pub fn schedule_tick(&self, now: jiff::Timestamp) -> Vec<StartedRun> {
         let source = WorkflowScheduleSource::new(self.config.clone());
         let pourer = self.pourer();
         adi_schedules::tick(&self.schedules, &source, &pourer, now)
@@ -535,12 +535,10 @@ mod tests {
         );
         engine.runs().set_enabled("weekly", true).expect("enable");
 
-        let first = chrono::DateTime::parse_from_rfc3339("2026-01-01T12:00:00Z")
-            .unwrap()
-            .with_timezone(&chrono::Utc);
+        let first = "2026-01-01T12:00:00Z".parse::<jiff::Timestamp>().unwrap();
         assert!(engine.schedule_tick(first).is_empty());
 
-        let second = first + chrono::Duration::minutes(1);
+        let second = first + jiff::SignedDuration::from_secs(60);
         let started = engine.schedule_tick(second);
         assert_eq!(started.len(), 1);
         assert_eq!(started[0].workflow, "weekly");
