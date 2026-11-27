@@ -4,7 +4,7 @@
 
 > The adi platform CLI — a thin argv adapter over adi-core's command surface.
 
-5 structs · 31 enums across 25 files.
+8 structs · 31 enums across 26 files.
 
 ## Index
 
@@ -15,11 +15,12 @@
 - [`src/dns.rs`](#srcdnsrs) — `DnsCommand`
 - [`src/embeddings.rs`](#srcembeddingsrs) — `EmbeddingsCommand`
 - [`src/events.rs`](#srceventsrs) — `EventsCommand`
-- [`src/facts.rs`](#srcfactsrs) — `FactsCommand`, `LlmCommand`, `TxCommand`
+- [`src/facts.rs`](#srcfactsrs) — `FactsCommand`, `TxCommand`
 - [`src/goals.rs`](#srcgoalsrs) — `GoalsCommand`
 - [`src/indexer.rs`](#srcindexerrs) — `IndexerCommand`
 - [`src/knowledge.rs`](#srcknowledgers) — `KnowledgeCommand`, `BaseCommand`
 - [`src/llm.rs`](#srcllmrs) — `LlmCommand`
+- [`src/llm_help.rs`](#srcllm_helprs) — `LlmHelp`, `LlmHelpCommand`, `Text`, `Group`, `Verb`
 - [`src/logs.rs`](#srclogsrs) — `LogsCommand`
 - [`src/main.rs`](#srcmainrs) — `Cli`, `Command`
 - [`src/marketplace.rs`](#srcmarketplacers) — `MarketplaceCommand`
@@ -32,7 +33,7 @@
 - [`src/tools.rs`](#srctoolsrs) — `ToolsCommand`
 - [`src/triggers.rs`](#srctriggersrs) — `TriggersCommand`
 - [`src/update.rs`](#srcupdaters) — `UpdateCommand`
-- [`src/workflows.rs`](#srcworkflowsrs) — `WorkflowsCommand`, `LlmCommand`
+- [`src/workflows.rs`](#srcworkflowsrs) — `WorkflowsCommand`
 
 ---
 
@@ -233,6 +234,7 @@ pub(crate) enum AgentsCommand {
         #[arg(long)]
         json: bool,
     },
+    Llm(crate::llm_help::LlmHelp),
 }
 ```
 
@@ -327,6 +329,7 @@ pub(crate) enum AnalyticsCommand {
     },
     Id,
     Forget,
+    Llm(crate::llm_help::LlmHelp),
 }
 ```
 
@@ -381,6 +384,7 @@ pub(crate) enum ChannelsCommand {
         #[arg(long)]
         json: bool,
     },
+    Llm(crate::llm_help::LlmHelp),
 }
 ```
 
@@ -450,6 +454,7 @@ pub(crate) enum DbCommand {
         project: Option<String>,
     },
     Client,
+    Llm(crate::llm_help::LlmHelp),
 }
 ```
 
@@ -472,6 +477,7 @@ pub(crate) enum DnsCommand {
     GrantDns,
     GrantNetwork,
     RemoveRoute,
+    Llm(crate::llm_help::LlmHelp),
 }
 ```
 
@@ -528,6 +534,7 @@ pub(crate) enum EmbeddingsCommand {
         #[arg(long)]
         json: bool,
     },
+    Llm(crate::llm_help::LlmHelp),
 }
 ```
 
@@ -556,6 +563,7 @@ pub(crate) enum EventsCommand {
         #[arg(long)]
         schema: bool,
     },
+    Llm(crate::llm_help::LlmHelp),
 }
 ```
 
@@ -622,20 +630,7 @@ pub(crate) enum FactsCommand {
         kind: String,
     },
     Bases,
-    #[command(disable_help_subcommand = true)]
-    Llm {
-        #[command(subcommand)]
-        command: Option<LlmCommand>,
-    },
-}
-```
-
-### enum `LlmCommand`
-
-```rust
-#[derive(Debug, Subcommand)]
-pub(crate) enum LlmCommand {
-    Help,
+    Llm(crate::llm_help::LlmHelp),
 }
 ```
 
@@ -718,6 +713,7 @@ pub(crate) enum GoalsCommand {
         #[arg(long)]
         json: bool,
     },
+    Llm(crate::llm_help::LlmHelp),
 }
 ```
 
@@ -806,6 +802,7 @@ pub(crate) enum IndexerCommand {
         #[arg(long)]
         json: bool,
     },
+    Llm(crate::llm_help::LlmHelp),
 }
 ```
 
@@ -915,6 +912,7 @@ pub(crate) enum KnowledgeCommand {
         #[arg(long)]
         json: bool,
     },
+    Llm(crate::llm_help::LlmHelp),
 }
 ```
 
@@ -1034,6 +1032,68 @@ pub(crate) enum LlmCommand {
         #[arg(long)]
         json: bool,
     },
+    Llm(crate::llm_help::LlmHelp),
+}
+```
+
+---
+
+## `src/llm_help.rs`
+
+### struct `LlmHelp`
+
+The `llm` verb itself, the same under every group.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Args)]
+#[command(disable_help_subcommand = true)]
+pub(crate) struct LlmHelp {
+    #[command(subcommand)]
+    pub(crate) command: Option<LlmHelpCommand>,
+}
+```
+
+### enum `LlmHelpCommand`
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Subcommand)]
+pub(crate) enum LlmHelpCommand {
+    Help,
+}
+```
+
+### enum `Text`
+
+What one group's `llm help` is made of.
+
+```rust
+pub(crate) enum Text {
+    Intro(&'static str),
+    Whole(&'static str),
+}
+```
+
+### struct `Group`
+
+One command group: its `adi-mono` subcommand, the name an agent runs it by, and its text.
+
+```rust
+pub(crate) struct Group {
+    pub(crate) name: &'static str,
+    pub(crate) prog: &'static str,
+    pub(crate) text: Text,
+}
+```
+
+### struct `Verb`
+
+One runnable verb: its usage and its first sentence, and the names it answers to — two variants with the same arguments and the same about (`rm`/`delete`) are one verb twice.
+
+```rust
+struct Verb {
+    names: Vec<String>,
+    usage: String,
+    about: String,
 }
 ```
 
@@ -1073,6 +1133,7 @@ pub(crate) enum LogsCommand {
         event_key: Option<String>,
         message: String,
     },
+    Llm(crate::llm_help::LlmHelp),
 }
 ```
 
@@ -1306,6 +1367,7 @@ pub(crate) enum MarketplaceCommand {
         #[arg(long, value_name = "ID")]
         project: Option<String>,
     },
+    Llm(crate::llm_help::LlmHelp),
 }
 ```
 
@@ -1355,6 +1417,7 @@ pub(crate) enum McpCommand {
     Rm {
         id: String,
     },
+    Llm(crate::llm_help::LlmHelp),
 }
 ```
 
@@ -1467,6 +1530,7 @@ pub(crate) enum MeshCommand {
         #[arg(long)]
         json: bool,
     },
+    Llm(crate::llm_help::LlmHelp),
 }
 ```
 
@@ -1524,6 +1588,7 @@ pub(crate) enum ProjectsCommand {
         #[command(subcommand)]
         command: HookCommand,
     },
+    Llm(crate::llm_help::LlmHelp),
 }
 ```
 
@@ -1711,6 +1776,7 @@ pub(crate) enum SecretsCommand {
         #[arg(long)]
         json: bool,
     },
+    Llm(crate::llm_help::LlmHelp),
 }
 ```
 
@@ -1815,6 +1881,7 @@ pub(crate) enum TasksCommand {
     Delete {
         id: String,
     },
+    Llm(crate::llm_help::LlmHelp),
 }
 ```
 
@@ -1897,6 +1964,7 @@ pub(crate) enum ToolsCommand {
         json: bool,
     },
     Seed,
+    Llm(crate::llm_help::LlmHelp),
 }
 ```
 
@@ -1973,6 +2041,7 @@ pub(crate) enum TriggersCommand {
         #[arg(long)]
         secret_name: Option<String>,
     },
+    Llm(crate::llm_help::LlmHelp),
 }
 ```
 
@@ -2005,6 +2074,7 @@ pub(crate) enum UpdateCommand {
     },
     Enable,
     Disable,
+    Llm(crate::llm_help::LlmHelp),
 }
 ```
 
@@ -2054,20 +2124,7 @@ pub(crate) enum WorkflowsCommand {
     Disable {
         id: String,
     },
-    #[command(disable_help_subcommand = true)]
-    Llm {
-        #[command(subcommand)]
-        command: Option<LlmCommand>,
-    },
-}
-```
-
-### enum `LlmCommand`
-
-```rust
-#[derive(Debug, Subcommand)]
-pub(crate) enum LlmCommand {
-    Help,
+    Llm(crate::llm_help::LlmHelp),
 }
 ```
 

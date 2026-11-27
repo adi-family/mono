@@ -14,7 +14,7 @@ use crate::format::{clean, print_json};
 /// read and finished. The proof-post shape at the end is the one worked example spec section G
 /// names — not code that exists yet (that's WF-7's job), but the pattern every multi-step,
 /// human-reviewed workflow here follows.
-const LLM_HELP: &str = r#"adi-workflows — a TypeScript file per workflow, run with checkpoints so it
+pub(crate) const LLM_HELP: &str = r#"adi-workflows — a TypeScript file per workflow, run with checkpoints so it
 resumes exactly where it left off after a crash or a restart, never from the top.
 
 A WORKFLOW FILE (workflows/*.ts, or projects/<id>/workflows/*.ts)
@@ -155,28 +155,12 @@ pub(crate) enum WorkflowsCommand {
     Enable { id: String },
     /// Stop a workflow's `schedule`/`event` triggers from firing it. `run` still works on it.
     Disable { id: String },
-    /// Help written for a language model rather than for a person. Bare `llm` prints it too —
-    /// `Help` is the only variant there is, and a caller shouldn't have to spell it out.
-    #[command(disable_help_subcommand = true)]
-    Llm {
-        #[command(subcommand)]
-        command: Option<LlmCommand>,
-    },
-}
-
-#[derive(Debug, Subcommand)]
-pub(crate) enum LlmCommand {
-    /// Everything an agent needs to write and work with a workflow correctly, and nothing else.
-    Help,
+    /// Help written for a language model rather than for a person. Bare `llm` prints it too.
+    Llm(crate::llm_help::LlmHelp),
 }
 
 /// Dispatch a `workflows` subcommand over the shared engine.
 pub(crate) fn run_workflows(adi: Adi, command: WorkflowsCommand) -> Result<(), String> {
-    if let WorkflowsCommand::Llm { .. } = command {
-        print!("{LLM_HELP}");
-        return Ok(());
-    }
-
     let engine = adi.workflows();
     match command {
         WorkflowsCommand::List { json } => {
@@ -245,7 +229,7 @@ pub(crate) fn run_workflows(adi: Adi, command: WorkflowsCommand) -> Result<(), S
             engine.set_enabled(&id, false).map_err(|e| e.to_string())?;
             println!("Disabled {id}.");
         }
-        WorkflowsCommand::Llm { .. } => unreachable!("answered above, before the engine is opened"),
+        WorkflowsCommand::Llm(_) => unreachable!("`llm` is answered in main"),
     }
     Ok(())
 }
@@ -351,6 +335,7 @@ fn print_schema(label: &str, schema: Option<&serde_json::Value>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::llm_help::{LlmHelp, LlmHelpCommand};
     use clap::{CommandFactory as _, Parser as _};
 
     #[derive(Debug, clap::Parser)]
@@ -369,9 +354,9 @@ mod tests {
         let cli = Harness::try_parse_from(["workflows", "llm", "help"]).expect("parses");
         assert!(matches!(
             cli.command,
-            WorkflowsCommand::Llm {
-                command: Some(LlmCommand::Help)
-            }
+            WorkflowsCommand::Llm(LlmHelp {
+                command: Some(LlmHelpCommand::Help)
+            })
         ));
         for needle in [
             "ctx.step", "ctx.task", "ctx.ask", "ctx.run", "ctx.waitFor", "ctx.sleep",
@@ -385,7 +370,10 @@ mod tests {
     #[test]
     fn bare_llm_parses_and_answers_the_same_help() {
         let cli = Harness::try_parse_from(["workflows", "llm"]).expect("parses");
-        assert!(matches!(cli.command, WorkflowsCommand::Llm { command: None }));
+        assert!(matches!(
+            cli.command,
+            WorkflowsCommand::Llm(LlmHelp { command: None })
+        ));
     }
 
     #[test]

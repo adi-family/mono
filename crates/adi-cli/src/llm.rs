@@ -163,6 +163,8 @@ pub(crate) enum LlmCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Help written for a language model rather than for a person. Bare `llm` prints it too.
+    Llm(crate::llm_help::LlmHelp),
 }
 
 /// Dispatch an `llm` subcommand over the backend registry and the shared hold store.
@@ -171,6 +173,7 @@ pub(crate) fn run_llm(adi: Adi, command: LlmCommand) -> Result<(), String> {
     let config = adi.agents().config().clone();
     let registry = LlmBackends::with_config(config.clone());
     match command {
+        LlmCommand::Llm(_) => unreachable!("`llm` is answered in main"),
         LlmCommand::Backends { json } => {
             let backends = registry.list().map_err(|e| e.to_string())?;
             let holds = Holds::with_config(&config);

@@ -133,6 +133,8 @@ pub(crate) enum SecretsCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Help written for a language model rather than for a person. Bare `llm` prints it too.
+    Llm(crate::llm_help::LlmHelp),
 }
 
 /// Dispatch a `secrets` subcommand over the adi-core facade, surfacing any store error as a
@@ -140,6 +142,7 @@ pub(crate) enum SecretsCommand {
 pub(crate) fn run_secrets(adi: Adi, command: SecretsCommand) -> Result<(), String> {
     let store = adi.secrets();
     match command {
+        SecretsCommand::Llm(_) => unreachable!("`llm` is answered in main"),
         SecretsCommand::List {
             global,
             project,

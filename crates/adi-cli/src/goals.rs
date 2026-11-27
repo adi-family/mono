@@ -96,11 +96,14 @@ pub(crate) enum GoalsCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Help written for a language model rather than for a person. Bare `llm` prints it too.
+    Llm(crate::llm_help::LlmHelp),
 }
 
 pub(crate) fn run_goals(adi: Adi, command: GoalsCommand) -> Result<(), String> {
     let store = adi.agents();
     match command {
+        GoalsCommand::Llm(_) => unreachable!("`llm` is answered in main"),
         GoalsCommand::Create {
             text,
             agent,

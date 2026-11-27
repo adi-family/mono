@@ -111,12 +111,15 @@ pub(crate) enum TriggersCommand {
         #[arg(long)]
         secret_name: Option<String>,
     },
+    /// Help written for a language model rather than for a person. Bare `llm` prints it too.
+    Llm(crate::llm_help::LlmHelp),
 }
 
 /// Dispatch a `triggers` subcommand over the shared trigger-definition store.
 pub(crate) fn run_triggers(adi: Adi, command: TriggersCommand) -> Result<(), String> {
     let store = adi.triggers();
     match command {
+        TriggersCommand::Llm(_) => unreachable!("`llm` is answered in main"),
         TriggersCommand::List { json } => {
             let triggers = store.list().map_err(|e| e.to_string())?;
             if json {

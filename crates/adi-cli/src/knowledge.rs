@@ -159,6 +159,8 @@ pub(crate) enum KnowledgeCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Help written for a language model rather than for a person. Bare `llm` prints it too.
+    Llm(crate::llm_help::LlmHelp),
 }
 
 #[derive(Debug, Subcommand)]
@@ -204,6 +206,7 @@ pub(crate) fn run_knowledge(
 ) -> Result<(), String> {
     let store = reader_store(adi.knowledge(), as_agent, as_project, root);
     match command {
+        KnowledgeCommand::Llm(_) => unreachable!("`llm` is answered in main"),
         KnowledgeCommand::Bases {
             global,
             project,

@@ -240,6 +240,8 @@ pub(crate) enum MeshCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Help written for a language model rather than for a person. Bare `llm` prints it too.
+    Llm(crate::llm_help::LlmHelp),
 }
 
 /// Dispatch a `mesh` subcommand over the mesh store.
@@ -252,6 +254,7 @@ pub(crate) enum MeshCommand {
 /// Any store, token, or handshake failure, as a message the caller prints.
 pub(crate) fn run_mesh(command: MeshCommand) -> Result<(), String> {
     match command {
+        MeshCommand::Llm(_) => unreachable!("`llm` is answered in main"),
         MeshCommand::Invite {
             ttl,
             qr,

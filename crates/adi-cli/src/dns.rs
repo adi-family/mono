@@ -26,4 +26,6 @@ pub(crate) enum DnsCommand {
     GrantNetwork,
     /// Remove the `.adi` route + front-door proxy (one admin prompt).
     RemoveRoute,
+    /// Help written for a language model rather than for a person. Bare `llm` prints it too.
+    Llm(crate::llm_help::LlmHelp),
 }

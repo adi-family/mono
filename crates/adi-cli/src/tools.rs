@@ -101,6 +101,8 @@ pub(crate) enum ToolsCommand {
     },
     /// Ensure the built-in system tools (adi-tasks, adi-projects, …) exist, then rebuild the `.bin`.
     Seed,
+    /// Help written for a language model rather than for a person. Bare `llm` prints it too.
+    Llm(crate::llm_help::LlmHelp),
 }
 
 /// Dispatch a `tools` subcommand over the adi-core facade, surfacing any store error as a
@@ -108,6 +110,7 @@ pub(crate) enum ToolsCommand {
 pub(crate) fn run_tools(adi: Adi, command: ToolsCommand) -> Result<(), String> {
     let store = adi.tools();
     match command {
+        ToolsCommand::Llm(_) => unreachable!("`llm` is answered in main"),
         ToolsCommand::List { project, all, json } => {
             let mut tools = store.list().map_err(|e| e.to_string())?;
             if !all {

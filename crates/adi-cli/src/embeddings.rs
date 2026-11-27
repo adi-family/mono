@@ -106,6 +106,8 @@ pub(crate) enum EmbeddingsCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Help written for a language model rather than for a person. Bare `llm` prints it too.
+    Llm(crate::llm_help::LlmHelp),
 }
 
 /// Dispatch an `embeddings` subcommand over the backend registry.
@@ -114,6 +116,7 @@ pub(crate) fn run_embeddings(adi: Adi, command: EmbeddingsCommand) -> Result<(),
     let config = adi.agents().config().clone();
     let registry = EmbeddingBackends::with_config(config.clone());
     match command {
+        EmbeddingsCommand::Llm(_) => unreachable!("`llm` is answered in main"),
         EmbeddingsCommand::Backends { json } => {
             let backends = registry.list().map_err(|e| e.to_string())?;
             if json {

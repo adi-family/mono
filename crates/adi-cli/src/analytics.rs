@@ -27,11 +27,14 @@ pub(crate) enum AnalyticsCommand {
     /// Clear this install's id. A fresh one is minted only the next time usage events run while
     /// on — never by this command.
     Forget,
+    /// Help written for a language model rather than for a person. Bare `llm` prints it too.
+    Llm(crate::llm_help::LlmHelp),
 }
 
 pub(crate) fn run_analytics(command: AnalyticsCommand) -> Result<(), String> {
     let module = adi_usage::module(&adi_config::Config::open());
     match command {
+        AnalyticsCommand::Llm(_) => unreachable!("`llm` is answered in main"),
         AnalyticsCommand::Enable => {
             adi_usage::set_enabled(&module, true).map_err(|e| e.to_string())?;
             println!("usage events: on");

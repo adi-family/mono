@@ -413,6 +413,8 @@ pub(crate) enum AgentsCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Help written for a language model rather than for a person. Bare `llm` prints it too.
+    Llm(crate::llm_help::LlmHelp),
 }
 
 /// What can be done to the wakes one conversation is holding.
@@ -494,6 +496,7 @@ pub(crate) enum AwaitsCommand {
 pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String> {
     let store = adi.agents();
     match command {
+        AgentsCommand::Llm(_) => unreachable!("`llm` is answered in main"),
         AgentsCommand::List {
             filter,
             project,

@@ -108,6 +108,8 @@ pub(crate) enum MarketplaceCommand {
         #[arg(long, value_name = "ID")]
         project: Option<String>,
     },
+    /// Help written for a language model rather than for a person. Bare `llm` prints it too.
+    Llm(crate::llm_help::LlmHelp),
 }
 
 /// Run one marketplace verb.
@@ -118,6 +120,7 @@ pub(crate) enum MarketplaceCommand {
 pub(crate) fn run_marketplace(command: MarketplaceCommand) -> Result<(), String> {
     let market = Marketplace::open();
     match command {
+        MarketplaceCommand::Llm(_) => unreachable!("`llm` is answered in main"),
         MarketplaceCommand::Add { name, url } => {
             let source = adi_marketplace::sources::add(market.config(), &name, &url)
                 .map_err(|e| e.to_string())?;

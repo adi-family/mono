@@ -15,6 +15,7 @@ mod goals;
 mod indexer;
 mod knowledge;
 mod llm;
+mod llm_help;
 mod logs;
 mod marketplace;
 mod mcp;
@@ -312,6 +313,85 @@ enum Command {
     },
 }
 
+/// The group whose `llm` verb `command` is, if it is one. Every group with verbs has `llm`; a group
+/// missing here would fall through to its own dispatch and hit that dispatch's `unreachable!`, which
+/// is why the tests ask every group in the tree through this function.
+fn llm_help_requested(command: &Command) -> Option<&'static llm_help::Group> {
+    let name = match command {
+        Command::Dns {
+            command: DnsCommand::Llm(_),
+        } => "dns",
+        Command::Projects {
+            command: ProjectsCommand::Llm(_),
+        } => "projects",
+        Command::Tasks {
+            command: TasksCommand::Llm(_),
+        } => "tasks",
+        Command::Tools {
+            command: ToolsCommand::Llm(_),
+        } => "tools",
+        Command::Secrets {
+            command: SecretsCommand::Llm(_),
+        } => "secrets",
+        Command::Db {
+            command: DbCommand::Llm(_),
+        } => "db",
+        Command::Agents {
+            command: AgentsCommand::Llm(_),
+        } => "agents",
+        Command::Llm {
+            command: LlmCommand::Llm(_),
+        } => "llm",
+        Command::Embeddings {
+            command: EmbeddingsCommand::Llm(_),
+        } => "embeddings",
+        Command::Goals {
+            command: GoalsCommand::Llm(_),
+        } => "goals",
+        Command::Triggers {
+            command: TriggersCommand::Llm(_),
+        } => "triggers",
+        Command::Workflows {
+            command: WorkflowsCommand::Llm(_),
+        } => "workflows",
+        Command::Knowledge {
+            command: KnowledgeCommand::Llm(_),
+            ..
+        } => "knowledge",
+        Command::Facts {
+            command: FactsCommand::Llm(_),
+            ..
+        } => "facts",
+        Command::Indexer {
+            command: IndexerCommand::Llm(_),
+        } => "indexer",
+        Command::Mesh {
+            command: MeshCommand::Llm(_),
+        } => "mesh",
+        Command::Marketplace {
+            command: MarketplaceCommand::Llm(_),
+        } => "marketplace",
+        Command::Channels {
+            command: ChannelsCommand::Llm(_),
+        } => "channels",
+        Command::Events {
+            command: EventsCommand::Llm(_),
+        } => "events",
+        Command::Logs {
+            command: logs::LogsCommand::Llm(_),
+        } => "logs",
+        Command::Update {
+            command: UpdateCommand::Llm(_),
+        } => "update",
+        Command::Analytics {
+            command: AnalyticsCommand::Llm(_),
+        } => "analytics",
+        Command::Mcp(mcp::McpCommand::Llm(_)) => "mcp",
+        _ => return None,
+    };
+    llm_help::group(name)
+}
+
 /// Print the resolved flavour, for a human, a script, or `jq`.
 fn print_flavor(json: bool, env: bool) {
     let flavour = adi_config::Flavor::current();
@@ -362,6 +442,16 @@ fn main() {
             std::process::exit(1);
         }
     }
+    // `llm` under any group prints and exits before `Adi::new()` opens anything: `adi-tools`
+    // captures it on every agent launch with a three-second budget, and a store that cannot be
+    // opened must not cost it that — nor turn the help into an error.
+    if let Some(group) = llm_help_requested(&cli.command) {
+        print!(
+            "{}",
+            llm_help::render(&<Cli as clap::CommandFactory>::command(), group)
+        );
+        return;
+    }
     let adi = Adi::new();
     match cli.command {
         Command::Flavor { json, env } => print_flavor(json, env),
@@ -383,6 +473,7 @@ fn main() {
             DnsCommand::GrantDns => adi.dns().install_dns_route(),
             DnsCommand::GrantNetwork => adi.dns().install_front_door(),
             DnsCommand::RemoveRoute => adi.dns().remove_route(),
+            DnsCommand::Llm(_) => unreachable!("`llm` is answered above"),
         },
         Command::Projects { command } => {
             if let Err(e) = run_projects(adi, command) {
@@ -626,6 +717,138 @@ mod tests {
     #[test]
     fn the_command_tree_is_well_formed() {
         Cli::command().debug_assert();
+    }
+
+    /// Every group with verbs, as the tree has them — the list the `llm` tests walk, so a group
+    /// added later is covered without anybody remembering to add it here.
+    fn groups() -> Vec<String> {
+        Cli::command()
+            .get_subcommands()
+            .filter(|group| !group.is_hide_set() && group.has_subcommands())
+            .map(|group| group.get_name().to_string())
+            .collect()
+    }
+
+    /// `adi-mono dns llm` was an error: only `facts` and `workflows` had the verb, so every other
+    /// system tool's agents were handed clap's bare listing instead. Both spellings `adi-tools`
+    /// relies on — `llm help` first, bare `llm` for a person — must reach `main`'s early answer
+    /// for every group; one that missed it would fall through to its own dispatch's
+    /// `unreachable!`.
+    #[test]
+    fn every_group_answers_llm_and_llm_help() {
+        let groups = groups();
+        assert!(groups.len() >= 20, "the walk found only {groups:?}");
+        for name in &groups {
+            for argv in [
+                vec!["adi-mono", name, "llm"],
+                vec!["adi-mono", name, "llm", "help"],
+            ] {
+                let cli = Cli::try_parse_from(&argv)
+                    .unwrap_or_else(|e| panic!("{} does not parse: {e}", argv.join(" ")));
+                let group = llm_help_requested(&cli.command)
+                    .unwrap_or_else(|| panic!("{} is not answered in main", argv.join(" ")));
+                assert_eq!(
+                    &group.name,
+                    name,
+                    "{} answers as the wrong group",
+                    argv.join(" ")
+                );
+            }
+        }
+        // And the table names nothing the tree does not have: a renamed group must not leave a
+        // stale entry that no argv can reach.
+        for group in llm_help::GROUPS {
+            assert!(
+                groups.iter().any(|name| name == group.name),
+                "{} is not a group",
+                group.name
+            );
+        }
+    }
+
+    /// A generated help that runs past `adi-tools`' cap loses its tail — the end of the command
+    /// reference — and nothing errors; the agent is just never told those verbs exist. Every
+    /// verb must appear, under the name the agent runs the tool by.
+    #[test]
+    fn every_generated_llm_help_fits_the_cap_and_names_every_verb() {
+        let cli = Cli::command();
+        for group in llm_help::GROUPS {
+            let llm_help::Text::Intro(_) = group.text else {
+                continue;
+            };
+            let text = llm_help::render(&cli, group);
+            assert!(
+                text.len() <= llm_help::MAX_HELP_CHARS,
+                "{}: {} chars, cap is {}",
+                group.name,
+                text.len(),
+                llm_help::MAX_HELP_CHARS
+            );
+            assert!(
+                text.starts_with(group.prog),
+                "{} does not open with {}",
+                group.name,
+                group.prog
+            );
+            let cmd = cli.find_subcommand(group.name).expect("group");
+            for verb in cmd.get_subcommands() {
+                if verb.is_hide_set() || matches!(verb.get_name(), "help" | "llm") {
+                    continue;
+                }
+                assert!(
+                    text.contains(&format!(" {} ", verb.get_name()))
+                        || text.contains(&format!(" {}\n", verb.get_name()))
+                        || text.contains(&format!("`{}`", verb.get_name())),
+                    "{}: `{}` is missing from\n{text}",
+                    group.name,
+                    verb.get_name()
+                );
+            }
+        }
+    }
+
+    /// The reference shows what a caller of the group has to type — not the global `--flavor`
+    /// on every line, and not the `--no-<flag>` half of a pair, which the footer covers once.
+    #[test]
+    fn the_generated_reference_reads_like_a_usage_line() {
+        let cli = Cli::command();
+        let dns = llm_help::render(&cli, llm_help::group("dns").expect("dns"));
+        assert!(dns.contains("  adi-dns status [--json]\n"), "{dns}");
+        assert!(!dns.contains("--flavor"), "{dns}");
+        assert!(
+            !dns.contains("--no-"),
+            "dns has no negated flag, so no footer for one: {dns}"
+        );
+
+        let knowledge = llm_help::render(&cli, llm_help::group("knowledge").expect("knowledge"));
+        assert!(
+            knowledge.contains(
+                "  adi-knowledge [--as-agent <AGENT>] [--as-project <PROJECT>] [--root] <COMMAND>\n"
+            ),
+            "the group's own flags go before the verb: {knowledge}"
+        );
+        assert!(
+            knowledge.contains("  adi-knowledge base new <BASE>"),
+            "nested verbs keep their path: {knowledge}"
+        );
+
+        let tasks = llm_help::render(&cli, llm_help::group("tasks").expect("tasks"));
+        assert!(
+            tasks.contains("Permanently delete a task (also `delete`)"),
+            "{tasks}"
+        );
+        assert!(
+            !tasks.contains("  adi-tasks delete "),
+            "a twin verb is listed once: {tasks}"
+        );
+
+        let agents = llm_help::render(&cli, llm_help::group("agents").expect("agents"));
+        assert!(
+            agents.contains("  adi-agents save <NAME> [OPTIONS]\n"),
+            "{agents}"
+        );
+        assert!(!agents.contains("[--no-tag]"), "{agents}");
+        assert!(agents.contains("`--no-<flag>`"), "{agents}");
     }
 
     /// The macOS app's report button runs exactly this argv, so it is pinned here rather than

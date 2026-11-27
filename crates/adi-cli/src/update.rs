@@ -37,11 +37,14 @@ pub(crate) enum UpdateCommand {
     Enable,
     /// Disable the background auto-update agent.
     Disable,
+    /// Help written for a language model rather than for a person. Bare `llm` prints it too.
+    Llm(crate::llm_help::LlmHelp),
 }
 
 /// Dispatch an `update` subcommand over the adi-core update facade.
 pub(crate) fn run_update(adi: Adi, command: UpdateCommand) {
     match command {
+        UpdateCommand::Llm(_) => unreachable!("`llm` is answered in main"),
         UpdateCommand::Check { json } => match adi.update().check() {
             Ok(check) => {
                 if json {

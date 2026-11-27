@@ -38,12 +38,15 @@ pub(crate) enum EventsCommand {
         #[arg(long)]
         schema: bool,
     },
+    /// Help written for a language model rather than for a person. Bare `llm` prints it too.
+    Llm(crate::llm_help::LlmHelp),
 }
 
 /// Dispatch an `events` subcommand over the shared event bus.
 pub(crate) fn run_events(adi: Adi, command: EventsCommand) -> Result<(), String> {
     let bus = adi.events();
     match command {
+        EventsCommand::Llm(_) => unreachable!("`llm` is answered in main"),
         EventsCommand::Emit { name, payload } => {
             let payload = clean(payload).unwrap_or_else(|| "{}".to_string());
             bus.emit(&name, payload).map_err(|e| e.to_string())?;

@@ -83,12 +83,15 @@ pub(crate) enum McpCommand {
     /// Permanently delete a server definition. An agent that still names it in its own `mcp` list
     /// is not followed here — it is the same dangling-id tolerance a deleted tool already gets.
     Rm { id: String },
+    /// Help written for a language model rather than for a person. Bare `llm` prints it too.
+    Llm(crate::llm_help::LlmHelp),
 }
 
 /// Dispatch an `mcp` subcommand over the MCP server registry.
 pub(crate) fn run_mcp(adi: Adi, command: McpCommand) -> Result<(), String> {
     let store = adi.mcp();
     match command {
+        McpCommand::Llm(_) => unreachable!("`llm` is answered in main"),
         McpCommand::List { project, json } => {
             let mut servers = store.list().map_err(|e| e.to_string())?;
             if let Some(pid) = project.as_deref() {

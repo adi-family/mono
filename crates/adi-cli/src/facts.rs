@@ -30,7 +30,7 @@ use crate::reader::reader_for;
 /// It is instructions, not rationale. **Why** the design is like this belongs in the code; an agent that has read a paragraph of justification has spent context and
 /// learned nothing it can act on. The examples do the teaching — a bad example teaches faster
 /// than a rule, which is why two of them are here and the corresponding rules are not.
-const LLM_HELP: &str = r"adi-facts — record what somebody said as plain sentences, and keep what you
+pub(crate) const LLM_HELP: &str = r"adi-facts — record what somebody said as plain sentences, and keep what you
 build on them honest.
 
 A FACT IS ONE SENTENCE THAT STANDS ALONE
@@ -201,23 +201,8 @@ pub(crate) enum FactsCommand {
     },
     /// List fact bases. Only the ones the caller may read are shown.
     Bases,
-    /// Help written for a language model rather than for a person. Bare `llm` prints it too —
-    /// `Help` is the only variant there is, and a caller shouldn't have to spell it out.
-    ///
-    // `disable_help_subcommand`: clap generates a `help` subcommand for anything that has
-    // subcommands, which collides with the `help` this group exists to provide. `adi-tools`
-    // captures a tool by running `llm help`, so that name is not ours to move.
-    #[command(disable_help_subcommand = true)]
-    Llm {
-        #[command(subcommand)]
-        command: Option<LlmCommand>,
-    },
-}
-
-#[derive(Debug, Subcommand)]
-pub(crate) enum LlmCommand {
-    /// Everything an agent needs to use this tool correctly, and nothing else.
-    Help,
+    /// Help written for a language model rather than for a person. Bare `llm` prints it too.
+    Llm(crate::llm_help::LlmHelp),
 }
 
 #[derive(Debug, Subcommand)]
@@ -280,15 +265,8 @@ pub(crate) fn run_facts(
     };
     let id = parse_base(base)?;
 
-    // Answered before anything opens the store: `adi-tools` captures this on every agent launch
-    // with a three-second budget, and a base that cannot be opened must not cost it that.
-    if let FactsCommand::Llm { .. } = command {
-        print!("{LLM_HELP}");
-        return Ok(());
-    }
-
     match command {
-        FactsCommand::Llm { .. } => unreachable!("answered above, before the store is opened"),
+        FactsCommand::Llm(_) => unreachable!("`llm` is answered in main"),
         FactsCommand::Bases => {
             let bases = store.list_bases(None);
             if bases.is_empty() {
@@ -456,6 +434,7 @@ fn err(e: impl std::fmt::Display) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::llm_help::{LlmHelp, LlmHelpCommand};
     use clap::Parser;
 
     /// A parser for this group alone, so the tests state argv the way a user types it without
@@ -512,9 +491,9 @@ mod tests {
     fn llm_help_is_reachable_under_the_name_the_capture_uses() {
         assert!(matches!(
             parse(&["llm", "help"]),
-            FactsCommand::Llm {
-                command: Some(LlmCommand::Help)
-            }
+            FactsCommand::Llm(LlmHelp {
+                command: Some(LlmHelpCommand::Help)
+            })
         ));
     }
 
@@ -523,7 +502,7 @@ mod tests {
     fn bare_llm_parses_and_answers_the_same_help() {
         assert!(matches!(
             parse(&["llm"]),
-            FactsCommand::Llm { command: None }
+            FactsCommand::Llm(LlmHelp { command: None })
         ));
     }
 

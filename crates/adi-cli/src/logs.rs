@@ -35,6 +35,8 @@ pub(crate) enum LogsCommand {
         event_key: Option<String>,
         message: String,
     },
+    /// Help written for a language model rather than for a person. Bare `llm` prints it too.
+    Llm(crate::llm_help::LlmHelp),
 }
 
 fn level(value: &str) -> Level {
@@ -47,6 +49,7 @@ fn level(value: &str) -> Level {
 
 pub(crate) fn run(store: Events, command: LogsCommand) -> Result<(), String> {
     match command {
+        LogsCommand::Llm(_) => unreachable!("`llm` is answered in main"),
         LogsCommand::List {
             limit,
             before,

@@ -66,6 +66,8 @@ pub(crate) enum ProjectsCommand {
         #[command(subcommand)]
         command: HookCommand,
     },
+    /// Help written for a language model rather than for a person. Bare `llm` prints it too.
+    Llm(crate::llm_help::LlmHelp),
 }
 
 #[derive(Debug, Subcommand)]
@@ -126,6 +128,7 @@ pub(crate) enum HookCommand {
 pub(crate) fn run_projects(adi: Adi, command: ProjectsCommand) -> Result<(), String> {
     let store = adi.projects();
     match command {
+        ProjectsCommand::Llm(_) => unreachable!("`llm` is answered in main"),
         ProjectsCommand::List { all, json } => {
             let mut projects = store.list().map_err(|e| e.to_string())?;
             if !all {

@@ -121,12 +121,15 @@ pub(crate) enum TasksCommand {
     Rm { id: String },
     /// Permanently delete a task.
     Delete { id: String },
+    /// Help written for a language model rather than for a person. Bare `llm` prints it too.
+    Llm(crate::llm_help::LlmHelp),
 }
 
 /// Dispatch a `tasks` subcommand over the shared task store.
 pub(crate) fn run_tasks(adi: Adi, command: TasksCommand) -> Result<(), String> {
     let store = adi.tasks();
     match command {
+        TasksCommand::Llm(_) => unreachable!("`llm` is answered in main"),
         TasksCommand::List {
             project,
             tag,

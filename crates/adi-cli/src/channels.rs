@@ -77,6 +77,8 @@ pub(crate) enum ChannelsCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Help written for a language model rather than for a person. Bare `llm` prints it too.
+    Llm(crate::llm_help::LlmHelp),
 }
 
 /// Dispatch a `channels` subcommand against this node's own `/api/channels/*`.
@@ -88,6 +90,7 @@ pub(crate) fn run_channels(command: ChannelsCommand) -> Result<(), String> {
     let config = adi_config::Config::open();
     let api = NodeApi::local(&config)?;
     match command {
+        ChannelsCommand::Llm(_) => unreachable!("`llm` is answered in main"),
         ChannelsCommand::Connect {
             provider,
             agent,

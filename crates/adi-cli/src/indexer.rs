@@ -120,6 +120,8 @@ pub(crate) enum IndexerCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Help written for a language model rather than for a person. Bare `llm` prints it too.
+    Llm(crate::llm_help::LlmHelp),
 }
 
 /// Dispatch an `indexer` subcommand.
@@ -128,6 +130,7 @@ pub(crate) enum IndexerCommand {
 /// blocking on — so each arm builds the runtime it needs rather than `main` wrapping everything.
 pub(crate) fn run_indexer(command: IndexerCommand) -> Result<(), String> {
     match command {
+        IndexerCommand::Llm(_) => unreachable!("`llm` is answered in main"),
         IndexerCommand::Languages { json } => {
             languages(json);
             Ok(())

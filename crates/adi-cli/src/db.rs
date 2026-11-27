@@ -98,6 +98,8 @@ pub(crate) enum DbCommand {
     /// Re-seed the Bun client (`@adi/db`) into the store's `node_modules` and print its directory.
     /// The app does this at startup; this is the manual repair path.
     Client,
+    /// Help written for a language model rather than for a person. Bare `llm` prints it too.
+    Llm(crate::llm_help::LlmHelp),
 }
 
 /// Dispatch a `db` subcommand over the adi-core facade, surfacing any store error as a `String`
@@ -109,6 +111,7 @@ pub(crate) enum DbCommand {
 pub(crate) fn run_db(adi: Adi, command: DbCommand) -> Result<(), String> {
     let store = adi.db();
     match command {
+        DbCommand::Llm(_) => unreachable!("`llm` is answered in main"),
         DbCommand::Query {
             sql,
             params,
