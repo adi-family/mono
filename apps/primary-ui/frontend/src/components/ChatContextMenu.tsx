@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Eye, EyeOff, Pencil, Star } from "lucide-react";
+import { useForm } from "react-hook-form";
 import { Button } from "@design-system/ui";
 import type { Conversation } from "../lib/app-chat";
 import { useChatList } from "../lib/app-chat-list";
@@ -10,7 +11,7 @@ export function ChatContextMenu({ target, onClose }: { target: ChatContextTarget
   const { renameChat, starChat, hideChat } = useChatList();
   const element = useRef<HTMLDivElement>(null);
   const [editing, setEditing] = useState(false);
-  const [name, setName] = useState(target.conversation.title);
+  const { register, handleSubmit, reset } = useForm<{ name: string }>({ defaultValues: { name: target.conversation.title } });
   const [position, setPosition] = useState({ left: target.x, top: target.y });
   function close(restore = true) {
     if (restore && target.trigger.isConnected) target.trigger.focus();
@@ -49,16 +50,16 @@ export function ChatContextMenu({ target, onClose }: { target: ChatContextTarget
       items[next]?.focus();
     }
   }}>
-    {editing ? <form className="space-y-2 p-2" onSubmit={(event) => { event.preventDefault(); void save(() => renameChat(target.conversation, name)); }}>
+    {editing ? <form className="space-y-2 p-2" onSubmit={handleSubmit(({ name }) => { void save(() => renameChat(target.conversation, name)); })}>
       <label className="block text-xs font-medium" htmlFor="context-chat-name">Chat name</label>
-      <input id="context-chat-name" value={name} onChange={(event) => setName(event.target.value)} className="border-input focus-visible:ring-ring w-full rounded-md border px-2 py-1 text-sm outline-none focus-visible:ring-2" />
+      <input id="context-chat-name" {...register("name")} className="border-input focus-visible:ring-ring w-full rounded-md border px-2 py-1 text-sm outline-none focus-visible:ring-2" />
       <p className="text-muted-foreground text-[11px]">Leave empty to restore the default title.</p>
       <div className="flex justify-end gap-1">
         <Button type="button" size="sm" variant="ghost" onClick={() => close()}>Cancel</Button>
         <Button type="submit" size="sm">Save</Button>
       </div>
     </form> : <>
-      <button role="menuitem" type="button" className={itemClass} onClick={() => setEditing(true)}><Pencil aria-hidden="true" className="size-3.5" />Rename</button>
+      <button role="menuitem" type="button" className={itemClass} onClick={() => { reset({ name: target.conversation.title }); setEditing(true); }}><Pencil aria-hidden="true" className="size-3.5" />Rename</button>
       <button role="menuitem" type="button" className={itemClass} onClick={() => void save(() => starChat(target.conversation, !target.conversation.starred))}><Star aria-hidden="true" className={target.conversation.starred ? "size-3.5 fill-current" : "size-3.5"} />{target.conversation.starred ? "Unstar" : "Star"}</button>
       {target.conversation.hidden
         ? <button role="menuitem" type="button" className={itemClass} onClick={() => void save(() => hideChat(target.conversation, false))}><Eye aria-hidden="true" className="size-3.5" />Unhide</button>

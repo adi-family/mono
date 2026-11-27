@@ -21,20 +21,21 @@
     "test:settings:browser": "bun tests/settings.browser.mjs"
   },
   "dependencies": {
-    "react": "19.3.1",
-    "react-dom": "19.3.1",
-    "react-router-dom": "7.18.5",
+    "@radix-ui/react-slot": "1.5.0",
     "@tanstack/react-query": "5.105.0",
-    "hono": "4.13.16",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
-    "tailwind-merge": "3.7.0",
+    "hono": "4.13.16",
     "lucide-react": "1.63.0",
-    "@radix-ui/react-slot": "1.5.0",
     "prism-react-renderer": "2.4.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "react-hook-form": "^7.92.0",
     "react-markdown": "10.1.0",
+    "react-router-dom": "7.18.5",
     "remark-breaks": "4.0.0",
-    "remark-gfm": "4.0.1"
+    "remark-gfm": "4.0.1",
+    "tailwind-merge": "3.7.0"
   },
   "devDependencies": {
     "@types/node": "26.6.6",

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { ArrowLeft, ArrowUpRight, LoaderCircle, Package } from "lucide-react";
+import { useForm } from "react-hook-form";
 import { Button, Card } from "@design-system/ui";
 import { ChatMarkdown } from "../components/ChatMarkdown";
 import { CatalogImage, imageUrl } from "./Marketplace";
@@ -23,24 +24,74 @@ function Dialog({ title, onClose, busy, children }: { title: string; onClose: ()
   </dialog>;
 }
 
+type MarketplaceInstallValues = {
+  destination: "new" | "existing" | "global";
+  projectName: string;
+  project: string;
+  name: string;
+  start: boolean;
+};
+
+type MarketplaceProjectsData = { projects: { id: string; name: string; archived_at?: number | null }[] };
+
+function MarketplaceInstallForm({ app, machine, legacy, element, busy, error, projects, onCancel, onInstall }: {
+  app: MarketplaceApp;
+  machine: string;
+  legacy: boolean;
+  element?: string;
+  busy: boolean;
+  error: string | null;
+  projects: UseQueryResult<MarketplaceProjectsData>;
+  onCancel: () => void;
+  onInstall: (values: MarketplaceInstallValues) => Promise<void>;
+}) {
+  const { register, handleSubmit, watch } = useForm<MarketplaceInstallValues>({
+    defaultValues: {
+      destination: "new",
+      projectName: app.elements.find((item) => item.kind === "project")?.name ?? app.name,
+      project: "",
+      name: app.name,
+      start: true,
+    },
+  });
+  const destination = watch("destination");
+  const projectName = watch("projectName");
+  const project = watch("project");
+  const name = watch("name");
+  const disabled = { disabled: busy, disabledReason: "Wait for the current marketplace action to finish." };
+
+  return (
+    <form data-slot="marketplace-install-form" className="space-y-5" aria-busy={busy} onSubmit={handleSubmit(onInstall)}>
+      {element && <p className="text-muted-foreground text-sm">Installing {element} on its own.</p>}
+      <fieldset disabled={busy} className="space-y-4"><legend className="mb-3 text-sm font-medium">Where should this be installed?</legend>
+        {([["new", "A new project"], ["existing", "An existing project"], ...(app.require_project ? [] : [["global", "Globally"]] as const)] as const).map(([value, label]) => (
+          <label key={value} className="flex items-center gap-2 text-sm"><input type="radio" value={value} {...register("destination")} />{label}</label>
+        ))}
+        {app.require_project && <p className="text-muted-foreground text-sm">{app.name} only installs into a project.</p>}
+        {destination === "new" && <label className="block space-y-2 text-sm"><span>Project name</span><input aria-label="Project name" required {...register("projectName", { required: true })} className={inputClass} /></label>}
+        {destination === "existing" && <><label className="block space-y-2 text-sm"><span>Project</span><select aria-label="Project" required {...register("project", { required: true })} className={inputClass}><option value="">{projects.isPending ? "Loading projects…" : "Choose a project"}</option>{projects.data?.projects.filter((item) => !item.archived_at).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>{projects.isError && <p role="alert" className="text-destructive text-sm">Couldn’t load projects. <button type="button" className="underline" onClick={() => void projects.refetch()}>Try again</button></p>}</>}
+        {destination === "global" && <p className="text-muted-foreground text-sm">Available globally on {machine}. Use a project to keep multiple copies separate.</p>}
+        {legacy && <><label className="block space-y-2 text-sm"><span>Copy name</span><input aria-label="Copy name" required {...register("name", { required: true })} className={inputClass} /></label><label className="flex items-center gap-2 text-sm"><input type="checkbox" {...register("start")} />Start it right away</label></>}
+      </fieldset>
+      {error && <p role="alert" className="text-destructive text-sm">{error}</p>}
+      <div className="flex justify-end gap-2"><Button type="button" variant="outline" {...disabled} onClick={onCancel}>Cancel</Button><Button type="submit" disabled={busy || (destination === "new" && !projectName.trim()) || (destination === "existing" && !project) || (legacy && !name.trim())} disabledReason={busy ? "Installation is in progress." : "Choose a destination and fill in the required names."}>{busy && <LoaderCircle className="size-4 animate-spin" />}{busy ? "Installing…" : "Install"}</Button></div>
+    </form>
+  );
+}
+
 function PackagePage({ app, source }: { app: MarketplaceApp; source?: string }) {
   const cache = useQueryClient();
   const key = marketplaceKey(source);
   const machine = source ?? "this machine";
   const [search, setSearch] = useSearchParams();
   const [install, setInstall] = useState<{ element?: string } | null>(search.get("install") === "1" ? {} : null);
-  const [destination, setDestination] = useState("new");
-  const [projectName, setProjectName] = useState(app.elements.find((element) => element.kind === "project")?.name ?? app.name);
-  const [project, setProject] = useState("");
-  const [name, setName] = useState(app.name);
-  const [start, setStart] = useState(true);
   const [mediaIndex, setMediaIndex] = useState(0);
   const [busy, setBusy] = useState(false);
   const pending = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<{ title: string; description: string; path: string; body: unknown } | null>(null);
-  const projects = useQuery({ queryKey: marketplaceProjectsKey(source), queryFn: ({ signal }) => marketplaceRequest<{ projects: { id: string; name: string; archived_at?: number | null }[] }>(source, "/projects", undefined, signal), enabled: install !== null });
+  const projects = useQuery({ queryKey: marketplaceProjectsKey(source), queryFn: ({ signal }) => marketplaceRequest<MarketplaceProjectsData>(source, "/projects", undefined, signal), enabled: install !== null });
   // A bundle's dashboard element is a row in the machine's Dashboards registry: archived until started, then on its host.
   const dashboards = useQuery({ queryKey: marketplaceDashboardsKey(source), queryFn: loadDashboards(source), enabled: hasDashboardElements(app), staleTime: 30000, refetchInterval: 30000 });
   const dashboardOf = (element: MarketplaceElement) => element.kind === "dashboards" && element.id ? dashboards.data?.find((row) => row.id === element.id) : undefined;
@@ -59,7 +110,7 @@ function PackagePage({ app, source }: { app: MarketplaceApp; source?: string }) 
     if (search.has("install")) { const next = new URLSearchParams(search); next.delete("install"); setSearch(next, { replace: true }); }
   }
   function openInstall(element?: string) {
-    setError(null); setDestination("new"); setProject(""); setProjectName(app.elements.find((item) => item.kind === "project")?.name ?? app.name); setName(app.name); setStart(true); setInstall({ element });
+    setError(null); setInstall({ element });
   }
   async function act(path: string, body: unknown): Promise<boolean> {
     if (pending.current) return false;
@@ -112,19 +163,30 @@ function PackagePage({ app, source }: { app: MarketplaceApp; source?: string }) 
     </section>}
     {app.readme && <section aria-label="About this package"><h3 className="mb-4 text-lg font-semibold">About this package</h3><ChatMarkdown>{app.readme}</ChatMarkdown></section>}
     <section aria-label="Repository" className="space-y-2 border-t pt-6 text-sm"><h3 className="font-semibold">Repository</h3><a href={app.repo.replace(/\.git$/, "")} target="_blank" rel="noopener noreferrer" className="text-muted-foreground inline-flex items-center gap-1 break-all underline underline-offset-4">{app.repo.replace(/\.git$/, "")} <ArrowUpRight className="size-3.5 shrink-0" /></a><p className="text-muted-foreground break-all font-mono text-xs">Commit: {app.commit}</p>{app.branch && <p className="text-muted-foreground text-xs">Branch: {app.branch}</p>}</section>
-    {install && <Dialog title={`Install ${app.name} on ${machine}`} busy={busy} onClose={closeInstall}><form data-slot="marketplace-install-form" className="space-y-5" aria-busy={busy} onSubmit={async (event) => { event.preventDefault(); if (await act("install", { ...address, element: install.element ?? null, name: legacy ? name.trim() : "", start, project: destination === "existing" ? project : null, new_project: destination === "new" ? projectName.trim() : null })) closeInstall(); }}>
-      {install.element && <p className="text-muted-foreground text-sm">Installing {install.element} on its own.</p>}
-      <fieldset disabled={busy} className="space-y-4"><legend className="mb-3 text-sm font-medium">Where should this be installed?</legend>
-        {[["new", "A new project"], ["existing", "An existing project"], ...(app.require_project ? [] : [["global", "Globally"]])].map(([value, label]) => <label key={value} className="flex items-center gap-2 text-sm"><input type="radio" name="destination" value={value} checked={destination === value} onChange={() => setDestination(value)} />{label}</label>)}
-        {app.require_project && <p className="text-muted-foreground text-sm">{app.name} only installs into a project.</p>}
-        {destination === "new" && <label className="block space-y-2 text-sm"><span>Project name</span><input aria-label="Project name" required value={projectName} onChange={(event) => setProjectName(event.target.value)} className={inputClass} /></label>}
-        {destination === "existing" && <><label className="block space-y-2 text-sm"><span>Project</span><select aria-label="Project" required value={project} onChange={(event) => setProject(event.target.value)} className={inputClass}><option value="">{projects.isPending ? "Loading projects…" : "Choose a project"}</option>{projects.data?.projects.filter((item) => !item.archived_at).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>{projects.isError && <p role="alert" className="text-destructive text-sm">Couldn’t load projects. <button type="button" className="underline" onClick={() => void projects.refetch()}>Try again</button></p>}</>}
-        {destination === "global" && <p className="text-muted-foreground text-sm">Available globally on {machine}. Use a project to keep multiple copies separate.</p>}
-        {legacy && <><label className="block space-y-2 text-sm"><span>Copy name</span><input aria-label="Copy name" required value={name} onChange={(event) => setName(event.target.value)} className={inputClass} /></label><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={start} onChange={(event) => setStart(event.target.checked)} />Start it right away</label></>}
-      </fieldset>
-      {error && <p role="alert" className="text-destructive text-sm">{error}</p>}
-      <div className="flex justify-end gap-2"><Button type="button" variant="outline" {...disabled} onClick={closeInstall}>Cancel</Button><Button type="submit" disabled={busy || (destination === "new" && !projectName.trim()) || (destination === "existing" && !project) || (legacy && !name.trim())} disabledReason={busy ? "Installation is in progress." : "Choose a destination and fill in the required names."}>{busy && <LoaderCircle className="size-4 animate-spin" />}{busy ? "Installing…" : "Install"}</Button></div>
-    </form></Dialog>}
+    {install && (
+      <Dialog title={`Install ${app.name} on ${machine}`} busy={busy} onClose={closeInstall}>
+        <MarketplaceInstallForm
+          app={app}
+          machine={machine}
+          legacy={legacy}
+          element={install.element}
+          busy={busy}
+          error={error}
+          projects={projects}
+          onCancel={closeInstall}
+          onInstall={async (values) => {
+            if (await act("install", {
+              ...address,
+              element: install.element ?? null,
+              name: legacy ? values.name.trim() : "",
+              start: values.start,
+              project: values.destination === "existing" ? values.project : null,
+              new_project: values.destination === "new" ? values.projectName.trim() : null,
+            })) closeInstall();
+          }}
+        />
+      </Dialog>
+    )}
     {confirmation && <Dialog title={confirmation.title} busy={busy} onClose={() => setConfirmation(null)}><p className="text-muted-foreground text-sm">{confirmation.description}</p>{error && <p role="alert" className="text-destructive mt-4 text-sm">{error}</p>}<div className="mt-6 flex justify-end gap-2"><Button variant="outline" {...disabled} onClick={() => setConfirmation(null)}>Cancel</Button><Button variant="destructive" {...disabled} onClick={async () => { if (await act(confirmation.path, confirmation.body)) setConfirmation(null); }}>{busy ? "Working…" : confirmation.title}</Button></div></Dialog>}
   </main>;
 }

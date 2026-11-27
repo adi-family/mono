@@ -1,5 +1,6 @@
-import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { ArrowLeft, ExternalLink, LoaderCircle, RefreshCw, Square } from "lucide-react";
+import { Controller, useForm } from "react-hook-form";
 import { Link } from "react-router-dom";
 import { Button, ChatComposer, ChatQueue, ChatQueuedMessage, ChatThread, ChatWaitingStatus } from "@design-system/ui";
 
@@ -16,33 +17,40 @@ import { useChatThread } from "../lib/app-chat-thread";
 import { sameConversation } from "../lib/app-chat-sources";
 import { appConversationHref } from "../lib/app-chat-transcript";
 
+type PendingQuestionValues = {
+  answers: { selected: string[]; text: string }[];
+};
+
 function PendingQuestion({ ask, onAnswer }: {
   ask: AgentAsk;
   onAnswer: (id: string, replies: string[]) => Promise<void>;
 }) {
   const id = useId();
-  const [answers, setAnswers] = useState(() => ask.questions.map(() => ({ selected: [] as string[], text: "" })));
-  const [sending, setSending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const {
+    control, register, handleSubmit, watch, setError, clearErrors,
+    formState: { isSubmitting: sending, errors },
+  } = useForm<PendingQuestionValues>({
+    defaultValues: { answers: ask.questions.map(() => ({ selected: [], text: "" })) },
+  });
   const inFlight = useRef(false);
+  const answers = watch("answers");
   const replies = answers.map(({ selected, text }) => [...selected, text.trim()].filter(Boolean).join(", "));
   const hasAnswer = replies.some((reply) => reply.length > 0);
+  const error = errors.root?.message ?? null;
 
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!hasAnswer || inFlight.current) return;
+  const submit = handleSubmit(async (values) => {
+    const nextReplies = values.answers.map(({ selected, text }) => [...selected, text.trim()].filter(Boolean).join(", "));
+    if (!nextReplies.some((reply) => reply.length > 0) || inFlight.current) return;
     inFlight.current = true;
-    setSending(true);
-    setError(null);
+    clearErrors("root");
     try {
-      await onAnswer(ask.id, replies);
-    } catch (error) {
-      setError(error instanceof Error ? error.message : "Your answer could not be sent. Try again.");
+      await onAnswer(ask.id, nextReplies);
+    } catch (cause) {
+      setError("root", { type: "server", message: cause instanceof Error ? cause.message : "Your answer could not be sent. Try again." });
     } finally {
       inFlight.current = false;
-      setSending(false);
     }
-  }
+  });
 
   return (
     <form data-slot="app-chat-question" className="min-w-0 space-y-4 rounded-xl border p-4" aria-label={ask.headline || "Agent question"} aria-busy={sending || undefined} onSubmit={submit}>
@@ -55,39 +63,45 @@ function PendingQuestion({ ask, onAnswer }: {
             {question.header && <span className="text-muted-foreground mr-2 text-xs">{question.header}</span>}
             {question.question || "Your answer"}
           </legend>
-          {question.options.map((option) => (
-            <label key={option.label} className="flex cursor-pointer items-start gap-2 rounded-md px-1 py-1 text-sm">
-              <input
-                className="accent-primary mt-1 shrink-0"
-                type={question.multi_select ? "checkbox" : "radio"}
-                name={`${id}-${index}`}
-                onClick={() => {
-                  if (!question.multi_select && answers[index]?.selected.includes(option.label)) {
-                    setAnswers((current) => current.map((answer, position) => position === index ? { ...answer, selected: [] } : answer));
-                  }
-                }}
-                checked={answers[index]?.selected.includes(option.label) ?? false}
-                onChange={(event) => setAnswers((current) => current.map((answer, position) => position !== index ? answer : {
-                  ...answer,
-                  selected: question.multi_select
-                    ? event.target.checked ? [...answer.selected, option.label] : answer.selected.filter((label) => label !== option.label)
-                    : event.target.checked ? [option.label] : [],
-                }))}
-              />
-              <span className="min-w-0 wrap-anywhere">
-                <span>{option.label}</span>
-                {option.description && <span className="text-muted-foreground mt-0.5 block text-xs leading-relaxed">{option.description}</span>}
-              </span>
-            </label>
-          ))}
+          <Controller
+            control={control}
+            name={`answers.${index}.selected`}
+            render={({ field }) => (
+              <>
+                {question.options.map((option) => (
+                  <label key={option.label} className="flex cursor-pointer items-start gap-2 rounded-md px-1 py-1 text-sm">
+                    <input
+                      className="accent-primary mt-1 shrink-0"
+                      type={question.multi_select ? "checkbox" : "radio"}
+                      name={`${id}-${index}`}
+                      onClick={() => {
+                        if (!question.multi_select && field.value.includes(option.label)) {
+                          field.onChange([]);
+                        }
+                      }}
+                      checked={field.value.includes(option.label)}
+                      onChange={(event) => field.onChange(
+                        question.multi_select
+                          ? event.target.checked ? [...field.value, option.label] : field.value.filter((label) => label !== option.label)
+                          : event.target.checked ? [option.label] : [],
+                      )}
+                    />
+                    <span className="min-w-0 wrap-anywhere">
+                      <span>{option.label}</span>
+                      {option.description && <span className="text-muted-foreground mt-0.5 block text-xs leading-relaxed">{option.description}</span>}
+                    </span>
+                  </label>
+                ))}
+              </>
+            )}
+          />
           <label className="block space-y-1.5 text-xs" htmlFor={`${id}-${index}-reply`}>
             <span className="text-muted-foreground">{question.options.length ? "Your answer or additional details" : "Your answer"}</span>
             <textarea
               data-slot="app-chat-answer-input"
               id={`${id}-${index}-reply`}
               rows={2}
-              value={answers[index]?.text ?? ""}
-              onChange={(event) => setAnswers((current) => current.map((answer, position) => position === index ? { ...answer, text: event.target.value } : answer))}
+              {...register(`answers.${index}.text`)}
               className="border-input bg-background focus-visible:ring-ring/50 field-sizing-content max-h-36 min-h-16 w-full resize-none rounded-md border px-3 py-2 text-sm outline-none focus-visible:ring-2"
             />
           </label>

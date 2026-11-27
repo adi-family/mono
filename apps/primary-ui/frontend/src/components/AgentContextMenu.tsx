@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Pencil, Star } from "lucide-react";
+import { useForm } from "react-hook-form";
 import type { Agent } from "../lib/app-chat";
 import { useChatSelection } from "../lib/app-chat-selection";
 
@@ -10,7 +11,7 @@ export function AgentContextMenu({ target, onClose }: { target: AgentContextTarg
   const element = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ left: target.x, top: target.y });
   const [renaming, setRenaming] = useState(false);
-  const [name, setName] = useState(target.agent.displayName ?? target.agent.name);
+  const { register, handleSubmit, reset } = useForm<{ name: string }>({ defaultValues: { name: target.agent.displayName ?? target.agent.name } });
   const [error, setError] = useState("");
   function close(restore = true) { if (restore && target.trigger.isConnected) target.trigger.focus(); onClose(); }
   useLayoutEffect(() => {
@@ -34,12 +35,11 @@ export function AgentContextMenu({ target, onClose }: { target: AgentContextTarg
       const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
       buttons[event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : (index + (event.key === "ArrowUp" ? -1 : 1) + buttons.length) % buttons.length]?.focus(); }
   }}>
-    {renaming ? <form className="space-y-2 p-2" onSubmit={(event) => {
-      event.preventDefault();
+    {renaming ? <form className="space-y-2 p-2" onSubmit={handleSubmit(({ name }) => {
       try { setAgentOverride(target.agent, "displayName", name.trim() && name.trim() !== target.agent.name ? name.trim() : undefined); close(); }
       catch { setError("Could not save this preference. Check browser storage and try again."); }
-    }}>
-      <label className="block text-xs font-medium">Name for me<input aria-label="Name for me" className="bg-background border-input mt-1 w-full rounded border px-2 py-1.5 text-sm" value={name} onChange={(event) => setName(event.target.value)} /></label>
+    })}>
+      <label className="block text-xs font-medium">Name for me<input aria-label="Name for me" className="bg-background border-input mt-1 w-full rounded border px-2 py-1.5 text-sm" {...register("name")} /></label>
       <p className="text-muted-foreground text-xs">Leave empty to restore {target.agent.name}.</p>
       <div className="flex gap-2"><button type="submit" className="hover:bg-accent rounded px-2 py-1 text-xs">Save</button><button type="button" className="hover:bg-accent rounded px-2 py-1 text-xs" onClick={() => close()}>Cancel</button></div>
     </form> : <>
@@ -47,7 +47,7 @@ export function AgentContextMenu({ target, onClose }: { target: AgentContextTarg
       try { setAgentOverride(target.agent, "starred", target.agent.starred ? false : undefined); close(); }
       catch { setError("Could not save this preference. Check browser storage and try again."); }
     }}><Star aria-hidden="true" className="size-3.5" />{target.agent.starred ? "Unstar for me" : "Restore star for me"}</button>
-    <button role="menuitem" type="button" className="hover:bg-accent focus:bg-accent flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs outline-none" onClick={() => { setError(""); setRenaming(true); }}><Pencil aria-hidden="true" className="size-3.5" />Rename for me</button>
+    <button role="menuitem" type="button" className="hover:bg-accent focus:bg-accent flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs outline-none" onClick={() => { setError(""); reset({ name: target.agent.displayName ?? target.agent.name }); setRenaming(true); }}><Pencil aria-hidden="true" className="size-3.5" />Rename for me</button>
     </>}
     <p className="text-muted-foreground px-2 py-1 text-xs">Only affects this browser.</p>
     {error && <p role="alert" className="text-destructive px-2 py-1 text-xs">{error}</p>}

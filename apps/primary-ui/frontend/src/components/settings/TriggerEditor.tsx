@@ -1,6 +1,7 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Check, Copy, Eye, EyeOff, LoaderCircle, Plus } from "lucide-react";
+import { Controller, useController, useForm, type Control, type ResolverResult } from "react-hook-form";
 import { Link } from "react-router-dom";
 
 import { Button, CodeEditor, Field, Input, Select, Switch, Textarea, cn } from "@design-system/ui";
@@ -65,29 +66,31 @@ function CopyRow({ label, hint, value, slot }: { label: string; hint?: ReactNode
  * The machine registers the trigger with the chosen relay when it is saved and writes back the
  * endpoint, which this group only ever shows.
  */
-function RelayGroup({ extra, relayKey, onChange }: { extra: Record<string, string>; relayKey: string | undefined; onChange: (extra: Record<string, string>) => void }) {
+function RelayGroup({ control, relayKey }: { control: Control<TriggerDraft>; relayKey: string | undefined }) {
+  const { field } = useController({ control, name: "extra" });
+  const extra = field.value ?? {};
   const relay = extra.relay ?? "";
   const publicUrl = relayPublicUrl(extra);
-  const put = (key: string, value: string) => onChange({ ...extra, [key]: value });
+  const put = (key: string, value: string) => field.onChange({ ...extra, [key]: value });
   return (
     <Group title="Webhook relay" hint="Lets an outside sender — Stripe, GitHub — reach this trigger without exposing the machine. Direct only keeps it reachable on this machine’s own address alone.">
       <div data-slot="trigger-relay" className="grid gap-x-5 gap-y-5 sm:grid-cols-2">
         <Field label="Relay">
-          {(control) => <Select {...control} name="relay" options={relayOptions} value={relayChoice(relay)} onValueChange={(choice) => put("relay", choice === "custom" ? `custom:${customRelayUrl(relay)}` : choice)} />}
+          {(controlProps) => <Select {...controlProps} name="relay" options={relayOptions} value={relayChoice(relay)} onValueChange={(choice) => put("relay", choice === "custom" ? `custom:${customRelayUrl(relay)}` : choice)} />}
         </Field>
         {isCustomRelay(relay) && (
           <Field label="Relay URL" hint="Your own self-hosted relay.">
-            {(control) => <Input {...control} mono name="relay_url" autoComplete="off" spellCheck={false} placeholder="https://relay.example.com" value={customRelayUrl(relay)} onChange={(event) => put("relay", `custom:${event.target.value}`)} />}
+            {(controlProps) => <Input {...controlProps} mono name="relay_url" autoComplete="off" spellCheck={false} placeholder="https://relay.example.com" value={customRelayUrl(relay)} onChange={(event) => put("relay", `custom:${event.target.value}`)} />}
           </Field>
         )}
         {relay && (
           <Field label="Retention (seconds)" hint="How long the relay keeps a delivery the machine has not collected. Blank uses the relay’s default.">
-            {(control) => <Input {...control} mono name="relay_retention" type="number" min={0} inputMode="numeric" value={extra.relay_retention ?? ""} onChange={(event) => put("relay_retention", event.target.value)} />}
+            {(controlProps) => <Input {...controlProps} mono name="relay_retention" type="number" min={0} inputMode="numeric" value={extra.relay_retention ?? ""} onChange={(event) => put("relay_retention", event.target.value)} />}
           </Field>
         )}
         {relay.startsWith("enterprise-") && (
           <Field label="Licence code" hint="Checked once, at registration, against this install’s ADI Enterprise licence.">
-            {(control) => <Input {...control} mono name="licence_code" autoComplete="off" spellCheck={false} value={extra.licence_code ?? ""} onChange={(event) => put("licence_code", event.target.value)} />}
+            {(controlProps) => <Input {...controlProps} mono name="licence_code" autoComplete="off" spellCheck={false} value={extra.licence_code ?? ""} onChange={(event) => put("licence_code", event.target.value)} />}
           </Field>
         )}
         {publicUrl && <CopyRow label="Public URL" hint="Give this to the sender." value={publicUrl} slot="trigger-relay-url" />}
@@ -113,12 +116,31 @@ export function TriggerEditor({ source, state, trigger, initialPreset, busy, err
   onSave: (body: SaveTrigger) => Promise<boolean>;
 }) {
   const presets = state.presets ?? [];
-  const [draft, setDraft] = useState<TriggerDraft>(() => {
+  const [defaultValues] = useState<TriggerDraft>(() => {
     if (trigger) return draftOf(trigger);
     const preset = presets.find((item) => item.id === initialPreset);
     return preset ? applyPreset(emptyDraft, preset) : emptyDraft;
   });
-  const [problem, setProblem] = useState<string | null>(null);
+  const {
+    control, register, handleSubmit, watch, getValues, setValue, reset, clearErrors,
+    formState: { errors },
+  } = useForm<TriggerDraft>({
+    defaultValues,
+    mode: "onSubmit",
+    reValidateMode: "onSubmit",
+    resolver: (values): ResolverResult<TriggerDraft> => {
+      const found = draftProblem(values);
+      if (found) return { values: {}, errors: { root: { validate: { type: "validate", message: found } } } };
+      return { values, errors: {} };
+    },
+  });
+  const draft = watch();
+  const problem = errors.root?.validate?.message ?? null;
+  useEffect(() => {
+    const subscription = watch(() => { clearErrors("root"); });
+    return () => subscription.unsubscribe();
+  }, [watch, clearErrors]);
+
   const [newKey, setNewKey] = useState("");
   const [newKeyProblem, setNewKeyProblem] = useState<string | null>(null);
   const projects = useQuery({ queryKey: settingsProjectsKey(source), queryFn: loadSettingsProjects(source), staleTime: 30000, retry: false });
@@ -126,7 +148,6 @@ export function TriggerEditor({ source, state, trigger, initialPreset, busy, err
   // offered no relay, unless the definition already carries one.
   const relayKey = useQuery({ queryKey: relayKeyKey(source), queryFn: loadRelayKey(source), enabled: draft.kind === "webhook", staleTime: Infinity, retry: false });
   const relayed = draft.kind === "webhook" && (relayKey.isSuccess || relaySettingKeys.some((key) => !!draft.extra[key]));
-  const set = (patch: Partial<TriggerDraft>) => { setProblem(null); setDraft((current) => ({ ...current, ...patch })); };
 
   const kinds = state.kinds.map((kind) => ({ value: kind.id, label: kind.label }));
   const runtimes = (state.runtimes ?? []).map((runtime) => ({ value: runtime.id, label: runtime.label }));
@@ -149,7 +170,8 @@ export function TriggerEditor({ source, state, trigger, initialPreset, busy, err
     const key = newKey.trim().toLowerCase();
     if (!settingKeyPattern.test(key)) { setNewKeyProblem("Use lowercase letters, digits and underscores, starting with a letter."); return; }
     if (fields.some((field) => field.key === key)) { setNewKeyProblem(`“${key}” is already one of this trigger's settings.`); return; }
-    set({ extra: { ...draft.extra, [key]: "" } });
+    setValue("extra", { ...getValues("extra"), [key]: "" }, { shouldDirty: true });
+    clearErrors("root");
     setNewKey("");
     setNewKeyProblem(null);
   }
@@ -161,18 +183,15 @@ export function TriggerEditor({ source, state, trigger, initialPreset, busy, err
       // The form reports its own problems, in one place and in words that name the fix.
       noValidate
       className="space-y-8"
-      onSubmit={async (event) => {
-        event.preventDefault();
-        const found = draftProblem(draft);
-        setProblem(found);
-        if (!found) await onSave(body);
-      }}
+      onSubmit={handleSubmit(async (values) => {
+        await onSave(saveBody(values, presets));
+      })}
     >
       {presets.length > 0 && (
         <Group title="Start from a preset" hint="Fills the form with a working code block. Edit it however you like.">
           <div className="flex flex-wrap gap-1.5">
             {presets.map((preset) => (
-              <Button key={preset.id} type="button" variant="outline" size="sm" data-preset={preset.id} title={preset.description} aria-pressed={draft.preset === preset.id} className={cn(draft.preset === preset.id && "bg-accent text-accent-foreground border-foreground/30")} onClick={() => set(applyPreset(draft, preset))}>
+              <Button key={preset.id} type="button" variant="outline" size="sm" data-preset={preset.id} title={preset.description} aria-pressed={draft.preset === preset.id} className={cn(draft.preset === preset.id && "bg-accent text-accent-foreground border-foreground/30")} onClick={() => reset(applyPreset(getValues(), preset))}>
                 {preset.label}
               </Button>
             ))}
@@ -182,24 +201,46 @@ export function TriggerEditor({ source, state, trigger, initialPreset, busy, err
 
       <div className="grid gap-x-5 gap-y-5 sm:grid-cols-2">
         <Field label="Name" hint={trigger ? "The name is the trigger's file, so it cannot be changed." : draft.kind === "webhook" && draft.name.trim() ? <>Also the webhook URL segment: <code className="font-mono">{webhookPath(draft.name.trim())}</code></> : "Letters, digits, '.', '-' or '_'. Also the webhook URL segment."}>
-          {(control) => <Input {...control} mono name="name" required readOnly={!!trigger} autoComplete="off" spellCheck={false} placeholder="deploy-hook" value={draft.name} onChange={(event) => set({ name: event.target.value })} />}
+          {(controlProps) => <Input {...controlProps} mono required readOnly={!!trigger} autoComplete="off" spellCheck={false} placeholder="deploy-hook" {...register("name")} />}
         </Field>
         <Field label="Description" hint="One line, shown in the list.">
-          {(control) => <Input {...control} name="description" autoComplete="off" placeholder="What this trigger does" value={draft.description} onChange={(event) => set({ description: event.target.value })} />}
+          {(controlProps) => <Input {...controlProps} autoComplete="off" placeholder="What this trigger does" {...register("description")} />}
         </Field>
         <Field label="Launches" hint={state.kinds.find((kind) => kind.id === draft.kind)?.hint || "How the code block gets launched."}>
-          {(control) => <Select {...control} name="kind" required options={kinds} placeholder="How does it launch?" value={draft.kind} onValueChange={(kind) => set({ kind })} />}
+          {(controlProps) => (
+            <Controller
+              control={control}
+              name="kind"
+              render={({ field }) => <Select {...controlProps} name={field.name} required options={kinds} placeholder="How does it launch?" value={field.value} onValueChange={field.onChange} onBlur={field.onBlur} />}
+            />
+          )}
         </Field>
         <Field label="Language" hint={(state.runtimes ?? []).find((runtime) => runtime.id === draft.runtime)?.hint}>
-          {(control) => <Select {...control} name="runtime" options={runtimes} value={draft.runtime} onValueChange={(runtime) => set({ runtime })} />}
+          {(controlProps) => (
+            <Controller
+              control={control}
+              name="runtime"
+              render={({ field }) => <Select {...controlProps} name={field.name} options={runtimes} value={field.value} onValueChange={field.onChange} onBlur={field.onBlur} />}
+            />
+          )}
         </Field>
         <Field label="Project" hint={projects.isError ? "Couldn’t load the projects; the current choice is kept." : "Files the trigger on that project's page. It does not limit what the trigger may do."}>
-          {(control) => <Select {...control} name="project" options={projectOptions} value={draft.project} onValueChange={(project) => set({ project })} />}
+          {(controlProps) => (
+            <Controller
+              control={control}
+              name="project"
+              render={({ field }) => <Select {...controlProps} name={field.name} options={projectOptions} value={field.value} onValueChange={field.onChange} onBlur={field.onBlur} />}
+            />
+          )}
         </Field>
         <div data-slot="field" className="flex min-w-0 flex-col gap-1.5">
           <span id="trigger-enabled-label" className="text-sm leading-none font-medium">Enabled</span>
           <div className="flex min-h-8 items-center gap-3">
-            <Switch name="enabled" aria-labelledby="trigger-enabled-label" aria-describedby="trigger-enabled-hint" checked={draft.enabled} onCheckedChange={(enabled) => set({ enabled })} />
+            <Controller
+              control={control}
+              name="enabled"
+              render={({ field }) => <Switch name={field.name} aria-labelledby="trigger-enabled-label" aria-describedby="trigger-enabled-hint" checked={field.value} onCheckedChange={field.onChange} onBlur={field.onBlur} />}
+            />
             <span className="text-sm">{draft.enabled ? "On" : "Off"}</span>
           </div>
           <p id="trigger-enabled-hint" className="text-muted-foreground text-xs leading-relaxed">
@@ -211,23 +252,42 @@ export function TriggerEditor({ source, state, trigger, initialPreset, busy, err
       {restrictable && (
         <Group title="Run only for projects" hint="None checked means every project. Otherwise it fires only when the payload names a checked project.">
           {allowlist.length ? (
-            <div data-slot="trigger-allowlist" className="flex flex-wrap gap-x-5 gap-y-2">
-              {allowlist.map((project) => (
-                <label key={project.id} className="flex items-center gap-2 text-sm">
-                  <input type="checkbox" className="accent-primary size-4" checked={draft.triggerOn.includes(project.id)} onChange={(event) => set({ triggerOn: event.target.checked ? [...draft.triggerOn, project.id] : draft.triggerOn.filter((id) => id !== project.id) })} />
-                  {project.name}
-                </label>
-              ))}
-            </div>
+            <Controller
+              control={control}
+              name="triggerOn"
+              render={({ field }) => (
+                <div data-slot="trigger-allowlist" className="flex flex-wrap gap-x-5 gap-y-2">
+                  {allowlist.map((project) => (
+                    <label key={project.id} className="flex items-center gap-2 text-sm">
+                      <input type="checkbox" className="accent-primary size-4" checked={field.value.includes(project.id)} onChange={(event) => field.onChange(event.target.checked ? [...field.value, project.id] : field.value.filter((id) => id !== project.id))} />
+                      {project.name}
+                    </label>
+                  ))}
+                </div>
+              )}
+            />
           ) : <p className="text-muted-foreground text-sm">{projects.isPending ? "Loading projects…" : "There are no projects on this machine yet."}</p>}
         </Group>
       )}
 
       <Group title="Settings" hint={<>Named values the code block reads from its environment — a setting called <code className="font-mono">interval_secs</code> arrives as <code className="font-mono">${settingEnvName("interval_secs")}</code>. Clear a value to remove it.</>}>
         {fields.length > 0 && (
-          <div data-slot="trigger-settings" className="grid gap-x-5 gap-y-5 sm:grid-cols-2">
-            {fields.map((field) => <SettingInput key={field.key} field={field} value={draft.extra[field.key] ?? ""} onChange={(value) => set({ extra: { ...draft.extra, [field.key]: value } })} />)}
-          </div>
+          <Controller
+            control={control}
+            name="extra"
+            render={({ field: extraField }) => (
+              <div data-slot="trigger-settings" className="grid gap-x-5 gap-y-5 sm:grid-cols-2">
+                {fields.map((setting) => (
+                  <SettingInput
+                    key={setting.key}
+                    field={setting}
+                    value={extraField.value[setting.key] ?? ""}
+                    onChange={(value) => extraField.onChange({ ...extraField.value, [setting.key]: value })}
+                  />
+                ))}
+              </div>
+            )}
+          />
         )}
         <div className="flex max-w-md flex-wrap items-start gap-2">
           <div className="min-w-40 flex-1">
@@ -240,12 +300,12 @@ export function TriggerEditor({ source, state, trigger, initialPreset, busy, err
         </div>
       </Group>
 
-      {relayed && <RelayGroup extra={draft.extra} relayKey={relayKey.data} onChange={(extra) => set({ extra })} />}
+      {relayed && <RelayGroup control={control} relayKey={relayKey.data} />}
 
       {draft.kind === "event" && (
         <Group title="Events">
           <Field label="Patterns" hint={<>One per line. <code className="font-mono">*</code> matches one segment, <code className="font-mono">**</code> the rest — <code className="font-mono">adi.tasks.*</code></>}>
-            {(control) => <Textarea {...control} mono name="events" rows={3} spellCheck={false} placeholder="adi.tasks.*" value={draft.events} onChange={(event) => set({ events: event.target.value })} />}
+            {(controlProps) => <Textarea {...controlProps} mono rows={3} spellCheck={false} placeholder="adi.tasks.*" {...register("events")} />}
           </Field>
           {eventTypes.length > 0 && (
             <div>
@@ -254,7 +314,7 @@ export function TriggerEditor({ source, state, trigger, initialPreset, busy, err
                 {eventTypes.map((type) => {
                   const example = type.example === undefined || type.example === null ? "" : JSON.stringify(type.example);
                   return (
-                    <button key={type.name} type="button" title={[type.summary, example && `Example: ${example}`].filter(Boolean).join("\n")} className="bg-muted hover:bg-accent hover:text-accent-foreground focus-visible:ring-ring rounded-md px-2 py-1 font-mono text-xs outline-none focus-visible:ring-2" onClick={() => set({ events: addEventPattern(draft.events, type.name) })}>
+                    <button key={type.name} type="button" title={[type.summary, example && `Example: ${example}`].filter(Boolean).join("\n")} className="bg-muted hover:bg-accent hover:text-accent-foreground focus-visible:ring-ring rounded-md px-2 py-1 font-mono text-xs outline-none focus-visible:ring-2" onClick={() => setValue("events", addEventPattern(getValues("events"), type.name), { shouldDirty: true })}>
                       {type.name}
                     </button>
                   );
@@ -267,7 +327,13 @@ export function TriggerEditor({ source, state, trigger, initialPreset, busy, err
 
       <Field label="Code block" hint={codeHint(draft.kind, draft.runtime)}>
         {/* Highlighted as the language the runtime picker says, so the block reads the way its interpreter will read it. */}
-        {(control) => <CodeEditor {...control} name="code" language={runtimeOrDefault(draft.runtime) === "ts" ? "ts" : "sh"} rows={18} value={draft.code} onValueChange={(code) => set({ code })} />}
+        {(controlProps) => (
+          <Controller
+            control={control}
+            name="code"
+            render={({ field }) => <CodeEditor {...controlProps} name={field.name} language={runtimeOrDefault(draft.runtime) === "ts" ? "ts" : "sh"} rows={18} value={field.value} onValueChange={field.onChange} onBlur={field.onBlur} />}
+          />
+        )}
       </Field>
 
       <div className="flex flex-wrap items-center gap-3 border-t pt-5">
