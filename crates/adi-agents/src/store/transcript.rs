@@ -617,9 +617,11 @@ mod tests {
         let worker = std::thread::spawn(move || {
             // Open before the other connection takes its lock: schema initialization is not
             // the operation under test. The busy handler releases the writer without sleeps.
-            let conn = super::super::db::conn(&worker_store.db_path()).unwrap();
             RETRY.with(|retry| *retry.borrow_mut() = Some((events_tx.clone(), release_rx)));
-            conn.busy_handler(Some(retry_after_writer_exits)).unwrap();
+            super::super::db::configure_connection(&worker_store.db_path(), |conn| {
+                conn.busy_handler(Some(retry_after_writer_exits))
+            })
+            .unwrap();
             ready_tx.send(()).unwrap();
             start_rx.recv().unwrap();
             let result = worker_store

@@ -330,6 +330,21 @@ pub(super) fn forget_connections() {
     CONNS.with(|cache| cache.borrow_mut().clear());
 }
 
+/// Configure a test's cached connection before handing out any shared handles.
+#[cfg(test)]
+pub(super) fn configure_connection(
+    path: &Path,
+    configure: impl FnOnce(&mut Connection) -> rusqlite::Result<()>,
+) -> Result<()> {
+    drop(conn(path)?);
+    CONNS.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let connection = cache.get_mut(path).expect("connection was just opened");
+        let connection = Rc::get_mut(connection).expect("test still holds a shared connection");
+        configure(connection).map_err(|e| sql_err("configure the test connection in", e))
+    })
+}
+
 pub(super) fn sql_err(doing: &str, e: rusqlite::Error) -> Error {
     Error::Session(format!("couldn't {doing} the session database: {e}"))
 }
