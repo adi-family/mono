@@ -53,7 +53,7 @@ export function AppLayoutExample() {
             />
           </div>
         </div>
-        <div className="bg-canvas isolate overflow-hidden rounded-lg border [overflow-wrap:anywhere]" aria-label="App layout preview">
+        <div className="bg-canvas isolate overflow-hidden rounded-lg border wrap-anywhere" aria-label="App layout preview">
           <AppLayout
             className="[--app-layout-height:24rem]"
             surface={surface}

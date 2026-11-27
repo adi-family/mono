@@ -141,7 +141,7 @@ pub(crate) fn Sentence(
     size: &'static str,
     #[prop(optional, into)] class: String,
 ) -> impl IntoView {
-    let own = format!("m-0 leading-[1.6] text-ink [overflow-wrap:anywhere] {size}");
+    let own = format!("m-0 leading-[1.6] text-ink wrap-anywhere {size}");
     view! { <p class=merge(&own, class)>{text}</p> }
 }
 
@@ -298,9 +298,9 @@ pub(crate) fn WasNow(
     view! {
         <div class=merge(own, class)>
             <span class="text-label text-ink-3">"was"</span>
-            <span class="text-small leading-normal text-ink-3 [overflow-wrap:anywhere]">{was}</span>
+            <span class="text-small leading-normal text-ink-3 wrap-anywhere">{was}</span>
             <span class="text-label text-ink-3">"now"</span>
-            <span class="text-small leading-normal text-ink [overflow-wrap:anywhere]">{now}</span>
+            <span class="text-small leading-normal text-ink wrap-anywhere">{now}</span>
         </div>
     }
 }
@@ -598,7 +598,7 @@ fn Step(change: Change) -> impl IntoView {
             </div>
             {if was.is_empty() {
                 view! {
-                    <div class="text-small leading-normal text-ink [overflow-wrap:anywhere]">
+                    <div class="text-small leading-normal text-ink wrap-anywhere">
                         {now}
                     </div>
                 }

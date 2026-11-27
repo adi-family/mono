@@ -155,7 +155,7 @@ const parts = [
   />,
 ];
 
-<div className="flex h-[32rem] flex-col rounded-xl border">
+<div className="flex h-128 flex-col rounded-xl border">
   {direction === "bottom-to-top" ? parts.reverse() : parts}
 </div>`;
 
@@ -424,7 +424,7 @@ export function ChatExamples() {
               />
             </div>
           </div>
-          <div className="bg-background flex h-[34rem] min-w-0 flex-col overflow-hidden rounded-xl border">
+          <div className="bg-background flex h-136 min-w-0 flex-col overflow-hidden rounded-xl border">
             {direction === "bottom-to-top" ? conversationParts.reverse() : conversationParts}
           </div>
           <p className="text-muted-foreground text-sm">
@@ -502,7 +502,7 @@ export function ChatExamples() {
               setLastSent(message);
             }}
           />
-          <p role="status" className={lastSent ? "text-muted-foreground text-sm [overflow-wrap:anywhere]" : "sr-only"}>
+          <p role="status" className={lastSent ? "text-muted-foreground text-sm wrap-anywhere" : "sr-only"}>
             {lastSent ? `Message sent: ${lastSent}` : ""}
           </p>
           <ChatWaitingStatus items={waits} onCancel={(id) => setWaits((current) => current.filter((item) => item.id !== id))} />

@@ -108,7 +108,7 @@ function TriggerRow({ trigger, actions }: { trigger: Trigger; actions: TriggerAc
         </p>
       </div>
       {/* On a phone the actions take their own line: the links under the text, the switch at the edge. */}
-      <div className="flex shrink-0 items-center gap-1 max-sm:-ml-2.5 max-sm:w-[calc(100%_+_0.625rem)]">
+      <div className="flex shrink-0 items-center gap-1 max-sm:-ml-2.5 max-sm:w-[calc(100%+0.625rem)]">
         <Button asChild variant="ghost" size="sm"><Link to={triggerHref(trigger.name, "log")} aria-label={`Log of ${trigger.name}`}>Log</Link></Button>
         <Button asChild variant="ghost" size="sm"><Link to={triggerHref(trigger.name)} aria-label={`Edit ${trigger.name}`}>Edit</Link></Button>
         <span className="ml-2 flex items-center max-sm:ml-auto">
@@ -218,7 +218,7 @@ function TriggerLogPane({ source, name }: { source?: string; name: string }) {
         tabIndex={0}
         aria-label={`Log of ${name}`}
         onScroll={(event) => { const element = event.currentTarget; pinned.current = element.scrollHeight - element.scrollTop - element.clientHeight < 24; }}
-        className="bg-muted/50 focus-visible:ring-ring max-h-[65svh] min-h-32 overflow-auto rounded-lg border p-3 font-mono text-xs leading-relaxed break-words whitespace-pre-wrap outline-none focus-visible:ring-2"
+        className="bg-muted/50 focus-visible:ring-ring max-h-[65svh] min-h-32 overflow-auto rounded-lg border p-3 font-mono text-xs leading-relaxed wrap-break-word whitespace-pre-wrap outline-none focus-visible:ring-2"
       >
         {output || " "}
       </pre>

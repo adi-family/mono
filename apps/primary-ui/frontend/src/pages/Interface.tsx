@@ -47,7 +47,7 @@ function PendingQuestion({ ask, onAnswer }: {
   return (
     <form data-slot="app-chat-question" className="min-w-0 space-y-4 rounded-xl border p-4" aria-label={ask.headline || "Agent question"} aria-busy={sending || undefined} onSubmit={submit}>
       {ask.headline && <p className="text-sm font-medium">{ask.headline}</p>}
-      {ask.note && <p className="text-muted-foreground text-sm whitespace-pre-wrap [overflow-wrap:anywhere]">{ask.note}</p>}
+      {ask.note && <p className="text-muted-foreground text-sm whitespace-pre-wrap wrap-anywhere">{ask.note}</p>}
       <p className="text-muted-foreground text-xs">Answer any questions you like. Choose an option, write your own answer, or combine both.</p>
       {ask.questions.map((question, index) => (
         <fieldset key={index} className="min-w-0 space-y-2" disabled={sending}>
@@ -74,7 +74,7 @@ function PendingQuestion({ ask, onAnswer }: {
                     : event.target.checked ? [option.label] : [],
                 }))}
               />
-              <span className="min-w-0 [overflow-wrap:anywhere]">
+              <span className="min-w-0 wrap-anywhere">
                 <span>{option.label}</span>
                 {option.description && <span className="text-muted-foreground mt-0.5 block text-xs leading-relaxed">{option.description}</span>}
               </span>
@@ -187,7 +187,7 @@ export function Interface() {
           : active ? <>
             {/* With no transcript to show, the failure is the content. */}
             <p className="text-muted-foreground text-sm">This conversation could not be loaded.</p>
-            {conversationError && <p role="alert" className="text-destructive max-w-md text-xs [overflow-wrap:anywhere]">{conversationError}</p>}
+            {conversationError && <p role="alert" className="text-destructive max-w-md text-xs wrap-anywhere">{conversationError}</p>}
             <Button type="button" size="sm" variant="ghost" onClick={retry}>Retry</Button>
           </>
             : <NewChatSetup />}

@@ -237,7 +237,7 @@ function ChatMessageContent({ className, ...props }: React.ComponentProps<"div">
     <div
       data-slot="chat-message-content"
       className={cn(
-        "min-w-0 leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere] group-data-[from=user]/chat-message:rounded-2xl group-data-[from=user]/chat-message:bg-muted group-data-[from=user]/chat-message:px-3 group-data-[from=user]/chat-message:py-3 group-data-[from=user]/chat-message:text-foreground sm:group-data-[from=user]/chat-message:px-4 group-data-[from=system]/chat-message:py-1 group-data-[from=system]/chat-message:text-center group-data-[from=system]/chat-message:text-xs",
+        "min-w-0 leading-relaxed whitespace-pre-wrap wrap-anywhere group-data-[from=user]/chat-message:rounded-2xl group-data-[from=user]/chat-message:bg-muted group-data-[from=user]/chat-message:px-3 group-data-[from=user]/chat-message:py-3 group-data-[from=user]/chat-message:text-foreground sm:group-data-[from=user]/chat-message:px-4 group-data-[from=system]/chat-message:py-1 group-data-[from=system]/chat-message:text-center group-data-[from=system]/chat-message:text-xs",
         className,
       )}
       {...props}
@@ -309,7 +309,7 @@ function ChatWaitingStatus({ items, onCancel, cancellingIds = [], className, ...
         <span className="min-w-0 flex-1 truncate">{items[0].label}</span>
         <ChevronDown aria-hidden="true" className="size-3 shrink-0 group-open/waiting:rotate-180" />
       </summary>
-      <ul className={cn("max-h-32 space-y-1 overflow-y-auto pb-2 pl-8.5 leading-5 [overflow-wrap:anywhere]", onCancel ? "pr-1" : "pr-3")}>
+      <ul className={cn("max-h-32 space-y-1 overflow-y-auto pb-2 pl-8.5 leading-5 wrap-anywhere", onCancel ? "pr-1" : "pr-3")}>
         {items.map((item) => onCancel ? (
           <li key={item.id} className="flex min-w-0 items-start gap-2">
             <span className="min-w-0 flex-1 py-0.5">{item.label}</span>
@@ -352,7 +352,7 @@ function ChatQueuedMessage({ text, label = "Queued", onCancel, cancelling = fals
           <span className="shrink-0 font-medium">{label}</span>
           <span className="min-w-0 flex-1 truncate">{text || "Image attachment"}</span>
         </summary>
-        <div className="max-h-48 overflow-y-auto px-3 pb-3 whitespace-pre-wrap [overflow-wrap:anywhere]">{text}{children}</div>
+        <div className="max-h-48 overflow-y-auto px-3 pb-3 whitespace-pre-wrap wrap-anywhere">{text}{children}</div>
       </details>
       {onCancel && (
         <Button

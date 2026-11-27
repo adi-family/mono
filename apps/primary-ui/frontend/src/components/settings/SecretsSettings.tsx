@@ -176,7 +176,7 @@ function SecretRow({ secret, projects, actions }: { secret: Secret; projects: Se
           </div>
           {secret.description && <p className="text-muted-foreground mt-1 line-clamp-2 text-sm leading-relaxed" title={secret.description}>{secret.description}</p>}
         </div>
-        <div className="flex shrink-0 items-center gap-1 max-sm:-ml-2.5 max-sm:w-[calc(100%_+_0.625rem)]">
+        <div className="flex shrink-0 items-center gap-1 max-sm:-ml-2.5 max-sm:w-[calc(100%+0.625rem)]">
           <span className="text-muted-foreground mr-2 text-xs max-sm:order-last max-sm:mr-0 max-sm:ml-auto" title={`Updated ${fullDate(secret.updated_at)}`}>Updated {formatAge(secret.updated_at)}</span>
           <ValueActions secret={secret} actions={actions} />
         </div>
@@ -251,7 +251,7 @@ function SecretList({ machine, query, projects, actions }: { machine: string; qu
 }
 
 function Fact({ label, children }: { label: string; children: ReactNode }) {
-  return <div className="min-w-0"><dt className="text-muted-foreground text-xs">{label}</dt><dd className="mt-0.5 text-sm break-words">{children}</dd></div>;
+  return <div className="min-w-0"><dt className="text-muted-foreground text-xs">{label}</dt><dd className="mt-0.5 text-sm wrap-break-word">{children}</dd></div>;
 }
 
 function SecretDetail({ source, machine, query, projects, target, creating, actions, authorize }: {

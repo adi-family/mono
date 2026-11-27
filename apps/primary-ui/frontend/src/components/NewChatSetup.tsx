@@ -26,7 +26,7 @@ export function NewChatSetup() {
             if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); setContextTarget({ agent: item, x: rect.left, y: rect.bottom, trigger: event.currentTarget }); }
           }} onClick={() => { if (isLaunchable(item)) newConversationOn(item.source, item.name); }}>
           <Star aria-hidden="true" className="text-muted-foreground mt-0.5 size-3.5 shrink-0 fill-current" />
-          <span className="min-w-0"><span className="block break-words text-sm font-medium">{item.displayName ?? item.name}</span><span className="text-muted-foreground block text-xs">{sourceName(item.source)}{item.caps?.answerable === false ? " · Read only" : item.runnable === false ? " · Unavailable" : item.running ? " · Running" : ""}</span></span>
+          <span className="min-w-0"><span className="block wrap-break-word text-sm font-medium">{item.displayName ?? item.name}</span><span className="text-muted-foreground block text-xs">{sourceName(item.source)}{item.caps?.answerable === false ? " · Read only" : item.runnable === false ? " · Unavailable" : item.running ? " · Running" : ""}</span></span>
         </button>)}
       </div>
       {agentsLoading && <p role="status" className="text-muted-foreground text-xs">Loading agents…</p>}

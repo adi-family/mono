@@ -30,7 +30,7 @@ export function ConfirmDialog({ title, confirmLabel, busy, error, onConfirm, onC
       data-slot="confirm-dialog"
       aria-label={title}
       onCancel={(event) => { event.preventDefault(); if (!busy) onClose(); }}
-      className="bg-popover text-popover-foreground fixed top-1/2 left-1/2 m-0 max-h-[90dvh] w-[calc(100vw_-_2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border p-6 shadow-xl backdrop:bg-black/50"
+      className="bg-popover text-popover-foreground fixed top-1/2 left-1/2 m-0 max-h-[90dvh] w-[calc(100vw-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border p-6 shadow-xl backdrop:bg-black/50"
     >
       <h2 className="mb-3 text-lg font-semibold">{title}</h2>
       <div className="text-muted-foreground text-sm leading-relaxed">{children}</div>

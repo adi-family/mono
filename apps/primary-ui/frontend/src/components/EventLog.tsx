@@ -15,15 +15,15 @@ function EventRow({ event, isNew, now }: { event: AppEvent; isNew: boolean; now:
   const when = new Date(event.lastSeen);
   return (
     <li data-slot="event-log-item" data-level={event.level} className="flex gap-2.5 rounded-md px-2 py-1.5">
-      <span aria-hidden="true" className={cn("mt-[7px] size-1.5 shrink-0 rounded-full", event.level === "error" ? "bg-destructive" : "bg-foreground/40")} />
+      <span aria-hidden="true" className={cn("mt-1.75 size-1.5 shrink-0 rounded-full", event.level === "error" ? "bg-destructive" : "bg-foreground/40")} />
       <div className="min-w-0 flex-1">
-        <p className="text-xs leading-5 [overflow-wrap:anywhere]">
+        <p className="text-xs leading-5 wrap-anywhere">
           <span className="sr-only">{event.level}: </span>
           {event.message}
         </p>
         {event.context != null && <details className="mt-1 text-xs">
           <summary className="text-muted-foreground cursor-pointer">Details</summary>
-          <pre className="bg-muted mt-1 max-h-48 overflow-auto rounded p-2 whitespace-pre-wrap [overflow-wrap:anywhere]">{JSON.stringify(event.context, null, 2)}</pre>
+          <pre className="bg-muted mt-1 max-h-48 overflow-auto rounded p-2 whitespace-pre-wrap wrap-anywhere">{JSON.stringify(event.context, null, 2)}</pre>
         </details>}
         <p className="text-muted-foreground flex min-w-0 flex-wrap items-center gap-x-1.5 text-[11px] leading-4">
           <span className="truncate">{event.machine ?? "This machine"} · {event.source ?? "Browser"} · {event.area}</span>

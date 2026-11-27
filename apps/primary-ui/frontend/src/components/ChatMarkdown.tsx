@@ -31,7 +31,7 @@ function CodeBlock({ node: _node, ...props }: ComponentProps<"pre"> & ExtraProps
       <Button
         type="button" size="icon" variant="outline" aria-label="Copy code" title={label}
         data-slot="chat-markdown-code-copy" data-outcome={outcome ?? undefined}
-        className="text-muted-foreground absolute top-[9px] right-[9px] size-7 opacity-0 transition-opacity group-focus-within/code:opacity-100 group-hover/code:opacity-100 pointer-coarse:opacity-100"
+        className="text-muted-foreground absolute top-2.25 right-2.25 size-7 opacity-0 transition-opacity group-focus-within/code:opacity-100 group-hover/code:opacity-100 pointer-coarse:opacity-100"
         onClick={() => void copy()}
       >
         {outcome === "copied" ? <Check aria-hidden="true" className="size-3.5" />
@@ -65,7 +65,7 @@ const components: Components = {
 export const ChatMarkdown = memo(function ChatMarkdown({ children }: { children: string }) {
   const id = useId();
   return (
-    <div data-slot="chat-markdown" className="chat-markdown min-w-0 whitespace-normal [overflow-wrap:anywhere]">
+    <div data-slot="chat-markdown" className="chat-markdown min-w-0 whitespace-normal wrap-anywhere">
       <Markdown
         remarkPlugins={[remarkGfm, remarkBreaks]}
         remarkRehypeOptions={{ clobberPrefix: `message-${id.replace(/:/g, "")}-` }}

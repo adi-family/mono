@@ -60,7 +60,7 @@ export function CodeExample({ code, label }: { code: string; label: string }) {
       <Highlight code={code} language="tsx" theme={codeTheme}>
         {({ tokens, getLineProps, getTokenProps }) => (
           <pre
-            className="bg-muted/20 rounded-b-lg p-4 font-mono text-xs leading-6 whitespace-pre-wrap [overflow-wrap:anywhere]"
+            className="bg-muted/20 rounded-b-lg p-4 font-mono text-xs leading-6 whitespace-pre-wrap wrap-anywhere"
             aria-label={`${label} code example`}
           >
             <code className="language-tsx">

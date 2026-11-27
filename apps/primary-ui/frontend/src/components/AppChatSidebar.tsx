@@ -74,7 +74,7 @@ function FilterMenu({ anchor, onClose }: { anchor: RefObject<HTMLButtonElement |
       ))}
       {/* A box rather than a tick alone: it widens whichever choice above is selected, and is not one of them. */}
       <button type="button" role="menuitemcheckbox" aria-checked={includeHidden} data-slot="app-chat-include-hidden" className={menuItemClass} onClick={() => { setIncludeHidden(!includeHidden); onClose(); }}>
-        <span aria-hidden="true" className={cn("flex size-3.5 shrink-0 items-center justify-center rounded-[4px] border", includeHidden ? "bg-primary border-primary text-primary-foreground" : "border-input")}>
+        <span aria-hidden="true" className={cn("flex size-3.5 shrink-0 items-center justify-center rounded-lg border", includeHidden ? "bg-primary border-primary text-primary-foreground" : "border-input")}>
           {includeHidden && <Check className="size-3" strokeWidth={3} />}
         </span>
         Include hidden

@@ -49,7 +49,7 @@ function ToolArguments({ name: tool, input }: { name: string; input: string }) {
             tabIndex={lengthy ? 0 : undefined}
             role={lengthy ? "region" : undefined}
             aria-label={lengthy ? `${name} argument` : undefined}
-            className="focus-visible:ring-ring/50 m-0 max-h-64 overflow-auto overscroll-x-contain rounded-sm font-mono whitespace-pre-wrap outline-none focus-visible:ring-2 focus-visible:ring-inset [overflow-wrap:anywhere]"
+            className="focus-visible:ring-ring/50 m-0 max-h-64 overflow-auto overscroll-x-contain rounded-sm font-mono whitespace-pre-wrap outline-none focus-visible:ring-2 focus-visible:ring-inset wrap-anywhere"
           >{value}</dd>
         </div>;
       })}
@@ -181,7 +181,7 @@ export function AppChatAttachments({ turn, source }: { turn: AgentTurn; source?:
   if (!turn.images.length) return null;
   return (
     <ul aria-label="Attachments" className="text-muted-foreground mt-2 space-y-1 text-xs">
-      {turn.images.map((image) => <li key={image.id} className="[overflow-wrap:anywhere]">
+      {turn.images.map((image) => <li key={image.id} className="wrap-anywhere">
         <a href={attachmentUrl(image.id, source)} target="_blank" rel="noreferrer" className="focus-visible:ring-ring inline-block rounded-md outline-none focus-visible:ring-2">
           {["image/png", "image/jpeg", "image/webp", "image/gif"].includes(image.media_type)
             ? <img src={attachmentUrl(image.id, source)} alt={image.name || "Attached image"} loading="lazy" className="max-h-48 max-w-full rounded-md object-contain" />

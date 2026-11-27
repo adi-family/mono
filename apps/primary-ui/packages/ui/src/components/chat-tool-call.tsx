@@ -173,7 +173,7 @@ function ChatToolCall({
       {hasContent && (
         <div id={contentId} data-slot="chat-tool-call-content" hidden={!expanded} className="ml-5 min-w-0 pb-2">
           {(description || meta != null) && (
-            <div className="text-muted-foreground flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 py-1 text-[11px] [overflow-wrap:anywhere]">
+            <div className="text-muted-foreground flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 py-1 text-[11px] wrap-anywhere">
               {description && <span>{description}</span>}
               {meta != null && <span data-slot="chat-tool-call-meta">{meta}</span>}
             </div>
@@ -265,7 +265,7 @@ function ChatToolDiff({ file, lines, className, ...props }: ChatToolDiffProps) {
       <div data-slot="chat-tool-diff-header" className="bg-muted/40 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 border-b px-3 py-2">
         <span className="flex min-w-0 flex-1 items-center gap-2 font-mono">
           <FileCode2 className="text-muted-foreground size-3.5 shrink-0" aria-hidden="true" />
-          <span className="[overflow-wrap:anywhere]">{file}</span>
+          <span className="wrap-anywhere">{file}</span>
         </span>
         <span className="flex shrink-0 items-center gap-2 font-mono" aria-label={`${additions} additions, ${deletions} deletions`}>
           <span aria-hidden="true" className="text-emerald-700 dark:text-emerald-400">+{additions}</span>

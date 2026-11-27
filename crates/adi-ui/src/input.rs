@@ -121,7 +121,7 @@ pub fn Textarea(
     #[prop(optional, into)] class: String,
 ) -> impl IntoView {
     let wrap = if prose {
-        "whitespace-pre-wrap [overflow-wrap:anywhere]"
+        "whitespace-pre-wrap wrap-anywhere"
     } else {
         "whitespace-pre overflow-auto"
     };

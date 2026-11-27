@@ -34,7 +34,7 @@ export function AgentChat() {
         label="Layout reviewer conversation"
         autoScroll={false}
         aria-live="off"
-        className="h-[32rem] min-w-0 flex-none rounded-xl border"
+        className="h-128 min-w-0 flex-none rounded-xl border"
       >
         <ChatMessage from="user">
           <div className="min-w-0">

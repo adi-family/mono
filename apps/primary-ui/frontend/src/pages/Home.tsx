@@ -98,8 +98,8 @@ export function Home() {
                 {href && <ArrowUpRight className="text-muted-foreground absolute -top-1 -right-1 size-3.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100" aria-hidden="true" />}
               </span>
               <div className="w-full min-w-0">
-                <h4 className="text-sm leading-5 font-medium [overflow-wrap:anywhere]">{name}</h4>
-                <p className="text-muted-foreground mt-1 text-[11px] leading-4 [overflow-wrap:anywhere]">{source || "This machine"}</p>
+                <h4 className="text-sm leading-5 font-medium wrap-anywhere">{name}</h4>
+                <p className="text-muted-foreground mt-1 text-[11px] leading-4 wrap-anywhere">{source || "This machine"}</p>
                 {notice && <p className="text-muted-foreground mt-1 text-[11px] leading-4">{notice}</p>}
               </div>
             </Card>;
