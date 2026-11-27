@@ -20,6 +20,16 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.47.0 — 2026-11-27
+
+### Added
+
+- **Find hidden chats and bring them back.** Turn on *Include hidden* in the chat filter menu to list hidden conversations alongside the others, on this machine and any selected paired machines. Hidden chats have a crossed-out eye icon; choose *Unhide* from a chat's context menu to bring it back to the ordinary list. The checkbox works with the selected filter and starts unchecked on each visit.
+
+### Fixed
+
+- **Opened tool calls stay open while an answer grows.** When an agent added another call to an expanded group, the group used to show "Loading activity" again and close the call details you were reading. Those rows now stay in place as new calls arrive and the answer finishes. If a refresh fails, the existing details stay visible with an error and a *Retry* button below them.
+
 ## 1.46.0 — 2026-11-26
 
 ### Changed
