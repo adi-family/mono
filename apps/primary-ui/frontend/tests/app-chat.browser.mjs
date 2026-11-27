@@ -121,6 +121,9 @@ function holdReads() {
 }
 /** A conversation's last activity, when a scenario needs a different one to be the newest. */
 const activity = new Map();
+/** The unfolded steps of a turn that is still being written, when a scenario grows one: `{ turn, steps }` by conversation. */
+const liveSteps = new Map();
+let failLiveSteps = false;
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const idOf = (ref) => `${ref.agent}:${ref.runId}`;
 const copy = (value) => structuredClone(value);
@@ -304,6 +307,13 @@ async function intercept({ requestId, request }) {
         return;
       }
       await fulfill(requestId, response);
+      return;
+    }
+    const live = liveSteps.get(idOf(ref));
+    if (request.method === "POST" && path === "/api/app/agents/run/steps" && live?.turn === body.turn) {
+      if (failLiveSteps) { await fulfill(requestId, { ok: false, error: "Fixture steps refused" }); return; }
+      // Clamped as the server clamps it: a header drawn before the run grew names a shorter range.
+      await fulfill(requestId, { name: ref.agent, run_id: ref.runId, turn: body.turn, from: body.from, steps: copy(live.steps.slice(body.from, body.to || undefined)) });
       return;
     }
     if (request.method === "POST" && path === "/api/app/agents/run/steps" && snapshot) {
@@ -1062,6 +1072,91 @@ try {
       await writeFile(resolve(process.env.BROWSER_SCREENSHOTS_DIR, "design-system-app-compact-errors-mobile.png"), Buffer.from(screenshot.data, "base64"));
       await send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 1000, deviceScaleFactor: 1, mobile: false });
     }
+    await open(main, "Mock main answer");
+  });
+
+  await check("an opened group of calls keeps its opened rows while the group grows and settles", async () => {
+    const settled = copy(snapshots.get(idOf(compact)));
+    const snapshot = snapshots.get(idOf(compact));
+    const call = (index, status = "ok") => ({
+      kind: "tool", name: "mcp__adi__PyCode", input: JSON.stringify({ code: `print("growing-step-${index}")` }),
+      status, output: status === "running" ? "" : `growing-output-${index}`,
+    });
+    const steps = [call(0), call(1, "running")];
+    const header = () => ({
+      kind: "calls", from: 0, to: steps.length, count: steps.length, tools: ["mcp__adi__PyCode"], preview: "",
+      status: steps.some((step) => step.status === "running") ? "running" : "ok",
+    });
+    const answer = { ...assistant("", 3, [header()]), pending: true };
+    snapshot.turns.push(user("Growing run request", 2), answer);
+    snapshot.total_turns = snapshot.turns.length;
+    snapshot.running = true;
+    liveSteps.set(idOf(compact), { turn: answer.seq, steps });
+
+    await open(compact, "Growing run request");
+    const group = `${chat} [data-pending] [data-slot="chat-tool-call"]`;
+    const rows = () => evaluate(`[...${q(group)}.querySelectorAll('[data-slot="chat-tool-call"]')].map(row => row.dataset.status + ':' + row.dataset.state)`);
+    await until(() => evaluate(`!!${q(`${group} [data-slot="chat-tool-call-trigger"]`)}`), "running group renders");
+    await click(`${group} [data-slot="chat-tool-call-trigger"]`);
+    await until(async () => (await rows()).length === 2, "the group's two calls render");
+    const first = `${group} [data-slot="chat-tool-call"]`;
+    await click(`${first} [data-slot="chat-tool-call-trigger"]`);
+    await until(() => contains("growing-output-0"), "the first call opens");
+    // The mark lives on the DOM node, so it is gone if the row is ever built again.
+    await evaluate(`(() => {
+      const group = ${q(group)};
+      const row = ${q(first)};
+      row.dataset.probe = 'kept';
+      row.querySelector('[data-slot="chat-tool-output"]').dataset.probe = 'kept-output';
+      window.__groupReloads = 0;
+      window.__groupObserver = new MutationObserver(() => { if (group.textContent.includes('Loading activity')) window.__groupReloads++; });
+      window.__groupObserver.observe(group, { childList: true, subtree: true, characterData: true });
+    })()`);
+    const kept = () => evaluate(`(() => {
+      const row = document.querySelector('[data-probe="kept"]');
+      return { row: row?.isConnected === true, state: row?.dataset.state, output: document.querySelector('[data-probe="kept-output"]')?.isConnected === true, reloads: window.__groupReloads };
+    })()`);
+
+    // A call finishes and the next one starts: the header's range and count both move.
+    steps[1] = call(1);
+    steps.push(call(2, "running"));
+    answer.steps = [header()];
+    await until(async () => (await rows()).length === 3, "the new call joins the opened group", 9000);
+    assert.deepEqual(await rows(), ["completed:open", "completed:closed", "running:closed"]);
+    assert.deepEqual(await kept(), { row: true, state: "open", output: true, reloads: 0 }, "the opened call is the same row, still open, and the list was never replaced by a loading line");
+    assert.equal(await evaluate(`${q(`${group} [data-slot="chat-tool-call-title"]`)}.textContent`), "3 tool calls · PyCode");
+
+    // A refresh that fails says so under the calls it could not replace, and a retry catches up.
+    failLiveSteps = true;
+    steps[2] = call(2);
+    steps.push(call(3, "running"));
+    answer.steps = [header()];
+    const alert = `${group} [data-slot="chat-tool-call-content"] [role="alert"]`;
+    await until(() => mutations("run/steps").some((request) => request.body.run_id === compact.runId && request.body.to === 4), "the grown range is asked for", 9000);
+    await until(() => evaluate(`${q(alert)}?.textContent.startsWith('Could not refresh activity details.') === true`), "the failed refresh is reported", 9000);
+    assert.equal((await rows()).length, 3, "the calls already read stay on screen");
+    assert.deepEqual(await kept(), { row: true, state: "open", output: true, reloads: 0 }, "a failed refresh keeps the opened call as it was");
+    failLiveSteps = false;
+    await click(`${alert} button`);
+    await until(async () => (await rows()).length === 4, "the retry reads the calls that were missed", 9000);
+    assert.equal(await evaluate(`!!${q(alert)}`), false, "the report clears once a read succeeds");
+    assert.deepEqual(await kept(), { row: true, state: "open", output: true, reloads: 0 });
+
+    // The answer ends: the header's status moves from running to done.
+    steps[3] = call(3);
+    answer.steps = [header()];
+    answer.text = "Growing run finished";
+    answer.pending = false;
+    snapshot.running = false;
+    await until(() => contains("Growing run finished"), "the answer settles", 9000);
+    const done = `${chat} [data-slot="chat-message"]:last-of-type [data-slot="chat-tool-call"]`;
+    await until(() => evaluate(`[...${q(done)}.querySelectorAll('[data-slot="chat-tool-call"]')].every(row => row.dataset.status === 'completed')`), "the last call settles", 9000);
+    assert.deepEqual(await kept(), { row: true, state: "open", output: true, reloads: 0 }, "settling the group keeps the opened call as it was");
+    assert.equal(await evaluate(`${q(done)}.querySelectorAll('[data-slot="chat-tool-call"]').length`), 4);
+
+    await evaluate("window.__groupObserver.disconnect()");
+    liveSteps.delete(idOf(compact));
+    snapshots.set(idOf(compact), settled);
     await open(main, "Mock main answer");
   });
 

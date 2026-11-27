@@ -92,43 +92,45 @@ function ToolActivity({ step, conversation, conversations, onOpenConversation }:
   );
 }
 
+/** One read of a run's calls: the run they belong to, and the request that answered them. */
+type LoadedSteps = { run: string; key: string; steps: AgentStep[] };
+
 function FoldedActivity({ step, ...props }: ActivityProps & { step: FoldedStep }) {
   const [open, setOpen] = useState(false);
   const [attempt, setAttempt] = useState(0);
-  const [loaded, setLoaded] = useState<{ key: string; steps: AgentStep[] } | null>(null);
+  const [loaded, setLoaded] = useState<LoadedSteps | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const cache = useRef<{ key: string; steps: AgentStep[] } | null>(null);
+  const latest = useRef<LoadedSteps | null>(null);
   const failed = useRef<{ key: string; attempt: number } | null>(null);
   const { agent, runId, source } = props.conversation;
   const { turn } = props;
   const { from, to, count, status } = step;
-  const requestKey = JSON.stringify([source ?? "", agent, runId, turn, from, to, count, status]);
+  // Where a run starts is what it is; its end, size and status move with every call while it is
+  // being written. They say when to read it again, never that the calls on screen are another run's.
+  const runKey = JSON.stringify([source ?? "", agent, runId, turn, from]);
+  const requestKey = JSON.stringify([runKey, to, count, status]);
 
   useEffect(() => {
     if (!open) return;
     if (failed.current?.key === requestKey && failed.current.attempt === attempt) return;
     setError(null);
-    const cached = cache.current;
-    if (status !== "running" && cached?.key === requestKey) {
-      setLoaded(cached);
-      return;
-    }
+    // A settled run reads the same every time; one that is running is read again when reopened.
+    if (status !== "running" && latest.current?.key === requestKey) return;
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     async function load() {
       try {
         const steps = await getSteps({ agent, runId, source }, turn, from, to, controller.signal);
         if (controller.signal.aborted) return;
-        const next = { key: requestKey, steps };
-        cache.current = status === "running" ? null : next;
         failed.current = null;
-        setLoaded(next);
+        latest.current = { run: runKey, key: requestKey, steps };
+        setLoaded(latest.current);
         // Schedule after completion so slow reads never overlap. A failure stops this loop.
         if (status === "running") timer = setTimeout(() => { void load(); }, 1000);
       } catch {
         if (controller.signal.aborted) return;
         failed.current = { key: requestKey, attempt };
-        setError("Could not load activity details.");
+        setError(latest.current?.run === runKey ? "Could not refresh activity details." : "Could not load activity details.");
       }
     }
     void load();
@@ -136,9 +138,11 @@ function FoldedActivity({ step, ...props }: ActivityProps & { step: FoldedStep }
       controller.abort();
       if (timer !== undefined) clearTimeout(timer);
     };
-  }, [open, attempt, requestKey, agent, runId, source, turn, from, to, status]);
+  }, [open, attempt, runKey, requestKey, agent, runId, source, turn, from, to, status]);
 
-  const steps = loaded?.key === requestKey ? loaded.steps : null;
+  // The calls of an earlier read stay up until the next one answers. Swapping them for a loading
+  // line, or for a failure, would build every row again and close the ones the reader had opened.
+  const steps = loaded?.run === runKey ? loaded.steps : null;
   const tools = steps?.filter((item) => item.kind === "tool");
   const errorCount = tools
     ? tools.filter((item) => item.status === "error").length
@@ -150,14 +154,15 @@ function FoldedActivity({ step, ...props }: ActivityProps & { step: FoldedStep }
   return (
     <ChatToolCall title={title} status={groupStatus} group={{ errorCount }} statusLabels={{ cancelled: "No result returned" }} open={open} onOpenChange={setOpen}>
       <div className="px-3 py-2">
+        {/* Keyed by a call's place in the turn, so a refresh updates the rows already drawn. */}
+        {steps?.map((item, index) => <Activity key={from + index} {...props} step={item} />)}
         {error ? (
           <p className="text-muted-foreground text-xs" role="alert">
             {error}{" "}
             <button type="button" onClick={() => setAttempt((value) => value + 1)} className="text-foreground focus-visible:ring-ring/50 rounded-sm underline underline-offset-2 outline-none focus-visible:ring-2">Retry</button>
           </p>
         ) : !steps ? <p className="text-muted-foreground text-xs" role="status">Loading activity…</p>
-          : !steps.length ? <p className="text-muted-foreground text-xs">No activity details available.</p>
-            : steps.map((item, index) => <Activity key={from + index} {...props} step={item} />)}
+          : !steps.length && <p className="text-muted-foreground text-xs">No activity details available.</p>}
       </div>
     </ChatToolCall>
   );
