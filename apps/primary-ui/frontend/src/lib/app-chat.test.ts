@@ -108,6 +108,16 @@ test("All, any-user and starred filters keep their distinct wire values; hidden 
   assert.equal(calls.at(-1)!.url, "/api/app/node/studio/api/agents/runs/all?hidden=true");
 });
 
+test("including hidden sends no hidden parameter, stays paged and filtered, and marks the answer", async () => {
+  mockResponse({ agents: [{ name: "designer", runs: [{ run_id: "shown" }, { run_id: "put-away", hidden: true }] }] });
+  const index = await getConversationIndex(undefined, "studio", { filter: "me", hidden: "include" });
+  assert.equal(calls[0].url, "/api/app/node/studio/api/agents/runs/all?limit=100&filter=me");
+  assert.equal(index.includesHidden, true);
+  assert.deepEqual(index.conversations.map((conversation) => [conversation.runId, conversation.hidden]), [["shown", false], ["put-away", true]]);
+  assert.equal((await getConversationIndex(undefined, "studio", { filter: "me" })).includesHidden, undefined);
+  assert.equal(calls[1].url, "/api/app/node/studio/api/agents/runs/all?hidden=false&limit=100&filter=me");
+});
+
 test("every conversation read and action uses its own source, including same-id chats", async () => {
   const remote = { ...ref, source: "laptop-b" };
   mockResponse({ run_id: "created", turns: [], steps: [] });
@@ -380,9 +390,12 @@ test("Hide persists on the owning machine and reports failed saves", async () =>
   assert.deepEqual(body(0), { name: ref.agent, run_id: ref.runId, hidden: true });
   await hideConversation(ref);
   assert.equal(calls[1].url, "/api/app/agents/run/hide");
+  // The same write brings a hidden chat back.
+  await hideConversation(ref, false);
+  assert.deepEqual(body(2), { name: ref.agent, run_id: ref.runId, hidden: false });
   mockResponse({ ok: false, error: "Hide refused" });
   await assert.rejects(hideConversation(ref), /Hide refused/);
-  assert.equal(calls.length, 3);
+  assert.equal(calls.length, 4);
 });
 
 test("ASAP replies retain attachments and target the owning machine", async () => {
@@ -567,6 +580,15 @@ test("each machine and view has its own saved list, and only the first page is k
     assert.equal(savedConversationIndex(undefined, page, storage), undefined);
   }
   assert.equal(stored(storage), before);
+  // The list with hidden chats included is a view of its own: kept beside the plain one, never in its place.
+  const withHidden = { filter: "me" as const, hidden: "include" as const };
+  assert.equal(savedConversationIndex(undefined, withHidden, storage), undefined);
+  mockResponse({ ...listing, agents: listing.agents.slice(0, 1) });
+  await getConversationIndex(undefined, undefined, withHidden);
+  const restored = savedConversationIndex(undefined, withHidden, storage)?.data;
+  assert.deepEqual([restored?.conversations.length, restored?.saved, restored?.includesHidden], [2, true, true]);
+  const plain = savedConversationIndex(undefined, { filter: "me" }, storage)?.data;
+  assert.deepEqual([plain?.conversations.length, plain?.includesHidden], [3, undefined]);
 });
 
 test("an open conversation's latest page is restored through the same parser, marked as saved", async () => {

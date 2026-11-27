@@ -111,6 +111,8 @@ export interface SourceRowsInput {
   agents: Agent[];
   overlays: ChatOverlays;
   filter: ChatFilter;
+  /** Hidden conversations are listed too, so one being hidden stays as a row marked hidden. */
+  includeHidden?: boolean;
   group: ChatGroup;
   active: ConversationRef | null;
   snapshot?: AgentPeek;
@@ -118,7 +120,7 @@ export interface SourceRowsInput {
 }
 
 /** Turns one source's index into the rows the sidebar shows. */
-export function buildSourceRows({ source, index, agents, overlays, filter, group, active, snapshot, remembered }: SourceRowsInput) {
+export function buildSourceRows({ source, index, agents, overlays, filter, includeHidden = false, group, active, snapshot, remembered }: SourceRowsInput) {
   const enrich = (row: Conversation): Conversation => {
     const owner = agents.find((agent) => agent.name === row.agent);
     return {
@@ -127,12 +129,13 @@ export function buildSourceRows({ source, index, agents, overlays, filter, group
       ...(owner ? { agentStarred: owner.starred, agentDisplayName: owner.displayName, project: row.project ?? owner.project } : {}),
     };
   };
-  const isShown = (row: Conversation) => !overlays[conversationKey(row)]?.hidden && matchesConversationFilter(row, filter, active);
+  const putAway = (ref: ConversationRef) => !includeHidden && overlays[conversationKey(ref)]?.hidden === true;
+  const isShown = (row: Conversation) => !putAway(row) && matchesConversationFilter(row, filter, active);
   const visibleRows = (rows: Conversation[]) => rows.map(enrich).filter(isShown);
 
   const conversations = visibleRows(index?.conversations ?? []);
   // A narrowing never makes the conversation being read disappear from its own rail.
-  if (active && active.source === source && !overlays[conversationKey(active)]?.hidden && !conversations.some((row) => sameConversation(row, active))) {
+  if (active && active.source === source && !putAway(active) && !conversations.some((row) => sameConversation(row, active))) {
     const prior = remembered.get(conversationKey(active));
     if (prior || snapshot) conversations.push(activeRowFrom(active, prior, snapshot, overlays[conversationKey(active)]));
   }
@@ -150,11 +153,11 @@ export function buildSourceRows({ source, index, agents, overlays, filter, group
   return { source, conversations, groups, total: index?.total ?? 0, loaded: index?.conversations.length ?? 0 };
 }
 
-/** Applies an accepted edit to a cached index, removing the row when the edit hides it. */
+/** Applies an accepted edit to a cached index, removing the row when the edit hides it from that list. */
 export function patchIndex(index: ConversationIndex, key: string, overlay: ChatOverlay): ConversationIndex {
   const patched = (rows: Conversation[]) => rows.flatMap((row) => {
     if (conversationKey(row) !== key) return [row];
-    return overlay.hidden ? [] : [{ ...row, ...overlay }];
+    return overlay.hidden && !index.includesHidden ? [] : [{ ...row, ...overlay }];
   });
   return {
     ...index,

@@ -24,8 +24,8 @@ export const chatQueryKeys = {
   voice: [...chatRoot, "voice"] as const,
   agents: (source?: string) => [...chatRoot, "agents", sourceKey(source)] as const,
   allIndexes: [...chatRoot, "conversations"] as const,
-  index: (source: string | undefined, filter: ChatFilter, group: ChatGroup, limit: number, projectMore: Record<string, number>) =>
-    [...chatRoot, "conversations", sourceKey(source), filter, group, limit, projectMore] as const,
+  index: (source: string | undefined, filter: ChatFilter, includeHidden: boolean, group: ChatGroup, limit: number, projectMore: Record<string, number>) =>
+    [...chatRoot, "conversations", sourceKey(source), filter, includeHidden, group, limit, projectMore] as const,
   thread: threadKey,
   snapshot: (ref: ConversationRef, limit: number) => [...threadKey(ref), limit] as const,
 };

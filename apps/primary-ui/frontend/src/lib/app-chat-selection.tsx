@@ -30,6 +30,8 @@ function useSelectionState() {
     return routeSource ? withSource(saved, routeSource) : saved;
   });
   const [filter, setFilter] = useState<ChatFilter>("me");
+  // Like the filter it starts off on every visit: hidden chats are looked up, not lived with.
+  const [includeHidden, setIncludeHidden] = useState(false);
   const [group, setGroupState] = useState<ChatGroup>(readGroup);
   const sourceList = useMemo(() => selectedSources(sources), [sources]);
   const activeSource = resolveActiveSource(params, sources, lastLaunchedAgent);
@@ -123,7 +125,7 @@ function useSelectionState() {
 
   return {
     enabled, invalidSource, sources, sourceList, activeSource, toggleSource,
-    filter, setFilter, group, setGroup,
+    filter, setFilter, includeHidden, setIncludeHidden, group, setGroup,
     fleetNodes: fleetQuery.data ?? [], fleetLoading: fleetQuery.isPending, fleetError,
     agents, agentsBySource, agentResults, newChatAgents: agentsBySource.flat(),
     agentsLoading: agentResults.some((result) => result.isPending),

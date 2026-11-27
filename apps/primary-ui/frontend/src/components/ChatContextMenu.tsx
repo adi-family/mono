@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { EyeOff, Pencil, Star } from "lucide-react";
+import { Eye, EyeOff, Pencil, Star } from "lucide-react";
 import { Button } from "@design-system/ui";
 import type { Conversation } from "../lib/app-chat";
 import { useChatList } from "../lib/app-chat-list";
@@ -60,7 +60,9 @@ export function ChatContextMenu({ target, onClose }: { target: ChatContextTarget
     </form> : <>
       <button role="menuitem" type="button" className={itemClass} onClick={() => setEditing(true)}><Pencil aria-hidden="true" className="size-3.5" />Rename</button>
       <button role="menuitem" type="button" className={itemClass} onClick={() => void save(() => starChat(target.conversation, !target.conversation.starred))}><Star aria-hidden="true" className={target.conversation.starred ? "size-3.5 fill-current" : "size-3.5"} />{target.conversation.starred ? "Unstar" : "Star"}</button>
-      <button role="menuitem" type="button" className={itemClass} onClick={() => void save(() => hideChat(target.conversation))}><EyeOff aria-hidden="true" className="size-3.5" />Hide</button>
+      {target.conversation.hidden
+        ? <button role="menuitem" type="button" className={itemClass} onClick={() => void save(() => hideChat(target.conversation, false))}><Eye aria-hidden="true" className="size-3.5" />Unhide</button>
+        : <button role="menuitem" type="button" className={itemClass} onClick={() => void save(() => hideChat(target.conversation))}><EyeOff aria-hidden="true" className="size-3.5" />Hide</button>}
     </>}
   </div>, document.body);
 }

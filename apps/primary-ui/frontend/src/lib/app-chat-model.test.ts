@@ -112,6 +112,19 @@ test("rows take the owning agent's details and local overlays, and hidden rows d
   assert.equal(result.loaded, 2);
 });
 
+test("with hidden chats included, a chat being hidden or brought back keeps its row and shows the edit", () => {
+  const hiding = row("hiding");
+  const returning = row("returning", { hidden: true });
+  const overlays = { [conversationKey(hiding)]: { hidden: true }, [conversationKey(returning)]: { hidden: false } };
+  const result = rows({ index: index([hiding, returning, row("put-away", { hidden: true })], { includesHidden: true }), includeHidden: true, overlays });
+  assert.deepEqual(result.conversations.map((item) => [item.runId, item.hidden]), [["hiding", true], ["returning", false], ["put-away", true]]);
+  // The open conversation is no exception: hidden, it stays in a list that shows hidden chats.
+  const active = { agent: "designer", runId: "open" };
+  const remembered = rememberRows(new Map(), [row("open")]);
+  const open = rows({ index: index([]), includeHidden: true, active, remembered, overlays: { [conversationKey(active)]: { hidden: true } } }).conversations;
+  assert.deepEqual(open.map((item) => [item.runId, item.hidden]), [["open", true]]);
+});
+
 test("the open conversation stays listed when its filter would drop it", () => {
   const active = { agent: "designer", runId: "open" };
   const prior = row("open", { title: "Known title", lastActivity: 9 });
@@ -150,6 +163,12 @@ test("accepted edits patch or remove the row in flat and grouped lists", () => {
   const hidden = patchIndex(data, key, { hidden: true });
   assert.deepEqual(hidden.conversations.map((item) => item.runId), ["other"]);
   assert.deepEqual(hidden.groups[0].conversations, []);
+  // A list read with hidden chats included keeps the row, marked, and unmarks it when it comes back.
+  const marked = patchIndex({ ...data, includesHidden: true }, key, { hidden: true });
+  assert.deepEqual(marked.conversations.map((item) => [item.runId, item.hidden]), [["target", true], ["other", undefined]]);
+  assert.equal(marked.groups[0].conversations[0].hidden, true);
+  assert.equal(marked.includesHidden, true);
+  assert.equal(patchIndex(marked, key, { hidden: false }).conversations[0].hidden, false);
 });
 
 test("clearing one overlay field preserves other pending edits and removes empty entries", () => {

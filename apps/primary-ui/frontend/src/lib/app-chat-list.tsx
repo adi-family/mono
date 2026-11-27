@@ -22,7 +22,7 @@ interface ChatEdit<F extends keyof ChatOverlay> {
 }
 
 function useListState() {
-  const { enabled, sourceList, filter, group, active, agentsBySource, agentResults, activeAgentsPending, isCurrentSelection, newConversationOn } = useChatSelection();
+  const { enabled, sourceList, filter, includeHidden, group, active, agentsBySource, agentResults, activeAgentsPending, isCurrentSelection, newConversationOn } = useChatSelection();
   const { snapshot } = useChatThread();
   const client = useQueryClient();
   const [indexLimits, setIndexLimits] = useState<Record<string, number>>({});
@@ -38,10 +38,11 @@ function useListState() {
       const limit = indexLimits[key] ?? indexPageSize;
       const options: ConversationIndexOptions = {
         filter, limit,
+        ...(includeHidden ? { hidden: "include" as const } : {}),
         ...(group === "project" ? { group: "project" as const, groupLimit: projectPageSize, groupMore: projectMore[key] } : {}),
       };
       return {
-        queryKey: chatQueryKeys.index(source, filter, group, limit, projectMore[key] ?? {}),
+        queryKey: chatQueryKeys.index(source, filter, includeHidden, group, limit, projectMore[key] ?? {}),
         queryFn: ({ signal }: { signal: AbortSignal }) => getConversationIndex(signal, source, options),
         enabled, refetchInterval: indexPollMs, retry: false,
         // The list opens with the rows this browser last saw for this machine and view.
@@ -61,7 +62,7 @@ function useListState() {
     const result = indexResults[position];
     const error = result.error ?? agentResults[position]?.error;
     return {
-      ...buildSourceRows({ source, index: result.data, agents: agentsBySource[position] ?? [], overlays, filter, group, active, snapshot, remembered }),
+      ...buildSourceRows({ source, index: result.data, agents: agentsBySource[position] ?? [], overlays, filter, includeHidden, group, active, snapshot, remembered }),
       isLoading: result.isPending,
       /** Still the rows saved on an earlier visit; this machine has not answered on this one. */
       saved: result.data?.saved === true,
@@ -106,7 +107,8 @@ function useListState() {
     setOverlays((current) => ({ ...current, [key]: { ...current[key], ...overlay } }));
     try {
       await write();
-      if (overlay.hidden && isCurrentSelection(key)) newConversationOn(ref.source, ref.agent);
+      // A chat hidden while hidden chats are listed keeps its row, so it stays open too.
+      if (overlay.hidden && !includeHidden && isCurrentSelection(key)) newConversationOn(ref.source, ref.agent);
       // Update inactive filter/group caches too. A failed follow-up read must not
       // roll back a write the server has already accepted.
       client.setQueriesData<ConversationIndex>({ queryKey: chatQueryKeys.allIndexes }, (index) => index && patchIndex(index, key, overlay));
@@ -125,8 +127,9 @@ function useListState() {
     return editChat({ ref, field: "title", value: title.trim() || defaultTitle, write: () => renameConversation(ref, title), failure: "Could not rename this chat." });
   }
 
-  function hideChat(ref: ConversationRef) {
-    return editChat({ ref, field: "hidden", value: true, write: () => hideConversation(ref), failure: "Could not hide this chat." });
+  /** Hides a chat, or with `hidden` false brings a hidden one back. */
+  function hideChat(ref: ConversationRef, hidden = true) {
+    return editChat({ ref, field: "hidden", value: hidden, write: () => hideConversation(ref, hidden), failure: hidden ? "Could not hide this chat." : "Could not unhide this chat." });
   }
 
   function starChat(ref: ConversationRef, starred: boolean) {

@@ -96,11 +96,12 @@ function agents(source) {
   ], source: localName(source) };
 }
 function indexFor(source, params) {
-  assert.ok(["false", "true"].includes(params.get("hidden")), "index explicitly chooses visible or hidden sessions");
+  // As on the machine: without the parameter the answer holds hidden and listed sessions alike.
+  assert.ok([null, "false", "true"].includes(params.get("hidden")), "index asks for visible, hidden or every session");
   const filter = params.get("filter") ?? "all";
   assert.ok(["all", "starred", "mine", "me"].includes(filter), "known server filter");
   const hidden = params.get("hidden") === "true";
-  let items = [...metadata.values()].filter((item) => item.source === source && item.hidden === hidden);
+  let items = [...metadata.values()].filter((item) => item.source === source && (!params.has("hidden") || item.hidden === hidden));
   items = items.filter((item) => {
     const snapshot = snapshots.get(idOf(item));
     if (source === remote && ignoreRemoteFilters) return true;
@@ -179,6 +180,13 @@ async function intercept({ requestId, request }) {
       const item = metadata.get(idOf({ agent: body.name, runId: body.run_id, ...(source ? {source} : {}) }));
       assert.ok(item, "renaming an existing source conversation");
       item.title = body.title || "Default fixture title";
+      return await fulfill(requestId, {agents:[]});
+    }
+    if (request.method === "POST" && path === "/agents/run/hide") {
+      const item = metadata.get(idOf({ agent: body.name, runId: body.run_id, ...(source ? {source} : {}) }));
+      assert.ok(item, "hiding an existing source conversation");
+      assert.equal(typeof body.hidden, "boolean");
+      item.hidden = body.hidden;
       return await fulfill(requestId, {agents:[]});
     }
     if (request.method === "GET" && path === "/fleet/nodes") return await fulfill(requestId, { nodes: [{ node: remote, locked: false }, { node: "locked-node", locked: true }] });
@@ -599,6 +607,106 @@ try {
     assert.equal(await evaluate(`!!${q(row(remoteMain))}`), true);
     ignoreRemoteFilters = false;
     await filter("All sessions");
+  });
+
+  await check("Include hidden lists hidden chats beside the others on every machine, marks them, and Unhide brings one back", async () => {
+    const hidden = { ...main, runId: "hidden-run" };
+    const remoteHidden = { ...remoteMain, runId: "hidden-run" };
+    const box = '[data-slot="app-chat-include-hidden"]';
+    const search = '[aria-label="Search conversations"]';
+    const marked = (ref) => evaluate(`${q(row(ref))}.hasAttribute('data-hidden')&&!!${q(row(ref))}.querySelector('[aria-label="Hidden chat"]')`);
+    const boxChecked = async () => {
+      await click('[aria-label="Filter conversations"]');
+      const value = await evaluate(`${q(box)}.getAttribute('aria-checked')`);
+      await key("Escape");
+      return value;
+    };
+    const indexAsked = (from, source, wanted) => requests.slice(from).some((request) => request.path === "/agents/runs/all" && request.source === source
+      && new URLSearchParams(request.query).get("hidden") === wanted && new URLSearchParams(request.query).has("limit"));
+    async function act(ref, label) {
+      await evaluate(`${q(row(ref))}.dispatchEvent(new MouseEvent('contextmenu', {bubbles:true, cancelable:true, clientX:200, clientY:300}))`);
+      await until(() => evaluate(`!!document.querySelector('[data-slot="chat-context-menu"]')`), "chat context menu");
+      const labels = await evaluate(`[...document.querySelectorAll('[data-slot="chat-context-menu"] [role="menuitem"]')].map(node=>node.textContent.trim())`);
+      await option("menuitem", label);
+      return labels;
+    }
+    const lastHide = () => requests.filter((request) => request.path === "/agents/run/hide").at(-1);
+    // The drawn box: an outline while unchecked, filled with the primary colour around a tick when checked.
+    const boxLook = () => evaluate(`(() => {
+      const mark=${q(box)}.querySelector('span');
+      const style=getComputedStyle(mark);
+      const context=document.createElement('canvas').getContext('2d', {willReadFrequently:true});
+      const rgba=color=>{context.clearRect(0,0,1,1);context.fillStyle=color;context.fillRect(0,0,1,1);return [...context.getImageData(0,0,1,1).data]};
+      const r=mark.getBoundingClientRect();
+      return {size:[r.width,r.height],border:style.borderTopWidth,fill:rgba(style.backgroundColor),primary:rgba(getComputedStyle(document.documentElement).getPropertyValue('--primary')),tick:!!mark.querySelector('svg')};
+    })()`);
+
+    await open(main);
+    await type(search, "hidden chat"); await settleIndex();
+    assert.equal(await evaluate(`document.querySelectorAll('[data-slot="app-conversation-link"]').length`), 0, "hidden chats are left out until asked for");
+    await click('[aria-label="Filter conversations"]');
+    assert.equal(await evaluate(`${q(box)}.getAttribute('role')`), "menuitemcheckbox");
+    assert.equal(await evaluate(`${q(box)}.getAttribute('aria-checked')`), "false");
+    assert.equal(await evaluate(`${q(box)}.textContent.trim()`), "Include hidden");
+    const empty = await boxLook();
+    assert.deepEqual([empty.size, empty.border, empty.fill[3], empty.tick], [[14, 14], "1px", 0, false]);
+    await screenshot("include-hidden-menu");
+    let from = requests.length;
+    await click(box);
+    await until(() => evaluate(`!!${q(row(hidden))}&&!!${q(row(remoteHidden))}`), "hidden chats listed from both machines");
+    assert.equal(await evaluate(`document.querySelector('[data-slot="app-chat-menu"]')===null`), true, "the checkbox closes the menu like its other options");
+    for (const source of [undefined, remote]) assert.ok(indexAsked(from, source, null), "the widened list is asked for without a hidden parameter, one page at a time");
+    assert.equal(await marked(hidden), true);
+    assert.equal(await marked(remoteHidden), true);
+    assert.equal(await evaluate(`${q('[aria-label="Filter conversations"]')}.title`), "All sessions, including hidden");
+    await type(search, ""); await settleIndex();
+    assert.equal(await evaluate(`!!${q(row(main))}&&!${q(row(main))}.hasAttribute('data-hidden')`), true, "listed chats stay, unmarked");
+    await click('[aria-label="Filter conversations"]');
+    const ticked = await boxLook();
+    assert.equal(await evaluate(`${q(box)}.getAttribute('aria-checked')`), "true");
+    assert.deepEqual([ticked.size, ticked.fill, ticked.tick], [[14, 14], ticked.primary, true]);
+    assert.equal(ticked.primary[3], 255);
+    await screenshot("include-hidden-list");
+    await key("Escape");
+
+    // A hidden row offers Unhide, sent to the machine that owns it; the row stays and loses its mark.
+    await type(search, "hidden chat"); await settleIndex();
+    assert.deepEqual(await act(remoteHidden, "Unhide"), ["Rename", "Star", "Unhide"]);
+    await until(async () => lastHide()?.body.hidden === false && !(await evaluate(`${q(row(remoteHidden))}.hasAttribute('data-hidden')`)), "remote chat brought back");
+    assert.equal(lastHide().source, remote);
+    assert.deepEqual(lastHide().body, { name: remoteHidden.agent, run_id: remoteHidden.runId, hidden: false });
+    assert.equal(await marked(hidden), true, "the same run on this machine is still hidden");
+
+    // Hidden again while it is open and hidden chats are listed: it keeps its row and stays open.
+    await open(remoteHidden);
+    assert.deepEqual(await act(remoteHidden, "Hide"), ["Rename", "Star", "Hide"]);
+    await until(async () => lastHide()?.body.hidden === true && await marked(remoteHidden), "remote chat marked hidden in place");
+    await settleIndex();
+    assert.equal(await activeIs(remoteHidden), true);
+    assert.equal(await contains("laptop-b fixture answer hidden-run"), true);
+
+    // Like the filter, the box starts unchecked on every visit.
+    await reloadWhen(`${q(`${chat} [data-slot="chat-thread"]`)}?.textContent.includes('laptop-b fixture answer hidden-run')&&${q('[aria-label="Conversations"]')}?.getAttribute('aria-busy')==='false'`, "open hidden chat reloads");
+    assert.equal(await boxChecked(), "false");
+    await filter("All sessions");
+    await type(search, "hidden chat"); await settleIndex();
+    assert.equal(await evaluate(`!!${q(row(hidden))}`), false);
+
+    // Checked and unchecked again in one visit, the list goes back to asking for listed chats only,
+    // and of the hidden ones keeps just the conversation that is open.
+    await click('[aria-label="Filter conversations"]'); await click(box);
+    await until(() => evaluate(`!!${q(row(hidden))}&&!!${q(row(remoteHidden))}`), "hidden chats listed again");
+    from = requests.length;
+    await click('[aria-label="Filter conversations"]'); await click(box);
+    await until(() => evaluate(`!${q(row(hidden))}`), "hidden chats left out again");
+    for (const source of [undefined, remote]) await until(() => indexAsked(from, source, "false"), "the plain list is asked for again");
+    assert.equal(await evaluate(`!!${q(row(remoteHidden))}`), true, "the open conversation keeps its row");
+    assert.equal(await evaluate(`${q('[aria-label="Filter conversations"]')}.title`), "All sessions");
+    await type(search, ""); await settleIndex();
+    await open(main);
+    await type(search, "hidden chat"); await settleIndex();
+    await until(() => evaluate(`document.querySelectorAll('[data-slot="app-conversation-link"]').length===0`), "closed, the hidden chat leaves the list");
+    await type(search, ""); await settleIndex();
   });
 
   await check("remote replies, child chats, questions and stop requests retain their node", async () => {

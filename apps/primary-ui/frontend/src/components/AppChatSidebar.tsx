@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown, Filter, Plus, Search, Star } from "lucide-react";
+import { Check, ChevronDown, EyeOff, Filter, Plus, Search, Star } from "lucide-react";
 
 import { Button, cn } from "@design-system/ui";
 
@@ -18,7 +18,7 @@ import { NodeSelector } from "./NodeSelector";
 const menuItemClass = "focus:bg-accent hover:bg-accent flex min-h-8 w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs outline-none disabled:opacity-50 disabled:hover:bg-transparent";
 
 function FilterMenu({ anchor, onClose }: { anchor: RefObject<HTMLButtonElement | null>; onClose: (restoreFocus?: boolean) => void }) {
-  const { filter, setFilter, group, setGroup } = useChatSelection();
+  const { filter, setFilter, includeHidden, setIncludeHidden, group, setGroup } = useChatSelection();
   const element = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ left: 0, top: 0 });
 
@@ -72,6 +72,13 @@ function FilterMenu({ anchor, onClose }: { anchor: RefObject<HTMLButtonElement |
           {option.label}
         </button>
       ))}
+      {/* A box rather than a tick alone: it widens whichever choice above is selected, and is not one of them. */}
+      <button type="button" role="menuitemcheckbox" aria-checked={includeHidden} data-slot="app-chat-include-hidden" className={menuItemClass} onClick={() => { setIncludeHidden(!includeHidden); onClose(); }}>
+        <span aria-hidden="true" className={cn("flex size-3.5 shrink-0 items-center justify-center rounded-[4px] border", includeHidden ? "bg-primary border-primary text-primary-foreground" : "border-input")}>
+          {includeHidden && <Check className="size-3" strokeWidth={3} />}
+        </span>
+        Include hidden
+      </button>
       <div role="separator" className="bg-border my-1 h-px" />
       <p className="text-muted-foreground px-2 py-1.5 text-[11px] font-medium">Group by</p>
       {conversationGroups.map((option) => (
@@ -86,7 +93,7 @@ function FilterMenu({ anchor, onClose }: { anchor: RefObject<HTMLButtonElement |
 }
 
 export function AppChatSidebar() {
-  const { active, sources, filter, group, openConversation, newConversation } = useChatSelection();
+  const { active, sources, filter, includeHidden, group, openConversation, newConversation } = useChatSelection();
   const { conversations, isLoading, indexFailing, sourceStates, loadMore, hideChat } = useChatList();
   const { refresh } = useChatThread();
   const [contextTarget, setContextTarget] = useState<ChatContextTarget | null>(null);
@@ -104,7 +111,8 @@ export function AppChatSidebar() {
   const sections = conversationSections(conversations, sourceStates, group, query);
   const count = sections.reduce((total, section) => total + section.conversations.length, 0);
   const sourceCount = Number(sources.local) + sources.nodes.length;
-  const currentFilter = conversationFilters.find((option) => option.value === filter)?.label;
+  const filterLabel = conversationFilters.find((option) => option.value === filter)?.label;
+  const currentFilter = includeHidden ? `${filterLabel}, including hidden` : filterLabel;
   const closeFilterMenu = (restoreFocus = true) => {
     if (restoreFocus) filterRef.current?.focus();
     setFilterMenuOpen(false);
@@ -116,7 +124,7 @@ export function AppChatSidebar() {
         <div className="mb-2 flex shrink-0 items-center gap-1 px-1 pt-3 md:pt-0">
           <h2 className="mr-auto pl-1 text-sm font-semibold">Chats</h2>
           <NodeSelector mobileOnly/>
-          <Button ref={filterRef} variant="ghost" size="icon" className={cn("size-7 shrink-0", filter === "all" ? "text-muted-foreground" : "text-foreground bg-foreground/8")} aria-label="Filter conversations" title={currentFilter} aria-haspopup="menu" aria-expanded={filterMenuOpen} onClick={() => setFilterMenuOpen((current) => !current)}>
+          <Button ref={filterRef} variant="ghost" size="icon" className={cn("size-7 shrink-0", filter === "all" && !includeHidden ? "text-muted-foreground" : "text-foreground bg-foreground/8")} aria-label="Filter conversations" title={currentFilter} aria-haspopup="menu" aria-expanded={filterMenuOpen} onClick={() => setFilterMenuOpen((current) => !current)}>
             <Filter aria-hidden="true" className="size-3.5" />
           </Button>
           <Button variant="ghost" size="icon" className="text-muted-foreground size-7 shrink-0 hover:text-foreground" aria-label="New conversation" title="New conversation" onClick={() => newConversation()}>
@@ -164,7 +172,7 @@ export function AppChatSidebar() {
                               const bounds = event.currentTarget.getBoundingClientRect();
                               setContextTarget({ conversation, x: bounds.left, y: bounds.bottom, trigger: event.currentTarget });
                             }
-                          }} href={conversationHref(conversation)} data-slot="app-conversation-link" data-source={conversation.source ?? ""} data-agent={conversation.agent} data-run={conversation.runId} aria-current={isActive ? "page" : undefined} title={conversation.title} className={cn("focus-visible:ring-ring block rounded-md px-2 py-1.5 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset", isActive ? "bg-foreground/8 text-foreground" : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground")} onClick={(event) => {
+                          }} href={conversationHref(conversation)} data-slot="app-conversation-link" data-source={conversation.source ?? ""} data-agent={conversation.agent} data-run={conversation.runId} data-hidden={conversation.hidden ? "" : undefined} aria-current={isActive ? "page" : undefined} title={conversation.title} className={cn("focus-visible:ring-ring block rounded-md px-2 py-1.5 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset", isActive ? "bg-foreground/8 text-foreground" : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground", conversation.hidden && !isActive && !conversation.pendingQuestion && "opacity-60 hover:opacity-100 focus-visible:opacity-100")} onClick={(event) => {
                             if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
                             event.preventDefault();
                             openConversation(conversation);
@@ -177,6 +185,7 @@ export function AppChatSidebar() {
                           }}>
                             <span className="flex min-w-0 items-center gap-2">
                               <span className="min-w-0 flex-1 truncate text-xs font-medium leading-5">{conversation.title}</span>
+                              {conversation.hidden && <EyeOff aria-label="Hidden chat" className="size-3 shrink-0" />}
                               {conversation.starred && <Star aria-label="Starred chat" className="size-3 shrink-0 fill-current" />}
                               {status && <span className={cn("size-1.5 shrink-0 rounded-full", conversation.pendingQuestion ? "bg-amber-600 dark:bg-amber-400" : conversation.running ? "bg-blue-600 dark:bg-blue-400" : "bg-foreground/50")} aria-hidden="true" />}
                             </span>

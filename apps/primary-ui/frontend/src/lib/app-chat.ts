@@ -58,7 +58,8 @@ export interface Conversation extends ConversationRef {
 }
 
 export interface ConversationIndexOptions {
-  hidden?: boolean;
+  /** `true` asks for the put-away conversations alone; `"include"` for those beside the listed ones. */
+  hidden?: boolean | "include";
   filter?: "all" | "starred" | "mine" | "me";
   limit?: number;
   group?: "project";
@@ -80,6 +81,8 @@ export interface ConversationIndex {
   groups: ConversationGroup[];
   /** Restored from this browser's saved copy, not read from the machine on this visit. */
   saved?: true;
+  /** Read with hidden conversations included, so hiding one of its rows marks the row instead of removing it. */
+  includesHidden?: true;
 }
 
 export type AgentToolStatus = "running" | "ok" | "error" | "unanswered";
@@ -511,19 +514,23 @@ function keptIndex(data: JsonObject): JsonObject {
   };
 }
 
-const savedIndexId = (source: string | undefined, options: ConversationIndexOptions) => JSON.stringify([source ?? "", options.filter ?? "all", options.group ?? "flat"]);
-/** The view a page opens with: the unhidden first page with no project expanded further. */
+const includesHidden = (options: ConversationIndexOptions) => options.hidden === "include";
+const savedIndexId = (source: string | undefined, options: ConversationIndexOptions) => JSON.stringify(
+  [source ?? "", options.filter ?? "all", options.group ?? "flat", ...(includesHidden(options) ? ["hidden"] : [])],
+);
+/** A view a page can open with: a first page of the list, with no project expanded further. */
 function isFirstPage(options: ConversationIndexOptions): boolean {
-  return !options.hidden && (options.limit ?? 100) === 100 && (options.groupLimit ?? 3) === 3
+  return options.hidden !== true && (options.limit ?? 100) === 100 && (options.groupLimit ?? 3) === 3
     && !Object.values(options.groupMore ?? {}).some((count) => count > 0);
 }
 
 export async function getConversationIndex(
   signal?: AbortSignal, source?: string, options: ConversationIndexOptions = {},
 ): Promise<ConversationIndex> {
-  const params = new URLSearchParams({ hidden: String(options.hidden ?? false) });
-  // Hidden is deliberately unpaged in the main app, so every put-away conversation is reachable.
-  if (!options.hidden || options.limit !== undefined) params.set("limit", String(options.limit ?? 100));
+  // Without the parameter the machine answers with hidden and listed conversations alike.
+  const params = new URLSearchParams(includesHidden(options) ? {} : { hidden: String(options.hidden ?? false) });
+  // Hidden alone is deliberately unpaged in the main app, so every put-away conversation is reachable.
+  if (options.hidden !== true || options.limit !== undefined) params.set("limit", String(options.limit ?? 100));
   if (options.filter && options.filter !== "all") params.set("filter", options.filter);
   if (options.group === "project") {
     params.set("group", "project");
@@ -533,7 +540,7 @@ export async function getConversationIndex(
     if (more) params.set("group_more", more);
   }
   const data = await request(`/agents/runs/all?${params}`, signal, undefined, source);
-  const index = conversationIndexOf(data, source);
+  const index: ConversationIndex = { ...conversationIndexOf(data, source), ...(includesHidden(options) ? { includesHidden: true } : {}) };
   if (isFirstPage(options)) writeSavedIn(savedIndexes, savedIndexId(source, options), keptIndex(data));
   return index;
 }
@@ -541,7 +548,9 @@ export async function getConversationIndex(
 /** One machine's list as this browser last read it, marked `saved`. Only the first page is ever kept. */
 export function savedConversationIndex(source: string | undefined, options: ConversationIndexOptions, storage?: Storage): Saved<ConversationIndex> | undefined {
   if (!isFirstPage(options)) return undefined;
-  return readSavedIn(savedIndexes, savedIndexId(source, options), fromSaved((data): ConversationIndex => ({ ...conversationIndexOf(data, source), saved: true })), storage);
+  return readSavedIn(savedIndexes, savedIndexId(source, options), fromSaved((data): ConversationIndex => ({
+    ...conversationIndexOf(data, source), saved: true, ...(includesHidden(options) ? { includesHidden: true } : {}),
+  })), storage);
 }
 
 export async function getConversations(
@@ -707,8 +716,9 @@ export async function uploadImage(file: File, source?: string): Promise<AgentAtt
   return { id: data.id, name: file.name, media_type: mediaType, size: file.size };
 }
 
-export async function hideConversation(ref: ConversationRef): Promise<void> {
-  await request("/agents/run/hide", undefined, { ...runBody(ref), hidden: true }, ref.source);
+/** Puts a conversation away, or with `hidden` false brings it back to the list. */
+export async function hideConversation(ref: ConversationRef, hidden = true): Promise<void> {
+  await request("/agents/run/hide", undefined, { ...runBody(ref), hidden }, ref.source);
 }
 
 export async function starConversation(ref: ConversationRef, starred: boolean): Promise<void> {
