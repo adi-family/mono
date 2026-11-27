@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { LoaderCircle, Mic, Square } from "lucide-react";
-import { Button } from "@design-system/ui";
+import { Button, stringStorageCodec, useLocalStorageState } from "@design-system/ui";
 import { getVoice, savedVoice, transcribeAudio } from "../lib/app-chat";
 import { chatQueryKeys } from "../lib/app-chat-queries";
 
@@ -22,7 +22,7 @@ export function ChatMicrophone({ onText, disabledReason = "", onBusyChange }: {
     queryKey: chatQueryKeys.voice, queryFn: getVoice, staleTime: 60_000, retry: false,
     initialData: () => savedVoice()?.data, initialDataUpdatedAt: () => savedVoice()?.savedAt,
   });
-  const [engine] = useState(() => { try { return localStorage.getItem("adi.voice.engine.v1") || ""; } catch { return ""; } });
+  const [engine] = useLocalStorageState("adi.voice.engine.v1", "", stringStorageCodec);
   const [state, setState] = useState<"idle" | "opening" | "recording" | "transcribing">("idle");
   const [error, setError] = useState("");
   const live = useRef<{ recognition?: Recognition; recorder?: MediaRecorder; stream?: MediaStream; controller?: AbortController; cancelled: boolean }>({ cancelled: false });

@@ -1,3 +1,10 @@
+import {
+  jsonStorageCodec,
+  type LocalStorageCodec,
+  readLocalStorage,
+  writeLocalStorage,
+} from "@design-system/ui";
+
 import type { ConversationRef } from "./app-chat";
 
 export interface ChatSources { local: boolean; nodes: string[] }
@@ -6,6 +13,7 @@ export type ChatGroup = "flat" | "machine" | "project";
 export const localSource = "";
 export const sourcesPreferenceKey = "adi-session-sources";
 export const groupPreferenceKey = "adi-session-group";
+export const defaultSources: ChatSources = { local: true, nodes: [] };
 const validNode = (value: unknown): value is string => typeof value === "string" && /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(value);
 
 export function normalizeSources(value: unknown): ChatSources {
@@ -16,18 +24,27 @@ export function normalizeSources(value: unknown): ChatSources {
   return { local: input.local !== false || nodes.length === 0, nodes };
 }
 
+export const sourcesStorageCodec: LocalStorageCodec<ChatSources> = {
+  ...jsonStorageCodec,
+  parse: (stored) => normalizeSources(jsonStorageCodec.parse(stored)),
+};
+
+export const groupStorageCodec: LocalStorageCodec<ChatGroup> = {
+  ...jsonStorageCodec,
+  parse: (stored) => {
+    const value = jsonStorageCodec.parse(stored);
+    return value === "project" || value === "flat" ? value : value === "activity" ? "flat" : undefined;
+  },
+};
+
 export function readSources(): ChatSources {
-  try { return normalizeSources(JSON.parse(localStorage.getItem(sourcesPreferenceKey) ?? "null")); }
-  catch { return { local: true, nodes: [] }; }
+  return readLocalStorage(sourcesPreferenceKey, defaultSources, sourcesStorageCodec);
 }
 export function readGroup(): ChatGroup {
-  try {
-    const value: unknown = JSON.parse(localStorage.getItem(groupPreferenceKey) ?? "null");
-    return value === "project" || value === "flat" ? value : value === "activity" ? "flat" : "machine";
-  } catch { return "machine"; }
+  return readLocalStorage(groupPreferenceKey, "machine", groupStorageCodec);
 }
 export function savePreference(key: string, value: unknown) {
-  try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* In-memory controls still work in private mode. */ }
+  writeLocalStorage(key, value);
 }
 /** The form of a source used in map keys and query keys; `undefined` means this machine. */
 export function sourceKey(source?: string) { return source ?? localSource; }
@@ -52,11 +69,16 @@ export function routeNode(value: string | null): string | undefined { return val
 
 export type LastLaunchedAgent = { agent: string; source?: string };
 export const lastLaunchedAgentKey = "adi.last-launched-agent.v1";
-export function readLastLaunchedAgent(): LastLaunchedAgent | undefined {
-  try {
-    const value = JSON.parse(localStorage.getItem(lastLaunchedAgentKey) ?? "null");
-    if (!value || typeof value.agent !== "string" || !value.agent.trim()) return undefined;
+export const lastLaunchedAgentCodec: LocalStorageCodec<LastLaunchedAgent | undefined> = {
+  ...jsonStorageCodec,
+  parse: (stored) => {
+    const value = jsonStorageCodec.parse(stored) as { agent?: unknown; source?: unknown } | null | undefined;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    if (typeof value.agent !== "string" || !value.agent.trim()) return undefined;
     if (value.source !== undefined && !validNode(value.source)) return undefined;
     return { agent: value.agent, ...(value.source ? { source: value.source } : {}) };
-  } catch { return undefined; }
+  },
+};
+export function readLastLaunchedAgent(): LastLaunchedAgent | undefined {
+  return readLocalStorage(lastLaunchedAgentKey, undefined, lastLaunchedAgentCodec);
 }

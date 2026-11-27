@@ -1,4 +1,11 @@
-import { jsonStorageCodec, type LocalStorageCodec, useLocalStorageState } from "../src/components";
+import {
+  jsonStorageCodec,
+  type LocalStorageCodec,
+  readLocalStorage,
+  stringStorageCodec,
+  useLocalStorageState,
+  writeLocalStorage,
+} from "../src/components";
 
 type Theme = "light" | "dark";
 
@@ -27,6 +34,11 @@ export function acceptedLocalStorageExamples(storageKey: string | undefined) {
   setTheme(null);
   const themeValue: Theme | null = theme;
 
+  // Bare string values use `stringStorageCodec`, and non-hook callers share the same codecs.
+  const [engine] = useLocalStorageState("adi.voice.engine.v1", "", stringStorageCodec);
+  const savedEngine: string = readLocalStorage("adi.voice.engine.v1", "", stringStorageCodec);
+  writeLocalStorage("adi.voice.engine.v1", savedEngine, stringStorageCodec);
+
   // The JSON codec can be composed with validation.
   const listCodec: LocalStorageCodec<string[]> = {
     ...jsonStorageCodec,
@@ -38,7 +50,7 @@ export function acceptedLocalStorageExamples(storageKey: string | undefined) {
   const [list] = useLocalStorageState("list", [], listCodec);
   const listValue: string[] = list;
 
-  return { widthValue, themeValue, listValue };
+  return { widthValue, themeValue, engine, listValue };
 }
 
 export function rejectedLocalStorageExamples() {

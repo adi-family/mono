@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { useLocalStorageState } from "../src/components";
+import { readLocalStorage, stringStorageCodec, useLocalStorageState, writeLocalStorage } from "../src/components";
 
 // A stand-in for window.localStorage; the test runner has no DOM. Every access can be made to
 // throw, as it does in sandboxed frames and some private modes.
@@ -89,5 +89,22 @@ describe("useLocalStorageState", () => {
     expect(storage.data.get("theme")).toBe("DARK");
     expect(shown(<Edit storageKey="theme" fallback="" codec={codec} update="" />)).toBe('<span>""</span>');
     expect(storage.data.has("theme")).toBe(false);
+  });
+
+  test("stringStorageCodec and read/write helpers handle bare strings and broken storage", () => {
+    const storage = install(fakeStorage({ engine: "openai", empty: "" }));
+    expect(readLocalStorage("engine", "", stringStorageCodec)).toBe("openai");
+    expect(readLocalStorage("empty", "fallback", stringStorageCodec)).toBe("fallback");
+    expect(readLocalStorage("missing", "", stringStorageCodec)).toBe("");
+    expect(shown(<Show storageKey="engine" fallback="" codec={stringStorageCodec} />)).toBe('<span>"openai"</span>');
+
+    writeLocalStorage("engine", "browser", stringStorageCodec);
+    expect(storage.data.get("engine")).toBe("browser");
+    writeLocalStorage("engine", "", stringStorageCodec);
+    expect(storage.data.has("engine")).toBe(false);
+
+    install(fakeStorage({ engine: "openai" }, { broken: true }));
+    expect(readLocalStorage("engine", "", stringStorageCodec)).toBe("");
+    expect(() => writeLocalStorage("engine", "browser", stringStorageCodec)).not.toThrow();
   });
 });

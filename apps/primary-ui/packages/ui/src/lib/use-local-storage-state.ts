@@ -18,14 +18,30 @@ export const jsonStorageCodec: LocalStorageCodec<unknown> = {
   serialize: (value) => (value === undefined ? undefined : JSON.stringify(value)),
 };
 
+/** Plain string in both directions, for keys that store bare text rather than JSON. Empty removes the key. */
+export const stringStorageCodec: LocalStorageCodec<string> = {
+  parse: (stored) => (stored ? stored : undefined),
+  serialize: (value) => (value ? value : undefined),
+};
+
+function storageArea(): Storage | undefined {
+  try {
+    return typeof window !== "undefined" ? window.localStorage : globalThis.localStorage;
+  } catch {
+    return undefined;
+  }
+}
+
 function readStorage(key: string): string | null {
-  try { return window.localStorage.getItem(key); } catch { return null; }
+  try { return storageArea()?.getItem(key) ?? null; } catch { return null; }
 }
 
 function writeStorage(key: string, stored: string | undefined) {
   try {
-    if (stored === undefined) window.localStorage.removeItem(key);
-    else window.localStorage.setItem(key, stored);
+    const storage = storageArea();
+    if (!storage) return;
+    if (stored === undefined) storage.removeItem(key);
+    else storage.setItem(key, stored);
   } catch { /* The value still lives in state when storage is unavailable (private mode, quota, sandboxed frames). */ }
 }
 
@@ -33,6 +49,30 @@ function writeStorage(key: string, stored: string | undefined) {
 // tells the other hooks on the same key here to read again.
 type Subscriber = { key: string; sync: () => void };
 const subscribers = new Set<Subscriber>();
+
+/** Read one value from `localStorage` through `codec`, returning `fallback` when missing, unusable or unavailable. */
+export function readLocalStorage<T>(
+  key: string | undefined,
+  fallback: T,
+  codec: LocalStorageCodec<T> = jsonStorageCodec as LocalStorageCodec<T>,
+): T {
+  const stored = key === undefined ? null : readStorage(key);
+  const parsed = stored === null ? undefined : codec.parse(stored);
+  return parsed === undefined ? fallback : parsed;
+}
+
+/** Write one value to `localStorage` through `codec` and notify any mounted `useLocalStorageState` hooks on the same key. */
+export function writeLocalStorage<T>(
+  key: string | undefined,
+  value: T,
+  codec: LocalStorageCodec<T> = jsonStorageCodec as LocalStorageCodec<T>,
+) {
+  if (key === undefined) return;
+  writeStorage(key, codec.serialize(value));
+  for (const subscriber of subscribers) {
+    if (subscriber.key === key) subscriber.sync();
+  }
+}
 
 /**
  * State persisted in `window.localStorage` under `key` — `useState` whose value outlives the page.
@@ -45,11 +85,7 @@ export function useLocalStorageState<T>(
   fallback: T,
   codec: LocalStorageCodec<T> = jsonStorageCodec as LocalStorageCodec<T>,
 ): [T, React.Dispatch<React.SetStateAction<T>>] {
-  const read = (): T => {
-    const stored = key === undefined ? null : readStorage(key);
-    const parsed = stored === null ? undefined : codec.parse(stored);
-    return parsed === undefined ? fallback : parsed;
-  };
+  const read = (): T => readLocalStorage(key, fallback, codec);
   const [value, setValue] = useStateWithDeps(read, [key]);
 
   // What the last committed render saw, for the setter and the sync listeners (both keyed on `key` alone).

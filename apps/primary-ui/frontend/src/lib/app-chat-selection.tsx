@@ -1,14 +1,16 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { useLocalStorageState } from "@design-system/ui";
 
 import { getAgents, getFleetNodes, savedAgents, savedFleetNodes, type Agent, type ConversationRef } from "./app-chat";
 import { errorText } from "./app-chat-errors";
 import { chooseAgentName, newChatHref, resolveActiveSource, selectionKeyOf } from "./app-chat-model";
 import { agentPollMs, chatQueryKeys, chatRoute, fleetPollMs, queryOutcomes } from "./app-chat-queries";
 import {
-  groupPreferenceKey, hasSource, lastLaunchedAgentKey, readGroup, readLastLaunchedAgent, readSources, routeNode, savePreference,
-  selectedSources, sourcesPreferenceKey, toggledSource, withSource, type ChatFilter, type ChatGroup, type LastLaunchedAgent,
+  defaultSources, groupPreferenceKey, groupStorageCodec, hasSource, lastLaunchedAgentCodec, lastLaunchedAgentKey,
+  readLastLaunchedAgent, routeNode, selectedSources, sourcesPreferenceKey, sourcesStorageCodec, toggledSource, withSource,
+  type ChatFilter, type ChatGroup, type LastLaunchedAgent,
 } from "./app-chat-sources";
 import { conversationHref } from "./app-chat-transcript";
 import { reportEvent } from "./event-log";
@@ -24,15 +26,18 @@ function useSelectionState() {
   const routeSource = routeNode(params.get("node"));
   const invalidSource = params.has("node") && !routeSource;
 
-  const [lastLaunchedAgent, setLastLaunchedAgent] = useState(readLastLaunchedAgent);
-  const [sources, setSources] = useState(() => {
-    const saved = readSources();
-    return routeSource ? withSource(saved, routeSource) : saved;
-  });
+  const [lastLaunchedAgent, setLastLaunchedAgent] = useLocalStorageState<LastLaunchedAgent | undefined>(
+    lastLaunchedAgentKey, undefined, lastLaunchedAgentCodec,
+  );
+  const [storedSources, setSources] = useLocalStorageState(sourcesPreferenceKey, defaultSources, sourcesStorageCodec);
+  const sources = useMemo(
+    () => (enabled && routeSource && !hasSource(storedSources, routeSource) ? withSource(storedSources, routeSource) : storedSources),
+    [enabled, storedSources, routeSource],
+  );
   const [filter, setFilter] = useState<ChatFilter>("me");
   // Like the filter it starts off on every visit: hidden chats are looked up, not lived with.
   const [includeHidden, setIncludeHidden] = useState(false);
-  const [group, setGroupState] = useState<ChatGroup>(readGroup);
+  const [group, setGroup] = useLocalStorageState<ChatGroup>(groupPreferenceKey, "machine", groupStorageCodec);
   const sourceList = useMemo(() => selectedSources(sources), [sources]);
   const activeSource = resolveActiveSource(params, sources, lastLaunchedAgent);
 
@@ -75,13 +80,18 @@ function useSelectionState() {
 
   // Async work checks this when it settles, because the user may have moved on meanwhile.
   const latestSelection = useRef({ key: selectionKey, pathname });
-  useLayoutEffect(() => { latestSelection.current = { key: selectionKey, pathname }; }, [selectionKey, pathname]);
+  const latestStoredSources = useRef(storedSources);
+  useLayoutEffect(() => {
+    latestSelection.current = { key: selectionKey, pathname };
+    latestStoredSources.current = storedSources;
+  }, [selectionKey, pathname, storedSources]);
 
-  useEffect(() => { savePreference(sourcesPreferenceKey, sources); }, [sources]);
   // Deep links and browser history select their owning machine as well as the conversation.
   useEffect(() => {
-    if (enabled && !invalidSource) setSources((current) => hasSource(current, activeSource) ? current : withSource(current, activeSource));
-  }, [enabled, activeSource, invalidSource]);
+    if (enabled && !invalidSource && !hasSource(latestStoredSources.current, activeSource)) {
+      setSources((current) => hasSource(current, activeSource) ? current : withSource(current, activeSource));
+    }
+  }, [enabled, activeSource, invalidSource, setSources]);
 
   function openConversation(ref: ConversationRef) { navigate(conversationHref(ref)); }
 
@@ -113,14 +123,8 @@ function useSelectionState() {
     if (enabled && !hasSource(next, activeSource)) newConversationOn(selectedSources(next)[0]);
   }
 
-  function setGroup(value: ChatGroup) {
-    setGroupState(value);
-    savePreference(groupPreferenceKey, value);
-  }
-
   function recordLaunch(launched: LastLaunchedAgent) {
     setLastLaunchedAgent(launched);
-    savePreference(lastLaunchedAgentKey, launched);
   }
 
   return {

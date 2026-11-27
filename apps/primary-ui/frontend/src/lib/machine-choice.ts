@@ -1,11 +1,24 @@
-import { useSyncExternalStore } from "react";
+import { useCallback } from "react";
 
-import { routeNode, savePreference } from "./app-chat-sources";
+import {
+  jsonStorageCodec,
+  type LocalStorageCodec,
+  readLocalStorage,
+  useLocalStorageState,
+  writeLocalStorage,
+} from "@design-system/ui";
+
+import { routeNode } from "./app-chat-sources";
 
 /** A paired node's petname, or `undefined` for this machine. */
 export function normalizeMachine(value: unknown): string | undefined {
   return typeof value === "string" ? routeNode(value) : undefined;
 }
+
+const machineCodec: LocalStorageCodec<string | undefined> = {
+  parse: (stored) => normalizeMachine(jsonStorageCodec.parse(stored)),
+  serialize: (value) => JSON.stringify(normalizeMachine(value) ?? ""),
+};
 
 /**
  * A page's single machine choice — whose marketplace, whose settings — remembered across visits
@@ -13,37 +26,13 @@ export function normalizeMachine(value: unknown): string | undefined {
  * machine at a time, so the choice is one petname or this machine.
  */
 export function createMachineChoice(storageKey: string) {
-  const listeners = new Set<() => void>();
-  const read = (): string | undefined => {
-    try { return normalizeMachine(JSON.parse(localStorage.getItem(storageKey) ?? "null")); }
-    catch { return undefined; }
-  };
-  let current = read();
-
-  function set(source?: string) {
-    current = normalizeMachine(source);
-    savePreference(storageKey, current ?? "");
-    for (const listener of listeners) listener();
-  }
-
-  function subscribe(listener: () => void) {
-    listeners.add(listener);
-    // Another tab choosing a machine is reflected here as well.
-    const onStorage = (event: StorageEvent) => {
-      if (event.key !== null && event.key !== storageKey) return;
-      current = read();
-      listener();
-    };
-    window.addEventListener("storage", onStorage);
-    return () => {
-      listeners.delete(listener);
-      window.removeEventListener("storage", onStorage);
-    };
-  }
+  const read = (): string | undefined => readLocalStorage(storageKey, undefined, machineCodec);
+  const set = (source?: string) => writeLocalStorage(storageKey, normalizeMachine(source), machineCodec);
 
   function use(): [string | undefined, (source?: string) => void] {
-    const source = useSyncExternalStore(subscribe, () => current, () => undefined);
-    return [source, set];
+    const [source, setStored] = useLocalStorageState<string | undefined>(storageKey, undefined, machineCodec);
+    const choose = useCallback((next?: string) => setStored(normalizeMachine(next)), [setStored]);
+    return [source, choose];
   }
 
   return { read, set, use };
