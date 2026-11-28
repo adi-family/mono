@@ -1685,6 +1685,9 @@ fn feed_turn(
             match &entry.turn {
                 T::Did(ToolRun { calls: None, .. }) => entry.redrawn_as("folded"),
                 T::Did(_) => entry.redrawn_as("open"),
+                // An event can land on a turn already drawn, taking the place its answer had; on
+                // the bare positional key the list would keep the answer's view in its stead.
+                T::Event(_) => entry.redrawn_as("event"),
                 _ => entry,
             }
         })
