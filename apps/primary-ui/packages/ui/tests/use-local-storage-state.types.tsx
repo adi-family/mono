@@ -60,11 +60,9 @@ export function rejectedLocalStorageExamples() {
   // @ts-expect-error — the setter only accepts the fallback's type.
   setCount("many");
 
+  // prettier-ignore
   // @ts-expect-error — a codec must match the fallback's type.
-  useLocalStorageState<number>("width", 0, {
-    parse: (stored) => stored,
-    serialize: (value: string) => value,
-  });
+  useLocalStorageState<number>("width", 0, { parse: (stored) => stored, serialize: (value: string) => value });
 
   // @ts-expect-error — a fallback is required.
   useLocalStorageState("count");

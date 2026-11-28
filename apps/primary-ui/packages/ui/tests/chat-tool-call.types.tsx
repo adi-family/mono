@@ -91,12 +91,9 @@ export function rejectedToolExamples() {
   <ToolWrapper title="8 tool calls" group={{ errorCount: "1" }} />;
   // @ts-expect-error The destination belongs to the row, so link props cannot override it.
   <ChatToolCall title="Agent chat" href="/agents/reviewer" linkProps={{ href: "/another-chat" }} />;
+  // prettier-ignore
   // @ts-expect-error The row summary provides the link's children.
-  <ChatToolCall
-    title="Agent chat"
-    href="/agents/reviewer"
-    linkProps={{ children: "Another title" }}
-  />;
+  <ChatToolCall title="Agent chat" href="/agents/reviewer" linkProps={{ children: "Another title" }} />;
   // @ts-expect-error Output is a literal string, so a renderer cannot silently interpret markup.
   <ChatToolOutput>
     <strong>Output</strong>

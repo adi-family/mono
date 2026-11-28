@@ -101,12 +101,7 @@ export function rejectedHelpExamples() {
   <Button disabled disabledReason="Choose a project." disabledHelpPosition="diagonal">
     Continue
   </Button>;
+  // prettier-ignore
   // @ts-expect-error ThemeToggle also preserves the helper placement contract.
-  <ThemeToggle
-    theme="light"
-    onThemeChange={() => {}}
-    disabled
-    disabledReason="Workspace setting."
-    disabledHelpPosition="diagonal"
-  />;
+  <ThemeToggle theme="light" onThemeChange={() => {}} disabled disabledReason="Workspace setting." disabledHelpPosition="diagonal" />;
 }
