@@ -561,4 +561,16 @@ mod tests {
         assert!(c.steps.is_empty());
         assert!(c.metrics.is_none());
     }
+
+    #[test]
+    fn the_fallback_drops_adis_own_turn_separators() {
+        let starting = "=== turn started: unix 1793636622 ===\n";
+        assert_eq!(parse(starting.as_bytes()).text, "");
+        let failed = concat!(
+            "=== turn started: unix 1 ===\n",
+            "claude: command not found\n",
+            "=== turn ended: unix 2 (exit status: 127) ===\n",
+        );
+        assert_eq!(parse(failed.as_bytes()).text, "claude: command not found");
+    }
 }

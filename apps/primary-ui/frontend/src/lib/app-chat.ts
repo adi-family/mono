@@ -107,6 +107,12 @@ export type AgentStep =
       preview: string;
       status: AgentToolStatus;
     }
+  | {
+      kind: "event";
+      name: string;
+      type: string;
+      metadata?: Record<string, unknown>;
+    }
   | { kind: "unknown" };
 
 export interface AgentAttachment {
@@ -336,6 +342,13 @@ function stepOf(value: unknown): AgentStep {
           : [],
         preview: text(step.preview),
         status: toolStatus(step.status),
+      };
+    case "event":
+      return {
+        kind: "event",
+        name: text(step.name),
+        type: text(step.type),
+        ...(isObject(step.metadata) ? { metadata: step.metadata } : {}),
       };
     default:
       return { kind: "unknown" };

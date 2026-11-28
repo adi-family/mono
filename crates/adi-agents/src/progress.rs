@@ -228,10 +228,55 @@ pub(crate) fn runner_capabilities(runner: &dyn crate::runner::Runner) -> Backend
     }
 }
 
-/// A best-effort UTF-8 view of a log, trimmed — the answer for a backend with no structured stream,
-/// and for a log written by something that died before it could say anything.
+/// Whether a log line is one of ADI's own per-turn bookends (`=== turn started: … ===` /
+/// `=== turn ended: … ===`, written by [`detached::spawn_child`](crate::backends::detached)).
+///
+/// They are the only lines in a freshly opened log until the engine emits its first event, so any
+/// plain-text fallback must drop them rather than showing scaffolding as the agent's answer.
+pub(crate) fn is_turn_separator(line: &str) -> bool {
+    let line = line.trim();
+    line.starts_with("=== turn started:") || line.starts_with("=== turn ended:")
+}
+
+/// Parse ADI's `=== turn started: … ===` log header into a structured [`Step::Event`], so every
+/// detached turn carries a parsable start milestone on its timeline instead of leaking raw text.
+pub(crate) fn turn_started_step(log: &[u8]) -> Option<Step> {
+    let text = String::from_utf8_lossy(log);
+    let rest = text
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("=== turn started:"))?;
+    let payload = rest.trim().strip_suffix("===").unwrap_or(rest).trim();
+    let unix = payload
+        .strip_prefix("unix")
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .or_else(|| {
+            time::OffsetDateTime::parse(payload, &time::format_description::well_known::Rfc3339)
+                .ok()
+                .and_then(|dt| u64::try_from(dt.unix_timestamp()).ok())
+        });
+    let metadata = match unix {
+        Some(ts) => serde_json::json!({ "unix": ts }),
+        None if !payload.is_empty() => serde_json::json!({ "at": payload }),
+        None => serde_json::Value::Null,
+    };
+    Some(Step::Event {
+        name: "Turn started".to_string(),
+        event_type: "turn.started".to_string(),
+        metadata,
+    })
+}
+
+/// A best-effort UTF-8 view of a log, trimmed and stripped of ADI's own turn separators — the
+/// answer for a backend with no structured stream, and for a log written by something that died
+/// before it could say anything.
 pub(crate) fn text_of(log: &[u8]) -> String {
-    String::from_utf8_lossy(log).trim().to_string()
+    String::from_utf8_lossy(log)
+        .lines()
+        .filter(|line| !is_turn_separator(line))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
 }
 
 /// Taking `&bool` is what serde's `skip_serializing_if` requires — it hands the predicate a
@@ -310,5 +355,35 @@ mod tests {
                 "{wire} renders differently than it used to",
             );
         }
+    }
+
+    #[test]
+    fn turn_started_step_parses_unix_and_rfc3339_headers() {
+        assert_eq!(
+            turn_started_step(b"=== turn started: unix 1793636622 ===\n"),
+            Some(Step::Event {
+                name: "Turn started".into(),
+                event_type: "turn.started".into(),
+                metadata: serde_json::json!({ "unix": 1_793_636_622_u64 }),
+            })
+        );
+        assert_eq!(
+            turn_started_step(b"=== turn started: 2026-11-23T10:46:10Z ===\n"),
+            Some(Step::Event {
+                name: "Turn started".into(),
+                event_type: "turn.started".into(),
+                metadata: serde_json::json!({ "unix": 1_795_430_770_u64 }),
+            })
+        );
+        assert_eq!(turn_started_step(b"plain output\n"), None);
+    }
+
+    #[test]
+    fn text_of_drops_adi_turn_separators_and_keeps_the_rest() {
+        assert_eq!(text_of(b"=== turn started: unix 1793636622 ===\n"), "");
+        assert_eq!(
+            text_of(b"=== turn started: unix 1 ===\nboom\n=== turn ended: unix 2 (exit status: 1) ===\n"),
+            "boom"
+        );
     }
 }

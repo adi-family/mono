@@ -1,5 +1,20 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Pencil } from "lucide-react";
+import {
+  Activity as ActivityIcon,
+  Archive,
+  ArrowUpRight,
+  Bot,
+  CircleCheck,
+  CircleX,
+  ListTree,
+  Pencil,
+  Play,
+  RotateCcw,
+  Square,
+  Timer,
+  Trash2,
+  Workflow,
+} from "lucide-react";
 import {
   Button,
   ChatMessage,
@@ -22,17 +37,15 @@ import {
 } from "../lib/app-chat";
 import {
   activityStatus,
-  agentLaunches,
-  conversationHref,
   toolArguments,
   toolCode,
   toolDisplayName,
   toolSummary,
   transcriptParts,
+  type EventStep,
 } from "../lib/app-chat-transcript";
 import { groupErrorCount } from "../lib/app-chat-activity";
 import { ChatMarkdown } from "./ChatMarkdown";
-import { conversationKey, sameConversation } from "../lib/app-chat-sources";
 
 export interface AppChatTranscriptProps {
   conversation: ConversationRef;
@@ -86,16 +99,11 @@ function ToolArguments({ name: tool, input }: { name: string; input: string }) {
   );
 }
 
-function ToolActivity({
-  step,
-  conversation,
-  conversations,
-  onOpenConversation,
-}: ActivityProps & { step: ToolStep }) {
-  const children = agentLaunches(step).map((ref) => ({
-    ...ref,
-    ...(conversation.source ? { source: conversation.source } : {}),
-  }));
+/**
+ * A call is drawn as the call it was, whatever it ran. An agent it launched is not folded into it:
+ * the platform records that as its own `agent.started` event step, drawn as a row right after.
+ */
+function ToolActivity({ step }: ActivityProps & { step: ToolStep }) {
   const details = (
     <>
       <ToolArguments name={step.name} input={step.input} />
@@ -105,37 +113,6 @@ function ToolActivity({
       )}
     </>
   );
-  if (children.length)
-    return children.map((ref) => {
-      const child = conversations.find((item) => sameConversation(item, ref));
-      return (
-        <ChatToolCall
-          key={conversationKey(ref)}
-          kind="agent"
-          title={[ref.agent, child?.title].filter(Boolean).join(" · ")}
-          status={child?.running ? "running" : child?.state === "waiting" ? "pending" : "completed"}
-          statusLabels={{ completed: child ? "Conversation available" : "Started" }}
-          href={conversationHref(ref)}
-          linkProps={{
-            onClick: (event) => {
-              if (
-                event.defaultPrevented ||
-                event.button !== 0 ||
-                event.metaKey ||
-                event.ctrlKey ||
-                event.shiftKey ||
-                event.altKey
-              )
-                return;
-              event.preventDefault();
-              onOpenConversation(ref);
-            },
-          }}
-        >
-          {details}
-        </ChatToolCall>
-      );
-    });
   const summary = toolSummary(step.name, step.input);
   return (
     <ChatToolCall
@@ -253,6 +230,133 @@ function FoldedActivity({ step, ...props }: ActivityProps & { step: FoldedStep }
       </div>
     </ChatToolCall>
   );
+}
+
+function metaString(meta: Record<string, unknown> | undefined, key: string): string | null {
+  const value = meta?.[key];
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed || null;
+}
+
+function formatUnixTime(unix: number): string {
+  const d = new Date(unix * 1000);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+function EventRow({
+  step,
+  conversation,
+  onOpenConversation,
+}: {
+  step: EventStep;
+  conversation: ConversationRef;
+  onOpenConversation: (ref: ConversationRef) => void;
+}) {
+  const meta = step.metadata;
+  const iconClass = "text-muted-foreground size-3.5 shrink-0";
+  let icon = <ActivityIcon aria-hidden="true" className={iconClass} />;
+  let detail: string | null = null;
+  let targetRef: ConversationRef | null = null;
+
+  switch (step.type) {
+    case "turn.started": {
+      icon = <Play aria-hidden="true" className={iconClass} />;
+      const unix = typeof meta?.unix === "number" ? meta.unix : null;
+      detail = unix !== null ? formatUnixTime(unix) : metaString(meta, "at");
+      break;
+    }
+    case "agent.started": {
+      icon = <Bot aria-hidden="true" className={iconClass} />;
+      const agent = metaString(meta, "agent");
+      const runId = metaString(meta, "run_id");
+      detail = runId ?? metaString(meta, "session");
+      if (agent && runId) {
+        targetRef = {
+          agent,
+          runId,
+          ...(conversation.source ? { source: conversation.source } : {}),
+        };
+      }
+      break;
+    }
+    case "agent.created":
+    case "agent.updated":
+      icon = <Bot aria-hidden="true" className={iconClass} />;
+      break;
+    case "agent.stopped":
+      icon = <Square aria-hidden="true" className={iconClass} />;
+      break;
+    case "agent.deleted":
+      icon = <Trash2 aria-hidden="true" className={iconClass} />;
+      break;
+    case "await.registered":
+      icon = <Timer aria-hidden="true" className={iconClass} />;
+      detail = metaString(meta, "id");
+      break;
+    case "workflow.started":
+    case "workflow.created":
+    case "workflow.enabled":
+    case "workflow.disabled":
+      icon = <Workflow aria-hidden="true" className={iconClass} />;
+      detail = metaString(meta, "run_key");
+      break;
+    case "task.created":
+    case "task.updated":
+    case "task.completed":
+    case "task.gave_up":
+    case "task.archived":
+    case "task.reopened":
+    case "task.deleted": {
+      const TaskIcon =
+        step.type === "task.completed"
+          ? CircleCheck
+          : step.type === "task.gave_up"
+            ? CircleX
+            : step.type === "task.archived"
+              ? Archive
+              : step.type === "task.reopened"
+                ? RotateCcw
+                : step.type === "task.deleted"
+                  ? Trash2
+                  : ListTree;
+      icon = <TaskIcon aria-hidden="true" className={iconClass} />;
+      detail = metaString(meta, "id");
+      break;
+    }
+  }
+
+  const content = (
+    <>
+      {icon}
+      <span className="truncate">{step.name}</span>
+      {detail && (
+        <span className="text-muted-foreground ml-auto shrink-0 pl-3 font-mono text-[11px]">
+          {detail}
+        </span>
+      )}
+      {targetRef && <ArrowUpRight aria-hidden="true" className={iconClass} />}
+    </>
+  );
+
+  const baseClass =
+    "border-border text-muted-foreground flex w-full items-center gap-2 border-l-2 py-1 pl-3 pr-2 text-xs";
+
+  if (targetRef) {
+    const ref = targetRef;
+    return (
+      <button
+        type="button"
+        className={`${baseClass} hover:bg-muted/50 hover:text-foreground focus-visible:ring-ring/50 rounded-r text-left transition-colors outline-none focus-visible:ring-2`}
+        onClick={() => onOpenConversation(ref)}
+      >
+        {content}
+      </button>
+    );
+  }
+
+  return <div className={baseClass}>{content}</div>;
 }
 
 function Activity({ step, ...props }: ActivityProps & { step: AgentStep }) {
@@ -382,6 +486,13 @@ export function appChatTranscriptEntries({
               <ChatMessageContent key={part.key} className="whitespace-normal">
                 <ChatMarkdown>{part.text}</ChatMarkdown>
               </ChatMessageContent>
+            ) : part.kind === "event" ? (
+              <EventRow
+                key={part.key}
+                step={part.step}
+                conversation={conversation}
+                onOpenConversation={onOpenConversation}
+              />
             ) : (
               <div key={part.key} className="min-w-0">
                 {part.steps.map(({ step, index }) => (

@@ -1431,12 +1431,54 @@ fn local_platform_event(
                 href: None,
             }
         }
-        "agent.created" | "agent.updated" => PlatformEvent {
-            icon: Lucide::Bot,
+        "agent.created" | "agent.updated" | "agent.stopped" => PlatformEvent {
+            icon: if event_type == "agent.stopped" {
+                Lucide::Square
+            } else {
+                Lucide::Bot
+            },
             name: name.to_string(),
             detail: None,
             action: None,
             href: meta_str("agent").map(|agent| agent_form_path(&agent)),
+        },
+        "agent.deleted" => PlatformEvent {
+            icon: Lucide::Trash2,
+            name: name.to_string(),
+            detail: None,
+            action: None,
+            href: None,
+        },
+        "await.registered" => PlatformEvent {
+            icon: Lucide::Timer,
+            name: name.to_string(),
+            detail: meta_str("id"),
+            action: None,
+            href: None,
+        },
+        "workflow.enabled" | "workflow.disabled" => PlatformEvent {
+            icon: Lucide::Workflow,
+            name: name.to_string(),
+            detail: None,
+            action: None,
+            href: meta_str("workflow").map(|id| {
+                crate::routing::workflow_detail_path(&id, crate::routing::WorkflowTab::Runs)
+            }),
+        },
+        "task.updated" | "task.completed" | "task.gave_up" | "task.archived" | "task.reopened"
+        | "task.deleted" => PlatformEvent {
+            icon: match event_type {
+                "task.completed" => Lucide::CircleCheck,
+                "task.gave_up" => Lucide::CircleX,
+                "task.archived" => Lucide::Archive,
+                "task.reopened" => Lucide::RotateCcw,
+                "task.deleted" => Lucide::Trash2,
+                _ => Lucide::ListTree,
+            },
+            name: name.to_string(),
+            detail: meta_str("id"),
+            action: None,
+            href: (event_type != "task.deleted").then(|| Route::Tasks.path().to_string()),
         },
         "workflow.started" | "workflow.created" => PlatformEvent {
             icon: Lucide::Workflow,
@@ -1454,6 +1496,17 @@ fn local_platform_event(
             action: None,
             href: Some(Route::Tasks.path().to_string()),
         },
+        "turn.started" => PlatformEvent {
+            icon: Lucide::Play,
+            name: name.to_string(),
+            detail: metadata
+                .get("unix")
+                .and_then(serde_json::Value::as_u64)
+                .map(format_unix_time)
+                .or_else(|| meta_str("at")),
+            action: None,
+            href: None,
+        },
         _ => {
             let href = meta_str("href").filter(|h| h.starts_with('/') && !h.starts_with("//"));
             PlatformEvent {
@@ -1465,6 +1518,28 @@ fn local_platform_event(
             }
         }
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn format_unix_time(unix: u64) -> String {
+    let d = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64((unix as f64) * 1000.0));
+    format!(
+        "{:02}:{:02}:{:02}",
+        d.get_hours(),
+        d.get_minutes(),
+        d.get_seconds()
+    )
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn format_unix_time(unix: u64) -> String {
+    let secs = unix % 86_400;
+    format!(
+        "{:02}:{:02}:{:02}",
+        secs / 3_600,
+        (secs % 3_600) / 60,
+        secs % 60
+    )
 }
 
 /// Handle an in-app click action produced by [`platform_event`].

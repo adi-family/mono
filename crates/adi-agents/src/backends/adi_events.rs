@@ -15,7 +15,7 @@ use std::io::Write;
 
 use serde_json::{Value, json};
 
-use crate::progress::{Step, ToolStatus, TurnContent, TurnMetrics};
+use crate::progress::{Step, ToolStatus, TurnContent, TurnMetrics, is_turn_separator};
 
 /// Where a turn writes its events. The child's stdout in production; a buffer in tests.
 pub(crate) type Sink<'a> = &'a mut dyn Write;
@@ -96,7 +96,7 @@ pub(crate) fn parse(log: &[u8]) -> TurnContent {
 
     for line in text.lines() {
         let line = line.trim();
-        if line.is_empty() {
+        if line.is_empty() || is_turn_separator(line) {
             continue;
         }
         let Ok(event) = serde_json::from_str::<Value>(line) else {
@@ -239,6 +239,17 @@ mod tests {
         let content = parse(b"\xe2\x9a\xa0 adi loop error: no API key\n");
         assert_eq!(content.text, "⚠ adi loop error: no API key");
         assert!(content.steps.is_empty());
+    }
+
+    #[test]
+    fn turn_separators_never_leak_into_plain_text_fallback() {
+        assert_eq!(parse(b"=== turn started: unix 1793636622 ===\n").text, "");
+        let failed = concat!(
+            "=== turn started: unix 1 ===\n",
+            "adi loop error: no API key\n",
+            "=== turn ended: unix 2 (exit status: 1) ===\n",
+        );
+        assert_eq!(parse(failed.as_bytes()).text, "adi loop error: no API key");
     }
 
     #[test]

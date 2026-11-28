@@ -346,7 +346,7 @@ impl DetachedRunner {
     /// a log written by something that crashed before it could say anything) falls back to plain
     /// text, so this never fails — the worst case is "just the answer, no steps".
     fn parse(&self, log: &[u8]) -> TurnContent {
-        match self.backend {
+        let mut content = match self.backend {
             Backend::ProcessClaude | Backend::HarnessClaudeSdk => claude_stream::parse(log),
             Backend::ProcessCodex => codex_stream::parse(log),
             Backend::ProcessAntigravity => antigravity_stream::parse(log),
@@ -356,7 +356,11 @@ impl DetachedRunner {
                 steps: Vec::new(),
                 metrics: None,
             },
+        };
+        if let Some(started) = progress::turn_started_step(log) {
+            content.steps.insert(0, started);
         }
+        content
     }
 }
 
@@ -5190,5 +5194,69 @@ mod tests {
                 error: None
             }
         )));
+    }
+
+    #[test]
+    fn turn_started_header_becomes_a_structured_event_step_across_backends() {
+        let session =
+            FakeSession::new("turn-started-event").with_state(json!({ "pid": std::process::id() }));
+        session.write_log("=== turn started: unix 1793636622 ===\n");
+
+        let expected = Step::Event {
+            name: "Turn started".into(),
+            event_type: "turn.started".into(),
+            metadata: json!({ "unix": 1_793_636_622_u64 }),
+        };
+
+        for backend in [
+            Backend::ProcessClaude,
+            Backend::HarnessClaudeSdk,
+            Backend::ProcessCodex,
+            Backend::ProcessAntigravity,
+            Backend::HarnessAdi,
+        ] {
+            let runner = DetachedRunner::new(backend);
+            let batch = runner.events(&session, None).expect("events");
+            assert_eq!(
+                batch.events,
+                vec![RunEvent::Step(expected.clone())],
+                "startup log emits only the structured turn.started event, never raw text"
+            );
+        }
+
+        // Once the engine emits its own events, `turn.started` stays first in the whole-turn read
+        // and is not duplicated on an incremental read from the cursor.
+        let runner = DetachedRunner::new(Backend::HarnessAdi);
+        let first = runner.events(&session, None).expect("startup batch");
+        session.write_log(&format!(
+            "=== turn started: unix 1793636622 ===\n{}\n{}\n",
+            json!({"kind": "tool", "id": "c1", "name": "Read", "input": "{}", "status": "ok", "output": "ok"}),
+            json!({"kind": "answer", "text": "done"}),
+        ));
+
+        let whole = runner.events(&session, None).expect("whole batch");
+        assert_eq!(whole.events[0], RunEvent::Step(expected));
+        assert!(matches!(
+            &whole.events[1],
+            RunEvent::Step(Step::Tool { name, .. }) if name == "Read"
+        ));
+        assert_eq!(
+            whole.events[2],
+            RunEvent::Answer {
+                text: "done".into()
+            }
+        );
+
+        let next = runner
+            .events(&session, Some(&first.cursor))
+            .expect("incremental batch");
+        assert!(
+            !next.events.iter().any(|e| matches!(
+                e,
+                RunEvent::Step(Step::Event { event_type, .. }) if event_type == "turn.started"
+            )),
+            "incremental read after byte 0 must not duplicate turn.started: {:?}",
+            next.events
+        );
     }
 }

@@ -903,6 +903,15 @@ pub fn register(store: &Awaits, agent: &str, conv: &str, req: &Request) -> Resul
         last_check: None,
     };
     store.save(&record)?;
+    // Best-effort: the await is registered either way, and a conversation that cannot take the row
+    // (a test fixture with no session, a store mid-transaction) loses only the row.
+    let _ = crate::Agents::with_config(store.config().clone()).push_event(
+        agent,
+        conv,
+        format!("Waiting {}", record.describe_stable()),
+        "await.registered",
+        serde_json::json!({ "id": record.id }),
+    );
     Ok(record)
 }
 

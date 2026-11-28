@@ -165,14 +165,7 @@ pub(crate) fn run_tasks(adi: Adi, command: TasksCommand) -> Result<(), String> {
             let task = store
                 .create(title, details, project, tag, parent, cwd)
                 .map_err(|e| e.to_string())?;
-            adi.agents().push_event_for_caller(
-                format!("Task {} created", task.task.id),
-                "task.created",
-                serde_json::json!({
-                    "id": task.task.id,
-                    "title": task.task.title,
-                }),
-            );
+            task_event(&adi, &task, "created");
             if json {
                 print_json(&task);
             } else {
@@ -211,6 +204,7 @@ pub(crate) fn run_tasks(adi: Adi, command: TasksCommand) -> Result<(), String> {
                     },
                 )
                 .map_err(|e| e.to_string())?;
+            task_event(&adi, &task, "updated");
             if json {
                 print_json(&task);
             } else {
@@ -232,6 +226,7 @@ pub(crate) fn run_tasks(adi: Adi, command: TasksCommand) -> Result<(), String> {
         } => {
             let result = parse_result(result, result_file)?;
             let task = store.complete(&id, result).map_err(|e| e.to_string())?;
+            task_event(&adi, &task, "completed");
             if json {
                 print_json(&task);
             } else {
@@ -241,6 +236,7 @@ pub(crate) fn run_tasks(adi: Adi, command: TasksCommand) -> Result<(), String> {
         }
         TasksCommand::GiveUp { id, reason, json } => {
             let task = store.give_up(&id, &reason).map_err(|e| e.to_string())?;
+            task_event(&adi, &task, "gave_up");
             if json {
                 print_json(&task);
             } else {
@@ -250,6 +246,7 @@ pub(crate) fn run_tasks(adi: Adi, command: TasksCommand) -> Result<(), String> {
         }
         TasksCommand::Archive { id, cascade, json } => {
             let task = store.archive(&id, cascade).map_err(|e| e.to_string())?;
+            task_event(&adi, &task, "archived");
             if json {
                 print_json(&task);
             } else {
@@ -259,6 +256,7 @@ pub(crate) fn run_tasks(adi: Adi, command: TasksCommand) -> Result<(), String> {
         }
         TasksCommand::Reopen { id, json } => {
             let task = store.reopen(&id).map_err(|e| e.to_string())?;
+            task_event(&adi, &task, "reopened");
             if json {
                 print_json(&task);
             } else {
@@ -268,10 +266,32 @@ pub(crate) fn run_tasks(adi: Adi, command: TasksCommand) -> Result<(), String> {
         }
         TasksCommand::Rm { id } | TasksCommand::Delete { id } => {
             store.delete(&id).map_err(|e| e.to_string())?;
+            adi.agents().push_event_for_caller(
+                format!("Task {id} deleted"),
+                "task.deleted",
+                serde_json::json!({ "id": id }),
+            );
             println!("Deleted task {id}.");
         }
     }
     Ok(())
+}
+
+/// Record `task.<verb>` onto the conversation running this command, if one is (a no-op for a
+/// person at a terminal).
+fn task_event(adi: &Adi, task: &TaskView, verb: &str) {
+    let label = match verb {
+        "gave_up" => "given up",
+        other => other,
+    };
+    adi.agents().push_event_for_caller(
+        format!("Task {} {label}", task.task.id),
+        format!("task.{verb}"),
+        serde_json::json!({
+            "id": task.task.id,
+            "title": task.task.title,
+        }),
+    );
 }
 
 /// Parse `--result`/`--result-file` into the JSON value to pass to `complete`, if either was

@@ -230,11 +230,21 @@ pub(crate) fn run_workflows(adi: Adi, command: WorkflowsCommand) -> Result<(), S
         WorkflowsCommand::Enable { id } => {
             engine.describe_workflow(&id).map_err(|e| e.to_string())?;
             engine.set_enabled(&id, true).map_err(|e| e.to_string())?;
+            adi.agents().push_event_for_caller(
+                format!("Workflow {id} enabled"),
+                "workflow.enabled",
+                serde_json::json!({ "workflow": id }),
+            );
             println!("Enabled {id}.");
         }
         WorkflowsCommand::Disable { id } => {
             engine.describe_workflow(&id).map_err(|e| e.to_string())?;
             engine.set_enabled(&id, false).map_err(|e| e.to_string())?;
+            adi.agents().push_event_for_caller(
+                format!("Workflow {id} disabled"),
+                "workflow.disabled",
+                serde_json::json!({ "workflow": id }),
+            );
             println!("Disabled {id}.");
         }
         WorkflowsCommand::Llm(_) => unreachable!("`llm` is answered in main"),

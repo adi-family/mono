@@ -10942,4 +10942,42 @@ mod tests {
             Step::Event { event_type, .. } if event_type == "task.created"
         ));
     }
+
+    /// Registering an await from inside a turn leaves an `await.registered` row on that turn,
+    /// named by what it waits on.
+    #[test]
+    fn registering_an_await_records_an_event_on_the_turn() {
+        let store = scratch("await-event");
+        store.save("watcher", spec("process:claude")).expect("save");
+        let sessions = store.sessions();
+        let conv = sessions
+            .create("watcher", Backend::ProcessClaude, "/tmp", "watch the build")
+            .expect("create")
+            .id;
+        sessions
+            .append_turn("watcher", &conv, store::user_turn("watch the build"))
+            .expect("user turn");
+
+        let pending = awaits::Awaits::with_config(store.config().clone());
+        let registered = awaits::register(
+            &pending,
+            "watcher",
+            &conv,
+            &awaits::Request {
+                events: vec!["adi.agents.run.finished".into()],
+                ..awaits::Request::default()
+            },
+        )
+        .expect("register");
+
+        let events = sessions.live_events("watcher", &conv);
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert!(matches!(
+            &events[0].1,
+            Step::Event { name, event_type, metadata }
+                if event_type == "await.registered"
+                    && name == "Waiting on adi.agents.run.finished"
+                    && metadata["id"] == registered.id.as_str()
+        ));
+    }
 }

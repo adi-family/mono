@@ -1075,6 +1075,11 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
         }
         AgentsCommand::Stop { name } => {
             if store.stop(&name).map_err(|e| e.to_string())? {
+                store.push_event_for_caller(
+                    format!("Agent {name} stopped"),
+                    "agent.stopped",
+                    serde_json::json!({ "agent": name }),
+                );
                 println!("Stopped agent {name}.");
             } else {
                 println!("Agent {name} wasn't running.");
@@ -1082,6 +1087,11 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
         }
         AgentsCommand::Rm { name } | AgentsCommand::Delete { name } => {
             if store.delete(&name).map_err(|e| e.to_string())? {
+                store.push_event_for_caller(
+                    format!("Agent {name} deleted"),
+                    "agent.deleted",
+                    serde_json::json!({ "agent": name }),
+                );
                 println!("Deleted agent {name}.");
             } else {
                 println!("No such agent: {name}.");

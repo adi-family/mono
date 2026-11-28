@@ -99,7 +99,7 @@ pub(crate) fn parse(log: &[u8]) -> TurnContent {
 
     if !saw_event {
         return TurnContent {
-            text: without_chrome(&text_of(log)),
+            text: text_of(log),
             steps: Vec::new(),
             metrics: None,
         };
@@ -137,17 +137,6 @@ pub(crate) fn parse(log: &[u8]) -> TurnContent {
 
 fn is_antigravity_event(kind: &str) -> bool {
     matches!(kind, "init" | "step_update" | "result" | "command_result")
-}
-
-fn without_chrome(text: &str) -> String {
-    let kept: Vec<&str> = text
-        .lines()
-        .filter(|line| {
-            let line = line.trim();
-            !line.starts_with("=== turn started:") && !line.starts_with("=== turn ended:")
-        })
-        .collect();
-    kept.join("\n").trim().to_string()
 }
 
 fn absorb_step_update(

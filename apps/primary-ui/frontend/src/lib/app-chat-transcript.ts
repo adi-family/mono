@@ -135,13 +135,18 @@ export function appConversationHref(ref: ConversationRef): string {
   );
 }
 
-type ActivityStep = Exclude<AgentStep, { kind: "message" } | { kind: "unknown" }>;
+type ActivityStep = Exclude<
+  AgentStep,
+  { kind: "message" } | { kind: "event" } | { kind: "unknown" }
+>;
+export type EventStep = Extract<AgentStep, { kind: "event" }>;
 
 export type TranscriptPart =
   | { kind: "message"; text: string; key: string }
+  | { kind: "event"; step: EventStep; key: string }
   | { kind: "activity"; steps: { step: ActivityStep; index: number }[]; key: string };
 
-/** Preserve text as the divider between runs of activity; final text lives outside steps. */
+/** Preserve text and platform events as dividers between runs of activity; final text lives outside steps. */
 export function transcriptParts(turn: AgentTurn): TranscriptPart[] {
   const parts: TranscriptPart[] = [];
   let activity: { step: ActivityStep; index: number }[] = [];
@@ -155,6 +160,9 @@ export function transcriptParts(turn: AgentTurn): TranscriptPart[] {
       finishActivity();
       if (step.text.trim())
         parts.push({ kind: "message", text: step.text, key: `message-${index}` });
+    } else if (step.kind === "event") {
+      finishActivity();
+      parts.push({ kind: "event", step, key: `event-${index}` });
     } else if (step.kind === "tool" || step.kind === "thinking" || step.kind === "calls") {
       activity.push({ step, index });
     }

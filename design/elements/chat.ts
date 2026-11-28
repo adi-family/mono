@@ -279,6 +279,14 @@ function platformEvent(step: EventStep, remote: boolean): PlatformEvent {
   return remote ? { ...event, href: null } : event;
 }
 
+const TASK_ICONS: Record<string, string> = {
+  "task.completed": "circle-check",
+  "task.gave_up": "circle-x",
+  "task.archived": "archive",
+  "task.reopened": "rotate-ccw",
+  "task.deleted": "trash-2",
+};
+
 function localPlatformEvent(step: EventStep): PlatformEvent {
   const meta = step.metadata;
   switch (step.type) {
@@ -296,18 +304,31 @@ function localPlatformEvent(step: EventStep): PlatformEvent {
       };
     }
     case "agent.created":
-    case "agent.updated": {
+    case "agent.updated":
+    case "agent.stopped": {
       const agent = metaStr(meta, "agent");
       return {
-        icon: "bot",
+        icon: step.type === "agent.stopped" ? "square" : "bot",
         name: step.name,
         detail: null,
         action: null,
         href: agent ? `/extended/agents/${encodeURIComponent(agent)}/edit` : null,
       };
     }
+    case "agent.deleted":
+      return { icon: "trash-2", name: step.name, detail: null, action: null, href: null };
+    case "await.registered":
+      return {
+        icon: "timer",
+        name: step.name,
+        detail: metaStr(meta, "id"),
+        action: null,
+        href: null,
+      };
     case "workflow.started":
-    case "workflow.created": {
+    case "workflow.created":
+    case "workflow.enabled":
+    case "workflow.disabled": {
       const workflow = metaStr(meta, "workflow");
       return {
         icon: "workflow",
@@ -318,13 +339,29 @@ function localPlatformEvent(step: EventStep): PlatformEvent {
       };
     }
     case "task.created":
+    case "task.updated":
+    case "task.completed":
+    case "task.gave_up":
+    case "task.archived":
+    case "task.reopened":
+    case "task.deleted":
       return {
-        icon: "list-tree",
+        icon: TASK_ICONS[step.type] ?? "list-tree",
         name: step.name,
         detail: metaStr(meta, "id"),
         action: null,
-        href: "/extended/tasks",
+        href: step.type === "task.deleted" ? null : "/extended/tasks",
       };
+    case "turn.started": {
+      const unix = typeof meta?.unix === "number" ? meta.unix : null;
+      return {
+        icon: "play",
+        name: step.name,
+        detail: unix !== null ? formatUnixTime(unix) : metaStr(meta, "at"),
+        action: null,
+        href: null,
+      };
+    }
     default: {
       const rawHref = metaStr(meta, "href");
       const href = rawHref && rawHref.startsWith("/") && !rawHref.startsWith("//") ? rawHref : null;
@@ -337,6 +374,12 @@ function localPlatformEvent(step: EventStep): PlatformEvent {
       };
     }
   }
+}
+
+function formatUnixTime(unix: number): string {
+  const d = new Date(unix * 1000);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
 function titleOf(run: AgentRunInfo | undefined): string {
