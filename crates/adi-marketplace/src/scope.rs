@@ -139,7 +139,10 @@ mod tests {
     #[test]
     fn no_project_is_the_global_scope() {
         assert_eq!(Scope::from_project(None).expect("global"), Scope::Global);
-        assert_eq!(Scope::from_project(Some("  ")).expect("blank"), Scope::Global);
+        assert_eq!(
+            Scope::from_project(Some("  ")).expect("blank"),
+            Scope::Global
+        );
         assert_eq!(Scope::Global.project(), None);
         assert_eq!(Scope::Global.key(), GLOBAL_KEY);
         assert!(!Scope::Global.is_project());

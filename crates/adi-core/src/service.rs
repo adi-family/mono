@@ -152,11 +152,7 @@ pub trait Service {
         let status = status::read(&self.status_path());
         let running = self.is_running();
 
-        let problems = if running {
-            self.problems()
-        } else {
-            Vec::new()
-        };
+        let problems = if running { self.problems() } else { Vec::new() };
         let detail = if running {
             let detail = self.detail(status.as_ref());
             if problems.is_empty() {

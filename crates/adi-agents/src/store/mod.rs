@@ -60,8 +60,8 @@ pub use questions::{
     Answer, AnsweredBy, Ask, Choice, MAX_QUESTIONS, Question, Request as AskRequest,
 };
 pub use queue::{QueueMode, QueuedMessage};
-pub(crate) use record::{head, started_at};
 pub use record::{RunOutcome, SessionRecord};
+pub(crate) use record::{head, started_at};
 pub use session::SessionRef;
 pub use transcript::{TranscriptPage, Turn, assistant_turn, user_turn, user_turn_with};
 
@@ -199,7 +199,9 @@ impl SessionStore {
         let (result, record) = f()?;
         if let Some(record) = &record {
             adi_events::outbox::write(&tx, &record.name, &record.payload).map_err(|e| {
-                Error::Session(format!("couldn't queue an event in the session database: {e}"))
+                Error::Session(format!(
+                    "couldn't queue an event in the session database: {e}"
+                ))
             })?;
         }
         tx.commit()
@@ -220,7 +222,9 @@ impl SessionStore {
         let conn = self.conn()?;
         let log = adi_events::Events::with_config(config.clone());
         adi_events::outbox::relay(&conn, &log, EVENT_SOURCE, 200).map_err(|e| {
-            Error::Session(format!("couldn't relay events from the session database: {e}"))
+            Error::Session(format!(
+                "couldn't relay events from the session database: {e}"
+            ))
         })
     }
 
@@ -623,7 +627,13 @@ impl SessionStore {
             },
         )
         .map(Some)
-        .or_else(|e| if matches!(e, rusqlite::Error::QueryReturnedNoRows) { Ok(None) } else { Err(e) })
+        .or_else(|e| {
+            if matches!(e, rusqlite::Error::QueryReturnedNoRows) {
+                Ok(None)
+            } else {
+                Err(e)
+            }
+        })
         .map_err(|e| db::sql_err("read a session's lease capability in", e))
     }
 
@@ -657,9 +667,11 @@ impl SessionStore {
         ) else {
             return Vec::new();
         };
-        stmt.query_map([user], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
-            .map(|rows| rows.flatten().collect())
-            .unwrap_or_default()
+        stmt.query_map([user], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map(|rows| rows.flatten().collect())
+        .unwrap_or_default()
     }
 
     /// Void every `lease_cap` belonging to `user`'s sessions (§10.1 step 2) — so a launch already
@@ -1369,7 +1381,12 @@ impl SessionStore {
     ///
     /// # Errors
     /// Returns database errors.
-    pub(crate) fn record_goal_delivery(&self, agent: &str, conv: &str, failed: bool) -> Result<u64> {
+    pub(crate) fn record_goal_delivery(
+        &self,
+        agent: &str,
+        conv: &str,
+        failed: bool,
+    ) -> Result<u64> {
         let conn = self.conn()?;
         goals::record_delivery(&conn, agent, conv, failed)
     }
@@ -1761,7 +1778,11 @@ mod tests {
             "the write touched the row",
         );
 
-        let stored = store.get("solver", &run.id).expect("get").lease.expect("set");
+        let stored = store
+            .get("solver", &run.id)
+            .expect("get")
+            .lease
+            .expect("set");
         assert_eq!(stored, lease);
 
         // Listing reads it back the same way `get` does.
@@ -1792,21 +1813,31 @@ mod tests {
             .create("solver", Backend::HarnessAdi, "/tmp/work", "go")
             .expect("create");
 
-        let lease = crate::LeaseRef { user: "u-aaa".to_string(), names: vec!["K".to_string()] };
+        let lease = crate::LeaseRef {
+            user: "u-aaa".to_string(),
+            names: vec!["K".to_string()],
+        };
         store.set_lease("solver", &mine.id, &lease).expect("set");
-        store.set_lease("writer", &also_mine.id, &lease).expect("set");
+        store
+            .set_lease("writer", &also_mine.id, &lease)
+            .expect("set");
         store
             .set_lease(
                 "solver",
                 &someone_elses.id,
-                &crate::LeaseRef { user: "u-bbb".to_string(), names: vec!["K".to_string()] },
+                &crate::LeaseRef {
+                    user: "u-bbb".to_string(),
+                    names: vec!["K".to_string()],
+                },
             )
             .expect("set");
 
         let mut found = store.with_lease_user("u-aaa");
         found.sort();
-        let mut expected =
-            vec![("solver".to_string(), mine.id.clone()), ("writer".to_string(), also_mine.id.clone())];
+        let mut expected = vec![
+            ("solver".to_string(), mine.id.clone()),
+            ("writer".to_string(), also_mine.id.clone()),
+        ];
         expected.sort();
         assert_eq!(found, expected);
         assert!(store.with_lease_user("u-nobody").is_empty());
@@ -1820,8 +1851,15 @@ mod tests {
             )
             .expect("seed a capability to void");
         let voided = store.void_lease_cap_for_user("u-aaa").expect("void");
-        assert_eq!(voided, 2, "every session on u-aaa's lease, whether or not it had a capability yet");
-        assert_eq!(store.get("solver", &mine.id).unwrap().lease, Some(lease), "the lease itself is untouched");
+        assert_eq!(
+            voided, 2,
+            "every session on u-aaa's lease, whether or not it had a capability yet"
+        );
+        assert_eq!(
+            store.get("solver", &mine.id).unwrap().lease,
+            Some(lease),
+            "the lease itself is untouched"
+        );
     }
 
     /// ADI-MONO-182 P3.1: a session with no lease at all never gets a capability — there is
@@ -1829,8 +1867,13 @@ mod tests {
     #[test]
     fn lease_capability_is_none_without_a_lease() {
         let store = scratch("lease-capability-no-lease");
-        let run = store.create("solver", Backend::HarnessAdi, "/tmp", "go").expect("create");
-        assert_eq!(store.lease_capability("solver", &run.id).expect("read"), None);
+        let run = store
+            .create("solver", Backend::HarnessAdi, "/tmp", "go")
+            .expect("create");
+        assert_eq!(
+            store.lease_capability("solver", &run.id).expect("read"),
+            None
+        );
     }
 
     /// P3.1's headline: minted once, and the same plaintext handed back on every later call —
@@ -1839,19 +1882,35 @@ mod tests {
     #[test]
     fn lease_capability_mints_once_and_is_stable_across_turns_and_restarts() {
         let store = scratch("lease-capability-stable");
-        let run = store.create("solver", Backend::HarnessAdi, "/tmp", "go").expect("create");
-        let lease = crate::LeaseRef { user: "u-aaa".to_string(), names: vec!["K".to_string()] };
+        let run = store
+            .create("solver", Backend::HarnessAdi, "/tmp", "go")
+            .expect("create");
+        let lease = crate::LeaseRef {
+            user: "u-aaa".to_string(),
+            names: vec!["K".to_string()],
+        };
         store.set_lease("solver", &run.id, &lease).expect("set");
 
-        let first = store.lease_capability("solver", &run.id).expect("mint").expect("a lease is set");
-        let again = store.lease_capability("solver", &run.id).expect("read back").expect("still set");
-        assert_eq!(first, again, "the same session, the same capability, every time");
+        let first = store
+            .lease_capability("solver", &run.id)
+            .expect("mint")
+            .expect("a lease is set");
+        let again = store
+            .lease_capability("solver", &run.id)
+            .expect("read back")
+            .expect("still set");
+        assert_eq!(
+            first, again,
+            "the same session, the same capability, every time"
+        );
 
         // A fresh `SessionStore` value against the same files — the same thing a new process
         // opening `sessions.db` after a restart would see.
         let reopened = SessionStore::new(store.dir().to_path_buf());
         assert_eq!(
-            reopened.lease_capability("solver", &run.id).expect("read after reopening"),
+            reopened
+                .lease_capability("solver", &run.id)
+                .expect("read after reopening"),
             Some(first),
             "stable across a fresh process, not just a fresh call",
         );
@@ -1863,13 +1922,24 @@ mod tests {
     #[test]
     fn find_by_lease_cap_resolves_the_hash_back_to_its_session() {
         let store = scratch("find-by-lease-cap");
-        let run = store.create("solver", Backend::HarnessAdi, "/tmp", "go").expect("create");
-        let lease = crate::LeaseRef { user: "u-aaa".to_string(), names: vec!["K".to_string()] };
+        let run = store
+            .create("solver", Backend::HarnessAdi, "/tmp", "go")
+            .expect("create");
+        let lease = crate::LeaseRef {
+            user: "u-aaa".to_string(),
+            names: vec!["K".to_string()],
+        };
         store.set_lease("solver", &run.id, &lease).expect("set");
-        let capability = store.lease_capability("solver", &run.id).expect("mint").expect("set");
+        let capability = store
+            .lease_capability("solver", &run.id)
+            .expect("mint")
+            .expect("set");
 
         let hash = lease::capability_hash(&capability);
-        assert_eq!(store.find_by_lease_cap(&hash), Some(("solver".to_string(), run.id.clone())));
+        assert_eq!(
+            store.find_by_lease_cap(&hash),
+            Some(("solver".to_string(), run.id.clone()))
+        );
         assert_eq!(
             store.find_by_lease_cap(&lease::capability_hash("something-else")),
             None,
@@ -1883,18 +1953,39 @@ mod tests {
     #[test]
     fn lease_capability_is_reminted_with_a_different_value_after_a_revoke() {
         let store = scratch("lease-capability-remint");
-        let run = store.create("solver", Backend::HarnessAdi, "/tmp", "go").expect("create");
-        let lease = crate::LeaseRef { user: "u-aaa".to_string(), names: vec!["K".to_string()] };
+        let run = store
+            .create("solver", Backend::HarnessAdi, "/tmp", "go")
+            .expect("create");
+        let lease = crate::LeaseRef {
+            user: "u-aaa".to_string(),
+            names: vec!["K".to_string()],
+        };
         store.set_lease("solver", &run.id, &lease).expect("set");
-        let before = store.lease_capability("solver", &run.id).expect("mint").expect("set");
+        let before = store
+            .lease_capability("solver", &run.id)
+            .expect("mint")
+            .expect("set");
         let hash_before = lease::capability_hash(&before);
 
         store.void_lease_cap_for_user("u-aaa").expect("void");
-        assert_eq!(store.find_by_lease_cap(&hash_before), None, "the old capability stops resolving");
+        assert_eq!(
+            store.find_by_lease_cap(&hash_before),
+            None,
+            "the old capability stops resolving"
+        );
 
-        let after = store.lease_capability("solver", &run.id).expect("remint").expect("still leased");
-        assert_ne!(before, after, "a genuinely fresh capability, not the same bytes recovered");
-        assert_eq!(store.find_by_lease_cap(&lease::capability_hash(&after)), Some(("solver".to_string(), run.id.clone())));
+        let after = store
+            .lease_capability("solver", &run.id)
+            .expect("remint")
+            .expect("still leased");
+        assert_ne!(
+            before, after,
+            "a genuinely fresh capability, not the same bytes recovered"
+        );
+        assert_eq!(
+            store.find_by_lease_cap(&lease::capability_hash(&after)),
+            Some(("solver".to_string(), run.id.clone()))
+        );
     }
 
     /// ADI-MONO-181 P2.8: `note_lease_wait` gates on turn count exactly like `note_idle`, and the
@@ -1907,11 +1998,23 @@ mod tests {
             .expect("create");
 
         assert!(store.note_lease_wait("solver", &run.id, 0).expect("first"));
-        assert!(!store.note_lease_wait("solver", &run.id, 0).expect("repeat"), "same turn, no re-announce");
-        assert!(store.note_lease_wait("solver", &run.id, 1).expect("next turn"), "a later turn is fresh");
+        assert!(
+            !store.note_lease_wait("solver", &run.id, 0).expect("repeat"),
+            "same turn, no re-announce"
+        );
+        assert!(
+            store
+                .note_lease_wait("solver", &run.id, 1)
+                .expect("next turn"),
+            "a later turn is fresh"
+        );
 
         // `note_idle` on the very same row and turn is unaffected either way.
-        assert!(store.note_idle("solver", &run.id, 1).expect("idle still announces"));
+        assert!(
+            store
+                .note_idle("solver", &run.id, 1)
+                .expect("idle still announces")
+        );
     }
 
     #[test]
@@ -2509,7 +2612,10 @@ mod tests {
             .create("chat", Backend::HarnessAdi, "/tmp", "second chat")
             .expect("create");
         assert!(
-            store.dequeue_batch("chat", &a.id).expect("batch").is_empty(),
+            store
+                .dequeue_batch("chat", &a.id)
+                .expect("batch")
+                .is_empty(),
             "nothing waiting is an empty batch, not an error"
         );
 
@@ -2528,8 +2634,16 @@ mod tests {
 
         let batch = store.dequeue_batch("chat", &a.id).expect("batch");
         assert_eq!(texts(batch.clone()), ["one", "two", "three"]);
-        assert_eq!(batch[1].mode, QueueMode::Asap, "each keeps what it was queued as");
-        assert_eq!(store.queue_len("chat", &a.id), 0, "and all of them have left");
+        assert_eq!(
+            batch[1].mode,
+            QueueMode::Asap,
+            "each keeps what it was queued as"
+        );
+        assert_eq!(
+            store.queue_len("chat", &a.id),
+            0,
+            "and all of them have left"
+        );
         assert_eq!(
             texts(store.queued("chat", &b.id)),
             ["elsewhere"],
@@ -2556,7 +2670,11 @@ mod tests {
         }
 
         let first = store.dequeue_batch("chat", id).expect("batch");
-        assert_eq!(first.len(), 1, "a message over the budget still goes, alone");
+        assert_eq!(
+            first.len(),
+            1,
+            "a message over the budget still goes, alone"
+        );
         assert_eq!(first[0].text.len(), queue::BATCH_BYTES);
 
         let second = store.dequeue_batch("chat", id).expect("batch");
@@ -2568,7 +2686,10 @@ mod tests {
 
         let third = store.dequeue_batch("chat", id).expect("batch");
         assert_eq!(third.len(), 1, "which then heads its own batch");
-        assert_eq!(texts(store.dequeue_batch("chat", id).expect("batch")), ["after", "last"]);
+        assert_eq!(
+            texts(store.dequeue_batch("chat", id).expect("batch")),
+            ["after", "last"]
+        );
         assert_eq!(store.queue_len("chat", id), 0);
 
         let _ = std::fs::remove_dir_all(store.dir());

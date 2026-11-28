@@ -40,7 +40,9 @@ pub fn node_username(node: &str) -> anyhow::Result<Option<String>> {
 pub fn gateway_client(timeout: Duration) -> anyhow::Result<GatewayClient> {
     // `rustls-no-provider` needs a provider installed before any TLS-capable client is built,
     // even though every request this module sends is plain `http://` to loopback.
-    rustls::crypto::ring::default_provider().install_default().ok();
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .ok();
     Ok(reqwest::blocking::Client::builder()
         .no_proxy()
         .timeout(timeout)

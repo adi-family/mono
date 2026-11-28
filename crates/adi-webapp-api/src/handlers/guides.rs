@@ -407,7 +407,10 @@ the user agree on, so progress survives across runs.
     }
 
     fn tasks_guide() -> &'static Guide {
-        GUIDES.iter().find(|g| g.file == "tasks.md").expect("tasks.md is a built-in guide")
+        GUIDES
+            .iter()
+            .find(|g| g.file == "tasks.md")
+            .expect("tasks.md is a built-in guide")
     }
 
     /// Sanity check for [`OLD_TASKS_TEMPLATE`] itself: if this ever fails, either the fixture
@@ -446,12 +449,19 @@ the user agree on, so progress survives across runs.
         let old_on_disk = render(OLD_TASKS_TEMPLATE, &cfg);
         std::fs::write(dir.join(g.file), &old_on_disk).unwrap();
         // ADI itself wrote exactly this (older) version last time.
-        write_shipped(&dir, &HashMap::from([(g.file.to_string(), hash_text(&old_on_disk))]));
+        write_shipped(
+            &dir,
+            &HashMap::from([(g.file.to_string(), hash_text(&old_on_disk))]),
+        );
 
         ensure_guides(&cfg);
 
         let on_disk = std::fs::read_to_string(dir.join(g.file)).unwrap();
-        assert_eq!(on_disk, render(g.body, &cfg), "should be refreshed to the current template");
+        assert_eq!(
+            on_disk,
+            render(g.body, &cfg),
+            "should be refreshed to the current template"
+        );
         let shipped = read_shipped(&dir);
         assert_eq!(shipped.get(g.file), Some(&hash_text(&render(g.body, &cfg))));
         assert!(!dir.join(format!("{}.new", g.file)).exists());
@@ -491,7 +501,11 @@ the user agree on, so progress survives across runs.
         ensure_guides(&cfg);
 
         let on_disk = std::fs::read_to_string(dir.join(g.file)).unwrap();
-        assert_eq!(on_disk, render(g.body, &cfg), "a recognised historical version is refreshed");
+        assert_eq!(
+            on_disk,
+            render(g.body, &cfg),
+            "a recognised historical version is refreshed"
+        );
         assert!(!dir.join(format!("{}.new", g.file)).exists());
         let shipped = read_shipped(&dir);
         assert_eq!(shipped.get(g.file), Some(&hash_text(&render(g.body, &cfg))));
@@ -510,7 +524,10 @@ the user agree on, so progress survives across runs.
         ensure_guides(&cfg);
 
         let on_disk = std::fs::read_to_string(dir.join(g.file)).unwrap();
-        assert_eq!(on_disk, edited, "an edited legacy copy must never be overwritten");
+        assert_eq!(
+            on_disk, edited,
+            "an edited legacy copy must never be overwritten"
+        );
         let new_contents = std::fs::read_to_string(dir.join(format!("{}.new", g.file))).unwrap();
         assert_eq!(new_contents, render(g.body, &cfg));
     }

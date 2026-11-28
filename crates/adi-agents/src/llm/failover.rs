@@ -45,9 +45,7 @@ pub enum Decision {
     /// Stop, and tell the person why nothing moved. Not a blocking question: it is a line in the
     /// conversation naming the thing only they can settle — a broken login, an empty chain, or a
     /// switch they asked to approve.
-    Ask {
-        reason: String,
-    },
+    Ask { reason: String },
 }
 
 /// Everything the decision needs about the turn that failed, beyond its chain.
@@ -233,9 +231,7 @@ pub fn can_carry(
 fn carries_history(from: &Backend, to: &Backend, same_credential: bool) -> bool {
     match to {
         Backend::HarnessAdi => true,
-        Backend::HarnessClaudeSdk => {
-            matches!(from, Backend::HarnessClaudeSdk) && same_credential
-        }
+        Backend::HarnessClaudeSdk => matches!(from, Backend::HarnessClaudeSdk) && same_credential,
         Backend::ProcessCodex => matches!(from, Backend::ProcessCodex) && same_credential,
         Backend::ProcessAntigravity => {
             matches!(from, Backend::ProcessAntigravity) && same_credential
@@ -252,7 +248,9 @@ fn carries_history(from: &Backend, to: &Backend, same_credential: bool) -> bool 
 /// direction for a check whose failure mode is a truncated conversation.
 #[must_use]
 pub fn estimate_tokens(text: &str) -> u64 {
-    u64::try_from(text.chars().count()).unwrap_or(u64::MAX).div_ceil(4)
+    u64::try_from(text.chars().count())
+        .unwrap_or(u64::MAX)
+        .div_ceil(4)
 }
 
 fn now_unix() -> u64 {
@@ -301,7 +299,10 @@ mod tests {
 
     fn three() -> PinnedChain {
         chain_of(&[
-            ("anthropic", manifest("harness:adi", "claude-opus-5", "a", 200_000)),
+            (
+                "anthropic",
+                manifest("harness:adi", "claude-opus-5", "a", 200_000),
+            ),
             ("codex", manifest("harness:adi", "gpt-5", "b", 400_000)),
             ("glm", manifest("harness:adi", "glm-5.3", "c", 128_000)),
         ])
@@ -337,7 +338,10 @@ mod tests {
             panic!("a quota with a free row below it switches");
         };
         assert_eq!(to, 1);
-        assert!(notice.starts_with("switched to codex, anthropic limited"), "{notice}");
+        assert!(
+            notice.starts_with("switched to codex, anthropic limited"),
+            "{notice}"
+        );
     }
 
     /// The shared hold's whole purpose, seen from the chain: a row another run already found spent
@@ -363,8 +367,14 @@ mod tests {
         let Decision::Switch { to, notice } = decide(&chain, &quota(), &turn(&free)) else {
             panic!("it switches");
         };
-        assert_eq!(to, 0, "row 1 has recovered, so it is the best row available");
-        assert!(notice.starts_with("switched to anthropic, codex limited"), "{notice}");
+        assert_eq!(
+            to, 0,
+            "row 1 has recovered, so it is the best row available"
+        );
+        assert!(
+            notice.starts_with("switched to anthropic, codex limited"),
+            "{notice}"
+        );
     }
 
     /// Every row out is the case that must not silently do nothing: the chat is told which backends
@@ -487,7 +497,10 @@ mod tests {
         assert!(reason.contains("theirs"), "{reason}");
 
         // The loop that replays ADI's own transcript takes a conversation from anywhere.
-        let chain = chain_of(&[("mine", sdk_a), ("loop", manifest("harness:adi", "m", "c", 0))]);
+        let chain = chain_of(&[
+            ("mine", sdk_a),
+            ("loop", manifest("harness:adi", "m", "c", 0)),
+        ]);
         assert!(matches!(
             decide(&chain, &quota(), &turn(&free)),
             Decision::Switch { to: 1, .. },
@@ -536,7 +549,10 @@ mod tests {
             ..quota()
         };
         let line = notice("anthropic", "codex", &with_time);
-        assert!(line.starts_with("switched to codex, anthropic limited until "), "{line}");
+        assert!(
+            line.starts_with("switched to codex, anthropic limited until "),
+            "{line}"
+        );
         assert!(line.contains("UTC"), "{line}");
 
         assert_eq!(

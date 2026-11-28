@@ -99,17 +99,27 @@ impl std::fmt::Debug for LeaseTable {
     /// Never the values — this is the one place in the process that holds them in the clear.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let count = self.0.lock().map(|t| t.len()).unwrap_or_default();
-        f.debug_struct("LeaseTable").field("leases", &count).finish()
+        f.debug_struct("LeaseTable")
+            .field("leases", &count)
+            .finish()
     }
 }
 
 impl LeaseTable {
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Lease>> {
-        self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Install (or replace in place) `user`'s lease.
-    fn unlock(&self, user: &str, petname: &str, values: BTreeMap<String, Zeroizing<String>>, length: LeaseLength) {
+    fn unlock(
+        &self,
+        user: &str,
+        petname: &str,
+        values: BTreeMap<String, Zeroizing<String>>,
+        length: LeaseLength,
+    ) {
         self.lock().insert(
             user.to_string(),
             Lease {
@@ -179,7 +189,10 @@ impl adi_agents::LeaseValues for LeaseTable {
         if !lease.is_live() {
             return None;
         }
-        lease.values.get(name).map(|v: &Zeroizing<String>| String::clone(v))
+        lease
+            .values
+            .get(name)
+            .map(|v: &Zeroizing<String>| String::clone(v))
     }
 }
 
@@ -206,7 +219,10 @@ struct SessionInfo {
 
 pub fn session(session: &SessionKey, user: Option<&str>) -> Response {
     let Some(user) = user else {
-        return handlers::error(403, "a local caller, or a peer with no user scope, has no lease to open");
+        return handlers::error(
+            403,
+            "a local caller, or a peer with no user scope, has no lease to open",
+        );
     };
     handlers::ok_json(&SessionInfo {
         user: user.to_string(),
@@ -280,8 +296,13 @@ pub fn unlock(
             continue;
         };
         let aad = format!("user:{user}/{}|{}|{device_key}", entry.name, req.epoch);
-        if let Ok(plaintext) = adi_mesh::lease_seal::open(session, &device_public, &aad, &entry.nonce, &entry.ciphertext)
-            && let Ok(value) = String::from_utf8(plaintext.to_vec())
+        if let Ok(plaintext) = adi_mesh::lease_seal::open(
+            session,
+            &device_public,
+            &aad,
+            &entry.nonce,
+            &entry.ciphertext,
+        ) && let Ok(value) = String::from_utf8(plaintext.to_vec())
         {
             values.insert(entry.name, Zeroizing::new(value));
         }
@@ -291,13 +312,20 @@ pub fn unlock(
     }
     let names: Vec<String> = values.keys().cloned().collect();
     table.unlock(user, petname, values, clamped);
-    let _ = events.emit_event(&LeaseGranted { user, names: &names });
-    handlers::ok_json(&serde_json::json!({ "ok": true, "names": names, "lease": clamped.to_string() }))
+    let _ = events.emit_event(&LeaseGranted {
+        user,
+        names: &names,
+    });
+    handlers::ok_json(
+        &serde_json::json!({ "ok": true, "names": names, "lease": clamped.to_string() }),
+    )
 }
 
 fn base64_decode32(text: &str) -> anyhow::Result<[u8; 32]> {
     let bytes = base64::engine::general_purpose::STANDARD.decode(text)?;
-    bytes.try_into().map_err(|_| anyhow::anyhow!("expected 32 bytes"))
+    bytes
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("expected 32 bytes"))
 }
 
 #[derive(Deserialize)]
@@ -306,7 +334,12 @@ struct RenewRequest {
 }
 
 /// `POST /api/leases/renew` (§9 step 5).
-pub fn renew(table: &LeaseTable, session: &SessionKey, user: Option<&str>, body: &[u8]) -> Response {
+pub fn renew(
+    table: &LeaseTable,
+    session: &SessionKey,
+    user: Option<&str>,
+    body: &[u8],
+) -> Response {
     let Some(user) = user else {
         return handlers::error(403, "no user scope to renew");
     };
@@ -333,15 +366,28 @@ pub fn renew(table: &LeaseTable, session: &SessionKey, user: Option<&str>, body:
 /// so a restarted `adi-app` with an empty table still stops whatever was started before it came
 /// back up. Returns whether a *live lease* was there to drop — the run ids actually stopped are
 /// in the published event, not here.
-pub fn revoke_user(table: &LeaseTable, agents: &adi_agents::Agents, events: &Events, user: &str) -> bool {
+pub fn revoke_user(
+    table: &LeaseTable,
+    agents: &adi_agents::Agents,
+    events: &Events,
+    user: &str,
+) -> bool {
     let had_lease = table.revoke(user);
     let stopped = agents.stop_runs_for_lease_user(user);
-    let _ = events.emit_event(&LeaseRevoked { user, stopped: &stopped });
+    let _ = events.emit_event(&LeaseRevoked {
+        user,
+        stopped: &stopped,
+    });
     had_lease
 }
 
 /// `POST /api/leases/revoke` (`mesh lock`, §4.4, §10.1).
-pub fn revoke(table: &LeaseTable, agents: &adi_agents::Agents, events: &Events, user: Option<&str>) -> Response {
+pub fn revoke(
+    table: &LeaseTable,
+    agents: &adi_agents::Agents,
+    events: &Events,
+    user: Option<&str>,
+) -> Response {
     let Some(user) = user else {
         return handlers::error(403, "no user scope to revoke");
     };
@@ -405,7 +451,8 @@ mod tests {
         value: &str,
     ) -> serde_json::Value {
         let aad = format!("user:{user}/{name}|{epoch}|{device_key}");
-        let sealed = adi_mesh::lease_seal::seal(&session.public(), &aad, value.as_bytes()).expect("seal");
+        let sealed =
+            adi_mesh::lease_seal::seal(&session.public(), &aad, value.as_bytes()).expect("seal");
         serde_json::json!({
             "name": name,
             "device_public": base64::engine::general_purpose::STANDARD.encode(sealed.device_public),
@@ -464,7 +511,16 @@ mod tests {
             "lease": "0",
             "sealed": [seal_one(&session, "u-aaa", "dev-1", session.epoch(), "NOT_OVERRIDABLE", "v")],
         });
-        let resp = unlock(&table, &session, &config, &events, Some("u-aaa"), Some("laptop"), Some("dev-1"), body.to_string().as_bytes());
+        let resp = unlock(
+            &table,
+            &session,
+            &config,
+            &events,
+            Some("u-aaa"),
+            Some("laptop"),
+            Some("dev-1"),
+            body.to_string().as_bytes(),
+        );
         assert_eq!(resp.status, 400, "{}", resp.body);
     }
 
@@ -474,7 +530,16 @@ mod tests {
         let events = events_for(&config);
         let table = LeaseTable::default();
         let session = SessionKey::generate();
-        let resp = unlock(&table, &session, &config, &events, Some("u-aaa"), Some("laptop"), Some("dev-1"), b"{}");
+        let resp = unlock(
+            &table,
+            &session,
+            &config,
+            &events,
+            Some("u-aaa"),
+            Some("laptop"),
+            Some("dev-1"),
+            b"{}",
+        );
         assert_eq!(resp.status, 400);
     }
 
@@ -498,7 +563,16 @@ mod tests {
             "lease": "forever",
             "sealed": [seal_one(&session, "u-aaa", "dev-1", session.epoch(), "K", "v")],
         });
-        let resp = unlock(&table, &session, &config, &events, Some("u-aaa"), Some("laptop"), Some("dev-1"), body.to_string().as_bytes());
+        let resp = unlock(
+            &table,
+            &session,
+            &config,
+            &events,
+            Some("u-aaa"),
+            Some("laptop"),
+            Some("dev-1"),
+            body.to_string().as_bytes(),
+        );
         assert_eq!(resp.status, 200, "{}", resp.body);
         let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
         assert_eq!(v["lease"], "24h");
@@ -516,7 +590,16 @@ mod tests {
             "lease": "0",
             "sealed": [seal_one(&session, "u-aaa", "dev-1", "not-the-real-epoch", "K", "v")],
         });
-        let resp = unlock(&table, &session, &config, &events, Some("u-aaa"), Some("laptop"), Some("dev-1"), body.to_string().as_bytes());
+        let resp = unlock(
+            &table,
+            &session,
+            &config,
+            &events,
+            Some("u-aaa"),
+            Some("laptop"),
+            Some("dev-1"),
+            body.to_string().as_bytes(),
+        );
         assert_eq!(resp.status, 409);
     }
 
@@ -532,12 +615,33 @@ mod tests {
             "lease": "0",
             "sealed": [seal_one(&session, "u-aaa", "dev-1", session.epoch(), "K", "v")],
         });
-        unlock(&table, &session, &config, &events, Some("u-aaa"), Some("laptop"), Some("dev-1"), body.to_string().as_bytes());
+        unlock(
+            &table,
+            &session,
+            &config,
+            &events,
+            Some("u-aaa"),
+            Some("laptop"),
+            Some("dev-1"),
+            body.to_string().as_bytes(),
+        );
 
-        let ok = renew(&table, &session, Some("u-aaa"), serde_json::json!({"epoch": session.epoch()}).to_string().as_bytes());
+        let ok = renew(
+            &table,
+            &session,
+            Some("u-aaa"),
+            serde_json::json!({"epoch": session.epoch()})
+                .to_string()
+                .as_bytes(),
+        );
         assert_eq!(ok.status, 200, "{}", ok.body);
 
-        let stale = renew(&table, &session, Some("u-aaa"), serde_json::json!({"epoch": "wrong"}).to_string().as_bytes());
+        let stale = renew(
+            &table,
+            &session,
+            Some("u-aaa"),
+            serde_json::json!({"epoch": "wrong"}).to_string().as_bytes(),
+        );
         assert_eq!(stale.status, 409);
 
         let no_user = renew(&table, &session, None, b"{}");
@@ -554,9 +658,14 @@ mod tests {
             LeaseLength::Connected,
         );
         // Force expiry without waiting out the real grace.
-        table.lock().get_mut("u-aaa").unwrap().last_seen = Instant::now().checked_sub(Duration::from_secs(10_000)).unwrap();
+        table.lock().get_mut("u-aaa").unwrap().last_seen = Instant::now()
+            .checked_sub(Duration::from_secs(10_000))
+            .unwrap();
         assert!(!table.renew("u-aaa"));
-        assert!(table.lock().get("u-aaa").is_none(), "the stale entry is evicted");
+        assert!(
+            table.lock().get("u-aaa").is_none(),
+            "the stale entry is evicted"
+        );
     }
 
     #[test]
@@ -605,14 +714,24 @@ mod tests {
             .create("worker", Backend::HarnessAdi, "/tmp", "go")
             .expect("create");
         sessions
-            .set_lease("worker", &record.id, &LeaseRef { user: "u-aaa".into(), names: vec!["K".into()] })
+            .set_lease(
+                "worker",
+                &record.id,
+                &LeaseRef {
+                    user: "u-aaa".into(),
+                    names: vec!["K".into()],
+                },
+            )
             .expect("set lease");
 
         // No lease in `LeaseTable` at all — the restart case §10.1 names explicitly.
         let table = LeaseTable::default();
         let resp = revoke(&table, &agents, &events, Some("u-aaa"));
         let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
-        assert_eq!(v["revoked"], false, "nothing was in the table to begin with");
+        assert_eq!(
+            v["revoked"], false,
+            "nothing was in the table to begin with"
+        );
 
         let published = events.catch_up("test", 10).expect("catch up");
         let revoked = published
@@ -631,8 +750,18 @@ mod tests {
     #[test]
     fn list_shows_everything_to_an_admin_and_only_mine_to_a_member() {
         let table = LeaseTable::default();
-        table.unlock("u-aaa", "laptop-a", BTreeMap::from([("K".to_string(), Zeroizing::new("v".to_string()))]), LeaseLength::Forever);
-        table.unlock("u-bbb", "laptop-b", BTreeMap::from([("K".to_string(), Zeroizing::new("v".to_string()))]), LeaseLength::Forever);
+        table.unlock(
+            "u-aaa",
+            "laptop-a",
+            BTreeMap::from([("K".to_string(), Zeroizing::new("v".to_string()))]),
+            LeaseLength::Forever,
+        );
+        table.unlock(
+            "u-bbb",
+            "laptop-b",
+            BTreeMap::from([("K".to_string(), Zeroizing::new("v".to_string()))]),
+            LeaseLength::Forever,
+        );
 
         let admin = list(&table, true, None);
         let v: serde_json::Value = serde_json::from_str(&admin.body).unwrap();
@@ -673,9 +802,13 @@ mod tests {
         // does (ADI-MONO-180 P2.1/P2.2).
         let wrap_key = adi_mesh::devicekey::load_or_create_in(&config).expect("device key");
         let dek = adi_secrets::wrap::generate_dek();
-        let (value_nonce, ciphertext) =
-            adi_secrets::wrap::seal_value(&dek, device_label, "CLAUDE_CODE_OAUTH_TOKEN", b"sk-mine")
-                .expect("seal value");
+        let (value_nonce, ciphertext) = adi_secrets::wrap::seal_value(
+            &dek,
+            device_label,
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            b"sk-mine",
+        )
+        .expect("seal value");
         let (wrap_nonce, wrapped) =
             adi_secrets::wrap::wrap_dek(&wrap_key, device_label, "CLAUDE_CODE_OAUTH_TOKEN", &dek)
                 .expect("wrap dek");
@@ -723,8 +856,12 @@ mod tests {
         .expect("open value");
         assert_eq!(plaintext, b"sk-mine");
 
-        let aad = format!("user:{user}/CLAUDE_CODE_OAUTH_TOKEN|{}|{device_label}", session.epoch());
-        let sealed = adi_mesh::lease_seal::seal(&session.public(), &aad, &plaintext).expect("seal to session");
+        let aad = format!(
+            "user:{user}/CLAUDE_CODE_OAUTH_TOKEN|{}|{device_label}",
+            session.epoch()
+        );
+        let sealed = adi_mesh::lease_seal::seal(&session.public(), &aad, &plaintext)
+            .expect("seal to session");
         let unlock_body = serde_json::json!({
             "epoch": session.epoch(),
             "lease": "24h",
@@ -773,9 +910,19 @@ mod tests {
     #[test]
     fn value_is_none_once_a_connected_lease_outlives_its_grace() {
         let table = LeaseTable::default();
-        table.unlock("u-aaa", "laptop", BTreeMap::from([("K".to_string(), Zeroizing::new("v".to_string()))]), LeaseLength::Connected);
-        assert_eq!(adi_agents::LeaseValues::value(&table, "u-aaa", "K"), Some("v".to_string()));
-        table.lock().get_mut("u-aaa").unwrap().last_seen = Instant::now().checked_sub(Duration::from_secs(10_000)).unwrap();
+        table.unlock(
+            "u-aaa",
+            "laptop",
+            BTreeMap::from([("K".to_string(), Zeroizing::new("v".to_string()))]),
+            LeaseLength::Connected,
+        );
+        assert_eq!(
+            adi_agents::LeaseValues::value(&table, "u-aaa", "K"),
+            Some("v".to_string())
+        );
+        table.lock().get_mut("u-aaa").unwrap().last_seen = Instant::now()
+            .checked_sub(Duration::from_secs(10_000))
+            .unwrap();
         assert_eq!(adi_agents::LeaseValues::value(&table, "u-aaa", "K"), None);
     }
 }

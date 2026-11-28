@@ -37,7 +37,9 @@ impl std::str::FromStr for Mode {
             "public" => Ok(Self::Public),
             "enterprise" => Ok(Self::Enterprise),
             "self-host" => Ok(Self::SelfHost),
-            other => Err(format!("unknown mode {other:?}: expected public, enterprise, or self-host")),
+            other => Err(format!(
+                "unknown mode {other:?}: expected public, enterprise, or self-host"
+            )),
         }
     }
 }
@@ -164,7 +166,9 @@ impl RawLimits {
     fn resolve(self, mode: Mode) -> Limits {
         let d = Limits::defaults_for(mode);
         Limits {
-            max_endpoints_per_key: self.max_endpoints_per_key.unwrap_or(d.max_endpoints_per_key),
+            max_endpoints_per_key: self
+                .max_endpoints_per_key
+                .unwrap_or(d.max_endpoints_per_key),
             max_body_bytes: self.max_body_bytes.unwrap_or(d.max_body_bytes),
             max_requests_per_minute_per_endpoint: self
                 .max_requests_per_minute_per_endpoint
@@ -172,11 +176,15 @@ impl RawLimits {
             max_registrations_per_ip_per_day: self
                 .max_registrations_per_ip_per_day
                 .unwrap_or(d.max_registrations_per_ip_per_day),
-            default_retention_secs: self.default_retention_secs.unwrap_or(d.default_retention_secs),
+            default_retention_secs: self
+                .default_retention_secs
+                .unwrap_or(d.default_retention_secs),
             max_retention_secs: self.max_retention_secs.unwrap_or(d.max_retention_secs),
             pull_batch_max: self.pull_batch_max.unwrap_or(d.pull_batch_max),
             pull_long_poll_secs: self.pull_long_poll_secs.unwrap_or(d.pull_long_poll_secs),
-            max_pending_per_endpoint: self.max_pending_per_endpoint.unwrap_or(d.max_pending_per_endpoint),
+            max_pending_per_endpoint: self
+                .max_pending_per_endpoint
+                .unwrap_or(d.max_pending_per_endpoint),
         }
     }
 }
@@ -269,9 +277,7 @@ hostname = "eu.webhooks.withadi.dev"
 
     #[test]
     fn an_explicit_limit_overrides_its_modes_default() {
-        let toml = format!(
-            "{PUBLIC_TOML}\n[limits]\nmax_body_bytes = 1000\n"
-        );
+        let toml = format!("{PUBLIC_TOML}\n[limits]\nmax_body_bytes = 1000\n");
         let cfg = Config::parse(&toml).expect("parses");
         assert_eq!(cfg.limits.max_body_bytes, 1000);
         // Everything else untouched still resolves to public's default.
@@ -333,8 +339,14 @@ ip_allowlist = ["10.0.0.0/8"]
 "#;
         let cfg = Config::parse(toml).expect("parses");
         let sh = cfg.self_host.expect("self_host section");
-        assert_eq!(sh.authorized_keys_path, PathBuf::from("/etc/webhook-relay/authorized_keys"));
-        assert_eq!(sh.shared_secret_env, Some("RELAY_SHARED_SECRET".to_string()));
+        assert_eq!(
+            sh.authorized_keys_path,
+            PathBuf::from("/etc/webhook-relay/authorized_keys")
+        );
+        assert_eq!(
+            sh.shared_secret_env,
+            Some("RELAY_SHARED_SECRET".to_string())
+        );
         assert_eq!(sh.ip_allowlist, vec!["10.0.0.0/8".to_string()]);
     }
 
@@ -364,7 +376,10 @@ ip_allowlist          = ["203.0.113.0/24"]
         let cfg = Config::parse(toml).expect("the self-host guide's sample relay.toml must parse");
         assert_eq!(cfg.limits.max_endpoints_per_key, u32::MAX);
         assert_eq!(cfg.limits.max_retention_secs, u64::MAX);
-        assert_eq!(cfg.self_host.unwrap().ip_allowlist, vec!["203.0.113.0/24".to_string()]);
+        assert_eq!(
+            cfg.self_host.unwrap().ip_allowlist,
+            vec!["203.0.113.0/24".to_string()]
+        );
     }
 
     #[test]

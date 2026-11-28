@@ -1,7 +1,6 @@
 import { AdiElement, define } from "./base.ts";
 
-class AdiKv extends AdiElement {
-}
+class AdiKv extends AdiElement {}
 
 define("adi-kv", AdiKv);
 

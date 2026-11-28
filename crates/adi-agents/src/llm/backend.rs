@@ -413,8 +413,7 @@ impl LlmBackends {
     }
 
     fn module(&self) -> Module {
-        self.config
-            .module(&format!("{LLM_MODULE}/{BACKENDS_DIR}"))
+        self.config.module(&format!("{LLM_MODULE}/{BACKENDS_DIR}"))
     }
 
     #[must_use]
@@ -505,7 +504,11 @@ impl LlmBackends {
             return Err(Error::Arguments(format!(
                 "`{id}` is still a member of {} — take it out of {} first",
                 groups.join(", "),
-                if groups.len() == 1 { "that group" } else { "those groups" }
+                if groups.len() == 1 {
+                    "that group"
+                } else {
+                    "those groups"
+                }
             )));
         }
         Ok(self.module().remove_manifest(id)?)
@@ -699,15 +702,26 @@ mod tests {
         let store = scratch("list");
         assert!(store.list().expect("empty list").is_empty());
 
-        store.save("glm", LlmBackendManifest {
-            runtime: Backend::HarnessAdi,
-            provider: Some("zai".into()),
-            ..Default::default()
-        })
-        .expect("save glm");
-        store.save("anthropic", anthropic()).expect("save anthropic");
+        store
+            .save(
+                "glm",
+                LlmBackendManifest {
+                    runtime: Backend::HarnessAdi,
+                    provider: Some("zai".into()),
+                    ..Default::default()
+                },
+            )
+            .expect("save glm");
+        store
+            .save("anthropic", anthropic())
+            .expect("save anthropic");
 
-        let ids: Vec<String> = store.list().expect("list").into_iter().map(|b| b.id).collect();
+        let ids: Vec<String> = store
+            .list()
+            .expect("list")
+            .into_iter()
+            .map(|b| b.id)
+            .collect();
         assert_eq!(ids, vec!["anthropic".to_string(), "glm".to_string()]);
     }
 
@@ -792,7 +806,11 @@ mod tests {
                 runtime,
                 ..Default::default()
             };
-            assert!(!manifest.is_replayable(), "{} keeps no transcript", manifest.runtime);
+            assert!(
+                !manifest.is_replayable(),
+                "{} keeps no transcript",
+                manifest.runtime
+            );
         }
         for runtime in [
             Backend::HarnessAdi,
@@ -804,7 +822,11 @@ mod tests {
                 runtime,
                 ..Default::default()
             };
-            assert!(manifest.is_replayable(), "{} has a transcript", manifest.runtime);
+            assert!(
+                manifest.is_replayable(),
+                "{} has a transcript",
+                manifest.runtime
+            );
         }
     }
 
@@ -897,12 +919,18 @@ mod tests {
     fn a_group_round_trips_through_the_store() {
         let store = scratch("group-round-trip");
         store.save("anthropic", anthropic()).expect("save base");
-        store.save("team", group(&["anthropic"])).expect("save group");
+        store
+            .save("team", group(&["anthropic"]))
+            .expect("save group");
 
         let read = store.get("team").expect("get").expect("present");
         assert!(read.manifest.is_group());
         assert_eq!(read.manifest.members, vec!["anthropic".to_string()]);
-        assert_eq!(read.manifest.runtime, Backend::default(), "a group has no runtime");
+        assert_eq!(
+            read.manifest.runtime,
+            Backend::default(),
+            "a group has no runtime"
+        );
     }
 
     /// `kind` is absent in the written file for a single backend — exactly the shape every
@@ -948,7 +976,9 @@ mod tests {
     #[test]
     fn a_group_naming_a_missing_member_is_refused() {
         let store = scratch("group-missing");
-        let err = store.save("team", group(&["nowhere"])).expect_err("refused");
+        let err = store
+            .save("team", group(&["nowhere"]))
+            .expect_err("refused");
         assert!(err.to_string().contains("names no such backend"), "{err}");
     }
 
@@ -964,7 +994,9 @@ mod tests {
     fn a_group_may_name_another_group() {
         let store = scratch("group-of-groups");
         store.save("anthropic", anthropic()).expect("save base");
-        store.save("inner", group(&["anthropic"])).expect("save inner group");
+        store
+            .save("inner", group(&["anthropic"]))
+            .expect("save inner group");
         store.save("outer", group(&["inner"])).expect("accepted");
     }
 
@@ -989,7 +1021,9 @@ mod tests {
     fn deleting_a_backend_still_named_by_a_group_is_refused() {
         let store = scratch("group-delete-guard");
         store.save("anthropic", anthropic()).expect("save base");
-        store.save("team", group(&["anthropic"])).expect("save group");
+        store
+            .save("team", group(&["anthropic"]))
+            .expect("save group");
         let err = store.delete("anthropic").expect_err("refused");
         assert!(err.to_string().contains("team"), "{err}");
         // Off the group, it deletes.
@@ -1001,8 +1035,12 @@ mod tests {
     fn groups_naming_lists_every_group_that_lists_a_backend() {
         let store = scratch("groups-naming");
         store.save("anthropic", anthropic()).expect("save base");
-        store.save("fast", group(&["anthropic"])).expect("save fast");
-        store.save("slow", group(&["anthropic"])).expect("save slow");
+        store
+            .save("fast", group(&["anthropic"]))
+            .expect("save fast");
+        store
+            .save("slow", group(&["anthropic"]))
+            .expect("save slow");
         let mut groups = store.groups_naming("anthropic").expect("query");
         groups.sort();
         assert_eq!(groups, vec!["fast".to_string(), "slow".to_string()]);
@@ -1013,14 +1051,22 @@ mod tests {
     fn renaming_members_repoints_every_group_that_names_the_old_id() {
         let store = scratch("rename-members");
         store.save("anthropic", anthropic()).expect("save base");
-        store.save("team", group(&["anthropic"])).expect("save team");
-        store.save("solo", group(&["anthropic"])).expect("save solo");
+        store
+            .save("team", group(&["anthropic"]))
+            .expect("save team");
+        store
+            .save("solo", group(&["anthropic"]))
+            .expect("save solo");
 
         // A rename is carried out by the caller as: save the new id, repoint everything naming the
         // old one, then delete the old one — so by the time members are repointed the new id
         // already exists, exactly as it would by the time this is called for real.
-        store.save("anthropic-opus", anthropic()).expect("save renamed");
-        let moved = store.rename_members("anthropic", "anthropic-opus").expect("rename");
+        store
+            .save("anthropic-opus", anthropic())
+            .expect("save renamed");
+        let moved = store
+            .rename_members("anthropic", "anthropic-opus")
+            .expect("rename");
         assert_eq!(moved, 2);
         let team = store.get("team").expect("get").expect("present");
         assert_eq!(team.manifest.members, vec!["anthropic-opus".to_string()]);

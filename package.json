@@ -1,0 +1,15 @@
+{
+  "name": "adi-family",
+  "private": true,
+  "scripts": {
+    "format": "bun run format:ts && bun run format:rs",
+    "format:check": "bun run format:ts:check && bun run format:rs:check",
+    "format:ts": "prettier --write \"**/*.{ts,tsx,mts,cts}\"",
+    "format:ts:check": "prettier --check \"**/*.{ts,tsx,mts,cts}\"",
+    "format:rs": "cargo fmt --all && cargo fmt --manifest-path lints/adi-clone-lint/Cargo.toml",
+    "format:rs:check": "cargo fmt --all -- --check && cargo fmt --manifest-path lints/adi-clone-lint/Cargo.toml -- --check"
+  },
+  "devDependencies": {
+    "prettier": "^3.10.1"
+  }
+}

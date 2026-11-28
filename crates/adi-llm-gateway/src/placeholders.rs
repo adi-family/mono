@@ -717,7 +717,9 @@ impl Frames {
             return format!("{}{line}", self.leftover());
         }
         if self.expand_frame(&mut frame) {
-            let ending = line.strip_prefix(&format!("data:{payload}")).unwrap_or("\n");
+            let ending = line
+                .strip_prefix(&format!("data:{payload}"))
+                .unwrap_or("\n");
             if let Ok(rendered) = serde_json::to_string(&frame) {
                 return format!("data: {rendered}{ending}");
             }
@@ -995,7 +997,10 @@ mod tests {
             reassembled(&client),
             format!("the file {P}llm.rs is the one")
         );
-        assert!(client.ends_with("data: [DONE]\n\n"), "the stream lost its end");
+        assert!(
+            client.ends_with("data: [DONE]\n\n"),
+            "the stream lost its end"
+        );
     }
 
     #[test]

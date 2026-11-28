@@ -70,7 +70,9 @@ pub fn llm_backends(store: &Agents) -> Response {
         // straight off the definitions, rather than kept on the backend itself.
         let member_of: Vec<String> = backends
             .iter()
-            .filter(|group| group.manifest.is_group() && group.manifest.members.contains(&backend.id))
+            .filter(|group| {
+                group.manifest.is_group() && group.manifest.members.contains(&backend.id)
+            })
             .map(|group| group.id.clone())
             .collect();
         out.push(backend_dto(backend, hold.as_ref(), used_by, member_of));
@@ -188,7 +190,11 @@ pub fn delete_llm_backend(store: &Agents, body: &[u8]) -> Response {
             &format!(
                 "{id} is still listed by {} — take it off {} first",
                 users.join(", "),
-                if users.len() == 1 { "that agent" } else { "those agents" }
+                if users.len() == 1 {
+                    "that agent"
+                } else {
+                    "those agents"
+                }
             ),
         );
     }
@@ -200,7 +206,11 @@ pub fn delete_llm_backend(store: &Agents, body: &[u8]) -> Response {
                 &format!(
                     "{id} is still a member of {} — take it out of {} first",
                     groups.join(", "),
-                    if groups.len() == 1 { "that group" } else { "those groups" }
+                    if groups.len() == 1 {
+                        "that group"
+                    } else {
+                        "those groups"
+                    }
                 ),
             );
         }
@@ -338,7 +348,12 @@ fn test_result_dto(result: &adi_agents::llm::TestResult) -> TestResultDto {
 /// rows are validated and `adi.agents.saved` fires — a rename is an edit of those agents.
 fn repoint_rows(store: &Agents, from: &str, to: &str) -> Result<(), AgentStoreError> {
     for agent in store.list()? {
-        if !agent.manifest.backends.iter().any(|row| row.backend == from) {
+        if !agent
+            .manifest
+            .backends
+            .iter()
+            .any(|row| row.backend == from)
+        {
             continue;
         }
         let mut manifest = agent.manifest;
@@ -550,7 +565,8 @@ mod tests {
     #[test]
     fn a_backend_round_trips_through_the_registry() {
         let store = scratch();
-        let Response { status, body } = save(&store, "anthropic", "claude-opus-5", "~/.claude/a.json");
+        let Response { status, body } =
+            save(&store, "anthropic", "claude-opus-5", "~/.claude/a.json");
         assert_eq!(status, 200, "{body}");
 
         let v: Value = serde_json::from_str(&llm_backends(&store).body).unwrap();
@@ -573,7 +589,10 @@ mod tests {
         save(&store, "opus", "claude-opus-5", "~/.claude/a.json");
         save(&store, "sonnet", "claude-sonnet-5", "~/.claude/a.json");
         let v: Value = serde_json::from_str(&llm_backends(&store).body).unwrap();
-        assert_eq!(v["backends"][0]["credential"], v["backends"][1]["credential"]);
+        assert_eq!(
+            v["backends"][0]["credential"],
+            v["backends"][1]["credential"]
+        );
     }
 
     #[test]
@@ -684,7 +703,10 @@ mod tests {
             .hold(&adi_agents::llm::Hold {
                 key: adi_agents::llm::HoldKey::new(
                     "settings:".to_string()
-                        + &adi_config::home().join(".claude/a.json").display().to_string(),
+                        + &adi_config::home()
+                            .join(".claude/a.json")
+                            .display()
+                            .to_string(),
                     "claude-opus-5",
                 ),
                 class: adi_agents::llm::LimitClass::Quota,
@@ -716,10 +738,8 @@ mod tests {
     #[test]
     fn the_global_switches_round_trip() {
         let store = scratch();
-        let Response { status, body } = save_llm_settings(
-            &store,
-            br#"{"ask_on_switch":true,"probe_every":900}"#,
-        );
+        let Response { status, body } =
+            save_llm_settings(&store, br#"{"ask_on_switch":true,"probe_every":900}"#);
         assert_eq!(status, 200, "{body}");
         let v: Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["settings"]["ask_on_switch"], true);
@@ -751,7 +771,10 @@ mod tests {
     #[test]
     fn test_by_id_of_an_unknown_backend_is_404() {
         let store = scratch();
-        assert_eq!(test_llm_backend(&store, br#"{"id":"ghost"}"#, None).status, 404);
+        assert_eq!(
+            test_llm_backend(&store, br#"{"id":"ghost"}"#, None).status,
+            404
+        );
     }
 
     /// A draft is tested exactly as sent, whether or not it has ever been saved — and nothing
@@ -767,7 +790,12 @@ mod tests {
         assert_eq!(status, 200, "{body}");
         let v: Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["verdict"], "failed", "{body}");
-        assert!(LlmBackends::with_config(store.config().clone()).list().unwrap().is_empty());
+        assert!(
+            LlmBackends::with_config(store.config().clone())
+                .list()
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -785,7 +813,9 @@ mod tests {
     fn save_group(store: &Agents, id: &str, members: &[&str]) -> Response {
         save_llm_backend(
             store,
-            json!({ "id": id, "kind": "group", "members": members }).to_string().as_bytes(),
+            json!({ "id": id, "kind": "group", "members": members })
+                .to_string()
+                .as_bytes(),
         )
     }
 
@@ -797,7 +827,12 @@ mod tests {
         assert_eq!(status, 200, "{body}");
 
         let v: Value = serde_json::from_str(&body).unwrap();
-        let group = v["backends"].as_array().unwrap().iter().find(|b| b["id"] == "team").unwrap();
+        let group = v["backends"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|b| b["id"] == "team")
+            .unwrap();
         assert_eq!(group["kind"], "group");
         assert_eq!(group["members"], json!(["anthropic"]));
         assert_eq!(group["runtime"], "", "a group has no runtime");
@@ -841,7 +876,9 @@ mod tests {
         // Remove the member out from under the group by writing the file directly — the API
         // itself refuses this (`delete` guards it), so a hand-edited store is the only way one
         // goes missing, and that is exactly the case this reports rather than crashes on.
-        LlmBackends::with_config(store.config().clone()).delete("anthropic").unwrap_err();
+        LlmBackends::with_config(store.config().clone())
+            .delete("anthropic")
+            .unwrap_err();
         std::fs::remove_file(
             LlmBackends::with_config(store.config().clone())
                 .dir()
@@ -878,9 +915,18 @@ mod tests {
         save_group(&store, "slow", &["anthropic"]);
 
         let v: Value = serde_json::from_str(&llm_backends(&store).body).unwrap();
-        let backend = v["backends"].as_array().unwrap().iter().find(|b| b["id"] == "anthropic").unwrap();
-        let mut member_of: Vec<&str> =
-            backend["member_of"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+        let backend = v["backends"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|b| b["id"] == "anthropic")
+            .unwrap();
+        let mut member_of: Vec<&str> = backend["member_of"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
         member_of.sort_unstable();
         assert_eq!(member_of, ["fast", "slow"]);
     }
@@ -917,8 +963,11 @@ mod tests {
     #[test]
     fn testing_a_group_draft_answers_that_it_is_a_group() {
         let store = scratch();
-        let Response { status, body } =
-            test_llm_backend(&store, br#"{"draft":{"id":"team","kind":"group","members":["x"]}}"#, None);
+        let Response { status, body } = test_llm_backend(
+            &store,
+            br#"{"draft":{"id":"team","kind":"group","members":["x"]}}"#,
+            None,
+        );
         assert_eq!(status, 200, "{body}");
         let v: Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["verdict"], "failed", "{body}");

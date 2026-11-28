@@ -253,10 +253,15 @@ impl ChatRef {
         }
         // The `@` is kept as itself: it is the one character here with a meaning of its own, and
         // `%40` in an address bar reads as nothing at all.
-        parts.iter().fold(CHAT.to_string(), |acc, p| match p.strip_prefix('@') {
-            Some(node) => format!("{acc}/@{}", String::from(js_sys::encode_uri_component(node))),
-            None => format!("{acc}/{}", String::from(js_sys::encode_uri_component(p))),
-        })
+        parts
+            .iter()
+            .fold(CHAT.to_string(), |acc, p| match p.strip_prefix('@') {
+                Some(node) => format!(
+                    "{acc}/@{}",
+                    String::from(js_sys::encode_uri_component(node))
+                ),
+                None => format!("{acc}/{}", String::from(js_sys::encode_uri_component(p))),
+            })
     }
 
     /// The place an address after `/chat/` names, its parts already decoded.
@@ -542,17 +547,19 @@ impl Desk {
                 Some(m) => format!("{} — {m}", a.name),
                 None => a.name,
             }),
-            Win::Chat | Win::Talk(_) => Some(self.chat_place(w)).filter(|c| !c.agent.is_empty()).map(|c| {
-                let who = match &c.node {
-                    Some(n) => format!("{} on {n}", c.agent),
-                    None => c.agent,
-                };
-                if c.title.is_empty() || c.run.is_empty() {
-                    who
-                } else {
-                    format!("{} — {who}", c.title)
-                }
-            }),
+            Win::Chat | Win::Talk(_) => Some(self.chat_place(w))
+                .filter(|c| !c.agent.is_empty())
+                .map(|c| {
+                    let who = match &c.node {
+                        Some(n) => format!("{} on {n}", c.agent),
+                        None => c.agent,
+                    };
+                    if c.title.is_empty() || c.run.is_empty() {
+                        who
+                    } else {
+                        format!("{} — {who}", c.title)
+                    }
+                }),
             Win::Settings | Win::About => None,
         }
         .unwrap_or_else(|| w.title().to_string())
@@ -562,9 +569,9 @@ impl Desk {
     fn address(self, w: Win) -> String {
         if matches!(w, Win::Chat | Win::Talk(_)) {
             return match w {
-                Win::Talk(id) => self.chats.with_untracked(|c| {
-                    c.iter().find(|(i, _)| *i == id).map(|(_, x)| x.link())
-                }),
+                Win::Talk(id) => self
+                    .chats
+                    .with_untracked(|c| c.iter().find(|(i, _)| *i == id).map(|(_, x)| x.link())),
                 _ => Some(self.chat_home.with_untracked(ChatRef::link)),
             }
             .unwrap_or_else(|| CHAT.to_string());

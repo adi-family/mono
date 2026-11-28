@@ -31,13 +31,26 @@ function blockEnd(value: string, start: number, end: number): number {
  * (blank lines stay blank) and keep those lines selected.
  */
 export function indentEdit(value: string, start: number, end: number, unit = "  "): CodeEdit {
-  if (start === end) return { from: start, to: end, insert: unit, selectionStart: start + unit.length, selectionEnd: start + unit.length };
+  if (start === end)
+    return {
+      from: start,
+      to: end,
+      insert: unit,
+      selectionStart: start + unit.length,
+      selectionEnd: start + unit.length,
+    };
   const from = lineStart(value, start);
   const to = blockEnd(value, start, end);
   const lines = value.slice(from, to).split("\n");
   const insert = lines.map((line) => (line ? unit + line : line)).join("\n");
   const first = lines[0] ? unit.length : 0;
-  return { from, to, insert, selectionStart: start + first, selectionEnd: end + (insert.length - (to - from)) };
+  return {
+    from,
+    to,
+    insert,
+    selectionStart: start + first,
+    selectionEnd: end + (insert.length - (to - from)),
+  };
 }
 
 /** How much of a line's leading whitespace one outdent removes: a tab, or up to one indent of spaces. */
@@ -49,7 +62,12 @@ function outdentWidth(line: string, unit: string): number {
 }
 
 /** Shift+Tab. Remove one indent from every line the selection touches; `null` when there is none to remove. */
-export function outdentEdit(value: string, start: number, end: number, unit = "  "): CodeEdit | null {
+export function outdentEdit(
+  value: string,
+  start: number,
+  end: number,
+  unit = "  ",
+): CodeEdit | null {
   const from = lineStart(value, start);
   const to = blockEnd(value, start, end);
   const lines = value.slice(from, to).split("\n");
@@ -59,7 +77,13 @@ export function outdentEdit(value: string, start: number, end: number, unit = " 
   const insert = lines.map((line, index) => line.slice(widths[index])).join("\n");
   // The caret never moves onto the previous line: it stops at its own line's start.
   const selectionStart = Math.max(from, start - widths[0]);
-  return { from, to, insert, selectionStart, selectionEnd: Math.max(selectionStart, end - removed) };
+  return {
+    from,
+    to,
+    insert,
+    selectionStart,
+    selectionEnd: Math.max(selectionStart, end - removed),
+  };
 }
 
 /** Enter. The new line starts at the indentation of the one the caret is leaving. */
@@ -67,7 +91,13 @@ export function newlineEdit(value: string, start: number, end: number): CodeEdit
   const from = lineStart(value, start);
   const indent = /^[ \t]*/.exec(value.slice(from, start))?.[0] ?? "";
   const insert = `\n${indent}`;
-  return { from: start, to: end, insert, selectionStart: start + insert.length, selectionEnd: start + insert.length };
+  return {
+    from: start,
+    to: end,
+    insert,
+    selectionStart: start + insert.length,
+    selectionEnd: start + insert.length,
+  };
 }
 
 /** A caret offset as the 1-based line and column a status line shows. */

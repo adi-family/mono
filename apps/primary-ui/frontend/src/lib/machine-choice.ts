@@ -27,10 +27,15 @@ const machineCodec: LocalStorageCodec<string | undefined> = {
  */
 export function createMachineChoice(storageKey: string) {
   const read = (): string | undefined => readLocalStorage(storageKey, undefined, machineCodec);
-  const set = (source?: string) => writeLocalStorage(storageKey, normalizeMachine(source), machineCodec);
+  const set = (source?: string) =>
+    writeLocalStorage(storageKey, normalizeMachine(source), machineCodec);
 
   function use(): [string | undefined, (source?: string) => void] {
-    const [source, setStored] = useLocalStorageState<string | undefined>(storageKey, undefined, machineCodec);
+    const [source, setStored] = useLocalStorageState<string | undefined>(
+      storageKey,
+      undefined,
+      machineCodec,
+    );
     const choose = useCallback((next?: string) => setStored(normalizeMachine(next)), [setStored]);
     return [source, choose];
   }

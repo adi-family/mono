@@ -286,14 +286,21 @@ fn completion_card(state: State, form: TasksForm, t: &TaskRow) -> AnyView {
 /// Parse the draft box as JSON and complete the task with it — the same validation
 /// `adi-mono tasks complete --result` runs, server-side, against the task's own `output_schema`.
 fn submit_completion(state: State, form: TasksForm, id: String) {
-    let raw = form.completion_drafts.get_untracked().get(&id).cloned().unwrap_or_default();
+    let raw = form
+        .completion_drafts
+        .get_untracked()
+        .get(&id)
+        .cloned()
+        .unwrap_or_default();
     let result = if raw.trim().is_empty() {
         None
     } else {
         match serde_json::from_str(&raw) {
             Ok(v) => Some(v),
             Err(e) => {
-                state.flash.set(Some(Flash::err(format!("the result box isn't valid JSON: {e}"))));
+                state.flash.set(Some(Flash::err(format!(
+                    "the result box isn't valid JSON: {e}"
+                ))));
                 return;
             }
         }
@@ -304,7 +311,9 @@ fn submit_completion(state: State, form: TasksForm, id: String) {
         None,
         move |s, t| {
             s.tasks.set(Some(t));
-            form.completion_drafts.update(|m| { m.remove(&cleared); });
+            form.completion_drafts.update(|m| {
+                m.remove(&cleared);
+            });
         },
         fetch::complete_task(id, result),
     );

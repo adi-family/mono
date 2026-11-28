@@ -310,9 +310,10 @@ impl Gateway {
             .headers
             .iter()
             .find(|(field, _)| field.eq_ignore_ascii_case(PLACEHOLDER_HEADER))
-            .map_or(self.settings.placeholders.default_mode.as_str(), |(_, v)| {
-                v.as_str()
-            });
+            .map_or(
+                self.settings.placeholders.default_mode.as_str(),
+                |(_, v)| v.as_str(),
+            );
         Some((Mode::parse(asked)?, Shape::for_provider(provider)?))
     }
 

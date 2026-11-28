@@ -24,7 +24,14 @@ type InputProps = Omit<React.ComponentProps<"input">, "size"> & VariantProps<typ
 
 /** A single-line text input. Supply an associated label or aria-label. */
 function Input({ className, size, mono, type = "text", ...props }: InputProps) {
-  return <input data-slot="input" type={type} className={cn(inputVariants({ size, mono, className }))} {...props} />;
+  return (
+    <input
+      data-slot="input"
+      type={type}
+      className={cn(inputVariants({ size, mono, className }))}
+      {...props}
+    />
+  );
 }
 
 type TextareaProps = React.ComponentProps<"textarea"> & { mono?: boolean };
@@ -35,7 +42,12 @@ function Textarea({ className, mono = false, rows = 3, ...props }: TextareaProps
     <textarea
       data-slot="textarea"
       rows={rows}
-      className={cn(fieldBox, "block resize-y px-3 py-2 leading-relaxed", mono && "font-mono text-[13px]", className)}
+      className={cn(
+        fieldBox,
+        "block resize-y px-3 py-2 leading-relaxed",
+        mono && "font-mono text-[13px]",
+        className,
+      )}
       {...props}
     />
   );

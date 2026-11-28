@@ -44,24 +44,123 @@ export const codeTokenInk: Record<CodeToken, string> = {
   punct: "text-muted-foreground",
 };
 
-export const codeLanguageLabels: Record<CodeLanguage, string> = { sh: "Shell", ts: "TypeScript", json: "JSON", py: "Python", plain: "Plain text" };
+export const codeLanguageLabels: Record<CodeLanguage, string> = {
+  sh: "Shell",
+  ts: "TypeScript",
+  json: "JSON",
+  py: "Python",
+  plain: "Plain text",
+};
 
 const TS_KEYWORDS = new Set([
-  "as", "async", "await", "break", "case", "catch", "class", "const", "continue", "default", "delete", "do", "else", "enum", "export",
-  "extends", "false", "finally", "for", "from", "function", "if", "implements", "import", "in", "instanceof", "interface", "let", "new",
-  "null", "of", "return", "static", "super", "switch", "this", "throw", "true", "try", "type", "typeof", "undefined", "var", "void",
-  "while", "yield",
+  "as",
+  "async",
+  "await",
+  "break",
+  "case",
+  "catch",
+  "class",
+  "const",
+  "continue",
+  "default",
+  "delete",
+  "do",
+  "else",
+  "enum",
+  "export",
+  "extends",
+  "false",
+  "finally",
+  "for",
+  "from",
+  "function",
+  "if",
+  "implements",
+  "import",
+  "in",
+  "instanceof",
+  "interface",
+  "let",
+  "new",
+  "null",
+  "of",
+  "return",
+  "static",
+  "super",
+  "switch",
+  "this",
+  "throw",
+  "true",
+  "try",
+  "type",
+  "typeof",
+  "undefined",
+  "var",
+  "void",
+  "while",
+  "yield",
 ]);
 const SH_KEYWORDS = new Set([
-  "case", "do", "done", "elif", "else", "esac", "exit", "export", "fi", "for", "function", "if", "in", "local", "read", "return", "select",
-  "shift", "then", "until", "while",
+  "case",
+  "do",
+  "done",
+  "elif",
+  "else",
+  "esac",
+  "exit",
+  "export",
+  "fi",
+  "for",
+  "function",
+  "if",
+  "in",
+  "local",
+  "read",
+  "return",
+  "select",
+  "shift",
+  "then",
+  "until",
+  "while",
 ]);
 
 // The soft keywords (`match`, `case`, `type`) are left out: each is far more often a variable.
 const PY_KEYWORDS = new Set([
-  "False", "None", "True", "and", "as", "assert", "async", "await", "break", "class", "continue", "def", "del", "elif", "else", "except",
-  "finally", "for", "from", "global", "if", "import", "in", "is", "lambda", "nonlocal", "not", "or", "pass", "raise", "return", "try",
-  "while", "with", "yield",
+  "False",
+  "None",
+  "True",
+  "and",
+  "as",
+  "assert",
+  "async",
+  "await",
+  "break",
+  "class",
+  "continue",
+  "def",
+  "del",
+  "elif",
+  "else",
+  "except",
+  "finally",
+  "for",
+  "from",
+  "global",
+  "if",
+  "import",
+  "in",
+  "is",
+  "lambda",
+  "nonlocal",
+  "not",
+  "or",
+  "pass",
+  "raise",
+  "return",
+  "try",
+  "while",
+  "with",
+  "yield",
 ]);
 const PY_STRING_PREFIXES = new Set(["r", "b", "f", "u", "t", "rb", "br", "fr", "rf", "tr", "rt"]);
 
@@ -97,11 +196,19 @@ function scanJson(source: string, emit: Emit) {
     if (c === '"') {
       const next = pastString(source, i);
       // A string is a key when the next non-space character is a colon.
-      const after = past(source, next, (ch) => ch === " " || ch === "\t" || ch === "\n" || ch === "\r");
+      const after = past(
+        source,
+        next,
+        (ch) => ch === " " || ch === "\t" || ch === "\n" || ch === "\r",
+      );
       emit(source[after] === ":" ? "key" : "str", i, next);
       i = next;
     } else if (isDigit(c) || c === "-") {
-      const next = past(source, i + 1, (ch) => isWord(ch) || ch === "." || ch === "-" || ch === "+");
+      const next = past(
+        source,
+        i + 1,
+        (ch) => isWord(ch) || ch === "." || ch === "-" || ch === "+",
+      );
       emit("num", i, next);
       i = next;
     } else if (isAlpha(c)) {
@@ -209,7 +316,11 @@ function scanSh(source: string, emit: Emit) {
     } else if (isAlpha(c) || c === "_") {
       const next = past(source, i, (ch) => isWord(ch) || ch === "-");
       // `name=value` — the assignment target reads like a key.
-      emit(SH_KEYWORDS.has(source.slice(i, next)) ? "kw" : source[next] === "=" ? "key" : "plain", i, next);
+      emit(
+        SH_KEYWORDS.has(source.slice(i, next)) ? "kw" : source[next] === "=" ? "key" : "plain",
+        i,
+        next,
+      );
       i = next;
     } else {
       emit("|&;()<>{}".includes(c) ? "punct" : "plain", i, i + 1);
@@ -258,7 +369,11 @@ function scanPy(source: string, emit: Emit) {
       const next = past(source, i, (ch) => isWord(ch) || ch === ".");
       emit("num", i, next);
       i = next;
-    } else if (c === "@" && isAlpha(source[i + 1] ?? "") && source.slice(source.lastIndexOf("\n", i - 1) + 1, i).trim() === "") {
+    } else if (
+      c === "@" &&
+      isAlpha(source[i + 1] ?? "") &&
+      source.slice(source.lastIndexOf("\n", i - 1) + 1, i).trim() === ""
+    ) {
       // A decorator: an `@` that opens its line. Anywhere else it is matrix multiplication.
       const next = past(source, i + 1, (ch) => isWord(ch) || ch === ".");
       emit("func", i, next);
@@ -295,7 +410,12 @@ function scanPy(source: string, emit: Emit) {
   }
 }
 
-const scanners: Record<Exclude<CodeLanguage, "plain">, (source: string, emit: Emit) => void> = { sh: scanSh, ts: scanTs, json: scanJson, py: scanPy };
+const scanners: Record<Exclude<CodeLanguage, "plain">, (source: string, emit: Emit) => void> = {
+  sh: scanSh,
+  ts: scanTs,
+  json: scanJson,
+  py: scanPy,
+};
 
 /** Beyond this the text is painted plain: highlighting is an enhancement, never a gate. */
 export const highlightLimit = 400_000;
@@ -306,7 +426,8 @@ export const highlightLimit = 400_000;
  */
 export function highlightCode(language: CodeLanguage, source: string): CodeRun[] {
   if (!source) return [];
-  const scan = language === "plain" || source.length > highlightLimit ? undefined : scanners[language];
+  const scan =
+    language === "plain" || source.length > highlightLimit ? undefined : scanners[language];
   if (!scan) return [["plain", source]];
   const runs: [CodeToken, number, number][] = [];
   scan(source, (token, from, to) => {

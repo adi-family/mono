@@ -21,9 +21,9 @@ describe("provider registry", () => {
 
   it("telegram is enabled once both its credentials are set", () => {
     expect(enabledProviders(env())).toEqual([]);
-    expect(
-      enabledProviders(env({ TELEGRAM_BOT_TOKEN: "t", TELEGRAM_SECRET_TOKEN: "s" })),
-    ).toEqual(["telegram"]);
+    expect(enabledProviders(env({ TELEGRAM_BOT_TOKEN: "t", TELEGRAM_SECRET_TOKEN: "s" }))).toEqual([
+      "telegram",
+    ]);
   });
 
   it("telegram stays disabled with only one of its two credentials", () => {
@@ -41,6 +41,8 @@ describe("provider registry", () => {
   });
 
   it("slack stays disabled with only some of its three credentials", () => {
-    expect(enabledProviders(env({ SLACK_CLIENT_ID: "id", SLACK_CLIENT_SECRET: "secret" }))).toEqual([]);
+    expect(enabledProviders(env({ SLACK_CLIENT_ID: "id", SLACK_CLIENT_SECRET: "secret" }))).toEqual(
+      [],
+    );
   });
 });

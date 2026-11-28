@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 
-import { slackAdapter, slackExchangeCode, slackInstallUrl, slackRedirectUri } from "../../src/adapters/slack";
+import {
+  slackAdapter,
+  slackExchangeCode,
+  slackInstallUrl,
+  slackRedirectUri,
+} from "../../src/adapters/slack";
 import type { Env } from "../../src/types";
 
 const SECRET = "slack-signing-secret";
@@ -22,11 +27,19 @@ function env(overrides: Partial<Env> = {}): Env {
 
 /** A correctly-signed webhook request, Slack's own documented scheme: HMAC-SHA256 of
  * `v0:<timestamp>:<raw body>` under the signing secret, hex, prefixed `v0=`. */
-async function signedRequest(body: string, timestamp = String(NOW), secret = SECRET): Promise<Request> {
+async function signedRequest(
+  body: string,
+  timestamp = String(NOW),
+  secret = SECRET,
+): Promise<Request> {
   const enc = new TextEncoder();
-  const key = await crypto.subtle.importKey("raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, [
-    "sign",
-  ]);
+  const key = await crypto.subtle.importKey(
+    "raw",
+    enc.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
   const sig = await crypto.subtle.sign("HMAC", key, enc.encode(`v0:${timestamp}:${body}`));
   const hex = Array.from(new Uint8Array(sig))
     .map((b) => b.toString(16).padStart(2, "0"))
@@ -50,7 +63,11 @@ describe("slack verify", () => {
 
   it("rejects a tampered body -- the signature no longer matches", async () => {
     const req = await signedRequest('{"type":"url_verification"}');
-    const tampered = new Request(req.url, { method: "POST", headers: req.headers, body: '{"type":"evil"}' });
+    const tampered = new Request(req.url, {
+      method: "POST",
+      headers: req.headers,
+      body: '{"type":"evil"}',
+    });
     expect(await slackAdapter.verify(tampered, env(), NOW)).toBe(false);
   });
 
@@ -67,7 +84,9 @@ describe("slack verify", () => {
 
   it("rejects when the deployment has no signing secret configured", async () => {
     const req = await signedRequest("{}");
-    expect(await slackAdapter.verify(req, env({ SLACK_SIGNING_SECRET: undefined }), NOW)).toBe(false);
+    expect(await slackAdapter.verify(req, env({ SLACK_SIGNING_SECRET: undefined }), NOW)).toBe(
+      false,
+    );
   });
 
   it("leaves the body readable afterwards -- router.ts still has to parse it", async () => {
@@ -79,7 +98,12 @@ describe("slack verify", () => {
 
 describe("slack routingKey", () => {
   it("is the team id, for an event_callback", () => {
-    const payload = { type: "event_callback", team_id: "T0123", event_id: "Ev1", event: { type: "app_mention" } };
+    const payload = {
+      type: "event_callback",
+      team_id: "T0123",
+      event_id: "Ev1",
+      event: { type: "app_mention" },
+    };
     expect(slackAdapter.routingKey(payload)).toBe("T0123");
   });
 
@@ -90,12 +114,19 @@ describe("slack routingKey", () => {
 
 describe("slack challengeResponse", () => {
   it("extracts the challenge from a url_verification payload", () => {
-    expect(slackAdapter.challengeResponse!({ type: "url_verification", challenge: "abc123" })).toBe("abc123");
+    expect(slackAdapter.challengeResponse!({ type: "url_verification", challenge: "abc123" })).toBe(
+      "abc123",
+    );
   });
 
   it("is null for an ordinary event_callback", () => {
     expect(
-      slackAdapter.challengeResponse!({ type: "event_callback", team_id: "T1", event_id: "E1", event: {} }),
+      slackAdapter.challengeResponse!({
+        type: "event_callback",
+        team_id: "T1",
+        event_id: "E1",
+        event: {},
+      }),
     ).toBeNull();
   });
 
@@ -143,7 +174,11 @@ describe("slack normalize", () => {
     });
     const messages = await slackAdapter.normalize(payload, "conn-1", env());
     expect(messages).toHaveLength(1);
-    expect(messages[0]).toMatchObject({ thread: "D333", text: "hello from a dm", raw_kind: "message" });
+    expect(messages[0]).toMatchObject({
+      thread: "D333",
+      text: "hello from a dm",
+      raw_kind: "message",
+    });
   });
 
   it("gives a threaded reply the channel:thread_ts thread key", async () => {
@@ -196,7 +231,9 @@ describe("slack normalize", () => {
   });
 
   it("is empty for url_verification -- routingKey already returned null, but normalize is pure", async () => {
-    expect(await slackAdapter.normalize({ type: "url_verification", challenge: "c" }, "conn-1", env())).toEqual([]);
+    expect(
+      await slackAdapter.normalize({ type: "url_verification", challenge: "c" }, "conn-1", env()),
+    ).toEqual([]);
   });
 
   it("carries an image attachment straight through, no round trip needed", async () => {
@@ -205,7 +242,9 @@ describe("slack normalize", () => {
       user: "U111",
       text: "look at this",
       channel: "C222",
-      files: [{ url_private: "https://files.slack.com/a.png", name: "a.png", mimetype: "image/png" }],
+      files: [
+        { url_private: "https://files.slack.com/a.png", name: "a.png", mimetype: "image/png" },
+      ],
     });
     const messages = await slackAdapter.normalize(payload, "conn-1", env());
     expect(messages[0].attachments).toEqual([
@@ -216,23 +255,31 @@ describe("slack normalize", () => {
 
 describe("slack send", () => {
   it("posts to chat.postMessage with the channel split out of the thread key", async () => {
-    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
-      new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    const fetchMock = vi.fn(
+      async (_url: string, _init?: RequestInit) =>
+        new Response(JSON.stringify({ ok: true }), { status: 200 }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    await slackAdapter.send({ routingKey: "T0123", thread: "C222", text: "hi there" }, { botToken: "xoxb-1" });
+    await slackAdapter.send(
+      { routingKey: "T0123", thread: "C222", text: "hi there" },
+      { botToken: "xoxb-1" },
+    );
 
     expect(fetchMock).toHaveBeenCalledOnce();
     const [calledUrl, init] = fetchMock.mock.calls[0];
     expect(calledUrl).toBe("https://slack.com/api/chat.postMessage");
     expect((init as RequestInit).headers).toMatchObject({ authorization: "Bearer xoxb-1" });
-    expect(JSON.parse((init as RequestInit).body as string)).toEqual({ channel: "C222", text: "hi there" });
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({
+      channel: "C222",
+      text: "hi there",
+    });
   });
 
   it("includes thread_ts once the thread key names a Slack thread", async () => {
-    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
-      new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    const fetchMock = vi.fn(
+      async (_url: string, _init?: RequestInit) =>
+        new Response(JSON.stringify({ ok: true }), { status: 200 }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -258,18 +305,25 @@ describe("slack send", () => {
   it("throws when slack rejects the post", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response(JSON.stringify({ ok: false, error: "channel_not_found" }), { status: 200 })),
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ ok: false, error: "channel_not_found" }), { status: 200 }),
+      ),
     );
     await expect(
-      slackAdapter.send({ routingKey: "T0123", thread: "C222", text: "hi" }, { botToken: "xoxb-1" }),
+      slackAdapter.send(
+        { routingKey: "T0123", thread: "C222", text: "hi" },
+        { botToken: "xoxb-1" },
+      ),
     ).rejects.toThrow(/channel_not_found/);
   });
 });
 
 describe("slack setThinking", () => {
   it("posts to assistant.threads.setStatus with the channel/thread split out", async () => {
-    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
-      new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    const fetchMock = vi.fn(
+      async (_url: string, _init?: RequestInit) =>
+        new Response(JSON.stringify({ ok: true }), { status: 200 }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -294,8 +348,11 @@ describe("slack setThinking", () => {
 
 describe("slack resolveSenderName", () => {
   it("resolves users.info's display_name", async () => {
-    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
-      new Response(JSON.stringify({ ok: true, user: { profile: { display_name: "Igor" } } }), { status: 200 }),
+    const fetchMock = vi.fn(
+      async (_url: string, _init?: RequestInit) =>
+        new Response(JSON.stringify({ ok: true, user: { profile: { display_name: "Igor" } } }), {
+          status: 200,
+        }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -309,10 +366,17 @@ describe("slack resolveSenderName", () => {
   it("falls back to real_name when display_name was never set", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () =>
-        new Response(JSON.stringify({ ok: true, user: { profile: { display_name: "", real_name: "Igor Realname" } } }), {
-          status: 200,
-        }),
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              ok: true,
+              user: { profile: { display_name: "", real_name: "Igor Realname" } },
+            }),
+            {
+              status: 200,
+            },
+          ),
       ),
     );
     const name = await slackAdapter.resolveSenderName!("U-rname-1", { botToken: "xoxb-rname" });
@@ -322,14 +386,21 @@ describe("slack resolveSenderName", () => {
   it("is null on a slack-side error, leaving the caller's own fallback standing", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response(JSON.stringify({ ok: false, error: "user_not_found" }), { status: 200 })),
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ ok: false, error: "user_not_found" }), { status: 200 }),
+      ),
     );
     expect(await slackAdapter.resolveSenderName!("U-err-1", { botToken: "xoxb-err" })).toBeNull();
   });
 
   it("caches a resolved name -- a second lookup for the same token+id makes no second request", async () => {
-    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
-      new Response(JSON.stringify({ ok: true, user: { profile: { display_name: "Cached Carl" } } }), { status: 200 }),
+    const fetchMock = vi.fn(
+      async (_url: string, _init?: RequestInit) =>
+        new Response(
+          JSON.stringify({ ok: true, user: { profile: { display_name: "Cached Carl" } } }),
+          { status: 200 },
+        ),
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -343,20 +414,28 @@ describe("slack resolveSenderName", () => {
   it("never shares a cached name across two different workspaces' bot tokens", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () =>
-        new Response(JSON.stringify({ ok: true, user: { profile: { display_name: "Workspace A's Carl" } } }), {
-          status: 200,
-        }),
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ ok: true, user: { profile: { display_name: "Workspace A's Carl" } } }),
+            {
+              status: 200,
+            },
+          ),
       ),
     );
     await slackAdapter.resolveSenderName!("U-cross-1", { botToken: "xoxb-cross-a" });
 
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () =>
-        new Response(JSON.stringify({ ok: true, user: { profile: { display_name: "Workspace B's Carl" } } }), {
-          status: 200,
-        }),
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ ok: true, user: { profile: { display_name: "Workspace B's Carl" } } }),
+            {
+              status: 200,
+            },
+          ),
       ),
     );
     const fromB = await slackAdapter.resolveSenderName!("U-cross-1", { botToken: "xoxb-cross-b" });
@@ -377,13 +456,21 @@ describe("slackInstallUrl", () => {
   });
 
   it("is null without a configured client id", () => {
-    expect(slackInstallUrl("https://router.example/register", env({ SLACK_CLIENT_ID: undefined }), "code")).toBeNull();
+    expect(
+      slackInstallUrl(
+        "https://router.example/register",
+        env({ SLACK_CLIENT_ID: undefined }),
+        "code",
+      ),
+    ).toBeNull();
   });
 });
 
 describe("slackRedirectUri", () => {
   it("is /link/slack on the request's own origin", () => {
-    expect(slackRedirectUri("https://router.example/register?x=1")).toBe("https://router.example/link/slack");
+    expect(slackRedirectUri("https://router.example/register?x=1")).toBe(
+      "https://router.example/link/slack",
+    );
   });
 });
 
@@ -391,18 +478,29 @@ describe("slackExchangeCode", () => {
   it("returns the team id and bot token on a successful exchange", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () =>
-        new Response(JSON.stringify({ ok: true, access_token: "xoxb-1", team: { id: "T0123" } }), { status: 200 }),
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ ok: true, access_token: "xoxb-1", team: { id: "T0123" } }),
+            { status: 200 },
+          ),
       ),
     );
-    const result = await slackExchangeCode(env(), "oauth-code", "https://router.example/link/slack");
+    const result = await slackExchangeCode(
+      env(),
+      "oauth-code",
+      "https://router.example/link/slack",
+    );
     expect(result).toEqual({ ok: true, teamId: "T0123", botToken: "xoxb-1" });
   });
 
   it("surfaces slack's own error string on a failed exchange", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response(JSON.stringify({ ok: false, error: "invalid_code" }), { status: 200 })),
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ ok: false, error: "invalid_code" }), { status: 200 }),
+      ),
     );
     const result = await slackExchangeCode(env(), "bad-code", "https://router.example/link/slack");
     expect(result).toEqual({ ok: false, error: "invalid_code" });
@@ -411,7 +509,11 @@ describe("slackExchangeCode", () => {
   it("fails without client credentials configured, before even calling slack", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-    const result = await slackExchangeCode(env({ SLACK_CLIENT_SECRET: undefined }), "code", "https://x/link/slack");
+    const result = await slackExchangeCode(
+      env({ SLACK_CLIENT_SECRET: undefined }),
+      "code",
+      "https://x/link/slack",
+    );
     expect(result.ok).toBe(false);
     expect(fetchMock).not.toHaveBeenCalled();
   });

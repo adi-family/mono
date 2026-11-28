@@ -45,7 +45,9 @@ let mod: Record<string, unknown>;
 try {
   mod = await import(modulePath);
 } catch (err) {
-  fail(`couldn't import the workflow module: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
+  fail(
+    `couldn't import the workflow module: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`,
+  );
 }
 
 let input: unknown;
@@ -55,7 +57,8 @@ try {
   fail(`couldn't parse the run's input JSON: ${err instanceof Error ? err.message : String(err)}`);
 }
 
-const inputShape = mod.input as { safeParse?: (v: unknown) => { success: boolean; data?: unknown; error?: unknown } } | undefined;
+const inputShape = mod.input as
+  { safeParse?: (v: unknown) => { success: boolean; data?: unknown; error?: unknown } } | undefined;
 if (inputShape?.safeParse) {
   const parsed = inputShape.safeParse(input);
   if (!parsed.success) {
@@ -64,7 +67,8 @@ if (inputShape?.safeParse) {
   input = parsed.data;
 }
 
-const body = mod.default as { run?: (ctx: unknown, input: unknown) => Promise<unknown> } | undefined;
+const body = mod.default as
+  { run?: (ctx: unknown, input: unknown) => Promise<unknown> } | undefined;
 if (!body || typeof body.run !== "function") {
   fail("the workflow file has no default workflow(...) export");
 }

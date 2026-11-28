@@ -32,16 +32,33 @@ import {
 import { telegramGroupInstallUrl, telegramInstallUrl } from "./adapters/telegram";
 import { bearerToken, html, json, problem, timingSafeEqual } from "./http";
 import { enabledProviders } from "./providers";
-import { encryptCredential, LINK_CODE_TTL_SECONDS, randomId, verifyLinkCode, verifyNodeToken } from "./state";
+import {
+  encryptCredential,
+  LINK_CODE_TTL_SECONDS,
+  randomId,
+  verifyLinkCode,
+  verifyNodeToken,
+} from "./state";
 import type { LinkCodePayload } from "./state";
 import { doId } from "./types";
-import type { ChannelAdapter, ChannelMessage, Connection, Env, OutboundReply, Target } from "./types";
+import type {
+  ChannelAdapter,
+  ChannelMessage,
+  Connection,
+  Env,
+  OutboundReply,
+  Target,
+} from "./types";
 
 /**
  * Route a request. `now` (epoch ms) is injected so tests can pin the clock, matching
  * oauth-router's `handle` convention.
  */
-export async function handle(request: Request, env: Env, now: number = Date.now()): Promise<Response> {
+export async function handle(
+  request: Request,
+  env: Env,
+  now: number = Date.now(),
+): Promise<Response> {
   const url = new URL(request.url);
   const segments = url.pathname.split("/").filter(Boolean);
 
@@ -111,7 +128,8 @@ async function handleRegister(request: Request, env: Env, now: number): Promise<
   }
   if (typeof body.node !== "string" || !body.node) return problem(400, "missing node");
   if (typeof body.provider !== "string" || !body.provider) return problem(400, "missing provider");
-  if (!getAdapter(body.provider)) return problem(404, `unknown or unsupported provider: ${body.provider}`);
+  if (!getAdapter(body.provider))
+    return problem(404, `unknown or unsupported provider: ${body.provider}`);
   if (!body.target) return problem(400, "missing target");
 
   if (!isAdmin) {
@@ -134,7 +152,10 @@ async function handleRegister(request: Request, env: Env, now: number): Promise<
   });
   if (res.status === 429) {
     await res.json(); // every DO response body must be drained, even unused -- see do.ts
-    return problem(429, "too many pending connections on this node -- link or disconnect one first");
+    return problem(
+      429,
+      "too many pending connections on this node -- link or disconnect one first",
+    );
   }
   const data = (await res.json()) as { token: string; connection: string; link_code: string };
   data.link_code = await shortenLinkCode(env, data.link_code, Math.floor(now / 1000));
@@ -148,7 +169,8 @@ async function handleRegister(request: Request, env: Env, now: number): Promise<
   // Telegram's own second deep link -- "add this bot to a group" instead of "message it
   // directly" -- which Telegram resolves to the same `/start <code>` the webhook already
   // handles (ADI-MONO-125: no routing change needed, only a second URL to offer).
-  const installUrlGroup = body.provider === "telegram" ? telegramGroupInstallUrl(env, data.link_code) : null;
+  const installUrlGroup =
+    body.provider === "telegram" ? telegramGroupInstallUrl(env, data.link_code) : null;
   return json({
     token: data.token,
     connection: data.connection,
@@ -164,7 +186,10 @@ async function handleRegister(request: Request, env: Env, now: number): Promise<
  * `rate_limiter.ts`). */
 async function checkRegisterRateLimit(env: Env, ip: string, nowSeconds: number): Promise<boolean> {
   const stub = env.REGISTER_LIMITER.get(env.REGISTER_LIMITER.idFromName(ip));
-  const res = await stub.fetch("https://do/check", { method: "POST", body: JSON.stringify({ now: nowSeconds }) });
+  const res = await stub.fetch("https://do/check", {
+    method: "POST",
+    body: JSON.stringify({ now: nowSeconds }),
+  });
   const { allowed } = (await res.json()) as { allowed: boolean };
   return allowed;
 }
@@ -172,8 +197,14 @@ async function checkRegisterRateLimit(env: Env, ip: string, nowSeconds: number):
 /** Who (if anyone) already owns `(provider, routing_key)` in D1 -- read-only, used to decide
  * *before* touching the owning Durable Object whether a link attempt is a steal (ADI-MONO-125:
  * "first install wins"). */
-async function routingKeyOwner(env: Env, provider: string, routingKey: string): Promise<string | null> {
-  const row = await env.ROUTING_KEYS.prepare("SELECT node_id FROM routing_keys WHERE provider = ? AND routing_key = ?")
+async function routingKeyOwner(
+  env: Env,
+  provider: string,
+  routingKey: string,
+): Promise<string | null> {
+  const row = await env.ROUTING_KEYS.prepare(
+    "SELECT node_id FROM routing_keys WHERE provider = ? AND routing_key = ?",
+  )
     .bind(provider, routingKey)
     .first<{ node_id: string }>();
   return row?.node_id ?? null;
@@ -184,7 +215,12 @@ async function routingKeyOwner(env: Env, provider: string, routingKey: string): 
  * landing between {@link routingKeyOwner}'s read and this write fails closed rather than
  * silently overwriting it (ADI-MONO-125). Returns whether `node` ended up the owner -- `true`
  * for a fresh key or one `node` already held, `false` if someone else got there first. */
-async function claimRoutingKey(env: Env, provider: string, routingKey: string, node: string): Promise<boolean> {
+async function claimRoutingKey(
+  env: Env,
+  provider: string,
+  routingKey: string,
+  node: string,
+): Promise<boolean> {
   await env.ROUTING_KEYS.prepare(
     `INSERT INTO routing_keys (provider, routing_key, node_id) VALUES (?, ?, ?)
      ON CONFLICT(provider, routing_key) DO UPDATE SET node_id = excluded.node_id
@@ -203,11 +239,9 @@ async function shortenLinkCode(env: Env, signed: string, nowSecs: number): Promi
   const handle = randomId();
   await env.ROUTING_KEYS.batch([
     env.ROUTING_KEYS.prepare("DELETE FROM link_codes WHERE expires_at < ?").bind(nowSecs),
-    env.ROUTING_KEYS.prepare("INSERT INTO link_codes (handle, signed, expires_at) VALUES (?, ?, ?)").bind(
-      handle,
-      signed,
-      nowSecs + LINK_CODE_TTL_SECONDS,
-    ),
+    env.ROUTING_KEYS.prepare(
+      "INSERT INTO link_codes (handle, signed, expires_at) VALUES (?, ?, ?)",
+    ).bind(handle, signed, nowSecs + LINK_CODE_TTL_SECONDS),
   ]);
   return handle;
 }
@@ -215,8 +249,14 @@ async function shortenLinkCode(env: Env, signed: string, nowSecs: number): Promi
 /** The inverse of {@link shortenLinkCode}, and single-use: the row is deleted as it is read, so a
  * link code can't be replayed inside its TTL the way a bare signed code could. The signed code is
  * still verified -- D1 holding a row is not, on its own, proof the router minted it. */
-async function consumeLinkCode(env: Env, handle: string, nowSecs: number): Promise<LinkCodePayload | null> {
-  const row = await env.ROUTING_KEYS.prepare("DELETE FROM link_codes WHERE handle = ? RETURNING signed")
+async function consumeLinkCode(
+  env: Env,
+  handle: string,
+  nowSecs: number,
+): Promise<LinkCodePayload | null> {
+  const row = await env.ROUTING_KEYS.prepare(
+    "DELETE FROM link_codes WHERE handle = ? RETURNING signed",
+  )
     .bind(handle)
     .first<{ signed: string }>();
   if (!row) return null;
@@ -224,7 +264,12 @@ async function consumeLinkCode(env: Env, handle: string, nowSecs: number): Promi
 }
 
 /** `POST /webhook/<provider>` -- §1's webhook row, §4's `verify`/`routingKey`/`normalize`. */
-async function handleWebhook(providerId: string, request: Request, env: Env, now: number): Promise<Response> {
+async function handleWebhook(
+  providerId: string,
+  request: Request,
+  env: Env,
+  now: number,
+): Promise<Response> {
   const adapter = getAdapter(providerId);
   if (!adapter) return problem(404, `unknown or unsupported provider: ${providerId}`);
 
@@ -257,7 +302,9 @@ async function handleWebhook(providerId: string, request: Request, env: Env, now
     return handleLinkAttempt(adapter, providerId, linkCode, routingKey, env, now);
   }
 
-  const row = await env.ROUTING_KEYS.prepare("SELECT node_id FROM routing_keys WHERE provider = ? AND routing_key = ?")
+  const row = await env.ROUTING_KEYS.prepare(
+    "SELECT node_id FROM routing_keys WHERE provider = ? AND routing_key = ?",
+  )
     .bind(providerId, routingKey)
     .first<{ node_id: string }>();
   if (!row) {
@@ -457,7 +504,11 @@ async function handleSlackOAuthCallback(url: URL, env: Env, now: number): Promis
   const stub = env.NODE_CONNECTION.get(doId(env.NODE_CONNECTION, payload.node, "slack"));
   const linkRes = await stub.fetch("https://do/internal/connection/link", {
     method: "POST",
-    body: JSON.stringify({ connection: payload.connection, routing_key: exchanged.teamId, credential }),
+    body: JSON.stringify({
+      connection: payload.connection,
+      routing_key: exchanged.teamId,
+      credential,
+    }),
   });
   const linkOk = linkRes.ok;
   await linkRes.json(); // every response body must be drained, even unused -- see do.ts
@@ -603,7 +654,9 @@ async function handleDisconnect(request: Request, env: Env, now: number): Promis
   };
 
   if (routing_key) {
-    await env.ROUTING_KEYS.prepare("DELETE FROM routing_keys WHERE provider = ? AND routing_key = ?")
+    await env.ROUTING_KEYS.prepare(
+      "DELETE FROM routing_keys WHERE provider = ? AND routing_key = ?",
+    )
       .bind(payload.provider, routing_key)
       .run();
   }

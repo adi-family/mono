@@ -12,7 +12,11 @@ use crate::state::{State, WorkflowsConsole};
 /// The Workflows panel on a project's detail page: this project's own workflow files, each
 /// expandable into its starters/shapes/enable toggle/run-now box, its own TypeScript source, and
 /// its own runs list, the same way a row on the global page is.
-pub(crate) fn workflows_panel(state: State, route: RwSignal<Route>, console: WorkflowsConsole) -> AnyView {
+pub(crate) fn workflows_panel(
+    state: State,
+    route: RwSignal<Route>,
+    console: WorkflowsConsole,
+) -> AnyView {
     // Load once per visit to this section — the same shared load the global page's own Effect
     // does, since there is no per-project list endpoint to fetch instead.
     Effect::new(move |loaded: Option<()>| {

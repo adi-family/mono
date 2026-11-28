@@ -39,7 +39,13 @@ export interface SlackCredential {
  * `app_mention` event, `assistant:write` for the Agents & AI Apps surface (`assistant_thread_*`
  * events, `assistant.threads.setStatus`), `chat:write` to reply, `im:history` for `message.im`,
  * `users:read` for `resolveSenderName`'s `users.info` call. */
-const SLACK_BOT_SCOPES = ["app_mentions:read", "assistant:write", "chat:write", "im:history", "users:read"];
+const SLACK_BOT_SCOPES = [
+  "app_mentions:read",
+  "assistant:write",
+  "chat:write",
+  "im:history",
+  "users:read",
+];
 
 /** How far a webhook's `X-Slack-Request-Timestamp` may drift from this router's own clock before
  * `verify` refuses it -- Slack's own documented replay window. */
@@ -119,9 +125,13 @@ function isOrdinaryUserEvent(event: SlackEventBase): boolean {
 
 async function hmacSha256Hex(secret: string, message: string): Promise<string> {
   const enc = new TextEncoder();
-  const key = await crypto.subtle.importKey("raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, [
-    "sign",
-  ]);
+  const key = await crypto.subtle.importKey(
+    "raw",
+    enc.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
   const sig = await crypto.subtle.sign("HMAC", key, enc.encode(message));
   return Array.from(new Uint8Array(sig))
     .map((b) => b.toString(16).padStart(2, "0"))
@@ -187,12 +197,19 @@ export const slackAdapter: ChannelAdapter = {
     const base = event as SlackEventBase;
     const isMessageIm = base.type === "message" && base.channel_type === "im";
     const isAppMention = base.type === "app_mention";
-    if ((!isMessageIm && !isAppMention) || !isOrdinaryUserEvent(base) || !base.channel || !base.user) {
+    if (
+      (!isMessageIm && !isAppMention) ||
+      !isOrdinaryUserEvent(base) ||
+      !base.channel ||
+      !base.user
+    ) {
       return [];
     }
 
     const attachments: ChannelMessage["attachments"] = (base.files ?? [])
-      .filter((f): f is { url_private: string; name?: string; mimetype?: string } => Boolean(f.url_private))
+      .filter((f): f is { url_private: string; name?: string; mimetype?: string } =>
+        Boolean(f.url_private),
+      )
       .map((f) => ({
         kind: f.mimetype?.startsWith("image/") ? "image" : "file",
         url: f.url_private,
@@ -221,13 +238,22 @@ export const slackAdapter: ChannelAdapter = {
       // Every connection's thread map is established at link time (§5); a reply with nothing to
       // address isn't a case `/send`'s caller should be able to reach, so this fails loudly
       // rather than guessing a channel from the workspace-wide routing key.
-      throw new Error("slack send needs a channel (OutboundReply.thread), not just the workspace routing key");
+      throw new Error(
+        "slack send needs a channel (OutboundReply.thread), not just the workspace routing key",
+      );
     }
     const [channel, threadTs] = splitThread(reply.thread);
     const res = await fetch("https://slack.com/api/chat.postMessage", {
       method: "POST",
-      headers: { "content-type": "application/json; charset=utf-8", authorization: `Bearer ${botToken}` },
-      body: JSON.stringify({ channel, text: reply.text, ...(threadTs ? { thread_ts: threadTs } : {}) }),
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        authorization: `Bearer ${botToken}`,
+      },
+      body: JSON.stringify({
+        channel,
+        text: reply.text,
+        ...(threadTs ? { thread_ts: threadTs } : {}),
+      }),
     });
     const data = (await res.json()) as { ok: boolean; error?: string };
     if (!res.ok || !data.ok) {
@@ -241,7 +267,10 @@ export const slackAdapter: ChannelAdapter = {
     if (!threadTs) return; // setStatus is a per-thread indicator; a bare channel has none to set
     const res = await fetch("https://slack.com/api/assistant.threads.setStatus", {
       method: "POST",
-      headers: { "content-type": "application/json; charset=utf-8", authorization: `Bearer ${botToken}` },
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        authorization: `Bearer ${botToken}`,
+      },
       body: JSON.stringify({ channel_id: channel, thread_ts: threadTs, status }),
     });
     const data = (await res.json()) as { ok: boolean; error?: string };
@@ -257,7 +286,8 @@ export const slackAdapter: ChannelAdapter = {
     if (cached && cached.expiresAt > Date.now()) return cached.name;
 
     const name = await usersInfo(botToken, senderId);
-    if (name) senderNameCache.set(cacheKey, { name, expiresAt: Date.now() + SENDER_NAME_CACHE_TTL_MS });
+    if (name)
+      senderNameCache.set(cacheKey, { name, expiresAt: Date.now() + SENDER_NAME_CACHE_TTL_MS });
     return name;
   },
 };
@@ -304,8 +334,7 @@ export function slackRedirectUri(requestUrl: string): string {
 }
 
 export type SlackExchangeResult =
-  | { ok: true; teamId: string; botToken: string }
-  | { ok: false; error: string };
+  { ok: true; teamId: string; botToken: string } | { ok: false; error: string };
 
 /** Exchange the OAuth authorization code for this workspace's bot token, server-to-server --
  * the callback leg of "Add to Slack". */

@@ -45,7 +45,10 @@ impl State {
     /// reads (every tick, while usage events are off) have nothing to write down.
     #[must_use]
     pub fn load(module: &Module) -> Self {
-        module.file(STATE_FILE).load_or_default().unwrap_or_default()
+        module
+            .file(STATE_FILE)
+            .load_or_default()
+            .unwrap_or_default()
     }
 
     /// # Errors

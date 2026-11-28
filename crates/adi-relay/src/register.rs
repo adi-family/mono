@@ -49,7 +49,9 @@ pub fn public_url(relay: &str, endpoint_id: &str) -> Option<String> {
 /// never runs that `main`) never does — see `adi-marketplace/src/fetch.rs::get_https` for the
 /// same line, idempotent by design.
 fn ensure_crypto_provider() {
-    rustls::crypto::ring::default_provider().install_default().ok();
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .ok();
 }
 
 /// A client for one relay call, shared by every caller in this module — the register/delete
@@ -72,7 +74,12 @@ fn now_secs() -> u64 {
 
 /// The four `X-Relay-*` headers for one request, signed with this node's key.
 #[must_use]
-pub fn signed_headers(identity: &RelayIdentity, method: &str, path_and_query: &str, body: &[u8]) -> Vec<(String, String)> {
+pub fn signed_headers(
+    identity: &RelayIdentity,
+    method: &str,
+    path_and_query: &str,
+    body: &[u8],
+) -> Vec<(String, String)> {
     let signed = crate::sign::sign(
         &identity.signing,
         method,
@@ -83,7 +90,10 @@ pub fn signed_headers(identity: &RelayIdentity, method: &str, path_and_query: &s
     );
     vec![
         (crate::sign::HEADER_KEY.to_string(), signed.key_line),
-        (crate::sign::HEADER_TIMESTAMP.to_string(), signed.timestamp.to_string()),
+        (
+            crate::sign::HEADER_TIMESTAMP.to_string(),
+            signed.timestamp.to_string(),
+        ),
         (crate::sign::HEADER_NONCE.to_string(), signed.nonce),
         (crate::sign::HEADER_SIGNATURE.to_string(), signed.signature),
     ]
@@ -133,7 +143,9 @@ pub async fn register(
 
     let path = "/v1/endpoints";
     let url = format!("{}{path}", relay_url.trim_end_matches('/'));
-    let mut req = http_client().post(&url).header("content-type", "application/json");
+    let mut req = http_client()
+        .post(&url)
+        .header("content-type", "application/json");
     for (k, v) in signed_headers(identity, "POST", path, &body) {
         req = req.header(k, v);
     }
@@ -147,8 +159,8 @@ pub async fn register(
     if !status.is_success() {
         return Err(relay_error_message(status.as_u16(), &text));
     }
-    let v: serde_json::Value =
-        serde_json::from_str(&text).map_err(|_| format!("{relay_url} answered a body that wasn't JSON"))?;
+    let v: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|_| format!("{relay_url} answered a body that wasn't JSON"))?;
     let endpoint_id = v["endpoint_id"]
         .as_str()
         .ok_or_else(|| format!("{relay_url}'s register response had no endpoint_id"))?
@@ -169,9 +181,14 @@ async fn delete_best_effort(relay_url: String, identity: Arc<RelayIdentity>, end
         req = req.header(k, v);
     }
     match req.send().await {
-        Ok(resp) if resp.status().is_success() || resp.status() == reqwest::StatusCode::NOT_FOUND => {}
-        Ok(resp) => debug!(%relay_url, %endpoint_id, status = %resp.status(), "best-effort relay delete answered non-2xx"),
-        Err(error) => debug!(%relay_url, %endpoint_id, %error, "best-effort relay delete could not reach the relay"),
+        Ok(resp)
+            if resp.status().is_success() || resp.status() == reqwest::StatusCode::NOT_FOUND => {}
+        Ok(resp) => {
+            debug!(%relay_url, %endpoint_id, status = %resp.status(), "best-effort relay delete answered non-2xx")
+        }
+        Err(error) => {
+            debug!(%relay_url, %endpoint_id, %error, "best-effort relay delete could not reach the relay")
+        }
     }
 }
 
@@ -179,7 +196,11 @@ async fn delete_best_effort(relay_url: String, identity: Arc<RelayIdentity>, end
 /// sync context in a long-running process (`adi-app`'s own `delete_trigger`, outside any save),
 /// which stays up long after this returns to let the spawned task actually run. [`Cleanup::Spawn`]
 /// is this same call, for an async caller that also has a [`Cleanup::Await`] mode to choose.
-pub fn spawn_delete_best_effort(relay_url: String, identity: Arc<RelayIdentity>, endpoint_id: String) {
+pub fn spawn_delete_best_effort(
+    relay_url: String,
+    identity: Arc<RelayIdentity>,
+    endpoint_id: String,
+) {
     tokio::spawn(delete_best_effort(relay_url, identity, endpoint_id));
 }
 
@@ -229,10 +250,17 @@ pub enum Plan {
 }
 
 #[must_use]
-pub fn plan(previous_extra: Option<&BTreeMap<String, String>>, incoming_extra: &BTreeMap<String, String>) -> Plan {
+pub fn plan(
+    previous_extra: Option<&BTreeMap<String, String>>,
+    incoming_extra: &BTreeMap<String, String>,
+) -> Plan {
     let new_relay = incoming_extra.get("relay").filter(|s| !s.is_empty());
-    let old_relay = previous_extra.and_then(|e| e.get("relay")).filter(|s| !s.is_empty());
-    let old_endpoint = previous_extra.and_then(|e| e.get("relay_endpoint")).filter(|s| !s.is_empty());
+    let old_relay = previous_extra
+        .and_then(|e| e.get("relay"))
+        .filter(|s| !s.is_empty());
+    let old_endpoint = previous_extra
+        .and_then(|e| e.get("relay_endpoint"))
+        .filter(|s| !s.is_empty());
 
     match new_relay {
         Some(new) if Some(new) == old_relay && old_endpoint.is_some() => Plan::Unchanged,
@@ -267,8 +295,14 @@ pub fn plan(previous_extra: Option<&BTreeMap<String, String>>, incoming_extra: &
 /// by hand) — so without this, an unrelated re-save of a relay-backed trigger would silently
 /// drop its live registration. Safe to call unconditionally: a no-op for a trigger with no
 /// relay, or one whose incoming manifest already names its own `relay_endpoint`.
-pub fn keep_unchanged_endpoint(previous_extra: Option<&BTreeMap<String, String>>, manifest_extra: &mut BTreeMap<String, String>) {
-    if let Some(endpoint) = previous_extra.and_then(|e| e.get("relay_endpoint")).filter(|s| !s.is_empty()) {
+pub fn keep_unchanged_endpoint(
+    previous_extra: Option<&BTreeMap<String, String>>,
+    manifest_extra: &mut BTreeMap<String, String>,
+) {
+    if let Some(endpoint) = previous_extra
+        .and_then(|e| e.get("relay_endpoint"))
+        .filter(|s| !s.is_empty())
+    {
         manifest_extra
             .entry("relay_endpoint".to_string())
             .or_insert_with(|| endpoint.clone());
@@ -302,7 +336,9 @@ pub async fn register_on_save(
             Ok(())
         }
         Plan::Register { url } => {
-            let retention = manifest_extra.get("relay_retention").and_then(|s| s.parse::<u64>().ok());
+            let retention = manifest_extra
+                .get("relay_retention")
+                .and_then(|s| s.parse::<u64>().ok());
             let licence_code = manifest_extra.get("licence_code").cloned();
             let registered = register(&url, identity, retention, licence_code.as_deref()).await?;
             manifest_extra.insert("relay_endpoint".to_string(), registered.endpoint_id);
@@ -315,7 +351,9 @@ pub async fn register_on_save(
                     && Some(old_relay.as_str()) != manifest_extra.get("relay").map(String::as_str)
                     && let Some(old_url) = resolve_url(old_relay)
                 {
-                    cleanup.run(old_url, Arc::clone(identity), old_endpoint.clone()).await;
+                    cleanup
+                        .run(old_url, Arc::clone(identity), old_endpoint.clone())
+                        .await;
                 }
             }
             Ok(())
@@ -328,17 +366,39 @@ mod tests {
     use super::*;
 
     fn extra(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     #[test]
     fn resolve_url_covers_the_four_hosted_relays_and_custom() {
-        assert_eq!(resolve_url("public-eu"), Some("https://eu.webhooks.withadi.dev".to_string()));
-        assert_eq!(resolve_url("public-us"), Some("https://us.webhooks.withadi.dev".to_string()));
-        assert_eq!(resolve_url("enterprise-eu"), Some("https://eu.ent.webhooks.withadi.dev".to_string()));
-        assert_eq!(resolve_url("enterprise-us"), Some("https://us.ent.webhooks.withadi.dev".to_string()));
-        assert_eq!(resolve_url("custom:https://relay.example.com/"), Some("https://relay.example.com".to_string()));
-        assert_eq!(resolve_url("custom:"), None, "a blank custom URL names nothing");
+        assert_eq!(
+            resolve_url("public-eu"),
+            Some("https://eu.webhooks.withadi.dev".to_string())
+        );
+        assert_eq!(
+            resolve_url("public-us"),
+            Some("https://us.webhooks.withadi.dev".to_string())
+        );
+        assert_eq!(
+            resolve_url("enterprise-eu"),
+            Some("https://eu.ent.webhooks.withadi.dev".to_string())
+        );
+        assert_eq!(
+            resolve_url("enterprise-us"),
+            Some("https://us.ent.webhooks.withadi.dev".to_string())
+        );
+        assert_eq!(
+            resolve_url("custom:https://relay.example.com/"),
+            Some("https://relay.example.com".to_string())
+        );
+        assert_eq!(
+            resolve_url("custom:"),
+            None,
+            "a blank custom URL names nothing"
+        );
         assert_eq!(resolve_url("bogus"), None);
     }
 
@@ -394,7 +454,10 @@ mod tests {
         // same relay named again must still register, not be read as "unchanged".
         let previous = extra(&[("relay", "public-eu")]);
         let incoming = extra(&[("relay", "public-eu")]);
-        assert!(matches!(plan(Some(&previous), &incoming), Plan::Register { .. }));
+        assert!(matches!(
+            plan(Some(&previous), &incoming),
+            Plan::Register { .. }
+        ));
     }
 
     /// The exact bug ADI-MONO-227 fixed: a caller that builds its save from scratch (the CLI's
@@ -426,7 +489,13 @@ mod tests {
     async fn respond(stream: &mut tokio::net::TcpStream, status: &str, body: &str) {
         use tokio::io::AsyncWriteExt as _;
         stream
-            .write_all(format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes())
+            .write_all(
+                format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
             .await
             .unwrap();
     }
@@ -444,7 +513,12 @@ mod tests {
             let (mut stream, _) = listener.accept().await.unwrap();
             let mut buf = vec![0u8; 8192];
             let _ = stream.read(&mut buf).await.unwrap();
-            respond(&mut stream, "500 Internal Server Error", "{\"message\":\"relay is down\"}").await;
+            respond(
+                &mut stream,
+                "500 Internal Server Error",
+                "{\"message\":\"relay is down\"}",
+            )
+            .await;
         });
 
         let mut manifest_extra = extra(&[]);
@@ -490,16 +564,27 @@ mod tests {
         // Both relays must resolve to the fake listener — only its *string* has to change for
         // `plan` to see a switch (a trailing slash does nothing to the resolved URL, but is
         // enough to make the two `relay` values compare unequal).
-        let previous_extra = extra(&[("relay", &format!("custom:http://{addr}/")), ("relay_endpoint", "wh_old")]);
+        let previous_extra = extra(&[
+            ("relay", &format!("custom:http://{addr}/")),
+            ("relay_endpoint", "wh_old"),
+        ]);
         let mut manifest_extra = extra(&[("relay", &format!("custom:http://{addr}"))]);
         // `Cleanup::Await`, the CLI's own mode — the one where the delete reaching the fake
         // relay at all is not a question of the surrounding runtime happening to keep running
         // long enough to poll an abandoned spawned task (see `Cleanup`'s own doc comment).
-        register_on_save(&identity, Some(&previous_extra), &mut manifest_extra, Cleanup::Await)
-            .await
-            .expect("registration succeeds");
+        register_on_save(
+            &identity,
+            Some(&previous_extra),
+            &mut manifest_extra,
+            Cleanup::Await,
+        )
+        .await
+        .expect("registration succeeds");
 
-        assert_eq!(manifest_extra.get("relay_endpoint"), Some(&"wh_fresh".to_string()));
+        assert_eq!(
+            manifest_extra.get("relay_endpoint"),
+            Some(&"wh_fresh".to_string())
+        );
         server.await.unwrap();
     }
 
@@ -529,11 +614,19 @@ mod tests {
             respond(&mut stream, "200 OK", "").await;
         });
 
-        let previous_extra = extra(&[("relay", &format!("custom:http://{addr}/")), ("relay_endpoint", "wh_old2")]);
+        let previous_extra = extra(&[
+            ("relay", &format!("custom:http://{addr}/")),
+            ("relay_endpoint", "wh_old2"),
+        ]);
         let mut manifest_extra = extra(&[("relay", &format!("custom:http://{addr}"))]);
-        register_on_save(&identity, Some(&previous_extra), &mut manifest_extra, Cleanup::Spawn)
-            .await
-            .expect("registration succeeds");
+        register_on_save(
+            &identity,
+            Some(&previous_extra),
+            &mut manifest_extra,
+            Cleanup::Spawn,
+        )
+        .await
+        .expect("registration succeeds");
 
         server.await.unwrap();
     }
@@ -545,6 +638,9 @@ mod tests {
             std::thread::current().id(),
         ));
         let _ = std::fs::remove_dir_all(&root);
-        Arc::new(crate::keys::load_or_create_in(&adi_config::Config::with_root(root)).expect("mint a scratch identity"))
+        Arc::new(
+            crate::keys::load_or_create_in(&adi_config::Config::with_root(root))
+                .expect("mint a scratch identity"),
+        )
     }
 }

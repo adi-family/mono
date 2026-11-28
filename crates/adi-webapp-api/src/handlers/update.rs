@@ -358,18 +358,29 @@ mod tests {
     #[test]
     fn dns_and_timeout_failures_are_offline() {
         assert_eq!(
-            classify_error("could not fetch the release manifest: Could not resolve host: github.com", false, false),
+            classify_error(
+                "could not fetch the release manifest: Could not resolve host: github.com",
+                false,
+                false
+            ),
             "offline"
         );
         assert_eq!(
-            classify_error("could not fetch the release manifest: Operation timed out after 30000 milliseconds", true, false),
+            classify_error(
+                "could not fetch the release manifest: Operation timed out after 30000 milliseconds",
+                true,
+                false
+            ),
             "offline"
         );
     }
 
     #[test]
     fn an_unrecognised_message_is_just_other() {
-        assert_eq!(classify_error("the download failed its checksum", false, false), "other");
+        assert_eq!(
+            classify_error("the download failed its checksum", false, false),
+            "other"
+        );
     }
 
     /// §5's table, one status per row, against the licence-service host — none of these may
@@ -397,10 +408,22 @@ mod tests {
     /// table instead — proving the branch is keyed on the host, not the status digit alone.
     #[test]
     fn the_same_statuses_off_the_licence_service_host_are_unaffected() {
-        assert_eq!(classify_error("curl: (22) ... 401 ...", false, false), "private-channel");
-        assert_eq!(classify_error("curl: (22) ... 401 ...", true, false), "other");
-        assert_eq!(classify_error("curl: (22) ... 402 ...", true, false), "other");
-        assert_eq!(classify_error("curl: (22) ... 409 ...", true, false), "other");
+        assert_eq!(
+            classify_error("curl: (22) ... 401 ...", false, false),
+            "private-channel"
+        );
+        assert_eq!(
+            classify_error("curl: (22) ... 401 ...", true, false),
+            "other"
+        );
+        assert_eq!(
+            classify_error("curl: (22) ... 402 ...", true, false),
+            "other"
+        );
+        assert_eq!(
+            classify_error("curl: (22) ... 409 ...", true, false),
+            "other"
+        );
     }
 
     #[test]
@@ -411,7 +434,9 @@ mod tests {
         assert!(!is_licence_service(
             "https://github.com/adi-family/mono-enterprise/releases/latest/download/manifest.json"
         ));
-        assert!(!is_licence_service("https://evil.example/licence.withadi.dev"));
+        assert!(!is_licence_service(
+            "https://evil.example/licence.withadi.dev"
+        ));
         assert!(!is_licence_service("not a url"));
     }
 

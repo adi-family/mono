@@ -33,10 +33,22 @@ pub(crate) const COLS: &[&str] = &["Backend", "Runtime", "Model", "Dimensions", 
 
 /// The four runtimes this build knows, and what to call each in the picker.
 const RUNTIMES: [(&str, &str); 4] = [
-    ("candle", "candle — in-process, jina-embeddings-v2-base-code"),
-    ("ollama", "ollama — a local model server, one request per text"),
-    ("openai", "openai — any OpenAI-compatible /v1/embeddings endpoint"),
-    ("hash", "hash — deterministic word-overlap, no model, no network"),
+    (
+        "candle",
+        "candle — in-process, jina-embeddings-v2-base-code",
+    ),
+    (
+        "ollama",
+        "ollama — a local model server, one request per text",
+    ),
+    (
+        "openai",
+        "openai — any OpenAI-compatible /v1/embeddings endpoint",
+    ),
+    (
+        "hash",
+        "hash — deterministic word-overlap, no model, no network",
+    ),
 ];
 
 /// Which consumers this build knows to ask, in the fixed order the page shows them — matching
@@ -45,7 +57,10 @@ const RUNTIMES: [(&str, &str); 4] = [
 const CONSUMERS: [(&str, &str); 3] = [
     ("indexer", "The code index — symbols and semantic search"),
     ("knowledge", "Knowledge bases — notes, searched by meaning"),
-    ("facts", "The facts base — sentences, and the pairs still to decide"),
+    (
+        "facts",
+        "The facts base — sentences, and the pairs still to decide",
+    ),
 ];
 
 /// The Embedding backends page: the registry, the whole-object editor under it, and how each
@@ -179,12 +194,18 @@ fn rows_view(state: State, console: EmbeddingsConsole) -> AnyView {
 }
 
 fn name_of(b: &EmbeddingBackendDto) -> String {
-    if b.label.is_empty() { b.id.clone() } else { b.label.clone() }
+    if b.label.is_empty() {
+        b.id.clone()
+    } else {
+        b.label.clone()
+    }
 }
 
 fn cell(col: &str, b: &EmbeddingBackendDto) -> AnyView {
     match col {
-        "Runtime" => view! { <span class="adi-mono adi-muted">{b.runtime.clone()}</span> }.into_any(),
+        "Runtime" => {
+            view! { <span class="adi-mono adi-muted">{b.runtime.clone()}</span> }.into_any()
+        }
         "Model" => {
             if b.model.is_empty() {
                 view! { <span class="adi-muted">"\u{2014}"</span> }.into_any()
@@ -348,7 +369,12 @@ fn reassign(
     } else {
         assignments.insert(consumer.to_string(), backend.clone());
     }
-    apply(state, console, None, fetch::save_embedding_settings(assignments));
+    apply(
+        state,
+        console,
+        None,
+        fetch::save_embedding_settings(assignments),
+    );
 }
 
 // ------------------------------------------------------------------ editor
@@ -529,7 +555,11 @@ fn body_from_form(console: EmbeddingsConsole) -> Result<SaveEmbeddingBackend, St
         id: id.clone(),
         label: console.label.get().trim().to_string(),
         runtime,
-        model: if fixed { String::new() } else { console.model.get().trim().to_string() },
+        model: if fixed {
+            String::new()
+        } else {
+            console.model.get().trim().to_string()
+        },
         dimensions: if fixed {
             0
         } else {
@@ -600,7 +630,12 @@ fn apply<F>(state: State, console: EmbeddingsConsole, busy: Option<RwSignal<bool
 where
     F: std::future::Future<Output = Result<EmbeddingBackendsDto, String>> + 'static,
 {
-    apply_mutation(state, busy, move |_s, fresh| console.backends.set(Some(fresh)), fut);
+    apply_mutation(
+        state,
+        busy,
+        move |_s, fresh| console.backends.set(Some(fresh)),
+        fut,
+    );
 }
 
 async fn refresh(console: EmbeddingsConsole) {

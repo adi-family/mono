@@ -38,7 +38,10 @@ impl TestResult {
     pub fn message(&self) -> String {
         match &self.verdict {
             TestVerdict::Answered { dimensions } => {
-                format!("embedded into {dimensions} dimensions in {}ms", self.elapsed_ms)
+                format!(
+                    "embedded into {dimensions} dimensions in {}ms",
+                    self.elapsed_ms
+                )
             }
             TestVerdict::Failed { error } => error.clone(),
         }
@@ -93,7 +96,10 @@ pub fn test_manifest(config: &Config, manifest: &EmbeddingBackendManifest) -> Te
         Ok(dimensions) => TestVerdict::Answered { dimensions },
         Err(error) => TestVerdict::Failed { error },
     };
-    TestResult { verdict, elapsed_ms }
+    TestResult {
+        verdict,
+        elapsed_ms,
+    }
 }
 
 /// Build the manifest's own runtime, embed [`TEST_TEXT`] once, and check the width it came back at
@@ -141,7 +147,9 @@ mod tests {
         let result = test_manifest(&scratch(), &hash_manifest());
         assert_eq!(
             result.verdict,
-            TestVerdict::Answered { dimensions: crate::runtimes::hash::HASH_DIMENSIONS },
+            TestVerdict::Answered {
+                dimensions: crate::runtimes::hash::HASH_DIMENSIONS
+            },
         );
     }
 
@@ -164,9 +172,15 @@ mod tests {
     /// disagreeing with zero — there is nothing to disagree with.
     #[test]
     fn an_undeclared_width_is_not_checked_against() {
-        let manifest = EmbeddingBackendManifest { dimensions: 0, ..hash_manifest() };
+        let manifest = EmbeddingBackendManifest {
+            dimensions: 0,
+            ..hash_manifest()
+        };
         let result = test_manifest(&scratch(), &manifest);
-        assert!(matches!(result.verdict, TestVerdict::Answered { .. }), "{result:?}");
+        assert!(
+            matches!(result.verdict, TestVerdict::Answered { .. }),
+            "{result:?}"
+        );
     }
 
     #[test]

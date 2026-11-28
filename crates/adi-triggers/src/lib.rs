@@ -59,8 +59,8 @@ pub use dispatch::{EventDispatcher, EventObserver};
 pub use error::{Error, Result};
 pub use fire::Firing;
 pub use hook_secret::{
-    HOOK_SECRET_EXTRA, HOOK_SECRET_REF_EXTRA, HookSecret, MigrateError, Migrated, default_secret_name,
-    reconcile_hook_secret,
+    HOOK_SECRET_EXTRA, HOOK_SECRET_REF_EXTRA, HookSecret, MigrateError, Migrated,
+    default_secret_name, reconcile_hook_secret,
 };
 pub use presets::{Preset, PresetField};
 pub use run::{RunState, Status};
@@ -369,7 +369,6 @@ impl Triggers {
     /// status file that can't be written costs a status readout, never the running process.
     #[cfg(feature = "supervisor")]
     pub(crate) fn publish_run_state(&self, name: &str, state: &RunState) {
-
         if validate_name(name).is_ok() {
             let _ = self.run_file(name).save(state);
         }

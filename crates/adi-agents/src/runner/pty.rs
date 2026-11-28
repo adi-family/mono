@@ -533,8 +533,14 @@ mod tests {
         session
             .set_state(json!({ "session": name }))
             .expect("state");
-        adi_pty::launch(&name, &["/bin/cat".to_string()], &std::env::temp_dir(), &[], &[])
-            .expect("launch a pane");
+        adi_pty::launch(
+            &name,
+            &["/bin/cat".to_string()],
+            &std::env::temp_dir(),
+            &[],
+            &[],
+        )
+        .expect("launch a pane");
         assert!(runner.is_alive(&session));
 
         let terminal = runner.as_terminal().expect("a pty is a terminal");

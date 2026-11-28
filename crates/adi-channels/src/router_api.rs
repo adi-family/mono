@@ -149,11 +149,21 @@ impl RouterApi {
     ///
     /// # Errors
     /// [`Error::Http`] if the request can't be sent; [`Error::Router`] on a non-2xx status.
-    pub fn send(&self, node_token: &str, connection: &str, thread: Option<&str>, text: &str) -> Result<()> {
+    pub fn send(
+        &self,
+        node_token: &str,
+        connection: &str,
+        thread: Option<&str>,
+        text: &str,
+    ) -> Result<()> {
         let response = client()?
             .post(format!("{}/send", self.base_url))
             .bearer_auth(node_token)
-            .json(&SendRequest { connection, text, thread })
+            .json(&SendRequest {
+                connection,
+                text,
+                thread,
+            })
             .send()
             .map_err(|e| Error::Http(e.to_string()))?;
         if !response.status().is_success() {
@@ -171,17 +181,29 @@ impl RouterApi {
     ///
     /// # Errors
     /// [`Error::Http`] if the request can't be sent; [`Error::Router`] on a non-2xx status.
-    pub fn set_thinking(&self, node_token: &str, connection: &str, thread: &str, status: &str) -> Result<()> {
+    pub fn set_thinking(
+        &self,
+        node_token: &str,
+        connection: &str,
+        thread: &str,
+        status: &str,
+    ) -> Result<()> {
         let response = client()?
             .post(format!("{}/send", self.base_url))
             .bearer_auth(node_token)
-            .json(&SetThinkingRequest { connection, thread, status })
+            .json(&SetThinkingRequest {
+                connection,
+                thread,
+                status,
+            })
             .send()
             .map_err(|e| Error::Http(e.to_string()))?;
         if !response.status().is_success() {
             let status_code = response.status();
             let body = response.text().unwrap_or_default();
-            return Err(Error::Router(format!("set_thinking failed ({status_code}): {body}")));
+            return Err(Error::Router(format!(
+                "set_thinking failed ({status_code}): {body}"
+            )));
         }
         Ok(())
     }
@@ -203,7 +225,9 @@ impl RouterApi {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().unwrap_or_default();
-            return Err(Error::Router(format!("disconnect failed ({status}): {body}")));
+            return Err(Error::Router(format!(
+                "disconnect failed ({status}): {body}"
+            )));
         }
         Ok(())
     }
@@ -233,10 +257,7 @@ mod tests {
                 if line == "\r\n" || line.is_empty() {
                     break;
                 }
-                if let Some(value) = line
-                    .to_ascii_lowercase()
-                    .strip_prefix("content-length:")
-                {
+                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
                     content_length = value.trim().parse().unwrap_or(0);
                 }
             }
@@ -263,13 +284,22 @@ mod tests {
             body.len()
         ));
         let registered = RouterApi::new(base)
-            .register("node-1", "telegram", &agent_target(), None, Some("admin-secret"))
+            .register(
+                "node-1",
+                "telegram",
+                &agent_target(),
+                None,
+                Some("admin-secret"),
+            )
             .expect("register");
         assert_eq!(registered.token, "tok_123");
         assert_eq!(registered.connection, "conn_abc");
         assert_eq!(registered.link_code, "code_1");
         assert_eq!(registered.install_url, None, "absent in this response");
-        assert_eq!(registered.install_url_group, None, "absent in this response");
+        assert_eq!(
+            registered.install_url_group, None,
+            "absent in this response"
+        );
     }
 
     /// ADI-MONO-125: open self-registration — a node with no admin secret at all still
@@ -301,13 +331,20 @@ mod tests {
                 "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
                 body.len()
             );
-            stream.try_clone().unwrap().write_all(response.as_bytes()).unwrap();
+            stream
+                .try_clone()
+                .unwrap()
+                .write_all(response.as_bytes())
+                .unwrap();
         });
 
         RouterApi::new(format!("http://{addr}"))
             .register("node-1", "telegram", &agent_target(), None, None)
             .expect("register");
-        assert!(!rx.recv().unwrap(), "no admin secret given -- no bearer sent");
+        assert!(
+            !rx.recv().unwrap(),
+            "no admin secret given -- no bearer sent"
+        );
     }
 
     #[test]
@@ -319,7 +356,13 @@ mod tests {
             body.len()
         ));
         let registered = RouterApi::new(base)
-            .register("node-1", "telegram", &agent_target(), None, Some("admin-secret"))
+            .register(
+                "node-1",
+                "telegram",
+                &agent_target(),
+                None,
+                Some("admin-secret"),
+            )
             .expect("register");
         assert_eq!(
             registered.install_url,
@@ -336,7 +379,13 @@ mod tests {
             body.len()
         ));
         let registered = RouterApi::new(base)
-            .register("node-1", "telegram", &agent_target(), None, Some("admin-secret"))
+            .register(
+                "node-1",
+                "telegram",
+                &agent_target(),
+                None,
+                Some("admin-secret"),
+            )
             .expect("register");
         assert_eq!(
             registered.install_url_group,
@@ -348,7 +397,13 @@ mod tests {
     fn register_surfaces_a_non_2xx_as_a_router_error() {
         let base = fake_router("HTTP/1.1 403 Forbidden\r\nContent-Length: 7\r\n\r\nrefused");
         let err = RouterApi::new(base)
-            .register("node-1", "telegram", &agent_target(), None, Some("wrong-secret"))
+            .register(
+                "node-1",
+                "telegram",
+                &agent_target(),
+                None,
+                Some("wrong-secret"),
+            )
             .expect_err("should refuse");
         assert!(matches!(err, Error::Router(msg) if msg.contains("refused")));
     }

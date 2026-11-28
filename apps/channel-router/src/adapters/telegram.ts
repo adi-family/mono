@@ -77,9 +77,14 @@ function startCommandArg(text: string | undefined): string | null {
 /** Resolve a photo's largest size to a fetchable URL via `getFile`, the one network round-trip
  * `normalize` makes -- Telegram's file URLs are short-lived, so this has to happen before
  * forwarding, never deferred to whenever the node gets around to it. */
-async function resolvePhotoUrl(botToken: string, photo: TelegramPhotoSize[]): Promise<string | null> {
+async function resolvePhotoUrl(
+  botToken: string,
+  photo: TelegramPhotoSize[],
+): Promise<string | null> {
   const largest = photo.reduce((a, b) => (b.width * b.height > a.width * a.height ? b : a));
-  const res = await fetch(`https://api.telegram.org/bot${botToken}/getFile?file_id=${largest.file_id}`);
+  const res = await fetch(
+    `https://api.telegram.org/bot${botToken}/getFile?file_id=${largest.file_id}`,
+  );
   if (!res.ok) return null;
   const body = (await res.json()) as { ok: boolean; result?: { file_path?: string } };
   if (!body.ok || !body.result?.file_path) return null;
@@ -142,7 +147,9 @@ export const telegramAdapter: ChannelAdapter = {
         },
         text: message.text ?? message.caption ?? "",
         attachments,
-        reply_to: message.reply_to_message ? `telegram:${message.reply_to_message.message_id}` : undefined,
+        reply_to: message.reply_to_message
+          ? `telegram:${message.reply_to_message.message_id}`
+          : undefined,
         raw_kind: rawKind,
         received_at: Date.now(),
       },

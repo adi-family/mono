@@ -5,11 +5,19 @@
 
 import { relay } from "./panel.ts";
 
-export function node(req: Request, ctx: { params: string[]; url: URL }): Promise<Response> | Response {
+export function node(
+  req: Request,
+  ctx: { params: string[]; url: URL },
+): Promise<Response> | Response {
   const [machine, api, agents, ...rest] = ctx.params;
   if (!machine || api !== "api" || agents !== "agents") {
     return Response.json({ error: "not found" }, { status: 404 });
   }
-  const path = ["/api/node", encodeURIComponent(decodeURIComponent(machine)), "api/agents", ...rest].join("/");
+  const path = [
+    "/api/node",
+    encodeURIComponent(decodeURIComponent(machine)),
+    "api/agents",
+    ...rest,
+  ].join("/");
   return relay(req, `${path}${ctx.url.search}`);
 }

@@ -82,7 +82,9 @@ class AdiAsk extends AdiElement {
 
   override update(): void {
     const busy = this.hasAttribute("busy");
-    for (const b of this.shadowRoot.querySelectorAll<HTMLButtonElement | HTMLInputElement>("button, input")) {
+    for (const b of this.shadowRoot.querySelectorAll<HTMLButtonElement | HTMLInputElement>(
+      "button, input",
+    )) {
       if (b.classList.contains("send")) continue;
       b.disabled = busy;
     }
@@ -101,13 +103,16 @@ class AdiAsk extends AdiElement {
     this.#picks = questions.map(() => ({ chosen: new Set<number>(), typed: "" }));
     this.must(".note").replaceChildren(ask.note?.trim() ? renderMarkdown(ask.note) : "");
 
-    const submitOnSelection = questions.length === 1
-      && (questions[0].options?.length ?? 0) > 0
-      && !questions[0].multi_select;
+    const submitOnSelection =
+      questions.length === 1 &&
+      (questions[0].options?.length ?? 0) > 0 &&
+      !questions[0].multi_select;
     this.must(".foot").hidden = submitOnSelection;
 
     container.replaceChildren(
-      ...questions.map((question, index) => this.#buildQuestion(question, index, submitOnSelection)),
+      ...questions.map((question, index) =>
+        this.#buildQuestion(question, index, submitOnSelection),
+      ),
     );
     this.#tick();
     this.update();
@@ -149,7 +154,11 @@ class AdiAsk extends AdiElement {
     return row;
   }
 
-  #buildOptions(question: AskQuestion, answer: AnswerPick, submitOnSelection: boolean): HTMLDivElement {
+  #buildOptions(
+    question: AskQuestion,
+    answer: AnswerPick,
+    submitOnSelection: boolean,
+  ): HTMLDivElement {
     const container = document.createElement("div");
     container.className = "options";
 
@@ -158,7 +167,9 @@ class AdiAsk extends AdiElement {
       button.type = "button";
       button.className = "option";
       button.setAttribute("aria-pressed", "false");
-      const description = option.description ? `<span class="desc">${esc(option.description)}</span>` : "";
+      const description = option.description
+        ? `<span class="desc">${esc(option.description)}</span>`
+        : "";
       button.innerHTML = `${esc(option.label)}${description}`;
 
       button.addEventListener("click", () => {
@@ -225,7 +236,8 @@ class AdiAsk extends AdiElement {
       return;
     }
     const left = at - Date.now();
-    line.textContent = left <= 0 ? "taking its own default now" : `takes its own default in ${shortDuration(left)}`;
+    line.textContent =
+      left <= 0 ? "taking its own default now" : `takes its own default in ${shortDuration(left)}`;
   }
 }
 

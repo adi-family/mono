@@ -4,43 +4,40 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 use adi_webapp_api::types::{
-    Accepted, AgentAttachment, AgentAwaits, AgentGoals, AgentKeys, AgentPeek, AgentPrompts, AgentRef,
-    AgentReviewStarted, AgentRunOverrides, AgentRunResult, AgentRuns, AgentSimBlock, AgentSimState,
-    AgentSimTurn, AgentSteps, AgentTokens, AgentsState, AllAgentRuns, AllowChannel,
-    AnswerRun, ApiError, ChannelAllowlistDto, ChannelConnected, ChannelConnectionDto, ChannelProviderStatus,
-    ChannelRef, ChannelTargetDto, ChannelsState, CloseGoal, CompleteTask, ConnectChannel,
-    DashboardCreated, DashboardRef, DashboardTemplatesState, DashboardTransferred, DashboardsState,
-    DbExecResult,
-    DbQuery, DbQueryResult, DbSchema, DbScope, DbState, DbTablesState, DiagnosticReport,
-    DirListing, EmbeddingBackendRef, EmbeddingBackendsDto, FileContent, FilesRef, FleetDashboards,
-    FleetGrantRef, FleetInstructions, FleetJoinRef, FleetNodes, FleetRef, FleetRename, FleetState,
-    FsContent, FsCreate, FsListing, FsRef, FsWrite, GiveUpTask, GoalsOf, Health, HideRun, HiveState,
-    IgnoreAwait, InstallMarketplaceApp, KnowledgeBaseRef, KnowledgeNoteDto, KnowledgeNoteRef,
-    KnowledgeNotes, KnowledgeReembed, KnowledgeResults, KnowledgeSaved, KnowledgeSearch,
-    KnowledgeState, LAUNCHED_BY_HUMAN, LeaseRef, LinkTool, LlmBackendRef, LlmBackendsDto,
-    LlmCallDetail, LlmCallRef, LlmCalls, LlmQuery, LlmSummary, MarketplaceDone, MarketplaceState,
-    MeshForwardRef, MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, MetaState, NewDashboard,
-    NewKnowledgeBase, NewKnowledgeNote, NewProject, NewProjectHook, NewService, NewTask, NewTool,
-    NewWorkspace, NodeServiceRef, PauseChannel, PortsState, ProjectDetail, ProjectHookLog,
-    ProjectHookRef, ProjectHookRunResult, ProjectRef, ProjectRenamed, ProjectsState, PromptsOf, QueueMode,
-    RealtimeSessionDto, RealtimeSessionRequest,
-    RelayKey, ReleaseResponse, RenameProject, RenameRun, ReplyToRun, ReserveResponse, RevealedSecret,
-    RouteChannel, ReviewRun, RewindRun, RunAgent,
-    RunDetailDto, RunRef, RunSteps, RunSystemAction, RunTool, RunWorkflow, RunsQuery, RunsState,
-    SaveAgent, SaveEmbeddingBackend,
-    SaveEmbeddingSettings, SaveLlmBackend, SaveLlmSettings, SaveTrigger, SecretRef, SecretsState,
-    SetAutoTitle, SetDashboardProject, SetGoal, SetOAuthSecret, SetRunLimit, SetSecret,
-    SetSharedAssets, SetSpawnPolicy, SetSystemPower, SetUsageEvents, SharedAssetsMode, SharedAssetsState,
-    SimulateAgent, SimulateTurn, SpawnRuleEdit, StarRun, StartMarketplaceApp,
-    StartMarketplaceService, StartResult, StartService, StopResult, SystemStatus, TaskRef,
-    TasksState, TestEmbeddingBackend,
-    TestLlmBackend, TestResultDto, ToolRef, ToolRunResult, ToolScript, ToolsState, Transcript,
-    TranscriptView, TransferDashboard, TriggerFireResult, TriggerLog, TriggerRef, TriggersState,
-    UninstallMarketplaceElement, UnlockNode, UnqueueFromRun, UpdateMarketplaceApp,
-    UpdateMarketplaceBundle, UpdateState, UsageEventsState, UsedPorts, VoiceState, WorkflowRef, WorkflowRunRef,
-    WorkflowStarted, WorkflowsState, WorkspaceCreateResult,
-    WorkspaceRef, WorkspaceTerm, WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef,
-    WorkspacesState, WriteFile, WriteToolScript,
+    Accepted, AgentAttachment, AgentAwaits, AgentGoals, AgentKeys, AgentPeek, AgentPrompts,
+    AgentRef, AgentReviewStarted, AgentRunOverrides, AgentRunResult, AgentRuns, AgentSimBlock,
+    AgentSimState, AgentSimTurn, AgentSteps, AgentTokens, AgentsState, AllAgentRuns, AllowChannel,
+    AnswerRun, ApiError, ChannelAllowlistDto, ChannelConnected, ChannelConnectionDto,
+    ChannelProviderStatus, ChannelRef, ChannelTargetDto, ChannelsState, CloseGoal, CompleteTask,
+    ConnectChannel, DashboardCreated, DashboardRef, DashboardTemplatesState, DashboardTransferred,
+    DashboardsState, DbExecResult, DbQuery, DbQueryResult, DbSchema, DbScope, DbState,
+    DbTablesState, DiagnosticReport, DirListing, EmbeddingBackendRef, EmbeddingBackendsDto,
+    FileContent, FilesRef, FleetDashboards, FleetGrantRef, FleetInstructions, FleetJoinRef,
+    FleetNodes, FleetRef, FleetRename, FleetState, FsContent, FsCreate, FsListing, FsRef, FsWrite,
+    GiveUpTask, GoalsOf, Health, HideRun, HiveState, IgnoreAwait, InstallMarketplaceApp,
+    KnowledgeBaseRef, KnowledgeNoteDto, KnowledgeNoteRef, KnowledgeNotes, KnowledgeReembed,
+    KnowledgeResults, KnowledgeSaved, KnowledgeSearch, KnowledgeState, LAUNCHED_BY_HUMAN, LeaseRef,
+    LinkTool, LlmBackendRef, LlmBackendsDto, LlmCallDetail, LlmCallRef, LlmCalls, LlmQuery,
+    LlmSummary, MarketplaceDone, MarketplaceState, MeshForwardRef, MeshListenRef, MeshPeerRef,
+    MeshPortRef, MeshState, MetaState, NewDashboard, NewKnowledgeBase, NewKnowledgeNote,
+    NewProject, NewProjectHook, NewService, NewTask, NewTool, NewWorkspace, NodeServiceRef,
+    PauseChannel, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef, ProjectHookRunResult,
+    ProjectRef, ProjectRenamed, ProjectsState, PromptsOf, QueueMode, RealtimeSessionDto,
+    RealtimeSessionRequest, RelayKey, ReleaseResponse, RenameProject, RenameRun, ReplyToRun,
+    ReserveResponse, RevealedSecret, ReviewRun, RewindRun, RouteChannel, RunAgent, RunDetailDto,
+    RunRef, RunSteps, RunSystemAction, RunTool, RunWorkflow, RunsQuery, RunsState, SaveAgent,
+    SaveEmbeddingBackend, SaveEmbeddingSettings, SaveLlmBackend, SaveLlmSettings, SaveTrigger,
+    SecretRef, SecretsState, SetAutoTitle, SetDashboardProject, SetGoal, SetOAuthSecret,
+    SetRunLimit, SetSecret, SetSharedAssets, SetSpawnPolicy, SetSystemPower, SetUsageEvents,
+    SharedAssetsMode, SharedAssetsState, SimulateAgent, SimulateTurn, SpawnRuleEdit, StarRun,
+    StartMarketplaceApp, StartMarketplaceService, StartResult, StartService, StopResult,
+    SystemStatus, TaskRef, TasksState, TestEmbeddingBackend, TestLlmBackend, TestResultDto,
+    ToolRef, ToolRunResult, ToolScript, ToolsState, Transcript, TranscriptView, TransferDashboard,
+    TriggerFireResult, TriggerLog, TriggerRef, TriggersState, UninstallMarketplaceElement,
+    UnlockNode, UnqueueFromRun, UpdateMarketplaceApp, UpdateMarketplaceBundle, UpdateState,
+    UsageEventsState, UsedPorts, VoiceState, WorkflowRef, WorkflowRunRef, WorkflowStarted,
+    WorkflowsState, WorkspaceCreateResult, WorkspaceRef, WorkspaceTerm, WorkspaceTermKeys,
+    WorkspaceTermRef, WorkspacesRef, WorkspacesState, WriteFile, WriteToolScript,
 };
 
 use crate::state::{PROJECT_PAGE, RailGrouping, SessionFilter};
@@ -191,7 +188,14 @@ pub async fn release_llm_hold(id: String) -> Result<LlmBackendsDto, String> {
 /// A real, billed request through this backend, right now — the form as it stands, whether or not
 /// it has ever been saved.
 pub async fn test_llm_backend(draft: SaveLlmBackend) -> Result<TestResultDto, String> {
-    post("/api/llm/backends/test", &TestLlmBackend { id: String::new(), draft: Some(draft) }).await
+    post(
+        "/api/llm/backends/test",
+        &TestLlmBackend {
+            id: String::new(),
+            draft: Some(draft),
+        },
+    )
+    .await
 }
 
 pub async fn release(body: &LeaseRef) -> Result<ReleaseResponse, String> {
@@ -213,13 +217,21 @@ pub async fn save_embedding_backend(
 }
 
 pub async fn delete_embedding_backend(id: String) -> Result<EmbeddingBackendsDto, String> {
-    post("/api/embeddings/backends/delete", &EmbeddingBackendRef { id }).await
+    post(
+        "/api/embeddings/backends/delete",
+        &EmbeddingBackendRef { id },
+    )
+    .await
 }
 
 pub async fn save_embedding_settings(
     assignments: BTreeMap<String, String>,
 ) -> Result<EmbeddingBackendsDto, String> {
-    post("/api/embeddings/settings", &SaveEmbeddingSettings { assignments }).await
+    post(
+        "/api/embeddings/settings",
+        &SaveEmbeddingSettings { assignments },
+    )
+    .await
 }
 
 /// Embed one short string through this backend, right now — the form as it stands, whether or not
@@ -227,7 +239,10 @@ pub async fn save_embedding_settings(
 pub async fn test_embedding_backend(draft: SaveEmbeddingBackend) -> Result<TestResultDto, String> {
     post(
         "/api/embeddings/backends/test",
-        &TestEmbeddingBackend { id: String::new(), draft: Some(draft) },
+        &TestEmbeddingBackend {
+            id: String::new(),
+            draft: Some(draft),
+        },
     )
     .await
 }
@@ -253,7 +268,11 @@ pub async fn connect_channel(
     provider: String,
     target: ChannelTargetDto,
 ) -> Result<ChannelConnected, String> {
-    post_local("/api/channels/connect", &ConnectChannel { provider, target }).await
+    post_local(
+        "/api/channels/connect",
+        &ConnectChannel { provider, target },
+    )
+    .await
 }
 
 pub async fn route_channel(id: String, target: ChannelTargetDto) -> Result<ChannelsState, String> {
@@ -752,7 +771,11 @@ pub async fn set_spawn_policy(spawn_policy: String) -> Result<AgentsState, Strin
 /// and what editing "Can be launched by" from a target's own page sends (`agent` is the *caller*
 /// the rule is added to there, never the page a person is looking at).
 pub async fn set_spawn_rule(agent: String, rule: String, add: bool) -> Result<AgentsState, String> {
-    post("/api/agents/spawn-rule", &SpawnRuleEdit { agent, rule, add }).await
+    post(
+        "/api/agents/spawn-rule",
+        &SpawnRuleEdit { agent, rule, add },
+    )
+    .await
 }
 
 pub async fn stop_agent(name: String) -> Result<AgentsState, String> {
@@ -1346,7 +1369,10 @@ pub async fn rewind_workflow_run(run_key: String, to: usize) -> Result<RunDetail
     post("/api/workflows/run/rewind", &RewindRun { run_key, to }).await
 }
 
-pub async fn complete_task(id: String, result: Option<serde_json::Value>) -> Result<TasksState, String> {
+pub async fn complete_task(
+    id: String,
+    result: Option<serde_json::Value>,
+) -> Result<TasksState, String> {
     post("/api/tasks/complete", &CompleteTask { id, result }).await
 }
 

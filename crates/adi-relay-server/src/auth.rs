@@ -149,12 +149,17 @@ impl AuthorizedKeys {
     }
 
     fn maybe_reload(&self) {
-        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.last_checked.elapsed() < RELOAD_INTERVAL {
             return;
         }
         state.last_checked = Instant::now();
-        let mtime = std::fs::metadata(&self.path).and_then(|m| m.modified()).ok();
+        let mtime = std::fs::metadata(&self.path)
+            .and_then(|m| m.modified())
+            .ok();
         if mtime == state.mtime {
             return;
         }
@@ -182,8 +187,14 @@ impl AuthorizedKeys {
 /// the operator's own misconfiguration — fails closed (every request refused) rather than
 /// silently skipping a check an operator believes is active.
 #[must_use]
-pub fn check_shared_secret(self_host: &SelfHostConfig, headers: &HashMap<String, String>) -> Option<Response> {
-    let env_name = self_host.shared_secret_env.as_ref().filter(|s| !s.is_empty())?;
+pub fn check_shared_secret(
+    self_host: &SelfHostConfig,
+    headers: &HashMap<String, String>,
+) -> Option<Response> {
+    let env_name = self_host
+        .shared_secret_env
+        .as_ref()
+        .filter(|s| !s.is_empty())?;
     let Ok(expected) = std::env::var(env_name) else {
         return Some(err(
             500,
@@ -191,11 +202,18 @@ pub fn check_shared_secret(self_host: &SelfHostConfig, headers: &HashMap<String,
             format!("self_host.shared_secret_env names {env_name}, which isn't set"),
         ));
     };
-    let offered = headers.get(HEADER_SHARED_SECRET).map(String::as_bytes).unwrap_or_default();
+    let offered = headers
+        .get(HEADER_SHARED_SECRET)
+        .map(String::as_bytes)
+        .unwrap_or_default();
     if offered.ct_eq(expected.as_bytes()).into() {
         None
     } else {
-        Some(err(403, "unknown_key", "missing or incorrect X-Relay-Shared-Secret"))
+        Some(err(
+            403,
+            "unknown_key",
+            "missing or incorrect X-Relay-Shared-Secret",
+        ))
     }
 }
 
@@ -209,11 +227,17 @@ pub fn check_ip_allowlist(self_host: &SelfHostConfig, remote_ip: &str) -> Option
     if self_host.ip_allowlist.is_empty() {
         return None;
     }
-    let Ok(ip) = remote_ip.parse() else { return None };
+    let Ok(ip) = remote_ip.parse() else {
+        return None;
+    };
     if crate::cidr::allows(&self_host.ip_allowlist, ip) {
         None
     } else {
-        Some(err(403, "unknown_key", "this address is not in ip_allowlist"))
+        Some(err(
+            403,
+            "unknown_key",
+            "this address is not in ip_allowlist",
+        ))
     }
 }
 
@@ -237,10 +261,20 @@ mod tests {
     fn a_well_formed_request_authenticates() {
         let store = Store::open_in_memory().unwrap();
         let signing = SigningKey::from_bytes(&[1u8; 32]);
-        let req = sign::sign(&signing, "GET", "/v1/pull", now(), &sign::generate_nonce(), b"");
+        let req = sign::sign(
+            &signing,
+            "GET",
+            "/v1/pull",
+            now(),
+            &sign::generate_nonce(),
+            b"",
+        );
         let headers = HashMap::from([
             (sign::HEADER_KEY.to_string(), req.key_line.clone()),
-            (sign::HEADER_TIMESTAMP.to_string(), req.timestamp.to_string()),
+            (
+                sign::HEADER_TIMESTAMP.to_string(),
+                req.timestamp.to_string(),
+            ),
             (sign::HEADER_NONCE.to_string(), req.nonce.clone()),
             (sign::HEADER_SIGNATURE.to_string(), req.signature.clone()),
         ]);
@@ -260,10 +294,20 @@ mod tests {
         let store = Store::open_in_memory().unwrap();
         let signing = SigningKey::from_bytes(&[2u8; 32]);
         let old = now() - 10_000;
-        let req = sign::sign(&signing, "GET", "/v1/pull", old, &sign::generate_nonce(), b"");
+        let req = sign::sign(
+            &signing,
+            "GET",
+            "/v1/pull",
+            old,
+            &sign::generate_nonce(),
+            b"",
+        );
         let headers = HashMap::from([
             (sign::HEADER_KEY.to_string(), req.key_line),
-            (sign::HEADER_TIMESTAMP.to_string(), req.timestamp.to_string()),
+            (
+                sign::HEADER_TIMESTAMP.to_string(),
+                req.timestamp.to_string(),
+            ),
             (sign::HEADER_NONCE.to_string(), req.nonce),
             (sign::HEADER_SIGNATURE.to_string(), req.signature),
         ]);
@@ -281,7 +325,10 @@ mod tests {
         let req = sign::sign(&signing, "GET", "/v1/pull", t, "fixed-nonce", b"");
         let headers = HashMap::from([
             (sign::HEADER_KEY.to_string(), req.key_line),
-            (sign::HEADER_TIMESTAMP.to_string(), req.timestamp.to_string()),
+            (
+                sign::HEADER_TIMESTAMP.to_string(),
+                req.timestamp.to_string(),
+            ),
             (sign::HEADER_NONCE.to_string(), req.nonce),
             (sign::HEADER_SIGNATURE.to_string(), req.signature),
         ]);
@@ -346,7 +393,10 @@ mod tests {
         let wrong = HashMap::from([(HEADER_SHARED_SECRET.to_string(), "nope".to_string())]);
         assert_eq!(check_shared_secret(&sh, &wrong).unwrap().status, 403);
 
-        assert_eq!(check_shared_secret(&sh, &HashMap::new()).unwrap().status, 403);
+        assert_eq!(
+            check_shared_secret(&sh, &HashMap::new()).unwrap().status,
+            403
+        );
     }
 
     #[test]

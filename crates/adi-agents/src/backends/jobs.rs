@@ -387,8 +387,12 @@ mod tests {
         let job = start(&dir, "conv-1", &shell, &dir, "exit 0").expect("start");
         settle(&job);
 
-        let found = referenced_in(&dir, "conv-1", &format!("tail -f {}; exit 0", job.log.display()))
-            .expect("the job's own log path names it");
+        let found = referenced_in(
+            &dir,
+            "conv-1",
+            &format!("tail -f {}; exit 0", job.log.display()),
+        )
+        .expect("the job's own log path names it");
         assert_eq!(found.id, job.id);
         assert!(has_exited(&found));
 

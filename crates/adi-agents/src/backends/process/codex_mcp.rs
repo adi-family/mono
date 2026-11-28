@@ -32,7 +32,13 @@ const BEARER_PREFIX: &str = adi_mcp::BEARER_PREFIX;
 fn bearer_env_var(server_id: &str) -> String {
     let safe: String = server_id
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_uppercase() } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
         .collect();
     format!("ADI_MCP_{safe}_BEARER")
 }
@@ -151,7 +157,10 @@ mod tests {
             transport: ResolvedTransport::Stdio {
                 command: "npx".to_string(),
                 args: vec!["-y".to_string(), "n8n-mcp".to_string()],
-                env: env.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+                env: env
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
             },
         }
     }
@@ -165,7 +174,10 @@ mod tests {
                 url: "http://n8n.adi/mcp/".to_string(),
                 headers: BTreeMap::from([(
                     "Authorization".to_string(),
-                    ResolvedHeader::Prefixed { prefix: BEARER_PREFIX.to_string(), raw: raw.to_string() },
+                    ResolvedHeader::Prefixed {
+                        prefix: BEARER_PREFIX.to_string(),
+                        raw: raw.to_string(),
+                    },
                 )]),
             },
         }
@@ -239,7 +251,10 @@ mod tests {
                 url: "http://x".to_string(),
                 headers: BTreeMap::from([(
                     "Authorization".to_string(),
-                    ResolvedHeader::Prefixed { prefix: "Token ".to_string(), raw: "tok".to_string() },
+                    ResolvedHeader::Prefixed {
+                        prefix: "Token ".to_string(),
+                        raw: "tok".to_string(),
+                    },
                 )]),
             },
         }];
@@ -250,7 +265,10 @@ mod tests {
     fn an_http_server_with_anything_else_refuses_clearly_rather_than_mis_sending() {
         let bad = [
             http_plain("none", &[]),
-            http_plain("extra", &[("Authorization", "Bearer tok"), ("X-Other", "y")]),
+            http_plain(
+                "extra",
+                &[("Authorization", "Bearer tok"), ("X-Other", "y")],
+            ),
             http_plain("wrong-name", &[("X-Api-Key", "tok")]),
             http_plain("no-bearer", &[("Authorization", "tok")]),
         ];

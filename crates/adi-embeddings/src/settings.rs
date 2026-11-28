@@ -19,8 +19,8 @@ use serde::{Deserialize, Serialize};
 
 use adi_config::Module;
 
-use crate::error::Result;
 use crate::EMBEDDINGS_MODULE;
+use crate::error::Result;
 
 /// The file the assignments live in, within the [`embeddings`](crate) module.
 pub(crate) const SETTINGS_FILE: &str = "settings.toml";
@@ -102,7 +102,10 @@ mod tests {
         settings.save(&module).expect("save");
 
         let read = EmbeddingSettings::load(&module).expect("load");
-        assert_eq!(read.assignments.get("knowledge"), Some(&"candle".to_string()));
+        assert_eq!(
+            read.assignments.get("knowledge"),
+            Some(&"candle".to_string())
+        );
     }
 
     #[test]

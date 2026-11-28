@@ -219,7 +219,10 @@ mod tests {
         assert_eq!(dead.note(), None, "no healthy number to show");
         let problems = dead.problems();
         assert_eq!(problems.len(), 2, "{problems:?}");
-        assert!(problems[0].contains("last ticked 11h 40m ago"), "{problems:?}");
+        assert!(
+            problems[0].contains("last ticked 11h 40m ago"),
+            "{problems:?}"
+        );
         assert!(problems[0].contains("pid 1108161"), "{problems:?}");
         assert!(problems[1].contains("212 undelivered"), "{problems:?}");
         assert!(problems[1].contains("11h 38m"), "{problems:?}");

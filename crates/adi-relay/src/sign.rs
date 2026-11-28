@@ -32,7 +32,13 @@ pub struct SignedRequest {
 /// The exact bytes that get signed: `METHOD "\n" PATH_AND_QUERY "\n" TIMESTAMP "\n" NONCE "\n"
 /// SHA256_HEX(BODY)` — `SHA256_HEX` of the empty string for a bodyless request.
 #[must_use]
-pub fn canonical_string(method: &str, path_and_query: &str, timestamp: u64, nonce: &str, body: &[u8]) -> String {
+pub fn canonical_string(
+    method: &str,
+    path_and_query: &str,
+    timestamp: u64,
+    nonce: &str,
+    body: &[u8],
+) -> String {
     format!(
         "{method}\n{path_and_query}\n{timestamp}\n{nonce}\n{}",
         sha256_hex(body)

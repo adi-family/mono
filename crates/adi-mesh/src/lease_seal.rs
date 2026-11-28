@@ -205,7 +205,8 @@ mod tests {
     #[test]
     fn a_value_sealed_to_the_session_opens_with_its_secret() {
         let session = SessionKey::generate();
-        let sealed = seal(&session.public(), "user:u-aaa/K|epoch1|device1", b"sk-mine").expect("seal");
+        let sealed =
+            seal(&session.public(), "user:u-aaa/K|epoch1|device1", b"sk-mine").expect("seal");
         let opened = open(
             &session,
             &sealed.device_public,
@@ -250,7 +251,16 @@ mod tests {
         let session_a = SessionKey::generate();
         let session_b = SessionKey::generate();
         let sealed = seal(&session_a.public(), "aad", b"v").expect("seal");
-        assert!(open(&session_b, &sealed.device_public, "aad", &sealed.nonce, &sealed.ciphertext).is_err());
+        assert!(
+            open(
+                &session_b,
+                &sealed.device_public,
+                "aad",
+                &sealed.nonce,
+                &sealed.ciphertext
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -258,7 +268,10 @@ mod tests {
         let session = SessionKey::generate();
         let first = seal(&session.public(), "aad", b"v").expect("seal 1");
         let second = seal(&session.public(), "aad", b"v").expect("seal 2");
-        assert_ne!(first.device_public, second.device_public, "fresh ephemeral key each call");
+        assert_ne!(
+            first.device_public, second.device_public,
+            "fresh ephemeral key each call"
+        );
         assert_ne!(first.ciphertext, second.ciphertext);
     }
 

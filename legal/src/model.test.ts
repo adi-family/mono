@@ -51,7 +51,9 @@ describe("validate", () => {
   });
 
   test("a todo must carry a marker somebody can grep for", () => {
-    expect(broken((d) => (d.jurisdictions.find((j) => j.id === "ru")!.todo = "ask someone"))).toContain(
+    expect(
+      broken((d) => (d.jurisdictions.find((j) => j.id === "ru")!.todo = "ask someone")),
+    ).toContain(
       "jurisdiction ru: todo must start with a marker naming who resolves it, e.g. TODO(lawyer)",
     );
   });

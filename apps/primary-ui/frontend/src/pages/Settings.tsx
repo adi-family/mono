@@ -33,15 +33,21 @@ export function Settings() {
     <main aria-label="Settings" className="w-full py-3 sm:px-4 sm:py-6 lg:px-6 lg:py-10">
       <SettingsLayout
         title="Settings"
-        description={<>How ADI behaves on <span data-slot="settings-machine">{source ? sourceName(source) : "this machine"}</span>. Sections move here one at a time; the rest is still in the old settings.</>}
-        actions={(
+        description={
+          <>
+            How ADI behaves on{" "}
+            <span data-slot="settings-machine">{source ? sourceName(source) : "this machine"}</span>
+            . Sections move here one at a time; the rest is still in the old settings.
+          </>
+        }
+        actions={
           <Button asChild variant="outline" data-slot="settings-old-ui">
             <a href={appHref("/extended/settings")}>
               Old UI settings
               <ArrowUpRight className="size-3.5" aria-hidden="true" />
             </a>
           </Button>
-        )}
+        }
         navigation={sections.map(({ id, label, icon: Icon }) => (
           <SettingsNavItem key={id} asChild>
             <NavLink to={`/settings/${id}`}>
@@ -51,13 +57,22 @@ export function Settings() {
           </SettingsNavItem>
         ))}
       >
-        {section ? section.element : (
+        {section ? (
+          section.element
+        ) : (
           <div role="alert" className="rounded-xl border border-dashed p-8 text-center">
             <h3 className="font-medium">No such settings section</h3>
-            <p className="text-muted-foreground mt-2 text-sm">“{sectionId}” is not a section of the new settings. It may still be in the old settings.</p>
+            <p className="text-muted-foreground mt-2 text-sm">
+              “{sectionId}” is not a section of the new settings. It may still be in the old
+              settings.
+            </p>
             <div className="mt-5 flex flex-wrap justify-center gap-2">
-              <Button asChild variant="outline"><Link to={`/settings/${sections[0].id}`}>Open {sections[0].label}</Link></Button>
-              <Button asChild variant="ghost"><a href={appHref("/extended/settings")}>Old UI settings</a></Button>
+              <Button asChild variant="outline">
+                <Link to={`/settings/${sections[0].id}`}>Open {sections[0].label}</Link>
+              </Button>
+              <Button asChild variant="ghost">
+                <a href={appHref("/extended/settings")}>Old UI settings</a>
+              </Button>
             </div>
           </div>
         )}

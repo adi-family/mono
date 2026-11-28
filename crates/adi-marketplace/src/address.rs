@@ -166,15 +166,21 @@ mod tests {
     #[test]
     fn every_wrong_shape_is_refused_by_name() {
         for spec in ["", "adi", "adi/"] {
-            assert!(matches!(Address::parse(spec), Err(Error::BadSpec(_))), "{spec:?}");
+            assert!(
+                matches!(Address::parse(spec), Err(Error::BadSpec(_))),
+                "{spec:?}"
+            );
         }
         for spec in [
-            "adi/crm-suite/nope/sales-bot",   // not one of the eight directories
-            "adi/crm-suite/agents",           // a non-singleton kind with no name
-            "adi/crm-suite/agents/..",        // a name that is not one safe path segment
+            "adi/crm-suite/nope/sales-bot", // not one of the eight directories
+            "adi/crm-suite/agents",         // a non-singleton kind with no name
+            "adi/crm-suite/agents/..",      // a name that is not one safe path segment
             "adi/crm-suite/agents/sales-bot/extra", // too many segments
         ] {
-            assert!(matches!(Address::parse(spec), Err(Error::BadAddress(_))), "{spec:?}");
+            assert!(
+                matches!(Address::parse(spec), Err(Error::BadAddress(_))),
+                "{spec:?}"
+            );
         }
     }
 }

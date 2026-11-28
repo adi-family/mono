@@ -8,10 +8,12 @@
 //! list, the status pill and the agent picker's options are all fetched once when the page opens.
 
 use adi_ui::{Icon, Lucide};
-use adi_webapp_api::types::{AgentDto, ChannelAllowlistDto, ChannelConnectionDto, ChannelTargetDto};
+use adi_webapp_api::types::{
+    AgentDto, ChannelAllowlistDto, ChannelConnectionDto, ChannelTargetDto,
+};
+use gloo_timers::future::TimeoutFuture;
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
-use gloo_timers::future::TimeoutFuture;
 
 use crate::fetch;
 use crate::state::{ChannelsConsole, Flash, State};
@@ -252,11 +254,7 @@ fn allowlist_label(allowlist: &ChannelAllowlistDto) -> String {
 
 /// "Change agent": a picker from this node's own agent list, Save/Cancel.
 fn route_editor(state: State, console: ChannelsConsole, id: String) -> AnyView {
-    let agents = console
-        .agents
-        .get()
-        .map(|a| a.agents)
-        .unwrap_or_default();
+    let agents = console.agents.get().map(|a| a.agents).unwrap_or_default();
     view! {
         <div class="adi-form">
             {agent_picker(console.route_agent, &agents)}
@@ -328,7 +326,12 @@ fn agent_picker(value: RwSignal<String>, agents: &[AgentDto]) -> AnyView {
 /// [`ChannelsConsole::connect_provider`] — the same two-`Effect` pattern
 /// `pages::marketplace::install_dialog` uses for the same reason: a dialog dismissed by its own
 /// ×/Escape/scrim has to put that signal back, or the Connect button that opens it stops working.
-fn connect_dialog(state: State, console: ChannelsConsole, provider: &'static str, label: &'static str) -> AnyView {
+fn connect_dialog(
+    state: State,
+    console: ChannelsConsole,
+    provider: &'static str,
+    label: &'static str,
+) -> AnyView {
     let open = RwSignal::new(false);
     Effect::new(move |_| {
         let wanted = console.connect_provider.get() == provider;
@@ -362,11 +365,7 @@ fn connect_dialog(state: State, console: ChannelsConsole, provider: &'static str
 
 /// Phase 1: pick an agent and who may talk, then submit.
 fn connect_form(state: State, console: ChannelsConsole, provider: &'static str) -> AnyView {
-    let agents = console
-        .agents
-        .get()
-        .map(|a| a.agents)
-        .unwrap_or_default();
+    let agents = console.agents.get().map(|a| a.agents).unwrap_or_default();
     view! {
         <form class="adi-panel__body" on:submit=move |ev| {
             ev.prevent_default();
@@ -492,17 +491,16 @@ async fn refresh(console: ChannelsConsole) {
 fn submit_connect(state: State, console: ChannelsConsole, provider: &'static str) {
     let agent = console.connect_agent.get().trim().to_string();
     if agent.is_empty() {
-        state.flash.set(Some(Flash::err("Pick an agent.".to_string())));
+        state
+            .flash
+            .set(Some(Flash::err("Pick an agent.".to_string())));
         return;
     }
     let open_allowlist = console.connect_open_allowlist.get();
     console.connect_busy.set(true);
     spawn_local(async move {
-        let result = fetch::connect_channel(
-            provider.to_string(),
-            ChannelTargetDto::Agent { agent },
-        )
-        .await;
+        let result =
+            fetch::connect_channel(provider.to_string(), ChannelTargetDto::Agent { agent }).await;
         console.connect_busy.set(false);
         match result {
             Ok(connected) => {
@@ -613,15 +611,22 @@ mod tests {
     #[test]
     fn target_label_reads_as_one_short_word_per_kind() {
         assert_eq!(
-            target_label(&ChannelTargetDto::Agent { agent: "adi-agent".into() }),
+            target_label(&ChannelTargetDto::Agent {
+                agent: "adi-agent".into()
+            }),
             "adi-agent"
         );
         assert_eq!(
-            target_label(&ChannelTargetDto::Trigger { trigger: "t1".into() }),
+            target_label(&ChannelTargetDto::Trigger {
+                trigger: "t1".into()
+            }),
             "trigger:t1"
         );
         assert_eq!(
-            target_label(&ChannelTargetDto::AppRoute { app: "crm".into(), route: "/webhook".into() }),
+            target_label(&ChannelTargetDto::AppRoute {
+                app: "crm".into(),
+                route: "/webhook".into()
+            }),
             "app:crm//webhook"
         );
     }
@@ -629,7 +634,10 @@ mod tests {
     #[test]
     fn allowlist_label_reads_as_one_short_phrase_per_kind() {
         assert_eq!(allowlist_label(&ChannelAllowlistDto::OwnerOnly), "only me");
-        assert_eq!(allowlist_label(&ChannelAllowlistDto::Open), "anyone in this chat");
+        assert_eq!(
+            allowlist_label(&ChannelAllowlistDto::Open),
+            "anyone in this chat"
+        );
         assert_eq!(
             allowlist_label(&ChannelAllowlistDto::List {
                 sender_ids: vec!["a".into(), "b".into()],

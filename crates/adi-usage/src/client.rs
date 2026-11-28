@@ -173,7 +173,9 @@ mod tests {
 
     #[test]
     fn relay_url_falls_back_to_the_default_when_the_override_is_blank() {
-        let _guard = ENV_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         unsafe { std::env::remove_var(RELAY_URL_ENV) };
         assert_eq!(relay_url(), DEFAULT_RELAY_URL);
         unsafe { std::env::set_var(RELAY_URL_ENV, "  ") };
@@ -197,7 +199,12 @@ mod tests {
         assert_eq!(body["events"].as_array().unwrap().len(), 2);
         assert_eq!(body["events"][0]["event"], "fleet_invite_created");
         assert_eq!(body["events"][0]["id"], "a");
-        assert!(body["events"][0]["ts"].as_str().unwrap().starts_with("2025-"));
+        assert!(
+            body["events"][0]["ts"]
+                .as_str()
+                .unwrap()
+                .starts_with("2025-")
+        );
     }
 
     #[tokio::test]
@@ -213,7 +220,9 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn a_batch_that_fails_to_send_is_left_queued_for_the_next_attempt() {
-        let _guard = ENV_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let module = scratch("unreachable");
         enqueue(&module, item("a"));
         // Nothing listens on this port; the POST itself fails rather than getting a response.
@@ -221,13 +230,19 @@ mod tests {
         let outcome = flush(&module, "install-1", 1_760_000_000_000).await;
         unsafe { std::env::remove_var(RELAY_URL_ENV) };
         assert_eq!(outcome, FlushOutcome::Failed);
-        assert_eq!(queue::read(&module).len(), 1, "the failed item stays queued");
+        assert_eq!(
+            queue::read(&module).len(),
+            1,
+            "the failed item stays queued"
+        );
     }
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn a_batch_posts_to_v1_app_with_no_key_and_no_origin_and_is_then_cleared() {
-        let _guard = ENV_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let module = scratch("posts");
         enqueue(&module, item("a"));
         enqueue(&module, item("b"));
@@ -256,8 +271,14 @@ mod tests {
 
         let request = server.await.unwrap();
         assert!(request.starts_with("POST /v1/app"), "{request}");
-        assert!(!request.to_lowercase().contains("authorization:"), "{request}");
+        assert!(
+            !request.to_lowercase().contains("authorization:"),
+            "{request}"
+        );
         assert!(!request.to_lowercase().contains("origin:"), "{request}");
-        assert!(request.contains("\"distinct_id\":\"install-1\""), "{request}");
+        assert!(
+            request.contains("\"distinct_id\":\"install-1\""),
+            "{request}"
+        );
     }
 }

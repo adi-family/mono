@@ -122,7 +122,14 @@ pub fn set_my_secret(store: &Secrets, body: &[u8], user: Option<&str>) -> Respon
             wrapped: w.wrapped,
         })
         .collect();
-    match store.set_wrapped(user, &req.name, req.description.as_deref(), req.nonce, req.ciphertext, wraps) {
+    match store.set_wrapped(
+        user,
+        &req.name,
+        req.description.as_deref(),
+        req.nonce,
+        req.ciphertext,
+        wraps,
+    ) {
         Ok(_) => secrets_mine(store, Some(user)),
         Err(e) => Response::from(&e),
     }
@@ -133,7 +140,10 @@ pub fn set_my_secret(store: &Secrets, body: &[u8], user: Option<&str>) -> Respon
 pub fn remove_my_secret(store: &Secrets, body: &[u8], user: Option<&str>) -> Response {
     let req = require!(body, RemoveMySecret);
     let Some(user) = user else {
-        return error(400, "a local caller has no user scope to remove a value from");
+        return error(
+            400,
+            "a local caller has no user scope to remove a value from",
+        );
     };
     match store.remove_mine(user, &req.name) {
         Ok(_) => secrets_mine(store, Some(user)),
@@ -148,7 +158,10 @@ pub fn remove_my_secret(store: &Secrets, body: &[u8], user: Option<&str>) -> Res
 pub fn set_my_settings(store: &Secrets, body: &[u8], user: Option<&str>) -> Response {
     let req = require!(body, SetMySettings);
     let Some(user) = user else {
-        return error(400, "a local caller has no user scope with its own settings");
+        return error(
+            400,
+            "a local caller has no user scope with its own settings",
+        );
     };
     let missing = match req.missing.as_deref() {
         None => None,
@@ -225,7 +238,8 @@ impl FromBody for RemoveMySecret {
 }
 
 impl FromBody for SetMySettings {
-    const EXPECTED: &'static str = "expected JSON body { \"missing\"?: \"server\"|\"wait\"|\"fail\" }";
+    const EXPECTED: &'static str =
+        "expected JSON body { \"missing\"?: \"server\"|\"wait\"|\"fail\" }";
 
     fn is_complete(&self) -> bool {
         true
@@ -285,7 +299,8 @@ mod tests {
         let store = scratch("never-reveals");
         let dek = adi_secrets::wrap::generate_dek();
         let (nonce, ciphertext) =
-            adi_secrets::wrap::seal_value(&dek, "u-aaa", "CLAUDE_CODE_OAUTH_TOKEN", b"sk-mine").expect("seal");
+            adi_secrets::wrap::seal_value(&dek, "u-aaa", "CLAUDE_CODE_OAUTH_TOKEN", b"sk-mine")
+                .expect("seal");
         store
             .set_wrapped(
                 "u-aaa",
@@ -306,7 +321,11 @@ mod tests {
         assert!(!body.contains("sk-mine"), "{body}");
         let v: Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["names"][0]["name"], "CLAUDE_CODE_OAUTH_TOKEN");
-        assert!(v["names"][0]["ciphertext"].as_str().is_some_and(|s| !s.is_empty()));
+        assert!(
+            v["names"][0]["ciphertext"]
+                .as_str()
+                .is_some_and(|s| !s.is_empty())
+        );
         assert_eq!(v["names"][0]["wraps"][0]["kind"], "device-key-v1");
     }
 
@@ -316,8 +335,7 @@ mod tests {
         set_scoped_for_test(&store, "u-aaa", "K");
         set_scoped_for_test(&store, "u-bbb", "K");
 
-        let Response { status, .. } =
-            remove_my_secret(&store, br#"{"name":"K"}"#, Some("u-aaa"));
+        let Response { status, .. } = remove_my_secret(&store, br#"{"name":"K"}"#, Some("u-aaa"));
         assert_eq!(status, 200);
         assert!(store.list_mine("u-aaa").unwrap().is_empty());
         assert_eq!(store.list_mine("u-bbb").unwrap().len(), 1);
@@ -336,7 +354,10 @@ mod tests {
         let Response { status, .. } =
             set_my_settings(&store, br#"{"missing":"wait"}"#, Some("u-aaa"));
         assert_eq!(status, 200);
-        assert_eq!(UserSettings::load(store.config(), "u-aaa").missing, Some(Missing::Wait));
+        assert_eq!(
+            UserSettings::load(store.config(), "u-aaa").missing,
+            Some(Missing::Wait)
+        );
 
         let Response { status, .. } = set_my_settings(&store, b"{}", Some("u-aaa"));
         assert_eq!(status, 200);
@@ -365,14 +386,20 @@ mod tests {
             "no user scope"
         );
 
-        let Response { status, body } =
-            set_my_secret(&store, br#"{"name":"CLAUDE_CODE_OAUTH_TOKEN"}"#, Some("u-aaa"));
+        let Response { status, body } = set_my_secret(
+            &store,
+            br#"{"name":"CLAUDE_CODE_OAUTH_TOKEN"}"#,
+            Some("u-aaa"),
+        );
         assert_eq!(status, 400, "{body}");
         assert!(body.contains("off"), "{body}");
 
         enable(&store, &["ANTHROPIC_API_KEY"]);
-        let Response { status, body } =
-            set_my_secret(&store, br#"{"name":"CLAUDE_CODE_OAUTH_TOKEN"}"#, Some("u-aaa"));
+        let Response { status, body } = set_my_secret(
+            &store,
+            br#"{"name":"CLAUDE_CODE_OAUTH_TOKEN"}"#,
+            Some("u-aaa"),
+        );
         assert_eq!(status, 400, "{body}");
         assert!(body.contains("overridable"), "{body}");
 
@@ -402,7 +429,10 @@ mod tests {
             "wraps":[{"kind":"device-key-v1","nonce":"wn","wrapped":"wc"}]}"#;
         let Response { status, body } = set_my_secret(&store, req, Some("u-aaa"));
         assert_eq!(status, 400, "{body}");
-        assert!(body.contains("nonce") || body.contains("ciphertext"), "{body}");
+        assert!(
+            body.contains("nonce") || body.contains("ciphertext"),
+            "{body}"
+        );
     }
 
     #[test]

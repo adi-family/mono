@@ -87,11 +87,15 @@ function ScrollSidebar({
         const element = document.getElementById(id);
         return element ? [element] : [];
       });
-      const current = sections.filter((section) => {
-        const marker = (Number.parseFloat(getComputedStyle(section).scrollMarginTop) || 0) + 1;
-        return section.getBoundingClientRect().top <= marker;
-      }).at(-1);
-      const atBottom = window.scrollY > 0 && window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 2;
+      const current = sections
+        .filter((section) => {
+          const marker = (Number.parseFloat(getComputedStyle(section).scrollMarginTop) || 0) + 1;
+          return section.getBoundingClientRect().top <= marker;
+        })
+        .at(-1);
+      const atBottom =
+        window.scrollY > 0 &&
+        window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 2;
       setActiveId((atBottom ? sections.at(-1) : current)?.id ?? sections[0]?.id);
     };
     const scheduleUpdate = () => {
@@ -100,7 +104,11 @@ function ScrollSidebar({
     };
     const restoreHash = () => {
       let id = "";
-      try { id = decodeURIComponent(window.location.hash.slice(1)); } catch { /* Ignore malformed fragments. */ }
+      try {
+        id = decodeURIComponent(window.location.hash.slice(1));
+      } catch {
+        /* Ignore malformed fragments. */
+      }
       // A router's passive effect can arrive after the click already navigated
       // and the reader started scrolling. Do not jump to that fragment twice.
       if (lastNavigation.current !== window.location.href) {
@@ -157,12 +165,18 @@ function ScrollSidebar({
           <span className="text-muted-foreground min-w-0 flex-1 truncate text-xs">
             {enabled ? links.find((link) => link.id === activeId)?.label : ""}
           </span>
-          <ChevronDown aria-hidden="true" className={cn("size-4 shrink-0", expanded && "rotate-180")} />
+          <ChevronDown
+            aria-hidden="true"
+            className={cn("size-4 shrink-0", expanded && "rotate-180")}
+          />
         </button>
         <nav
           id={navigationId}
           aria-label={navigationLabel}
-          className={cn("mt-3 max-h-[calc(100svh-10rem)] space-y-5 overflow-y-auto md:mt-0 md:block md:max-h-[calc(100svh-16rem)]", !expanded && "hidden")}
+          className={cn(
+            "mt-3 max-h-[calc(100svh-10rem)] space-y-5 overflow-y-auto md:mt-0 md:block md:max-h-[calc(100svh-16rem)]",
+            !expanded && "hidden",
+          )}
         >
           {groups.map((group) => (
             <div key={group.label}>
@@ -170,27 +184,40 @@ function ScrollSidebar({
               <ul className="grid grid-cols-2 gap-1 md:grid-cols-1">
                 {group.links.map((link) => (
                   <li key={link.id}>
-                    {renderLink({
-                      href: `${hrefPrefix}#${encodeURIComponent(link.id)}`,
-                      "aria-current": enabled && activeId === link.id ? "location" : undefined,
-                      className: cn(
-                        "focus-visible:ring-ring block rounded-md px-2 py-1.5 text-sm outline-none transition-colors focus-visible:ring-2",
-                        enabled && activeId === link.id ? "bg-accent text-accent-foreground font-medium" : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
-                      ),
-                      onClick: (event) => {
-                        if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-                        lastNavigation.current = null;
-                        setExpanded(false);
-                        setActiveId(link.id);
-                        pendingFocus.current = link.id;
-                        cancelAnimationFrame(navigationFrame.current);
-                        // Collapse the mobile menu before measuring the destination.
-                        navigationFrame.current = requestAnimationFrame(() => {
-                          navigateTo(link.id, true);
-                        });
+                    {renderLink(
+                      {
+                        href: `${hrefPrefix}#${encodeURIComponent(link.id)}`,
+                        "aria-current": enabled && activeId === link.id ? "location" : undefined,
+                        className: cn(
+                          "focus-visible:ring-ring block rounded-md px-2 py-1.5 text-sm outline-none transition-colors focus-visible:ring-2",
+                          enabled && activeId === link.id
+                            ? "bg-accent text-accent-foreground font-medium"
+                            : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+                        ),
+                        onClick: (event) => {
+                          if (
+                            event.defaultPrevented ||
+                            event.button !== 0 ||
+                            event.metaKey ||
+                            event.ctrlKey ||
+                            event.shiftKey ||
+                            event.altKey
+                          )
+                            return;
+                          lastNavigation.current = null;
+                          setExpanded(false);
+                          setActiveId(link.id);
+                          pendingFocus.current = link.id;
+                          cancelAnimationFrame(navigationFrame.current);
+                          // Collapse the mobile menu before measuring the destination.
+                          navigationFrame.current = requestAnimationFrame(() => {
+                            navigateTo(link.id, true);
+                          });
+                        },
+                        children: link.label,
                       },
-                      children: link.label,
-                    }, link)}
+                      link,
+                    )}
                   </li>
                 ))}
               </ul>

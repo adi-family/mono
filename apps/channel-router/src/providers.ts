@@ -28,7 +28,8 @@ export const PROVIDERS: Record<string, ProviderDef> = {
   slack: {
     id: "slack",
     name: "Slack",
-    enabled: (env) => Boolean(env.SLACK_CLIENT_ID && env.SLACK_CLIENT_SECRET && env.SLACK_SIGNING_SECRET),
+    enabled: (env) =>
+      Boolean(env.SLACK_CLIENT_ID && env.SLACK_CLIENT_SECRET && env.SLACK_SIGNING_SECRET),
   },
 };
 

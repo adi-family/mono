@@ -74,10 +74,9 @@ const server = Bun.serve({
         dashboard: DASHBOARD,
         modules: await moduleIds(),
       };
-      return new Response(
-        shell.replace("__ADI_CONFIG__", JSON.stringify(config)),
-        { headers: { "content-type": "text/html; charset=utf-8" } },
-      );
+      return new Response(shell.replace("__ADI_CONFIG__", JSON.stringify(config)), {
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
     }
 
     // Live module list, so the shell can refresh without a reload.
@@ -119,6 +118,4 @@ const server = Bun.serve({
   },
 });
 
-console.log(
-  `dashboard ${DASHBOARD} frontend on http://${server.hostname}:${server.port}`,
-);
+console.log(`dashboard ${DASHBOARD} frontend on http://${server.hostname}:${server.port}`);

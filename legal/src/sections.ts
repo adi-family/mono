@@ -8,7 +8,14 @@
  */
 
 import { blocks, bullet, table, wrap } from "./md";
-import { sorted, TIERS, type Authority, type Dataset, type Jurisdiction, type Region } from "./model";
+import {
+  sorted,
+  TIERS,
+  type Authority,
+  type Dataset,
+  type Jurisdiction,
+  type Region,
+} from "./model";
 
 /** The entries a document lists by name: everything except the catch-all default. */
 export function listed(data: Dataset): Jurisdiction[] {
@@ -64,7 +71,9 @@ function regionBlock(r: Region): string {
 
 function detailBlock(j: Jurisdiction): string {
   const heading = `### ${j.name} — ${tierPhrase(j.tier)}`;
-  const meta = wrap(`*Reviewed ${j.reviewed} · ${statusPhrase(j.status)}.* ${TIERS[j.tier].effect}`);
+  const meta = wrap(
+    `*Reviewed ${j.reviewed} · ${statusPhrase(j.status)}.* ${TIERS[j.tier].effect}`,
+  );
   const authorities = blocks("Authorities:", j.authority.map((a) => authorityLine(a)).join("\n"));
   const regions = j.regions?.length
     ? blocks("Regional carve-outs:", j.regions.map(regionBlock).join("\n\n"))

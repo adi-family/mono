@@ -182,7 +182,10 @@ fn trigger_line(trigger: &TriggerDef) -> String {
             }
             line
         }
-        TriggerDef::Event { pattern, where_clause } => match where_clause {
+        TriggerDef::Event {
+            pattern,
+            where_clause,
+        } => match where_clause {
             Some(clause) => format!(
                 "event: {pattern} where {}",
                 serde_json::Value::Object(clause.clone())
@@ -252,8 +255,7 @@ impl FromBody for WorkflowRunRef {
 }
 
 impl FromBody for RewindRun {
-    const EXPECTED: &'static str =
-        "expected JSON body { \"run_key\": \"…\", \"to\": <number> }";
+    const EXPECTED: &'static str = "expected JSON body { \"run_key\": \"…\", \"to\": <number> }";
 
     fn is_complete(&self) -> bool {
         !self.run_key.trim().is_empty()

@@ -1,16 +1,56 @@
-import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useLocalStorageState } from "@design-system/ui";
 
-import { getAgents, getFleetNodes, savedAgents, savedFleetNodes, type Agent, type ConversationRef } from "./app-chat";
-import { errorText } from "./app-chat-errors";
-import { chooseAgentName, newChatHref, resolveActiveSource, selectionKeyOf } from "./app-chat-model";
-import { agentPollMs, chatQueryKeys, chatRoute, fleetPollMs, queryOutcomes } from "./app-chat-queries";
 import {
-  defaultSources, groupPreferenceKey, groupStorageCodec, hasSource, lastLaunchedAgentCodec, lastLaunchedAgentKey,
-  readLastLaunchedAgent, routeNode, selectedSources, sourcesPreferenceKey, sourcesStorageCodec, toggledSource, withSource,
-  type ChatFilter, type ChatGroup, type LastLaunchedAgent,
+  getAgents,
+  getFleetNodes,
+  savedAgents,
+  savedFleetNodes,
+  type Agent,
+  type ConversationRef,
+} from "./app-chat";
+import { errorText } from "./app-chat-errors";
+import {
+  chooseAgentName,
+  newChatHref,
+  resolveActiveSource,
+  selectionKeyOf,
+} from "./app-chat-model";
+import {
+  agentPollMs,
+  chatQueryKeys,
+  chatRoute,
+  fleetPollMs,
+  queryOutcomes,
+} from "./app-chat-queries";
+import {
+  defaultSources,
+  groupPreferenceKey,
+  groupStorageCodec,
+  hasSource,
+  lastLaunchedAgentCodec,
+  lastLaunchedAgentKey,
+  readLastLaunchedAgent,
+  routeNode,
+  selectedSources,
+  sourcesPreferenceKey,
+  sourcesStorageCodec,
+  toggledSource,
+  withSource,
+  type ChatFilter,
+  type ChatGroup,
+  type LastLaunchedAgent,
 } from "./app-chat-sources";
 import { conversationHref } from "./app-chat-transcript";
 import { reportEvent } from "./event-log";
@@ -26,18 +66,29 @@ function useSelectionState() {
   const routeSource = routeNode(params.get("node"));
   const invalidSource = params.has("node") && !routeSource;
 
-  const [lastLaunchedAgent, setLastLaunchedAgent] = useLocalStorageState<LastLaunchedAgent | undefined>(
-    lastLaunchedAgentKey, undefined, lastLaunchedAgentCodec,
+  const [lastLaunchedAgent, setLastLaunchedAgent] = useLocalStorageState<
+    LastLaunchedAgent | undefined
+  >(lastLaunchedAgentKey, undefined, lastLaunchedAgentCodec);
+  const [storedSources, setSources] = useLocalStorageState(
+    sourcesPreferenceKey,
+    defaultSources,
+    sourcesStorageCodec,
   );
-  const [storedSources, setSources] = useLocalStorageState(sourcesPreferenceKey, defaultSources, sourcesStorageCodec);
   const sources = useMemo(
-    () => (enabled && routeSource && !hasSource(storedSources, routeSource) ? withSource(storedSources, routeSource) : storedSources),
+    () =>
+      enabled && routeSource && !hasSource(storedSources, routeSource)
+        ? withSource(storedSources, routeSource)
+        : storedSources,
     [enabled, storedSources, routeSource],
   );
   const [filter, setFilter] = useState<ChatFilter>("me");
   // Like the filter it starts off on every visit: hidden chats are looked up, not lived with.
   const [includeHidden, setIncludeHidden] = useState(false);
-  const [group, setGroup] = useLocalStorageState<ChatGroup>(groupPreferenceKey, "machine", groupStorageCodec);
+  const [group, setGroup] = useLocalStorageState<ChatGroup>(
+    groupPreferenceKey,
+    "machine",
+    groupStorageCodec,
+  );
   const sourceList = useMemo(() => selectedSources(sources), [sources]);
   const activeSource = resolveActiveSource(params, sources, lastLaunchedAgent);
 
@@ -46,8 +97,12 @@ function useSelectionState() {
   // Every read here starts from what this browser last saw and refreshes in the background, so
   // the page opens whole instead of filling in as each machine answers.
   const fleetQuery = useQuery({
-    queryKey: chatQueryKeys.fleet, queryFn: ({ signal }) => getFleetNodes(signal), retry: false, refetchInterval: fleetPollMs,
-    initialData: () => savedFleetNodes()?.data, initialDataUpdatedAt: () => savedFleetNodes()?.savedAt,
+    queryKey: chatQueryKeys.fleet,
+    queryFn: ({ signal }) => getFleetNodes(signal),
+    retry: false,
+    refetchInterval: fleetPollMs,
+    initialData: () => savedFleetNodes()?.data,
+    initialDataUpdatedAt: () => savedFleetNodes()?.savedAt,
   });
   const fleetError = fleetQuery.error ? errorText(fleetQuery.error) : null;
   // The fleet is polled on every page; a failure goes to the event log once per outage.
@@ -58,22 +113,29 @@ function useSelectionState() {
     queries: sourceList.map((source) => ({
       queryKey: chatQueryKeys.agents(source),
       queryFn: ({ signal }: { signal: AbortSignal }) => getAgents(signal, source),
-      enabled, refetchInterval: agentPollMs, retry: false,
-      initialData: () => savedAgents(source)?.data, initialDataUpdatedAt: () => savedAgents(source)?.savedAt,
+      enabled,
+      refetchInterval: agentPollMs,
+      retry: false,
+      initialData: () => savedAgents(source)?.data,
+      initialDataUpdatedAt: () => savedAgents(source)?.savedAt,
     })),
     combine: queryOutcomes<Agent[]>,
   });
   const { overrides, setOverride } = usePersonalOverrides();
-  const agentsBySource = agentResults.map((result) => (result.data ?? noAgents).map(
-    (item) => applyOverrides(item, overrides, entityOverrideKey("agent", item.name, item.source)),
-  ));
+  const agentsBySource = agentResults.map((result) =>
+    (result.data ?? noAgents).map((item) =>
+      applyOverrides(item, overrides, entityOverrideKey("agent", item.name, item.source)),
+    ),
+  );
   const activeSourceIndex = sourceList.indexOf(activeSource);
   const agents = agentsBySource[activeSourceIndex] ?? noAgents;
-  const rememberedAgent = lastLaunchedAgent?.source === activeSource ? lastLaunchedAgent?.agent : undefined;
+  const rememberedAgent =
+    lastLaunchedAgent?.source === activeSource ? lastLaunchedAgent?.agent : undefined;
   const agent = params.get("agent") || chooseAgentName(agents, rememberedAgent);
   const runId = params.get("run") ?? "";
   const active = useMemo(
-    () => agent && runId ? { agent, runId, ...(activeSource ? { source: activeSource } : {}) } : null,
+    () =>
+      agent && runId ? { agent, runId, ...(activeSource ? { source: activeSource } : {}) } : null,
     [agent, runId, activeSource],
   );
   const selectionKey = selectionKeyOf(active, agent, activeSource);
@@ -89,25 +151,41 @@ function useSelectionState() {
   // Deep links and browser history select their owning machine as well as the conversation.
   useEffect(() => {
     if (enabled && !invalidSource && !hasSource(latestStoredSources.current, activeSource)) {
-      setSources((current) => hasSource(current, activeSource) ? current : withSource(current, activeSource));
+      setSources((current) =>
+        hasSource(current, activeSource) ? current : withSource(current, activeSource),
+      );
     }
   }, [enabled, activeSource, invalidSource, setSources]);
 
-  function openConversation(ref: ConversationRef) { navigate(conversationHref(ref)); }
+  function openConversation(ref: ConversationRef) {
+    navigate(conversationHref(ref));
+  }
 
-  function savedLaunch() { return readLastLaunchedAgent() ?? lastLaunchedAgent; }
+  function savedLaunch() {
+    return readLastLaunchedAgent() ?? lastLaunchedAgent;
+  }
 
-  function navigateToNewChat(source: string | undefined, name: string | undefined, saved: LastLaunchedAgent | undefined) {
+  function navigateToNewChat(
+    source: string | undefined,
+    name: string | undefined,
+    saved: LastLaunchedAgent | undefined,
+  ) {
     const available = agentResults[sourceList.indexOf(source)]?.data;
     const desired = name ?? (saved?.source === source ? saved?.agent : undefined);
     // An empty explicit agent keeps this a new chat while the destination's agents load.
-    navigate(newChatHref(available ? chooseAgentName(available, desired) : desired ?? "", source));
+    navigate(
+      newChatHref(available ? chooseAgentName(available, desired) : (desired ?? ""), source),
+    );
   }
 
   /** Starts a new chat, inferring the machine from the agent choice and the last launch. */
   function newConversation(name?: string) {
     const saved = savedLaunch();
-    navigateToNewChat(!name && saved && hasSource(sources, saved.source) ? saved.source : activeSource, name, saved);
+    navigateToNewChat(
+      !name && saved && hasSource(sources, saved.source) ? saved.source : activeSource,
+      name,
+      saved,
+    );
   }
 
   /** Starts a new chat on one specific machine; `undefined` means this machine. */
@@ -128,25 +206,52 @@ function useSelectionState() {
   }
 
   return {
-    enabled, invalidSource, sources, sourceList, activeSource, toggleSource,
-    filter, setFilter, includeHidden, setIncludeHidden, group, setGroup,
-    fleetNodes: fleetQuery.data ?? [], fleetLoading: fleetQuery.isPending, fleetError,
-    agents, agentsBySource, agentResults, newChatAgents: agentsBySource.flat(),
+    enabled,
+    invalidSource,
+    sources,
+    sourceList,
+    activeSource,
+    toggleSource,
+    filter,
+    setFilter,
+    includeHidden,
+    setIncludeHidden,
+    group,
+    setGroup,
+    fleetNodes: fleetQuery.data ?? [],
+    fleetLoading: fleetQuery.isPending,
+    fleetError,
+    agents,
+    agentsBySource,
+    agentResults,
+    newChatAgents: agentsBySource.flat(),
     agentsLoading: agentResults.some((result) => result.isPending),
     activeAgentsPending: agentResults[activeSourceIndex]?.isPending === true,
     personalAgentOverrides: overrides,
-    setAgentOverride: <K extends keyof Agent>(item: Agent, field: K, value: Agent[K] | undefined) => setOverride(entityOverrideKey("agent", item.name, item.source), field, value),
-    agent, runId, active, selectionKey,
+    setAgentOverride: <K extends keyof Agent>(item: Agent, field: K, value: Agent[K] | undefined) =>
+      setOverride(entityOverrideKey("agent", item.name, item.source), field, value),
+    agent,
+    runId,
+    active,
+    selectionKey,
     routeNamesConversation: params.has("agent") || params.has("run"),
-    isCurrentSelection: (key: string) => latestSelection.current.key === key && latestSelection.current.pathname === chatRoute,
-    openConversation, newConversation, newConversationOn, recordLaunch,
+    isCurrentSelection: (key: string) =>
+      latestSelection.current.key === key && latestSelection.current.pathname === chatRoute,
+    openConversation,
+    newConversation,
+    newConversationOn,
+    recordLaunch,
   };
 }
 
 const ChatSelectionContext = createContext<ReturnType<typeof useSelectionState> | null>(null);
 
 export function ChatSelectionProvider({ children }: { children: ReactNode }) {
-  return <ChatSelectionContext.Provider value={useSelectionState()}>{children}</ChatSelectionContext.Provider>;
+  return (
+    <ChatSelectionContext.Provider value={useSelectionState()}>
+      {children}
+    </ChatSelectionContext.Provider>
+  );
 }
 
 /** Which machines, agent and conversation are selected. Stable while a transcript polls or a draft changes. */

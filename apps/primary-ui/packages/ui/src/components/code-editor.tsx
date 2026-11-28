@@ -1,8 +1,20 @@
 import * as React from "react";
 
 import { cn } from "../lib/cn";
-import { caretPosition, indentEdit, lineCount, newlineEdit, outdentEdit, type CodeEdit } from "../lib/code-edit";
-import { codeLanguageLabels, codeTokenInk as ink, highlightCode, type CodeLanguage } from "../lib/highlight";
+import {
+  caretPosition,
+  indentEdit,
+  lineCount,
+  newlineEdit,
+  outdentEdit,
+  type CodeEdit,
+} from "../lib/code-edit";
+import {
+  codeLanguageLabels,
+  codeTokenInk as ink,
+  highlightCode,
+  type CodeLanguage,
+} from "../lib/highlight";
 
 /**
  * Everything that decides where a glyph lands, applied to the painted layer, the textarea and
@@ -15,7 +27,10 @@ const lineHeight = 20;
 const verticalPadding = 24;
 const headerHeight = 32;
 
-type CodeEditorProps = Omit<React.ComponentProps<"textarea">, "value" | "defaultValue" | "onChange" | "rows" | "wrap" | "children"> & {
+type CodeEditorProps = Omit<
+  React.ComponentProps<"textarea">,
+  "value" | "defaultValue" | "onChange" | "rows" | "wrap" | "children"
+> & {
   value: string;
   onValueChange?: (value: string) => void;
   /** What to scan the text as. It may change while the editor stays mounted. */
@@ -72,7 +87,8 @@ function CodeEditor({
   const follow = React.useCallback(() => {
     const element = area.current;
     if (!element) return;
-    if (paint.current) paint.current.style.transform = `translate(${-element.scrollLeft}px, ${-element.scrollTop}px)`;
+    if (paint.current)
+      paint.current.style.transform = `translate(${-element.scrollLeft}px, ${-element.scrollTop}px)`;
     if (gutter.current) gutter.current.style.transform = `translateY(${-element.scrollTop}px)`;
   }, []);
   // A change of text can move the scroll position without a scroll event.
@@ -81,8 +97,13 @@ function CodeEditor({
   function locate() {
     const element = area.current;
     if (!element) return;
-    const next = caretPosition(element.value, element.selectionDirection === "backward" ? element.selectionStart : element.selectionEnd);
-    setCaret((current) => (current.line === next.line && current.column === next.column ? current : next));
+    const next = caretPosition(
+      element.value,
+      element.selectionDirection === "backward" ? element.selectionStart : element.selectionEnd,
+    );
+    setCaret((current) =>
+      current.line === next.line && current.column === next.column ? current : next,
+    );
   }
 
   /** Make an edit the way typing would, so the browser's own undo history keeps it. */
@@ -113,25 +134,56 @@ function CodeEditor({
       )}
       style={{ height: headerHeight + rows * lineHeight + verticalPadding + 2, ...style }}
     >
-      <div data-slot="code-editor-header" className="text-muted-foreground flex h-8 shrink-0 items-center justify-between gap-3 border-b px-3 text-xs">
-        <span data-slot="code-editor-label" className="min-w-0 truncate">{label ?? codeLanguageLabels[language]}</span>
+      <div
+        data-slot="code-editor-header"
+        className="text-muted-foreground flex h-8 shrink-0 items-center justify-between gap-3 border-b px-3 text-xs"
+      >
+        <span data-slot="code-editor-label" className="min-w-0 truncate">
+          {label ?? codeLanguageLabels[language]}
+        </span>
         <span data-slot="code-editor-position" aria-hidden="true" className="shrink-0 tabular-nums">
           Ln {caret.line}, Col {caret.column}
         </span>
       </div>
       <div className="flex min-h-0 flex-1">
         {lineNumbers && (
-          <div data-slot="code-editor-gutter" aria-hidden="true" className="bg-muted/40 text-muted-foreground/70 shrink-0 overflow-hidden border-r text-right select-none">
-            <div ref={gutter} className={cn(layer, "px-2.5 tabular-nums")} style={{ minWidth: `calc(${Math.max(2, String(lines).length)}ch + 1.25rem)` }}>
+          <div
+            data-slot="code-editor-gutter"
+            aria-hidden="true"
+            className="bg-muted/40 text-muted-foreground/70 shrink-0 overflow-hidden border-r text-right select-none"
+          >
+            <div
+              ref={gutter}
+              className={cn(layer, "px-2.5 tabular-nums")}
+              style={{ minWidth: `calc(${Math.max(2, String(lines).length)}ch + 1.25rem)` }}
+            >
               {Array.from({ length: lines }, (_, index) => index + 1).join("\n")}
             </div>
           </div>
         )}
         <div className="relative min-w-0 flex-1 overflow-hidden">
-          <pre ref={paint} data-slot="code-editor-paint" aria-hidden="true" className={cn(layer, "text-foreground pointer-events-none absolute top-0 left-0 w-max min-w-full px-3")}>
-            {value === "" && placeholder ? <span className="text-muted-foreground">{placeholder}</span> : runs.map(([token, text], index) => (
-              token === "plain" ? text : <span key={index} data-token={token} className={ink[token]}>{text}</span>
-            ))}
+          <pre
+            ref={paint}
+            data-slot="code-editor-paint"
+            aria-hidden="true"
+            className={cn(
+              layer,
+              "text-foreground pointer-events-none absolute top-0 left-0 w-max min-w-full px-3",
+            )}
+          >
+            {value === "" && placeholder ? (
+              <span className="text-muted-foreground">{placeholder}</span>
+            ) : (
+              runs.map(([token, text], index) =>
+                token === "plain" ? (
+                  text
+                ) : (
+                  <span key={index} data-token={token} className={ink[token]}>
+                    {text}
+                  </span>
+                ),
+              )
+            )}
             {/* A trailing newline paints as nothing; a space gives the caret's last line something to be. */}
             {value.endsWith("\n") ? " " : null}
           </pre>
@@ -141,19 +193,33 @@ function CodeEditor({
             {...props}
             ref={area}
             data-slot="code-editor-input"
-            className={cn(layer, "caret-foreground selection:bg-foreground/20 relative block size-full resize-none overflow-auto bg-transparent px-3 text-transparent outline-none [-webkit-text-fill-color:transparent] selection:text-transparent")}
+            className={cn(
+              layer,
+              "caret-foreground selection:bg-foreground/20 relative block size-full resize-none overflow-auto bg-transparent px-3 text-transparent outline-none [-webkit-text-fill-color:transparent] selection:text-transparent",
+            )}
             wrap="off"
             spellCheck={false}
             autoCapitalize="off"
             autoCorrect="off"
             autoComplete="off"
             readOnly={readOnly}
-            aria-describedby={[describedBy, readOnly ? null : hintId].filter(Boolean).join(" ") || undefined}
+            aria-describedby={
+              [describedBy, readOnly ? null : hintId].filter(Boolean).join(" ") || undefined
+            }
             value={value}
             onChange={(event) => onValueChange?.(event.target.value)}
-            onScroll={(event) => { follow(); onScroll?.(event); }}
-            onSelect={(event) => { locate(); onSelect?.(event); }}
-            onBlur={(event) => { leaving.current = false; onBlur?.(event); }}
+            onScroll={(event) => {
+              follow();
+              onScroll?.(event);
+            }}
+            onSelect={(event) => {
+              locate();
+              onSelect?.(event);
+            }}
+            onBlur={(event) => {
+              leaving.current = false;
+              onBlur?.(event);
+            }}
             onKeyDown={(event) => {
               onKeyDown?.(event);
               if (event.defaultPrevented || event.nativeEvent.isComposing || readOnly) return;
@@ -163,14 +229,22 @@ function CodeEditor({
               if (event.key === "Escape") {
                 leaving.current = true;
               } else if (event.key === "Tab" && plain) {
-                if (leaving.current) { leaving.current = false; return; }
+                if (leaving.current) {
+                  leaving.current = false;
+                  return;
+                }
                 event.preventDefault();
-                const edit = event.shiftKey ? outdentEdit(text, selectionStart, selectionEnd, unit) : indentEdit(text, selectionStart, selectionEnd, unit);
+                const edit = event.shiftKey
+                  ? outdentEdit(text, selectionStart, selectionEnd, unit)
+                  : indentEdit(text, selectionStart, selectionEnd, unit);
                 if (edit) apply(edit);
               } else if (event.key === "Enter" && plain && !event.shiftKey) {
                 const edit = newlineEdit(text, selectionStart, selectionEnd);
                 // A line with no indentation is the browser's own Enter.
-                if (edit.insert !== "\n") { event.preventDefault(); apply(edit); }
+                if (edit.insert !== "\n") {
+                  event.preventDefault();
+                  apply(edit);
+                }
                 leaving.current = false;
               } else if (!["Shift", "Control", "Alt", "Meta"].includes(event.key)) {
                 leaving.current = false;
@@ -179,7 +253,11 @@ function CodeEditor({
           />
         </div>
       </div>
-      {!readOnly && <span id={hintId} hidden>Tab indents and Shift+Tab outdents. Press Escape, then Tab, to move to the next control.</span>}
+      {!readOnly && (
+        <span id={hintId} hidden>
+          Tab indents and Shift+Tab outdents. Press Escape, then Tab, to move to the next control.
+        </span>
+      )}
     </div>
   );
 }

@@ -67,9 +67,9 @@ export function CodeExample({ code, label }: { code: string; label: string }) {
               {tokens.map((line, lineIndex) => (
                 <Fragment key={lineIndex}>
                   <span {...getLineProps({ line })}>
-                    {line.map((token, tokenIndex) => token.empty ? null : (
-                      <span key={tokenIndex} {...getTokenProps({ token })} />
-                    ))}
+                    {line.map((token, tokenIndex) =>
+                      token.empty ? null : <span key={tokenIndex} {...getTokenProps({ token })} />,
+                    )}
                   </span>
                   {lineIndex < tokens.length - 1 ? "\n" : null}
                 </Fragment>
@@ -78,8 +78,15 @@ export function CodeExample({ code, label }: { code: string; label: string }) {
           </pre>
         )}
       </Highlight>
-      <p className={copyError ? "text-muted-foreground border-t px-3 py-2 text-xs" : "sr-only"} role="status">
-        {copyError ? "Clipboard unavailable here. Select and copy the code above." : copied ? "Code copied." : ""}
+      <p
+        className={copyError ? "text-muted-foreground border-t px-3 py-2 text-xs" : "sr-only"}
+        role="status"
+      >
+        {copyError
+          ? "Clipboard unavailable here. Select and copy the code above."
+          : copied
+            ? "Code copied."
+            : ""}
       </p>
     </div>
   );

@@ -16,7 +16,10 @@ function env(overrides: Partial<Env> = {}): Env {
 }
 
 /** Run a login and pull out the signed state and the nonce cookie it set. */
-async function login(e: Env, path = "https://router.example/login/google"): Promise<{
+async function login(
+  e: Env,
+  path = "https://router.example/login/google",
+): Promise<{
   location: URL;
   state: string;
   nonce: string;
@@ -52,9 +55,13 @@ describe("health", () => {
 describe("login", () => {
   it("redirects to Google's authorize endpoint with the expected params", async () => {
     const { location, state } = await login(env());
-    expect(location.origin + location.pathname).toBe("https://accounts.google.com/o/oauth2/v2/auth");
+    expect(location.origin + location.pathname).toBe(
+      "https://accounts.google.com/o/oauth2/v2/auth",
+    );
     expect(location.searchParams.get("client_id")).toBe("gid");
-    expect(location.searchParams.get("redirect_uri")).toBe("https://router.example/callback/google");
+    expect(location.searchParams.get("redirect_uri")).toBe(
+      "https://router.example/callback/google",
+    );
     expect(location.searchParams.get("response_type")).toBe("code");
     expect(location.searchParams.get("scope")).toBe("openid email profile");
     expect(location.searchParams.get("access_type")).toBe("offline");
@@ -105,7 +112,9 @@ describe("login", () => {
   it("ignores a malformed ROUTER_URL rather than failing the login", async () => {
     const e = env({ ROUTER_URL: "not a url" });
     const { location } = await login(e);
-    expect(location.searchParams.get("redirect_uri")).toBe("https://router.example/callback/google");
+    expect(location.searchParams.get("redirect_uri")).toBe(
+      "https://router.example/callback/google",
+    );
   });
 });
 
@@ -115,14 +124,22 @@ describe("callback", () => {
     const { state, nonce } = await login(e);
 
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
-      tokenResponse({ access_token: "AT", token_type: "Bearer", expires_in: 3600, scope: "openid email" }),
+      tokenResponse({
+        access_token: "AT",
+        token_type: "Bearer",
+        expires_in: 3600,
+        scope: "openid email",
+      }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
     const res = await handle(
-      new Request(`https://router.example/callback/google?code=CODE&state=${encodeURIComponent(state)}`, {
-        headers: { cookie: `oauth_nonce_google=${nonce}` },
-      }),
+      new Request(
+        `https://router.example/callback/google?code=CODE&state=${encodeURIComponent(state)}`,
+        {
+          headers: { cookie: `oauth_nonce_google=${nonce}` },
+        },
+      ),
       e,
       NOW + 5_000,
     );
@@ -167,12 +184,18 @@ describe("callback", () => {
   it("keeps the refresh_token out of the fragment unless opted in", async () => {
     const e = env();
     const { state, nonce } = await login(e);
-    vi.stubGlobal("fetch", vi.fn(async () => tokenResponse({ access_token: "AT", refresh_token: "RT" })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => tokenResponse({ access_token: "AT", refresh_token: "RT" })),
+    );
 
     const res = await handle(
-      new Request(`https://router.example/callback/google?code=CODE&state=${encodeURIComponent(state)}`, {
-        headers: { cookie: `oauth_nonce_google=${nonce}` },
-      }),
+      new Request(
+        `https://router.example/callback/google?code=CODE&state=${encodeURIComponent(state)}`,
+        {
+          headers: { cookie: `oauth_nonce_google=${nonce}` },
+        },
+      ),
       e,
       NOW + 5_000,
     );
@@ -183,12 +206,18 @@ describe("callback", () => {
   it("forwards the refresh_token when INCLUDE_REFRESH_TOKEN=true", async () => {
     const e = env({ INCLUDE_REFRESH_TOKEN: "true" });
     const { state, nonce } = await login(e);
-    vi.stubGlobal("fetch", vi.fn(async () => tokenResponse({ access_token: "AT", refresh_token: "RT" })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => tokenResponse({ access_token: "AT", refresh_token: "RT" })),
+    );
 
     const res = await handle(
-      new Request(`https://router.example/callback/google?code=CODE&state=${encodeURIComponent(state)}`, {
-        headers: { cookie: `oauth_nonce_google=${nonce}` },
-      }),
+      new Request(
+        `https://router.example/callback/google?code=CODE&state=${encodeURIComponent(state)}`,
+        {
+          headers: { cookie: `oauth_nonce_google=${nonce}` },
+        },
+      ),
       e,
       NOW + 5_000,
     );
@@ -211,7 +240,9 @@ describe("callback", () => {
     const e = env();
     const { state } = await login(e);
     const res = await handle(
-      new Request(`https://router.example/callback/google?code=CODE&state=${encodeURIComponent(state)}`),
+      new Request(
+        `https://router.example/callback/google?code=CODE&state=${encodeURIComponent(state)}`,
+      ),
       e,
       NOW + 5_000,
     );
@@ -238,12 +269,18 @@ describe("callback", () => {
   it("redirects with an error when the token exchange fails", async () => {
     const e = env();
     const { state, nonce } = await login(e);
-    vi.stubGlobal("fetch", vi.fn(async () => tokenResponse({ error: "invalid_grant" }, 400)));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => tokenResponse({ error: "invalid_grant" }, 400)),
+    );
 
     const res = await handle(
-      new Request(`https://router.example/callback/google?code=CODE&state=${encodeURIComponent(state)}`, {
-        headers: { cookie: `oauth_nonce_google=${nonce}` },
-      }),
+      new Request(
+        `https://router.example/callback/google?code=CODE&state=${encodeURIComponent(state)}`,
+        {
+          headers: { cookie: `oauth_nonce_google=${nonce}` },
+        },
+      ),
       e,
       NOW + 5_000,
     );
@@ -256,7 +293,12 @@ describe("callback", () => {
 describe("refresh", () => {
   it("exchanges a refresh token for a fresh access token", async () => {
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
-      tokenResponse({ access_token: "AT2", token_type: "Bearer", expires_in: 3600, refresh_token: "RT2" }),
+      tokenResponse({
+        access_token: "AT2",
+        token_type: "Bearer",
+        expires_in: 3600,
+        refresh_token: "RT2",
+      }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -305,7 +347,10 @@ describe("refresh", () => {
   });
 
   it("502s when the provider rejects the refresh", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => tokenResponse({ error: "invalid_grant" }, 400)));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => tokenResponse({ error: "invalid_grant" }, 400)),
+    );
     const res = await handle(
       new Request("https://router.example/refresh/google", {
         method: "POST",

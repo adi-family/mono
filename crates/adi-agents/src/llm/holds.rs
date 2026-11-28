@@ -370,8 +370,10 @@ pub fn backoff(base_seconds: u64, attempts: u32) -> u64 {
 }
 
 fn read_hold(row: &rusqlite::Row<'_>) -> Result<Hold> {
-    let get = |index: usize| -> Result<String> { row.get(index).map_err(|e| sql_err("read from", &e)) };
-    let get_u64 = |index: usize| -> Result<u64> { row.get(index).map_err(|e| sql_err("read from", &e)) };
+    let get =
+        |index: usize| -> Result<String> { row.get(index).map_err(|e| sql_err("read from", &e)) };
+    let get_u64 =
+        |index: usize| -> Result<u64> { row.get(index).map_err(|e| sql_err("read from", &e)) };
     Ok(Hold {
         key: HoldKey {
             credential: get(0)?,
@@ -512,8 +514,12 @@ mod tests {
     fn recording_the_same_limit_twice_updates_one_row() {
         let store = scratch("upsert");
         let key = HoldKey::new("cred", "m");
-        store.hold(&hold_for("cred", "m", now_unix() + 60)).expect("first");
-        store.hold(&hold_for("cred", "m", now_unix() + 600)).expect("second");
+        store
+            .hold(&hold_for("cred", "m", now_unix() + 60))
+            .expect("first");
+        store
+            .hold(&hold_for("cred", "m", now_unix() + 600))
+            .expect("second");
         assert_eq!(store.all().expect("all").len(), 1);
         assert!(store.blocking(&key).expect("query").expect("held").until > now_unix() + 500);
     }
@@ -522,7 +528,9 @@ mod tests {
     fn releasing_reports_whether_there_was_one() {
         let store = scratch("release");
         let key = HoldKey::new("cred", "m");
-        store.hold(&hold_for("cred", "m", now_unix() + 60)).expect("hold");
+        store
+            .hold(&hold_for("cred", "m", now_unix() + 60))
+            .expect("hold");
         assert!(store.release(&key).expect("release"));
         assert!(!store.release(&key).expect("release again"));
         assert!(store.blocking(&key).expect("query").is_none());
@@ -531,8 +539,12 @@ mod tests {
     #[test]
     fn the_due_queue_holds_only_what_has_expired() {
         let store = scratch("due");
-        store.hold(&hold_for("a", "m", now_unix() + 600)).expect("live");
-        store.hold(&hold_for("b", "m", now_unix() - 5)).expect("expired");
+        store
+            .hold(&hold_for("a", "m", now_unix() + 600))
+            .expect("live");
+        store
+            .hold(&hold_for("b", "m", now_unix() - 5))
+            .expect("expired");
         let due = store.due().expect("due");
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].key.credential, "b");
@@ -542,7 +554,9 @@ mod tests {
     fn extending_counts_the_attempt_and_doubles_the_wait() {
         let store = scratch("extend");
         let key = HoldKey::new("cred", "m");
-        store.hold(&hold_for("cred", "m", now_unix() - 1)).expect("hold");
+        store
+            .hold(&hold_for("cred", "m", now_unix() - 1))
+            .expect("hold");
 
         let first = store.extend(&key, 60).expect("extend").expect("present");
         assert_eq!(first.attempts, 1);

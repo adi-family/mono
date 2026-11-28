@@ -536,7 +536,10 @@ fn open(path: Option<&Path>) -> Result<Indexer, String> {
 /// before this crate resolved through the registry: indexing and FTS search still work, semantic
 /// search reports there is nothing to search.
 fn resolve_embedder() -> Arc<dyn Embedder> {
-    match adi_embeddings::resolve(&adi_config::Config::open(), adi_embeddings::CONSUMER_INDEXER) {
+    match adi_embeddings::resolve(
+        &adi_config::Config::open(),
+        adi_embeddings::CONSUMER_INDEXER,
+    ) {
         Ok(embedder) => embedder,
         Err(e) => {
             eprintln!("embedding backend registry: {e} — indexing without semantic search");

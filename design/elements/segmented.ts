@@ -34,7 +34,8 @@ class AdiSegmented extends AdiElement {
     // Listen on each option: shadow retargeting makes event.target the host outside the root.
     const options = this.must(".options");
     options.addEventListener("click", (event) => {
-      const option = event.target instanceof Element ? event.target.closest<HTMLElement>("[value]") : null;
+      const option =
+        event.target instanceof Element ? event.target.closest<HTMLElement>("[value]") : null;
       if (!option || ("disabled" in option && option.disabled)) return;
       this.#choose(option.getAttribute("value") ?? "");
     });
@@ -71,7 +72,8 @@ class AdiSegmented extends AdiElement {
     }
     for (const option of options) {
       option.setAttribute("aria-pressed", String(option.getAttribute("value") === this.value));
-      if (option instanceof HTMLButtonElement && !option.hasAttribute("type")) option.type = "button";
+      if (option instanceof HTMLButtonElement && !option.hasAttribute("type"))
+        option.type = "button";
     }
   }
 }

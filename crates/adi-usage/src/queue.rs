@@ -75,7 +75,10 @@ pub fn drop_stale(module: &Module, now_ms: u64) -> Vec<QueuedEvent> {
 /// stays, exactly as it would if this flush had simply run a moment earlier.
 pub fn remove(module: &Module, sent: &std::collections::HashSet<String>) {
     let items = read(module);
-    let remaining: Vec<QueuedEvent> = items.into_iter().filter(|i| !sent.contains(&i.id)).collect();
+    let remaining: Vec<QueuedEvent> = items
+        .into_iter()
+        .filter(|i| !sent.contains(&i.id))
+        .collect();
     write(module, &remaining);
 }
 
@@ -138,7 +141,10 @@ mod tests {
         enqueue(&module, item("old", 0)); // day 0: 10 days old, past the 7-day window
         enqueue(&module, item("fresh", 4 * 24 * 3600 * 1000)); // day 4: 6 days old
         let fresh = drop_stale(&module, now_ms);
-        assert_eq!(fresh.into_iter().map(|i| i.id).collect::<Vec<_>>(), vec!["fresh"]);
+        assert_eq!(
+            fresh.into_iter().map(|i| i.id).collect::<Vec<_>>(),
+            vec!["fresh"]
+        );
         assert_eq!(
             read(&module).into_iter().map(|i| i.id).collect::<Vec<_>>(),
             vec!["fresh"],
@@ -152,7 +158,10 @@ mod tests {
         enqueue(&module, item("a", 1));
         enqueue(&module, item("b", 2));
         enqueue(&module, item("c", 3));
-        remove(&module, &["a".to_string(), "c".to_string()].into_iter().collect());
+        remove(
+            &module,
+            &["a".to_string(), "c".to_string()].into_iter().collect(),
+        );
         assert_eq!(
             read(&module).into_iter().map(|i| i.id).collect::<Vec<_>>(),
             vec!["b"]

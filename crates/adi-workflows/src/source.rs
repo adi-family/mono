@@ -114,7 +114,9 @@ mod tests {
              export const on = schedule(\"0 5 * * MON\", \"UTC\");\n",
         );
         assert!(
-            WorkflowScheduleSource::new(config.clone()).schedules().is_empty(),
+            WorkflowScheduleSource::new(config.clone())
+                .schedules()
+                .is_empty(),
             "a never-enabled workflow contributes no schedule rule"
         );
         enable(&config, "weekly");

@@ -6,14 +6,12 @@ import "./icon.ts";
 class AdiTag extends AdiElement {}
 
 class AdiChip extends AdiElement {
-
   override setup() {
     if (this.hasAttribute("clickable") && !this.hasAttribute("tabindex")) this.tabIndex = 0;
   }
 }
 
 class AdiGrant extends AdiElement {
-
   override template() {
     return `
       <slot></slot>

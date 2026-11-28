@@ -702,8 +702,14 @@ mod tests {
         store
             .record_outcome("worker", &record.id, &outcome)
             .expect("record outcome");
-        let goal = create(&agents, "worker", &record.id, "task ADI-TIKTOK-144 is done", SetBy::Automation)
-            .expect("create goal");
+        let goal = create(
+            &agents,
+            "worker",
+            &record.id,
+            "task ADI-TIKTOK-144 is done",
+            SetBy::Automation,
+        )
+        .expect("create goal");
 
         let nudged = tick(&agents);
 
@@ -750,8 +756,14 @@ mod tests {
         let record = store
             .create("worker", Backend::HarnessAdi, "/tmp", "go")
             .expect("create session");
-        let goal = create(&agents, "worker", &record.id, "task is done", SetBy::Automation)
-            .expect("create goal");
+        let goal = create(
+            &agents,
+            "worker",
+            &record.id,
+            "task is done",
+            SetBy::Automation,
+        )
+        .expect("create goal");
         for _ in 0..DELIVERY_FAILURE_CAP - 1 {
             store
                 .record_goal_delivery("worker", &record.id, true)

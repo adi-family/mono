@@ -884,7 +884,8 @@ pub(crate) fn load_agent_into_form(form: AgentsForm, a: &AgentDto) {
     form.knowledge.set(a.knowledge.iter().cloned().collect());
     form.memory.set(a.memory);
     form.dispatch.set(a.dispatch);
-    form.can_spawn.set(a.can_spawn.iter().map(|r| r.rule.clone()).collect());
+    form.can_spawn
+        .set(a.can_spawn.iter().map(|r| r.rule.clone()).collect());
     form.can_spawn_draft.set(String::new());
     form.mcp.set(a.mcp.clone());
     form.mcp_draft.set(String::new());

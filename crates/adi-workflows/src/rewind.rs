@@ -24,7 +24,12 @@ use crate::{Error, Result};
 /// # Errors
 /// [`Error::Store`] on a read or write failure partway through — a step whose task was already
 /// deleted by an earlier partial rewind call is treated as already clean, not re-raised.
-pub fn rewind(store: &WorkflowStore, tasks: &adi_tasks::Tasks, run_key: &str, keep: usize) -> Result<()> {
+pub fn rewind(
+    store: &WorkflowStore,
+    tasks: &adi_tasks::Tasks,
+    run_key: &str,
+    keep: usize,
+) -> Result<()> {
     let discarded = store.truncate_steps(run_key, keep)?;
     for step in discarded {
         match step.kind {
@@ -64,7 +69,9 @@ pub fn rewind(store: &WorkflowStore, tasks: &adi_tasks::Tasks, run_key: &str, ke
 fn delete_task_if_present(tasks: &adi_tasks::Tasks, task_id: &str) -> Result<()> {
     match tasks.delete(task_id) {
         Ok(()) | Err(adi_tasks::Error::NotFound(_)) => Ok(()),
-        Err(e) => Err(Error::Store(anyhow::anyhow!("couldn't delete a rewound step's task: {e}"))),
+        Err(e) => Err(Error::Store(anyhow::anyhow!(
+            "couldn't delete a rewound step's task: {e}"
+        ))),
     }
 }
 
@@ -97,7 +104,10 @@ mod tests {
             .expect("create run");
 
         store
-            .put_step("r@1", &StepRecord::new("a", StepKind::Step, StepOutcome::Ok(json!(1))))
+            .put_step(
+                "r@1",
+                &StepRecord::new("a", StepKind::Step, StepOutcome::Ok(json!(1))),
+            )
             .expect("step a");
         let task = tasks
             .create_full(adi_tasks::NewTask {
@@ -115,7 +125,10 @@ mod tests {
             )
             .expect("step b");
         store
-            .put_step("r@1", &StepRecord::new("c", StepKind::Step, StepOutcome::Ok(json!(3))))
+            .put_step(
+                "r@1",
+                &StepRecord::new("c", StepKind::Step, StepOutcome::Ok(json!(3))),
+            )
             .expect("step c");
 
         rewind(&store, &tasks, "r@1", 1).expect("rewind");
@@ -125,13 +138,11 @@ mod tests {
         assert_eq!(remaining[0].step_key, "a");
 
         // b's task is gone — the stepId is free for a genuine redo.
-        assert!(matches!(tasks.get(&task.task.id), Err(adi_tasks::Error::NotFound(_))));
-        assert!(
-            tasks
-                .find_step("r@1", "b")
-                .expect("find_step")
-                .is_none()
-        );
+        assert!(matches!(
+            tasks.get(&task.task.id),
+            Err(adi_tasks::Error::NotFound(_))
+        ));
+        assert!(tasks.find_step("r@1", "b").expect("find_step").is_none());
     }
 
     #[test]
@@ -140,7 +151,15 @@ mod tests {
         let store = WorkflowStore::with_config(config.clone());
         let tasks = Tasks::with_config(config.clone());
         store
-            .create_run("parent@1", "parent", "/p.ts", "h", &json!({}), &json!({}), None)
+            .create_run(
+                "parent@1",
+                "parent",
+                "/p.ts",
+                "h",
+                &json!({}),
+                &json!({}),
+                None,
+            )
             .expect("parent");
 
         let child_task = tasks
@@ -192,7 +211,10 @@ mod tests {
             .create_run("r@1", "r", "/r.ts", "h", &json!({}), &json!({}), None)
             .expect("create run");
         store
-            .put_step("r@1", &StepRecord::new("a", StepKind::Step, StepOutcome::Ok(json!(1))))
+            .put_step(
+                "r@1",
+                &StepRecord::new("a", StepKind::Step, StepOutcome::Ok(json!(1))),
+            )
             .expect("step a");
 
         rewind(&store, &tasks, "r@1", 10).expect("rewind");

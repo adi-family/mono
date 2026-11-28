@@ -161,7 +161,11 @@ pub(crate) fn note(language: Language, servers: &[String]) -> String {
 /// not read the note tries.
 fn doc(spec: &ToolSpec, language: Language) -> String {
     let schema = (spec.schema)();
-    let mut text = format!("`{}`\n\n{}", signature(spec, &schema, language), told(spec, language));
+    let mut text = format!(
+        "`{}`\n\n{}",
+        signature(spec, &schema, language),
+        told(spec, language)
+    );
     fields(&mut text, &schema, "");
     text
 }
@@ -236,8 +240,9 @@ fn signature(spec: &ToolSpec, schema: &Value, language: Language) -> String {
         .map(|properties| properties.keys().collect())
         .unwrap_or_default();
     // What must be given first, in both spellings: it is what a reader copies.
-    let (must, may): (Vec<&String>, Vec<&String>) =
-        names.into_iter().partition(|name| required.contains(&name.as_str()));
+    let (must, may): (Vec<&String>, Vec<&String>) = names
+        .into_iter()
+        .partition(|name| required.contains(&name.as_str()));
     match language {
         Language::TypeScript => {
             let listed: Vec<String> = must
@@ -525,9 +530,15 @@ mod tests {
     fn the_description_leads_with_what_became_of_the_other_tools() {
         let ts = describe("BASE.", Language::TypeScript);
         assert!(ts.starts_with("**This is your only tool.** Your other tools — `Read`, `Write`, `Edit`, `Bash`, `Glob`, `Grep`, `Await`, `Ask`, `Report`, and each MCP server as `mcp.<server>` — are functions to `await` in this code."), "{ts}");
-        assert!(ts.contains("\"What your code can call\" in your instructions"), "{ts}");
+        assert!(
+            ts.contains("\"What your code can call\" in your instructions"),
+            "{ts}"
+        );
         assert!(ts.ends_with("\n\nBASE."), "{ts}");
-        assert!(ts.chars().count() < "BASE.".len() + 400, "a lead, not a list: {ts}");
+        assert!(
+            ts.chars().count() < "BASE.".len() + 400,
+            "a lead, not a list: {ts}"
+        );
 
         let py = describe("BASE.", Language::Python);
         assert!(py.contains("are functions to call in this code"), "{py}");
@@ -540,25 +551,55 @@ mod tests {
     #[test]
     fn the_note_carries_every_other_tool_in_the_language_it_is_called_from() {
         let ts = note(Language::TypeScript, &[]);
-        assert!(ts.starts_with("# What your code can call\n\n`TsCode` is the only tool you have."), "{ts}");
-        assert!(ts.contains("it means the function of that name here"), "{ts}");
+        assert!(
+            ts.starts_with("# What your code can call\n\n`TsCode` is the only tool you have."),
+            "{ts}"
+        );
+        assert!(
+            ts.contains("it means the function of that name here"),
+            "{ts}"
+        );
         for spec in tools::inner() {
-            assert!(ts.contains(&format!("\n\n## `await {}(", spec.name)), "{} is missing: {ts}", spec.name);
+            assert!(
+                ts.contains(&format!("\n\n## `await {}(", spec.name)),
+                "{} is missing: {ts}",
+                spec.name
+            );
         }
-        assert!(ts.contains("## `await Read({ path, limit?, offset? })`\n\nRead a file from the filesystem."), "{ts}");
+        assert!(
+            ts.contains(
+                "## `await Read({ path, limit?, offset? })`\n\nRead a file from the filesystem."
+            ),
+            "{ts}"
+        );
         assert!(ts.contains("\n- `path` (string): File to read."), "{ts}");
         assert!(ts.contains("\n- `offset` (integer, optional):"), "{ts}");
         assert!(
             ts.contains("\n- `questions[].options[].label` (string):"),
             "what an argument is made of is described too: {ts}"
         );
-        assert!(ts.contains("\n- `events` (array of string, optional):"), "{ts}");
-        assert!(!ts.contains("PyCode(") && !ts.contains("TsCode("), "the code tools are not functions: {ts}");
-        assert!(!ts.contains("mcp."), "no servers, so nothing about them: {ts}");
+        assert!(
+            ts.contains("\n- `events` (array of string, optional):"),
+            "{ts}"
+        );
+        assert!(
+            !ts.contains("PyCode(") && !ts.contains("TsCode("),
+            "the code tools are not functions: {ts}"
+        );
+        assert!(
+            !ts.contains("mcp."),
+            "no servers, so nothing about them: {ts}"
+        );
 
         let py = note(Language::Python, &[]);
-        assert!(py.starts_with("# What your code can call\n\n`PyCode` is the only tool you have."), "{py}");
-        assert!(py.contains("## `Read(path=…, limit=None, offset=None)`"), "{py}");
+        assert!(
+            py.starts_with("# What your code can call\n\n`PyCode` is the only tool you have."),
+            "{py}"
+        );
+        assert!(
+            py.contains("## `Read(path=…, limit=None, offset=None)`"),
+            "{py}"
+        );
         assert!(py.contains("## `Await(after_seconds=None,"), "{py}");
         assert!(!py.contains("await Read"), "{py}");
     }
@@ -571,8 +612,14 @@ mod tests {
         let ts = note(Language::TypeScript, &[]);
         assert!(!ts.contains("Only the shell moves"), "{ts}");
         assert!(ts.contains("From code this shell is `$`"), "{ts}");
-        assert!(ts.contains("`await $.background`…`;` is its `background`"), "{ts}");
-        assert!(ts.contains("It is one shell across the whole conversation"), "the rest of it stands: {ts}");
+        assert!(
+            ts.contains("`await $.background`…`;` is its `background`"),
+            "{ts}"
+        );
+        assert!(
+            ts.contains("It is one shell across the whole conversation"),
+            "the rest of it stands: {ts}"
+        );
 
         // Python has no template to write a command in, so there the function is the way.
         let py = note(Language::Python, &[]);
@@ -599,12 +646,22 @@ mod tests {
     fn a_function_is_documented_once_and_says_the_same_everywhere() {
         let said = docs(Language::TypeScript);
         let edit = said["Edit"].as_str().expect("a doc");
-        assert!(note(Language::TypeScript, &[]).contains(&format!("## {edit}")), "{edit}");
+        assert!(
+            note(Language::TypeScript, &[]).contains(&format!("## {edit}")),
+            "{edit}"
+        );
         assert_eq!(
             usage("Edit", Language::TypeScript).as_deref(),
             Some("await Edit({ new_string, old_string, path, replace_all? })")
         );
-        assert!(edit.starts_with("`await Edit({ new_string, old_string, path, replace_all? })`\n\n"), "{edit}");
-        assert_eq!(usage("TsCode", Language::TypeScript), None, "not a function");
+        assert!(
+            edit.starts_with("`await Edit({ new_string, old_string, path, replace_all? })`\n\n"),
+            "{edit}"
+        );
+        assert_eq!(
+            usage("TsCode", Language::TypeScript),
+            None,
+            "not a function"
+        );
     }
 }

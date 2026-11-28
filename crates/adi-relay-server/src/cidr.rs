@@ -32,7 +32,11 @@ fn parse(entry: &str) -> Option<(IpAddr, u8)> {
 /// relay refusing every connection rather than one silently wide open.
 #[must_use]
 pub fn allows(allowlist: &[String], remote: IpAddr) -> bool {
-    allowlist.is_empty() || allowlist.iter().filter_map(|e| parse(e)).any(|(addr, bits)| in_prefix(remote, addr, bits))
+    allowlist.is_empty()
+        || allowlist
+            .iter()
+            .filter_map(|e| parse(e))
+            .any(|(addr, bits)| in_prefix(remote, addr, bits))
 }
 
 fn in_prefix(remote: IpAddr, addr: IpAddr, bits: u8) -> bool {

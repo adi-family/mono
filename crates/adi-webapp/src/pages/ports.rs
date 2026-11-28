@@ -145,24 +145,25 @@ fn rows_view(state: State) -> AnyView {
             let service = l.service.clone();
             let key = l.key.clone();
             let menu_key = format!("lease:{service}/{key}");
-            let release = menu_item(state, "Release", true, move || {
-                let (service, key) = (service.clone(), key.clone());
-                spawn_local(async move {
-                    let req = LeaseRef { service, key };
-                    match fetch::release(&req).await {
-                        Ok(r) => {
-                            // A freed port is reported by the row leaving the table. Releasing a
-                            // lease that was already gone leaves the table unchanged, which reads
-                            // as a button that did nothing — so that one is said.
-                            state.flash.set(r.freed.is_none().then(|| {
-                                Flash::err("There was no port to release.".to_string())
-                            }));
-                            load(state).await;
+            let release =
+                menu_item(state, "Release", true, move || {
+                    let (service, key) = (service.clone(), key.clone());
+                    spawn_local(async move {
+                        let req = LeaseRef { service, key };
+                        match fetch::release(&req).await {
+                            Ok(r) => {
+                                // A freed port is reported by the row leaving the table. Releasing a
+                                // lease that was already gone leaves the table unchanged, which reads
+                                // as a button that did nothing — so that one is said.
+                                state.flash.set(r.freed.is_none().then(|| {
+                                    Flash::err("There was no port to release.".to_string())
+                                }));
+                                load(state).await;
+                            }
+                            Err(e) => state.flash.set(Some(Flash::err(e))),
                         }
-                        Err(e) => state.flash.set(Some(Flash::err(e))),
-                    }
+                    });
                 });
-            });
             view! {
                 <TableRow
                     state=table

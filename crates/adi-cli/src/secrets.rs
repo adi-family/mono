@@ -332,7 +332,11 @@ fn run_leases(node: Option<String>, json: bool) -> Result<(), String> {
             lease["petname"].as_str().unwrap_or("?"),
             lease["names"]
                 .as_array()
-                .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(", "))
+                .map(|a| a
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "))
                 .unwrap_or_default(),
             lease["lease"].as_str().unwrap_or("?"),
             lease["last_seen_secs_ago"].as_u64().unwrap_or(0),
@@ -360,7 +364,9 @@ fn local_leases_at(port: u16) -> Result<serde_json::Value, String> {
     let response = client
         .get(format!("http://127.0.0.1:{port}/api/leases"))
         .send()
-        .map_err(|e| format!("reaching this machine's own adi-app on 127.0.0.1:{port}: {e} — is it running?"))?;
+        .map_err(|e| {
+            format!("reaching this machine's own adi-app on 127.0.0.1:{port}: {e} — is it running?")
+        })?;
     let status = response.status();
     let text = response
         .text()
@@ -377,8 +383,9 @@ fn local_leases_at(port: u16) -> Result<serde_json::Value, String> {
 /// share`/`unlock`/`lock` (ADI-MONO-180 P2.5), which need exactly the same node for exactly the
 /// same reason, even though none of them takes a `--user` flag of their own.
 pub(crate) fn require_node(node: Option<&str>) -> Result<String, String> {
-    node.map(str::to_string)
-        .ok_or_else(|| "--user needs --node: there is no user scope on your own machine".to_string())
+    node.map(str::to_string).ok_or_else(|| {
+        "--user needs --node: there is no user scope on your own machine".to_string()
+    })
 }
 
 /// `secrets policy`, local and `--user --node` both.
@@ -414,7 +421,8 @@ fn run_policy(
         return Err("--enable and --disable are mutually exclusive".to_string());
     }
     let mut policy = UserSecretsPolicy::load(store.config());
-    let edited = enable || disable || overridable.is_some() || missing.is_some() || max_lease.is_some();
+    let edited =
+        enable || disable || overridable.is_some() || missing.is_some() || max_lease.is_some();
     if edited {
         if enable {
             policy.enabled = true;
@@ -447,7 +455,11 @@ fn run_policy(
     } else {
         println!(
             "user_secrets: {} — overridable: {} — missing: {}{}",
-            if policy.enabled { "enabled" } else { "disabled" },
+            if policy.enabled {
+                "enabled"
+            } else {
+                "disabled"
+            },
             if policy.overridable.is_empty() {
                 "(none)".to_string()
             } else {
@@ -477,7 +489,9 @@ fn parse_missing(text: &str) -> Result<Missing, String> {
         "server" => Ok(Missing::Server),
         "wait" => Ok(Missing::Wait),
         "fail" => Ok(Missing::Fail),
-        other => Err(format!("unrecognised --missing value: {other} (want server, wait or fail)")),
+        other => Err(format!(
+            "unrecognised --missing value: {other} (want server, wait or fail)"
+        )),
     }
 }
 
@@ -546,8 +560,8 @@ fn set_user_secret(
 ) -> Result<serde_json::Value, String> {
     let wrap_key = adi_mesh::devicekey::load_or_create().map_err(|e| e.to_string())?;
     let dek = adi_secrets::wrap::generate_dek();
-    let (nonce, ciphertext) =
-        adi_secrets::wrap::seal_value(&dek, node, name, value.as_bytes()).map_err(|e| e.to_string())?;
+    let (nonce, ciphertext) = adi_secrets::wrap::seal_value(&dek, node, name, value.as_bytes())
+        .map_err(|e| e.to_string())?;
     let (wrap_nonce, wrapped) =
         adi_secrets::wrap::wrap_dek(&wrap_key, node, name, &dek).map_err(|e| e.to_string())?;
     let body = serde_json::json!({
@@ -623,7 +637,9 @@ mod tests {
     #[test]
     fn rm_takes_user_and_node() {
         match parse(&["rm", "CLAUDE_CODE_OAUTH_TOKEN", "--user", "--node", "box-b"]) {
-            SecretsCommand::Rm { name, user, node, .. } => {
+            SecretsCommand::Rm {
+                name, user, node, ..
+            } => {
                 assert_eq!(name, "CLAUDE_CODE_OAUTH_TOKEN");
                 assert!(user);
                 assert_eq!(node, Some("box-b".to_string()));
@@ -635,7 +651,13 @@ mod tests {
     #[test]
     fn set_takes_user_and_node() {
         match parse(&["set", "K", "v", "--user", "--node", "box-b"]) {
-            SecretsCommand::Set { name, value, user, node, .. } => {
+            SecretsCommand::Set {
+                name,
+                value,
+                user,
+                node,
+                ..
+            } => {
                 assert_eq!(name, "K");
                 assert_eq!(value, Some("v".to_string()));
                 assert!(user);
@@ -685,7 +707,12 @@ mod tests {
         }
 
         match parse(&["policy", "--user", "--node", "box-b", "--missing", "wait"]) {
-            SecretsCommand::Policy { user, node, missing, .. } => {
+            SecretsCommand::Policy {
+                user,
+                node,
+                missing,
+                ..
+            } => {
                 assert!(user);
                 assert_eq!(node, Some("box-b".to_string()));
                 assert_eq!(missing, Some("wait".to_string()));
@@ -764,8 +791,7 @@ mod tests {
     #[test]
     fn policy_with_no_edit_flags_only_reads() {
         let store = scratch("read-only");
-        run_policy(&store, false, None, false, false, None, None, None, true)
-            .expect("read");
+        run_policy(&store, false, None, false, false, None, None, None, true).expect("read");
         assert!(!UserSecretsPolicy::load(store.config()).enabled);
     }
 
@@ -780,7 +806,10 @@ mod tests {
             None,
             true,
             false,
-            Some(vec!["CLAUDE_CODE_OAUTH_TOKEN".to_string(), "  ".to_string()]),
+            Some(vec![
+                "CLAUDE_CODE_OAUTH_TOKEN".to_string(),
+                "  ".to_string(),
+            ]),
             Some("fail".to_string()),
             Some("72h".to_string()),
             true,
@@ -789,24 +818,28 @@ mod tests {
 
         let policy = UserSecretsPolicy::load(store.config());
         assert!(policy.enabled);
-        assert_eq!(policy.overridable, vec!["CLAUDE_CODE_OAUTH_TOKEN".to_string()]);
+        assert_eq!(
+            policy.overridable,
+            vec!["CLAUDE_CODE_OAUTH_TOKEN".to_string()]
+        );
         assert_eq!(policy.missing, Missing::Fail);
         assert_eq!(policy.max_lease, Some("72h".to_string()));
 
         // `--disable` turns it back off without touching the rest.
-        run_policy(&store, false, None, false, true, None, None, None, true)
-            .expect("disable");
+        run_policy(&store, false, None, false, true, None, None, None, true).expect("disable");
         let policy = UserSecretsPolicy::load(store.config());
         assert!(!policy.enabled);
-        assert_eq!(policy.missing, Missing::Fail, "untouched by a disable-only call");
+        assert_eq!(
+            policy.missing,
+            Missing::Fail,
+            "untouched by a disable-only call"
+        );
     }
 
     #[test]
     fn policy_refuses_enable_and_disable_together() {
         let store = scratch("enable-disable-conflict");
-        assert!(
-            run_policy(&store, false, None, true, true, None, None, None, false).is_err()
-        );
+        assert!(run_policy(&store, false, None, true, true, None, None, None, false).is_err());
     }
 
     #[test]

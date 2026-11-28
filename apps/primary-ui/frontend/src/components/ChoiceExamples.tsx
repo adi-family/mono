@@ -59,7 +59,9 @@ function createDemoSource() {
         return records;
       }
       return records.filter((option) =>
-        [option.label, ...(option.keywords ?? [])].some((text) => text.toLowerCase().includes(search)),
+        [option.label, ...(option.keywords ?? [])].some((text) =>
+          text.toLowerCase().includes(search),
+        ),
       );
     },
     async onCreate(input: string) {
@@ -207,10 +209,19 @@ function ChoiceExample({
   );
 }
 
-function SelectedValue({ value }: { value: string | ChoiceOption | readonly ChoiceOption[] | null }) {
-  const serialized = typeof value === "string" ? JSON.stringify(value) : Array.isArray(value)
-    ? JSON.stringify(value.map((option: ChoiceOption) => option.value))
-    : value ? JSON.stringify((value as ChoiceOption).value) : "null";
+function SelectedValue({
+  value,
+}: {
+  value: string | ChoiceOption | readonly ChoiceOption[] | null;
+}) {
+  const serialized =
+    typeof value === "string"
+      ? JSON.stringify(value)
+      : Array.isArray(value)
+        ? JSON.stringify(value.map((option: ChoiceOption) => option.value))
+        : value
+          ? JSON.stringify((value as ChoiceOption).value)
+          : "null";
 
   return (
     <p className="text-muted-foreground mt-3 break-words text-xs" aria-live="polite">
@@ -222,8 +233,8 @@ function SelectedValue({ value }: { value: string | ChoiceOption | readonly Choi
 function AsyncHint() {
   return (
     <p className="text-muted-foreground mt-2 text-xs leading-5">
-      Simulated server · 650 ms. Try <code>react</code>, <code>no-match</code>, or <code>error</code>.
-      The first “error” request fails; Retry returns the list. Reload to reset.
+      Simulated server · 650 ms. Try <code>react</code>, <code>no-match</code>, or{" "}
+      <code>error</code>. The first “error” request fails; Retry returns the list. Reload to reset.
     </p>
   );
 }
@@ -237,8 +248,17 @@ function SelectExample() {
       description="Choose one value from a fixed list. A native select with familiar keyboard and mobile behavior."
       code={selectCode}
     >
-      <label htmlFor="select-framework" className="mb-2 block text-sm font-medium">Framework</label>
-      <Select id="select-framework" name="framework" options={frameworks} value={value} onValueChange={setValue} placeholder="Choose a framework" />
+      <label htmlFor="select-framework" className="mb-2 block text-sm font-medium">
+        Framework
+      </label>
+      <Select
+        id="select-framework"
+        name="framework"
+        options={frameworks}
+        value={value}
+        onValueChange={setValue}
+        placeholder="Choose a framework"
+      />
       <SelectedValue value={value} />
     </ChoiceExample>
   );
@@ -253,8 +273,17 @@ function MultiSelectExample() {
       description="Search a local list and select several options. Remove a tag individually or clear the selection."
       code={multiSelectCode}
     >
-      <label htmlFor="multi-frameworks" className="mb-2 block text-sm font-medium">Frameworks</label>
-      <MultiSelect id="multi-frameworks" name="frameworks" options={frameworks} value={value} onValueChange={setValue} placeholder="Add frameworks" />
+      <label htmlFor="multi-frameworks" className="mb-2 block text-sm font-medium">
+        Frameworks
+      </label>
+      <MultiSelect
+        id="multi-frameworks"
+        name="frameworks"
+        options={frameworks}
+        value={value}
+        onValueChange={setValue}
+        placeholder="Add frameworks"
+      />
       <SelectedValue value={value} />
     </ChoiceExample>
   );
@@ -269,9 +298,19 @@ function LocalAutocompleteExample() {
       description="Filter supplied options as you type. Search labels or extra keywords: “jsx” finds React."
       code={localAutocompleteCode}
     >
-      <label htmlFor="autocomplete-local" className="mb-2 block text-sm font-medium">Framework</label>
-      <Autocomplete id="autocomplete-local" options={frameworks} value={value} onValueChange={setValue} placeholder="Search frameworks" />
-      <p className="text-muted-foreground mt-2 text-xs">Try “jsx” for a keyword match or “no-match” for the empty state.</p>
+      <label htmlFor="autocomplete-local" className="mb-2 block text-sm font-medium">
+        Framework
+      </label>
+      <Autocomplete
+        id="autocomplete-local"
+        options={frameworks}
+        value={value}
+        onValueChange={setValue}
+        placeholder="Search frameworks"
+      />
+      <p className="text-muted-foreground mt-2 text-xs">
+        Try “jsx” for a keyword match or “no-match” for the empty state.
+      </p>
       <SelectedValue value={value} />
     </ChoiceExample>
   );
@@ -286,8 +325,17 @@ function AsyncAutocompleteExample() {
       description="Load results on demand. Debounced queries support loading, empty, and retry states."
       code={asyncAutocompleteCode}
     >
-      <label htmlFor="autocomplete-async" className="mb-2 block text-sm font-medium">Remote framework</label>
-      <Autocomplete id="autocomplete-async" loadOptions={remoteAutocomplete.loadOptions} debounceMs={250} value={value} onValueChange={setValue} placeholder="Search remote frameworks" />
+      <label htmlFor="autocomplete-async" className="mb-2 block text-sm font-medium">
+        Remote framework
+      </label>
+      <Autocomplete
+        id="autocomplete-async"
+        loadOptions={remoteAutocomplete.loadOptions}
+        debounceMs={250}
+        value={value}
+        onValueChange={setValue}
+        placeholder="Search remote frameworks"
+      />
       <AsyncHint />
       <SelectedValue value={value} />
     </ChoiceExample>
@@ -313,12 +361,30 @@ function CreatableAutocompleteExample() {
       code={creatableAutocompleteCode}
     >
       <label className="mb-4 flex cursor-pointer items-center gap-2 text-sm">
-        <input id="allow-creation" type="checkbox" checked={allowCreation} onChange={(event) => setAllowCreation(event.target.checked)} className="accent-primary size-4 focus-visible:outline-ring focus-visible:outline-2 focus-visible:outline-offset-2" />
+        <input
+          id="allow-creation"
+          type="checkbox"
+          checked={allowCreation}
+          onChange={(event) => setAllowCreation(event.target.checked)}
+          className="accent-primary size-4 focus-visible:outline-ring focus-visible:outline-2 focus-visible:outline-offset-2"
+        />
         Allow creating new options
       </label>
-      <label htmlFor="autocomplete-create" className="mb-2 block text-sm font-medium">Framework</label>
-      <Autocomplete id="autocomplete-create" options={options} value={value} onValueChange={setValue} creatable={allowCreation} onCreate={onCreate} placeholder="Search or create a framework" />
-      <p className="text-muted-foreground mt-2 text-xs">Try “Astro”, then choose Create. Clear and search again to find the saved option.</p>
+      <label htmlFor="autocomplete-create" className="mb-2 block text-sm font-medium">
+        Framework
+      </label>
+      <Autocomplete
+        id="autocomplete-create"
+        options={options}
+        value={value}
+        onValueChange={setValue}
+        creatable={allowCreation}
+        onCreate={onCreate}
+        placeholder="Search or create a framework"
+      />
+      <p className="text-muted-foreground mt-2 text-xs">
+        Try “Astro”, then choose Create. Clear and search again to find the saved option.
+      </p>
       <SelectedValue value={value} />
     </ChoiceExample>
   );
@@ -333,10 +399,22 @@ function AsyncCreatableExample() {
       description="Combine remote search with asynchronous creation. Creation waits for a successful empty result."
       code={asyncCreatableCode}
     >
-      <label htmlFor="autocomplete-async-create" className="mb-2 block text-sm font-medium">Remote framework</label>
-      <Autocomplete id="autocomplete-async-create" loadOptions={remoteCreatable.loadOptions} value={value} onValueChange={setValue} creatable onCreate={remoteCreatable.onCreate} placeholder="Search or create remotely" />
+      <label htmlFor="autocomplete-async-create" className="mb-2 block text-sm font-medium">
+        Remote framework
+      </label>
+      <Autocomplete
+        id="autocomplete-async-create"
+        loadOptions={remoteCreatable.loadOptions}
+        value={value}
+        onValueChange={setValue}
+        creatable
+        onCreate={remoteCreatable.onCreate}
+        placeholder="Search or create remotely"
+      />
       <AsyncHint />
-      <p className="text-muted-foreground mt-1 text-xs">Try “Astro” to create. Saving takes 450 ms; the result remains searchable.</p>
+      <p className="text-muted-foreground mt-1 text-xs">
+        Try “Astro” to create. Saving takes 450 ms; the result remains searchable.
+      </p>
       <SelectedValue value={value} />
     </ChoiceExample>
   );
@@ -351,8 +429,19 @@ function AsyncMultiSelectExample() {
       description="The same async loader and optional creation work with multiple selections."
       code={asyncMultiSelectCode}
     >
-      <label htmlFor="multi-async" className="mb-2 block text-sm font-medium">Remote frameworks</label>
-      <MultiSelect id="multi-async" name="frameworks" loadOptions={remoteMultiSelect.loadOptions} value={value} onValueChange={setValue} creatable onCreate={remoteMultiSelect.onCreate} placeholder="Search or create frameworks" />
+      <label htmlFor="multi-async" className="mb-2 block text-sm font-medium">
+        Remote frameworks
+      </label>
+      <MultiSelect
+        id="multi-async"
+        name="frameworks"
+        loadOptions={remoteMultiSelect.loadOptions}
+        value={value}
+        onValueChange={setValue}
+        creatable
+        onCreate={remoteMultiSelect.onCreate}
+        placeholder="Search or create frameworks"
+      />
       <AsyncHint />
       <SelectedValue value={value} />
     </ChoiceExample>
@@ -363,7 +452,9 @@ export function ChoiceExamples() {
   return (
     <section aria-labelledby="choice-components-title" className="flex min-w-0 flex-col gap-6">
       <div>
-        <h2 id="choice-components-title" className="text-xl font-semibold tracking-tight">Selection &amp; autocomplete</h2>
+        <h2 id="choice-components-title" className="text-xl font-semibold tracking-tight">
+          Selection &amp; autocomplete
+        </h2>
         <p className="text-muted-foreground mt-2 text-sm leading-6">
           Start with a fixed list, add search, or load options asynchronously. Creation is opt-in.
           Each example shows the component props and the state needed to use it.

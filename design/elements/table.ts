@@ -62,7 +62,9 @@ class AdiTable extends AdiElement {
 
     const direction = this.attr("dir", "asc") === "desc" ? -1 : 1;
     const compare = column.compare ?? defaultCompare;
-    return [...this.#rows].sort((left, right) => direction * compare(left[key], right[key], left, right));
+    return [...this.#rows].sort(
+      (left, right) => direction * compare(left[key], right[key], left, right),
+    );
   }
 
   #draw(): void {
@@ -134,8 +136,8 @@ class AdiTable extends AdiElement {
 
     if (this.hasAttribute("selectable")) {
       rowElement.addEventListener("click", (event) => {
-        const clickedControl = event.target instanceof Element
-          && event.target.closest("button, a, adi-button");
+        const clickedControl =
+          event.target instanceof Element && event.target.closest("button, a, adi-button");
         if (clickedControl) return;
         this.emit("select", { row, index });
       });

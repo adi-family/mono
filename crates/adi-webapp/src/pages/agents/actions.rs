@@ -376,11 +376,7 @@ pub(crate) fn stop_agent(state: State, watch: AgentsWatch, name: String) {
     if watch.name.get_untracked().as_deref() == Some(name.as_str()) {
         watch.close();
     }
-    apply_agents(
-        state,
-        None,
-        fetch::stop_agent(name),
-    );
+    apply_agents(state, None, fetch::stop_agent(name));
 }
 
 /// Stop one specific run of a headless agent — for a conversation, the answer being produced, and
@@ -845,9 +841,10 @@ fn all_chats_rows(state: State, watch: AgentsWatch, only: &Option<Vec<String>>) 
             }
             .into_any();
             view! { <TableRow state=table cell=move |col| match col {
-                    "Agent" => view! { <span>{agent.clone()}</span> }.into_any(),
-                    other => run_cell(other, &r, answerable),
-                } actions=open/> }.into_any()
+                "Agent" => view! { <span>{agent.clone()}</span> }.into_any(),
+                other => run_cell(other, &r, answerable),
+            } actions=open/> }
+            .into_any()
         })
         .collect::<Vec<_>>()
         .into_any()
@@ -2038,7 +2035,13 @@ const IMAGES_REFUSED: &str = "this one can't be sent a file — a terminal sessi
 /// under the agent it answers for: pointed at another agent, the box shows nothing until that one's
 /// list arrives rather than offering the last agent's words.
 fn recall(watch: AgentsWatch) -> adi_ui::Recall {
-    let held = RwSignal::new(None::<(Option<String>, String, Vec<adi_webapp_api::types::AgentPrompt>)>);
+    let held = RwSignal::new(
+        None::<(
+            Option<String>,
+            String,
+            Vec<adi_webapp_api::types::AgentPrompt>,
+        )>,
+    );
     let loading = RwSignal::new(false);
     let error = RwSignal::new(None::<String>);
     let prompts = Signal::derive(move || {
@@ -2057,7 +2060,9 @@ fn recall(watch: AgentsWatch) -> adi_ui::Recall {
             .unwrap_or_default()
     });
     let on_open = Callback::new(move |()| {
-        let Some(name) = watch.name.get_untracked() else { return };
+        let Some(name) = watch.name.get_untracked() else {
+            return;
+        };
         let node = watch.node.get_untracked();
         loading.set(true);
         error.set(None);
@@ -4936,7 +4941,10 @@ fn chat_session_filter(state: State) -> AnyView {
     // The grouping lives behind this button too, and a preference nothing on screen advertises is
     // one nobody finds — the headings say how the rail *is* grouped, never that it could be another
     // way.
-    let hint = format!("{narrowed}\n\nGroup by: {}", state.session_group.get().label());
+    let hint = format!(
+        "{narrowed}\n\nGroup by: {}",
+        state.session_group.get().label()
+    );
     view! {
         <button class="adi-chat__head-btn" class:is-on=current != SessionFilter::All type="button"
             title=hint aria-haspopup="menu"
@@ -5418,8 +5426,8 @@ fn source_rows(
         .unwrap_or_default();
     // `None` unless the head's ★ is on, in which case only this source's own starred agents are
     // listed — a fact about that machine's agents, never borrowed from a different one.
-    let keep: Option<std::collections::HashSet<&str>> = (filter == SessionFilter::Starred).then(
-        || {
+    let keep: Option<std::collections::HashSet<&str>> =
+        (filter == SessionFilter::Starred).then(|| {
             let mut keep: std::collections::HashSet<&str> = agents
                 .map(|s| {
                     s.agents
@@ -5433,8 +5441,7 @@ fn source_rows(
                 keep.insert(watched);
             }
             keep
-        },
-    );
+        });
 
     let mut rows: Vec<SessionRow> = Vec::new();
     let mut listed_watched = false;
@@ -5628,9 +5635,7 @@ fn session_rows(state: State, watch: AgentsWatch) -> (Vec<SessionRow>, SessionFi
                         SessionFilter::Mine => {
                             let asking = match &row.node {
                                 None => local_asking.as_deref(),
-                                Some(n) => {
-                                    node_chats.get(n).and_then(|c| c.asking_user.as_deref())
-                                }
+                                Some(n) => node_chats.get(n).and_then(|c| c.asking_user.as_deref()),
                             };
                             launched_by_me(r, asking)
                         }
@@ -6119,7 +6124,13 @@ fn rail_layout(state: State, bands: &[RailBand], filter: SessionFilter) -> RailL
     RailLayout::Blocks(
         bands
             .iter()
-            .map(|b| (b.label.clone(), b.node.clone(), collapsed.contains(&b.label)))
+            .map(|b| {
+                (
+                    b.label.clone(),
+                    b.node.clone(),
+                    collapsed.contains(&b.label),
+                )
+            })
             .collect(),
     )
 }
@@ -6135,7 +6146,8 @@ fn rail_layout(state: State, bands: &[RailBand], filter: SessionFilter) -> RailL
 /// once did — made every live run's tick redraw every row of the rail.
 fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
     let rail = Memo::new(move |_| rail_bands(state, watch));
-    let layout = Memo::new(move |_| rail.with(|(bands, filter)| rail_layout(state, bands, *filter)));
+    let layout =
+        Memo::new(move |_| rail.with(|(bands, filter)| rail_layout(state, bands, *filter)));
     (move || match layout.get() {
         RailLayout::Empty(msg) => view! { <div class="adi-chome__empty">{msg}</div> }.into_any(),
         // One band (a single source, or `SessionGroup::Flat` merging several): a single list filling
@@ -6274,7 +6286,10 @@ fn row_id(row: &SessionRow) -> RowId {
     (
         row.node.clone(),
         row.agent.clone(),
-        row.run.as_ref().map(|r| r.run_id.clone()).unwrap_or_default(),
+        row.run
+            .as_ref()
+            .map(|r| r.run_id.clone())
+            .unwrap_or_default(),
     )
 }
 
@@ -6611,8 +6626,7 @@ fn chat_session_row(
             watch.name.get().as_deref() == Some(agent.as_str())
                 && watch.node.get() == node
                 && (run_id.is_empty() && watch.interactive.get()
-                    || !run_id.is_empty()
-                        && watch.run_id.get().as_deref() == Some(run_id.as_str()))
+                    || !run_id.is_empty() && watch.run_id.get().as_deref() == Some(run_id.as_str()))
         })
     };
     let menu = SessionRef::of(node.clone(), &agent, &run_id, &title, false, starred);
@@ -8077,7 +8091,11 @@ fn viewer_nodes(state: State) -> Vec<FleetNode> {
         .into_iter()
         .filter(|n| selected.is_empty() || selected.contains(&n.petname))
         .collect();
-    nodes.sort_by(|a, b| b.active.cmp(&a.active).then_with(|| a.petname.cmp(&b.petname)));
+    nodes.sort_by(|a, b| {
+        b.active
+            .cmp(&a.active)
+            .then_with(|| a.petname.cmp(&b.petname))
+    });
     nodes
 }
 

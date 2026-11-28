@@ -151,7 +151,11 @@ mod tests {
                 "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
                 body.len()
             );
-            stream.try_clone().unwrap().write_all(response.as_bytes()).unwrap();
+            stream
+                .try_clone()
+                .unwrap()
+                .write_all(response.as_bytes())
+                .unwrap();
         });
         format!("http://{addr}")
     }
@@ -211,7 +215,10 @@ mod tests {
         )
         .expect("connect");
 
-        assert_eq!(connected.connection.id, "conn_abc", "the router's own id, verbatim");
+        assert_eq!(
+            connected.connection.id, "conn_abc",
+            "the router's own id, verbatim"
+        );
         assert!(!connected.connection.manifest.linked);
         assert_eq!(
             connected.install_url,
@@ -236,7 +243,9 @@ mod tests {
         let cfg = scratch("connect-allow");
         let connections = Connections::with_config(cfg.clone());
         let secrets = adi_secrets::Secrets::with_config(cfg.clone());
-        let base = fake_router("{\"token\":\"tok_1\",\"connection\":\"conn_open\",\"link_code\":\"code_1\"}");
+        let base = fake_router(
+            "{\"token\":\"tok_1\",\"connection\":\"conn_open\",\"link_code\":\"code_1\"}",
+        );
 
         let connected = connect(
             &connections,
@@ -277,7 +286,10 @@ mod tests {
 
         // Two connections share the provider — removing one leaves the token in place.
         disconnect(&connections, &secrets, &router_url, &a.id).unwrap();
-        assert_eq!(token::load(&secrets, "telegram").unwrap(), Some("tok_1".into()));
+        assert_eq!(
+            token::load(&secrets, "telegram").unwrap(),
+            Some("tok_1".into())
+        );
 
         // Removing the last one drops the token too.
         disconnect(&connections, &secrets, &router_url, &b.id).unwrap();
@@ -321,7 +333,13 @@ mod tests {
         // Nothing listening on this port -- the request can't even be sent.
         let err = disconnect(&connections, &secrets, "http://127.0.0.1:1", &a.id).unwrap_err();
         assert!(matches!(err, Error::Router(_) | Error::Http(_)));
-        assert!(connections.get(&a.id).unwrap().is_some(), "local state untouched");
-        assert_eq!(token::load(&secrets, "telegram").unwrap(), Some("tok_1".into()));
+        assert!(
+            connections.get(&a.id).unwrap().is_some(),
+            "local state untouched"
+        );
+        assert_eq!(
+            token::load(&secrets, "telegram").unwrap(),
+            Some("tok_1".into())
+        );
     }
 }

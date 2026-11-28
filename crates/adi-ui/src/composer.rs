@@ -175,7 +175,9 @@ pub fn Composer(
         if recall_at.get_untracked().is_some() {
             return focus_first(recall_list);
         }
-        let Some(el) = recall_button.get_untracked() else { return false };
+        let Some(el) = recall_button.get_untracked() else {
+            return false;
+        };
         recall.on_open.run(());
         recall_at.set(Some(place(&el)));
         // The rows are drawn on the next tick; the cached list is already there to focus. A

@@ -81,18 +81,36 @@ class Sh {
     readonly truncated = false,
     readonly echoed = false,
   ) {}
-  get ok(): boolean { return this.code === 0; }
+  get ok(): boolean {
+    return this.code === 0;
+  }
   /** The same number under the name Bun's and Node's results give it. */
-  get exitCode(): number { return this.code; }
+  get exitCode(): number {
+    return this.code;
+  }
   /** This result, as one that shows nothing when it stands on a line of its own. */
-  quieted(): Sh { return new Sh(this.stdout, this.stderr, this.code, this.cmd, this.truncated, true); }
+  quieted(): Sh {
+    return new Sh(this.stdout, this.stderr, this.code, this.cmd, this.truncated, true);
+  }
   /** stdout with trailing newlines dropped — what `$(...)` would have given. */
-  get text(): string { return this.stdout.replace(/\n+$/, ""); }
-  get lines(): string[] { return this.text === "" ? [] : this.text.split("\n"); }
-  json(): unknown { return JSON.parse(this.stdout); }
-  toString(): string { return this.text; }
-  toJSON(): string { return this.text; }
-  [Symbol.toPrimitive](): string { return this.text; }
+  get text(): string {
+    return this.stdout.replace(/\n+$/, "");
+  }
+  get lines(): string[] {
+    return this.text === "" ? [] : this.text.split("\n");
+  }
+  json(): unknown {
+    return JSON.parse(this.stdout);
+  }
+  toString(): string {
+    return this.text;
+  }
+  toJSON(): string {
+    return this.text;
+  }
+  [Symbol.toPrimitive](): string {
+    return this.text;
+  }
   /** Shown when a command is a top-level expression, and read the way Bash's result is. */
   shown(): string {
     if (this.echoed) return this.code !== 0 ? `(exit ${this.code})` : "";
@@ -117,7 +135,11 @@ class ShError extends Error {
   readonly stdout: string;
   readonly stderr: string;
   /** `killed`: the command did not end by itself — it was stopped at a deadline. */
-  constructor(message: string, readonly result: Sh, readonly killed = false) {
+  constructor(
+    message: string,
+    readonly result: Sh,
+    readonly killed = false,
+  ) {
     super(message);
     this.name = "ShError";
     this.code = result.code;
@@ -163,11 +185,15 @@ function killTree(child: ChildProcess) {
     try {
       if (child.pid) process.kill(-child.pid, name);
     } catch {
-      try { child.kill(name); } catch {}
+      try {
+        child.kill(name);
+      } catch {}
     }
   };
   signal("SIGTERM");
-  setTimeout(() => { if (child.exitCode === null && child.signalCode === null) signal("SIGKILL"); }, 1000).unref();
+  setTimeout(() => {
+    if (child.exitCode === null && child.signalCode === null) signal("SIGKILL");
+  }, 1000).unref();
 }
 
 /**
@@ -177,7 +203,11 @@ function killTree(child: ChildProcess) {
  * get wrong. A non-zero exit rejects with `ShError` carrying the output — pass `check: false`
  * where failing is an answer rather than a fault (`grep`, `diff`, `test`).
  */
-function sh(cmd: string | readonly unknown[], options: ShOptions = {}, label?: string): Promise<Sh> {
+function sh(
+  cmd: string | readonly unknown[],
+  options: ShOptions = {},
+  label?: string,
+): Promise<Sh> {
   const check = options.check ?? true;
   const echo = options.echo ?? false;
   const argv = typeof cmd === "string" ? ["/bin/sh", "-c", cmd] : cmd.map((part) => String(part));
@@ -189,7 +219,10 @@ function sh(cmd: string | readonly unknown[], options: ShOptions = {}, label?: s
   const env = { ...(options.env ?? process.env), PWD: where };
   // Taken now, while the cell that called is still on the stack. The error itself is made later,
   // in an event handler, where the only frames left are the runtime's own.
-  const calledFrom = String(new Error().stack ?? "").split("\n").filter((line) => /^\s+at /.test(line)).slice(1);
+  const calledFrom = String(new Error().stack ?? "")
+    .split("\n")
+    .filter((line) => /^\s+at /.test(line))
+    .slice(1);
 
   return new Promise<Sh>((resolve, reject0) => {
     const reject = (error: ShError) => {
@@ -197,7 +230,9 @@ function sh(cmd: string | readonly unknown[], options: ShOptions = {}, label?: s
       reject0(error);
     };
     if (stopping) {
-      reject(new ShError(`command was not started (${stopping}): ${shown}`, new Sh("", "", -1, shown)));
+      reject(
+        new ShError(`command was not started (${stopping}): ${shown}`, new Sh("", "", -1, shown)),
+      );
       return;
     }
     const out: Buffer[] = [];
@@ -209,7 +244,14 @@ function sh(cmd: string | readonly unknown[], options: ShOptions = {}, label?: s
     let timer: ReturnType<typeof setTimeout> | undefined;
 
     const result = (code: number) =>
-      new Sh(Buffer.concat(out).toString("utf8"), Buffer.concat(err).toString("utf8"), code, shown, truncated, echo);
+      new Sh(
+        Buffer.concat(out).toString("utf8"),
+        Buffer.concat(err).toString("utf8"),
+        code,
+        shown,
+        truncated,
+        echo,
+      );
 
     const entry = {
       stop(why: string) {
@@ -225,7 +267,13 @@ function sh(cmd: string | readonly unknown[], options: ShOptions = {}, label?: s
       if (timer) clearTimeout(timer);
       const got = result(code);
       if (stopped === "timeout") {
-        reject(new ShError(`command still running after ${options.timeout}ms and was killed: ${shown}${tail(got)}`, got, true));
+        reject(
+          new ShError(
+            `command still running after ${options.timeout}ms and was killed: ${shown}${tail(got)}`,
+            got,
+            true,
+          ),
+        );
       } else if (stopped) {
         // The call's own deadline. What the command had printed is worth showing — it is
         // usually the only clue to why it was slow.
@@ -248,7 +296,10 @@ function sh(cmd: string | readonly unknown[], options: ShOptions = {}, label?: s
       done = true;
       running.delete(entry);
       const what = fs.existsSync(where) ? argv[0] : where;
-      const reason = (error as NodeJS.ErrnoException)?.code === "ENOENT" ? "No such file or directory" : String((error as Error)?.message ?? error);
+      const reason =
+        (error as NodeJS.ErrnoException)?.code === "ENOENT"
+          ? "No such file or directory"
+          : String((error as Error)?.message ?? error);
       const got = new Sh("", `${what}: ${reason}\n`, 127, shown);
       if (check) reject(new ShError(`couldn't run ${shown}${tail(got)}`, got));
       else resolve(got);
@@ -372,7 +423,10 @@ class Quoting {
         }
         const line = this.line;
         this.line = "";
-        if (line !== undefined && (this.here.tabs ? line.replace(/^\t+/, "") : line) === this.here.word) {
+        if (
+          line !== undefined &&
+          (this.here.tabs ? line.replace(/^\t+/, "") : line) === this.here.word
+        ) {
           this.here = this.awaited.shift();
           this.fresh = true;
         }
@@ -510,7 +564,9 @@ class RawText {
 function wordsOf(value: unknown): string[] {
   if (Array.isArray(value)) return value.flatMap(wordsOf);
   if (value === undefined || value === null) {
-    throw new TypeError(`$: a value put into the command is ${value}. A command with a hole in it is not run — check the variable, or pass "" if empty is what you mean.`);
+    throw new TypeError(
+      `$: a value put into the command is ${value}. A command with a hole in it is not run — check the variable, or pass "" if empty is what you mean.`,
+    );
   }
   if (value instanceof Sh) return [value.text];
   switch (typeof value) {
@@ -526,7 +582,9 @@ function wordsOf(value: unknown): string[] {
       if (text !== "[object Object]") return [text];
     }
   }
-  throw new TypeError(`$: ${typeof value === "object" ? "an object" : `a ${typeof value}`} cannot be put into a command — pass a string (JSON.stringify it, if JSON is what the command wants).`);
+  throw new TypeError(
+    `$: ${typeof value === "object" ? "an object" : `a ${typeof value}`} cannot be put into a command — pass a string (JSON.stringify it, if JSON is what the command wants).`,
+  );
 }
 
 /** A template as the script that runs it, and as the command to call it when reporting on it. */
@@ -559,7 +617,9 @@ function build(pieces: readonly string[], values: readonly unknown[]): Built {
     const words = wordsOf(value);
     const place = quoting.place();
     if (place === "sealed") {
-      throw new TypeError("$: a value cannot be put into a heredoc whose delimiter is quoted (<<'EOF'): nothing inside one is expanded. Leave the delimiter bare, or hand the text over with .input(text).");
+      throw new TypeError(
+        "$: a value cannot be put into a heredoc whose delimiter is quoted (<<'EOF'): nothing inside one is expanded. Leave the delimiter bare, or hand the text over with .input(text).",
+      );
     }
     if (place === "bare") {
       body += words.map((word) => `"${keep(word)}"`).join(" ");
@@ -601,15 +661,23 @@ function exportedName(line: string): string | undefined {
  * the listing is `sh`'s own output, in whichever spelling that `sh` uses, and it is the only
  * reader always right about it. `undefined` when it could not be asked.
  */
-function exportedValues(file: string, names: readonly string[], env: Record<string, string | undefined>): Record<string, string> | undefined {
+function exportedValues(
+  file: string,
+  names: readonly string[],
+  env: Record<string, string | undefined>,
+): Record<string, string> | undefined {
   const found: Record<string, string> = {};
   if (!names.length) return found;
   // Every name was checked to be a plain identifier, which is what makes the `eval` safe.
   const script =
     'if sh -n "$1" 2>/dev/null; then . "$1"; fi; shift; ' +
     "for n do eval 'v=${'\"$n\"'-}; s=${'\"$n\"'+x}'; " +
-    "[ -n \"$s\" ] && printf '%s=%s\\0' \"$n\" \"$v\"; done; true";
-  const ran = spawnSync("/bin/sh", ["-c", script, "sh", file, ...names], { env: env as NodeJS.ProcessEnv, stdio: ["ignore", "pipe", "ignore"], timeout: 30_000 });
+    '[ -n "$s" ] && printf \'%s=%s\\0\' "$n" "$v"; done; true';
+  const ran = spawnSync("/bin/sh", ["-c", script, "sh", file, ...names], {
+    env: env as NodeJS.ProcessEnv,
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 30_000,
+  });
   if (ran.error || !ran.stdout) return undefined;
   for (const item of ran.stdout.toString("utf8").split("\0")) {
     const eq = item.indexOf("=");
@@ -673,7 +741,11 @@ function adopt(files: StateFiles, options: ShOptions) {
 function runInShell(built: Built, options: ShOptions): Promise<Sh> {
   stateDir ??= fs.mkdtempSync(path.join(os.tmpdir(), "adi-sh-"));
   const stem = path.join(stateDir, String(++stateCalls));
-  const files: StateFiles = { cwd: `${stem}.cwd`, before: `${stem}.before`, after: `${stem}.after` };
+  const files: StateFiles = {
+    cwd: `${stem}.cwd`,
+    before: `${stem}.before`,
+    after: `${stem}.after`,
+  };
   // Recorded by an `EXIT` trap, so that it still happens when the command itself exits, and
   // the command's own status is what the shell then ends with.
   const script =
@@ -686,7 +758,9 @@ function runInShell(built: Built, options: ShOptions): Promise<Sh> {
     // than none: nothing is taken from it.
     if (!killed) adopt(files, options);
     for (const file of Object.values(files)) {
-      try { fs.unlinkSync(file); } catch {}
+      try {
+        fs.unlinkSync(file);
+      } catch {}
     }
   };
   return sh(script, options, built.label).then(
@@ -723,39 +797,82 @@ class ShCall implements PromiseLike<Sh> {
     const { built } = this;
     // A template that is no command fails where its result is awaited, like a command that
     // fails — not on the line that wrote it, where a `.catch()` further along would never see it.
-    this.started ??= built instanceof Error
-      ? Promise.reject(built)
-      : runInShell(built, this.options).then((result) => (this.silent ? result.quieted() : result));
+    this.started ??=
+      built instanceof Error
+        ? Promise.reject(built)
+        : runInShell(built, this.options).then((result) =>
+            this.silent ? result.quieted() : result,
+          );
     return this.started;
   }
 
   private adjust(change: () => void): this {
-    if (this.started) throw new Error("this command is already running — adjust it on the line that starts it: await $`…`.nothrow()");
+    if (this.started)
+      throw new Error(
+        "this command is already running — adjust it on the line that starts it: await $`…`.nothrow()",
+      );
     change();
     return this;
   }
 
   /** Resolve with the result whatever the exit status, instead of rejecting on a non-zero one. */
-  nothrow(): this { return this.adjust(() => { this.options.check = false; }); }
+  nothrow(): this {
+    return this.adjust(() => {
+      this.options.check = false;
+    });
+  }
   /** Show nothing of the output when the call stands on a line of its own. */
-  quiet(): this { return this.adjust(() => { this.silent = true; }); }
+  quiet(): this {
+    return this.adjust(() => {
+      this.silent = true;
+    });
+  }
   /** Copy the output through as it is produced. */
-  echo(): this { return this.adjust(() => { this.options.echo = true; }); }
+  echo(): this {
+    return this.adjust(() => {
+      this.options.echo = true;
+    });
+  }
   /** Kill the command after this many milliseconds. */
-  timeout(ms: number): this { return this.adjust(() => { this.options.timeout = ms; }); }
+  timeout(ms: number): this {
+    return this.adjust(() => {
+      this.options.timeout = ms;
+    });
+  }
   /** Run it in `dir` instead of where the conversation stands — and leave the conversation there. */
-  cwd(dir: string): this { return this.adjust(() => { this.options.cwd = dir; }); }
+  cwd(dir: string): this {
+    return this.adjust(() => {
+      this.options.cwd = dir;
+    });
+  }
   /** Run it with exactly this environment. What it exports is then not kept. */
-  env(vars: Record<string, string | undefined>): this { return this.adjust(() => { this.options.env = vars; }); }
+  env(vars: Record<string, string | undefined>): this {
+    return this.adjust(() => {
+      this.options.env = vars;
+    });
+  }
   /** Give it this on its standard input. */
-  input(data: string | Uint8Array): this { return this.adjust(() => { this.options.input = data; }); }
+  input(data: string | Uint8Array): this {
+    return this.adjust(() => {
+      this.options.input = data;
+    });
+  }
 
   /** stdout with the trailing newline dropped. */
-  text(): Promise<string> { return this.start().then((result) => result.text); }
-  lines(): Promise<string[]> { return this.start().then((result) => result.lines); }
-  json(): Promise<unknown> { return this.start().then((result) => result.json()); }
+  text(): Promise<string> {
+    return this.start().then((result) => result.text);
+  }
+  lines(): Promise<string[]> {
+    return this.start().then((result) => result.lines);
+  }
+  json(): Promise<unknown> {
+    return this.start().then((result) => result.json());
+  }
 
-  then<A = Sh, B = never>(done?: ((result: Sh) => A | PromiseLike<A>) | null, failed?: ((reason: unknown) => B | PromiseLike<B>) | null): Promise<A | B> {
+  then<A = Sh, B = never>(
+    done?: ((result: Sh) => A | PromiseLike<A>) | null,
+    failed?: ((reason: unknown) => B | PromiseLike<B>) | null,
+  ): Promise<A | B> {
     return this.start().then(done, failed);
   }
   catch<B = never>(failed?: ((reason: unknown) => B | PromiseLike<B>) | null): Promise<Sh | B> {
@@ -778,7 +895,9 @@ class ShCall implements PromiseLike<Sh> {
  */
 function dollar(pieces: TemplateStringsArray, ...values: unknown[]): ShCall {
   if (!Array.isArray(pieces) || !Array.isArray(pieces.raw)) {
-    throw new TypeError("$ is a template tag — write $`command`, with backticks. For a command held in a string there is sh(command).");
+    throw new TypeError(
+      "$ is a template tag — write $`command`, with backticks. For a command held in a string there is sh(command).",
+    );
   }
   try {
     // The raw text, so that what is typed between the backticks is what the shell reads: a
@@ -802,9 +921,14 @@ dollar.raw = (text: unknown): RawText => new RawText(String(text));
 dollar.background = async (pieces: TemplateStringsArray, ...values: unknown[]): Promise<string> => {
   const built = build(pieces.raw, values);
   if (!door?.names.includes("Bash")) {
-    throw new Error("$.background starts a job through the Bash tool, which code can call only in a cell of a code-only agent. Here, start it with the Bash tool's own `background`.");
+    throw new Error(
+      "$.background starts a job through the Bash tool, which code can call only in a cell of a code-only agent. Here, start it with the Bash tool's own `background`.",
+    );
   }
-  return (toolFunction("Bash") as (input: unknown) => Promise<string>)({ command: built.script, background: true });
+  return (toolFunction("Bash") as (input: unknown) => Promise<string>)({
+    command: built.script,
+    background: true,
+  });
 };
 
 /**
@@ -836,10 +960,14 @@ function share(name: string, value: unknown): void {
   try {
     text = JSON.stringify(value);
   } catch (error) {
-    throw new TypeError(`share(${JSON.stringify(name)}): only what JSON can hold can be shared (${(error as Error).message}). Convert it first, or write it to a file.`);
+    throw new TypeError(
+      `share(${JSON.stringify(name)}): only what JSON can hold can be shared (${(error as Error).message}). Convert it first, or write it to a file.`,
+    );
   }
   if (text === undefined) {
-    throw new TypeError(`share(${JSON.stringify(name)}): only what JSON can hold can be shared, and ${typeof value === "function" ? "a function" : String(value)} is not. Convert it first, or write it to a file.`);
+    throw new TypeError(
+      `share(${JSON.stringify(name)}): only what JSON can hold can be shared, and ${typeof value === "function" ? "a function" : String(value)} is not. Convert it first, or write it to a file.`,
+    );
   }
   replaceFile(file, text);
 }
@@ -851,7 +979,9 @@ function shared(name?: string): unknown {
     const dir = path.dirname(sharedPrefix);
     const stem = path.basename(sharedPrefix);
     let entries: string[] = [];
-    try { entries = fs.readdirSync(dir); } catch {}
+    try {
+      entries = fs.readdirSync(dir);
+    } catch {}
     return entries
       .filter((entry) => entry.startsWith(stem) && entry.endsWith(".json"))
       .map((entry) => entry.slice(stem.length, -".json".length))
@@ -864,7 +994,9 @@ function shared(name?: string): unknown {
     text = fs.readFileSync(file, "utf8");
   } catch {
     const names = shared() as string[];
-    throw new ReferenceError(`nothing is shared as ${JSON.stringify(name)}. What is: ${names.join(", ") || "nothing yet"}`);
+    throw new ReferenceError(
+      `nothing is shared as ${JSON.stringify(name)}. What is: ${names.join(", ") || "nothing yet"}`,
+    );
   }
   return JSON.parse(text);
 }
@@ -881,7 +1013,10 @@ function shared(name?: string): unknown {
 
 /** A tool called from code failed, or could not be reached. The message is what the tool said. */
 class ToolError extends Error {
-  constructor(message: string, readonly tool: string) {
+  constructor(
+    message: string,
+    readonly tool: string,
+  ) {
     super(message);
     this.name = "ToolError";
   }
@@ -914,7 +1049,10 @@ const toolTexts = new Set<string>();
 /** Send one call through the door and resolve to its answer. */
 function ask(tool: string, message: Record<string, unknown>): Promise<Answer> {
   // Taken now, for the reason `sh` takes it: the error is made in an event handler.
-  const calledFrom = String(new Error().stack ?? "").split("\n").filter((line) => /^\s+at /.test(line)).slice(2);
+  const calledFrom = String(new Error().stack ?? "")
+    .split("\n")
+    .filter((line) => /^\s+at /.test(line))
+    .slice(2);
   return new Promise<Answer>((resolve, reject0) => {
     const reject = (text: string) => {
       const error = new ToolError(text, tool);
@@ -922,7 +1060,9 @@ function ask(tool: string, message: Record<string, unknown>): Promise<Answer> {
       reject0(error);
     };
     if (!door) {
-      reject(`${tool} can only be called while a cell of yours is running: not from a background script, and not from a callback that outlived its cell`);
+      reject(
+        `${tool} can only be called while a cell of yours is running: not from a background script, and not from a callback that outlived its cell`,
+      );
       return;
     }
     if (stopping) {
@@ -933,7 +1073,9 @@ function ask(tool: string, message: Record<string, unknown>): Promise<Answer> {
     try {
       payload = JSON.stringify(message);
     } catch (error) {
-      reject(`${tool}: its arguments are not something JSON can hold (${(error as Error).message})`);
+      reject(
+        `${tool}: its arguments are not something JSON can hold (${(error as Error).message})`,
+      );
       return;
     }
 
@@ -956,19 +1098,24 @@ function ask(tool: string, message: Record<string, unknown>): Promise<Answer> {
     };
     running.add(entry);
     // Listening from the start — a socket nobody is listening to does not keep what it is sent.
-    conn.on("data", (chunk) => { buffer += chunk.toString("utf8"); });
-    conn.on("error", (error) => finish(() => reject(`couldn't reach the platform for ${tool}: ${error.message}`)));
-    const answered = () => finish(() => {
-      let reply: { ok?: boolean; text?: string; value?: unknown };
-      try {
-        reply = JSON.parse(buffer);
-      } catch {
-        reject(`${tool} got no answer`);
-        return;
-      }
-      if (reply.ok) resolve(reply);
-      else reject(String(reply.text ?? `${tool} failed`));
+    conn.on("data", (chunk) => {
+      buffer += chunk.toString("utf8");
     });
+    conn.on("error", (error) =>
+      finish(() => reject(`couldn't reach the platform for ${tool}: ${error.message}`)),
+    );
+    const answered = () =>
+      finish(() => {
+        let reply: { ok?: boolean; text?: string; value?: unknown };
+        try {
+          reply = JSON.parse(buffer);
+        } catch {
+          reject(`${tool} got no answer`);
+          return;
+        }
+        if (reply.ok) resolve(reply);
+        else reject(String(reply.text ?? `${tool} failed`));
+      });
     conn.on("end", answered);
     conn.on("close", answered);
     conn.write(payload + "\n");
@@ -998,7 +1145,10 @@ function toolFunction(name: string): unknown {
   Object.defineProperty(call, "name", { value: name });
   // Asked what it is — `Edit.toString()`, the first thing tried by code that does not know —
   // it says how it is called rather than showing the wrapper above.
-  call.toString = () => door?.docs?.[name] ?? toolDocs[name] ?? `${name}({ … }) — one of your tools, as a function. tools() prints how each is called.`;
+  call.toString = () =>
+    door?.docs?.[name] ??
+    toolDocs[name] ??
+    `${name}({ … }) — one of your tools, as a function. tools() prints how each is called.`;
   made = call;
   toolFunctions.set(name, made);
   return made;
@@ -1011,19 +1161,36 @@ let toolDocs: Record<string, string> = {};
 function toolsList(): string {
   // In the order the agent's instructions list them, which is the order they were offered in —
   // not the alphabetical one a JSON object arrives in.
-  const names = [...(door?.names ?? []).filter((name) => name in toolDocs), ...Object.keys(toolDocs).filter((name) => !door?.names.includes(name))];
+  const names = [
+    ...(door?.names ?? []).filter((name) => name in toolDocs),
+    ...Object.keys(toolDocs).filter((name) => !door?.names.includes(name)),
+  ];
   const said = names.map((name) => toolDocs[name]);
   const servers = door?.servers ?? [];
   if (servers.length) {
-    said.push(`MCP servers: ${servers.map((id) => `mcp[${JSON.stringify(id)}]`).join(", ")} — \`await mcp[id].tools()\` lists what one offers, \`await mcp[id].call(name, { … })\` calls one.`);
+    said.push(
+      `MCP servers: ${servers.map((id) => `mcp[${JSON.stringify(id)}]`).join(", ")} — \`await mcp[id].tools()\` lists what one offers, \`await mcp[id].call(name, { … })\` calls one.`,
+    );
   }
-  const text = said.length ? said.join("\n\n") : "There are no tool functions here: they exist in a cell of a code-only agent.";
+  const text = said.length
+    ? said.join("\n\n")
+    : "There are no tool functions here: they exist in a cell of a code-only agent.";
   toolTexts.add(text);
   return text;
 }
 
 /** Names a server object is asked for by something other than a script calling a tool. */
-const NOT_A_TOOL = new Set(["then", "toJSON", "constructor", "prototype", "inspect", "valueOf", "toString", "name", "length"]);
+const NOT_A_TOOL = new Set([
+  "then",
+  "toJSON",
+  "constructor",
+  "prototype",
+  "inspect",
+  "valueOf",
+  "toString",
+  "name",
+  "length",
+]);
 
 const mcpServers = new Map<string, unknown>();
 
@@ -1035,7 +1202,8 @@ function mcpServer(id: string): unknown {
   let made = mcpServers.get(id);
   if (made) return made;
   const call = async (tool: unknown, input: unknown = {}) => {
-    if (typeof tool !== "string" || !tool) throw new TypeError(`mcp.${id}.call takes the tool's name first: call("name", { … })`);
+    if (typeof tool !== "string" || !tool)
+      throw new TypeError(`mcp.${id}.call takes the tool's name first: call("name", { … })`);
     if (input === null || typeof input !== "object" || Array.isArray(input)) {
       throw new TypeError(`mcp.${id}.${tool} takes one object of arguments`);
     }
@@ -1089,13 +1257,84 @@ type Tok = {
 };
 
 const PUNCT = [
-  ">>>=", "...", "===", "!==", "**=", "<<=", ">>=", ">>>", "&&=", "||=", "??=",
-  "=>", "==", "!=", "<=", ">=", "&&", "||", "??", "?.", "++", "--", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "**", "<<", ">>",
+  ">>>=",
+  "...",
+  "===",
+  "!==",
+  "**=",
+  "<<=",
+  ">>=",
+  ">>>",
+  "&&=",
+  "||=",
+  "??=",
+  "=>",
+  "==",
+  "!=",
+  "<=",
+  ">=",
+  "&&",
+  "||",
+  "??",
+  "?.",
+  "++",
+  "--",
+  "+=",
+  "-=",
+  "*=",
+  "/=",
+  "%=",
+  "&=",
+  "|=",
+  "^=",
+  "**",
+  "<<",
+  ">>",
 ];
-const ASSIGNS = new Set(["=", "+=", "-=", "*=", "/=", "%=", "**=", "<<=", ">>=", ">>>=", "&=", "|=", "^=", "&&=", "||=", "??=", "++", "--"]);
+const ASSIGNS = new Set([
+  "=",
+  "+=",
+  "-=",
+  "*=",
+  "/=",
+  "%=",
+  "**=",
+  "<<=",
+  ">>=",
+  ">>>=",
+  "&=",
+  "|=",
+  "^=",
+  "&&=",
+  "||=",
+  "??=",
+  "++",
+  "--",
+]);
 /** Words after which a `/` opens a regular expression rather than dividing. */
-const BEFORE_REGEX = new Set(["return", "typeof", "instanceof", "in", "of", "new", "delete", "void", "throw", "case", "do", "else", "yield", "await"]);
-const isIdStart = (c: string) => (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || c === "_" || c === "$" || c === "#" || c > "\x7f";
+const BEFORE_REGEX = new Set([
+  "return",
+  "typeof",
+  "instanceof",
+  "in",
+  "of",
+  "new",
+  "delete",
+  "void",
+  "throw",
+  "case",
+  "do",
+  "else",
+  "yield",
+  "await",
+]);
+const isIdStart = (c: string) =>
+  (c >= "a" && c <= "z") ||
+  (c >= "A" && c <= "Z") ||
+  c === "_" ||
+  c === "$" ||
+  c === "#" ||
+  c > "\x7f";
 const isIdPart = (c: string) => isIdStart(c) || (c >= "0" && c <= "9");
 const isDigit = (c: string) => c >= "0" && c <= "9";
 
@@ -1111,7 +1350,8 @@ function tokenize(src: string): Tok[] {
   let depth = 0;
   /** The depth inside each `${…}` now open, so the `}` that ends one is told from any other. */
   const holes: number[] = [];
-  const push = (t: Tok["t"], s: number, e: number, d = depth) => toks.push({ t, s, e, d, v: src.slice(s, e) });
+  const push = (t: Tok["t"], s: number, e: number, d = depth) =>
+    toks.push({ t, s, e, d, v: src.slice(s, e) });
 
   /** Read template text from `from` to the backtick that ends it or the `${` that interrupts it. */
   const template = (from: number, first: boolean): number => {
@@ -1156,7 +1396,15 @@ function tokenize(src: string): Tok[] {
       i = template(i + 1, false);
     } else if (isDigit(c) || (c === "." && isDigit(src[i + 1] ?? ""))) {
       let j = i + 1;
-      while (j < n && (isIdPart(src[j]) || src[j] === "." || ((src[j] === "+" || src[j] === "-") && /[eE]/.test(src[j - 1]) && !/^0[xXbBoO]/.test(src.slice(i, i + 2))))) j += 1;
+      while (
+        j < n &&
+        (isIdPart(src[j]) ||
+          src[j] === "." ||
+          ((src[j] === "+" || src[j] === "-") &&
+            /[eE]/.test(src[j - 1]) &&
+            !/^0[xXbBoO]/.test(src.slice(i, i + 2))))
+      )
+        j += 1;
       push("num", i, j);
       i = j;
     } else if (isIdStart(c)) {
@@ -1166,17 +1414,22 @@ function tokenize(src: string): Tok[] {
       i = j;
     } else if (c === "/") {
       const prev = toks[toks.length - 1];
-      const regex = !prev
-        || (prev.t === "punct" && ![")", "]", "}", "++", "--"].includes(prev.v))
-        || (prev.t === "id" && BEFORE_REGEX.has(prev.v));
+      const regex =
+        !prev ||
+        (prev.t === "punct" && ![")", "]", "}", "++", "--"].includes(prev.v)) ||
+        (prev.t === "id" && BEFORE_REGEX.has(prev.v));
       if (regex) {
         let j = i + 1;
         let inClass = false;
         while (j < n && src[j] !== "\n") {
           if (src[j] === "\\") j += 2;
-          else if (src[j] === "[") { inClass = true; j += 1; }
-          else if (src[j] === "]") { inClass = false; j += 1; }
-          else if (src[j] === "/" && !inClass) break;
+          else if (src[j] === "[") {
+            inClass = true;
+            j += 1;
+          } else if (src[j] === "]") {
+            inClass = false;
+            j += 1;
+          } else if (src[j] === "/" && !inClass) break;
           else j += 1;
         }
         j = Math.min(j + 1, n);
@@ -1207,7 +1460,20 @@ function tokenize(src: string): Tok[] {
 }
 
 /** Statements that are not expressions and declare nothing a later cell needs: left exactly as they are. */
-const CONTROL = new Set(["if", "for", "while", "do", "switch", "try", "throw", "return", "break", "continue", "debugger", "with"]);
+const CONTROL = new Set([
+  "if",
+  "for",
+  "while",
+  "do",
+  "switch",
+  "try",
+  "throw",
+  "return",
+  "break",
+  "continue",
+  "debugger",
+  "with",
+]);
 /** Words that continue the statement before them even at the start of a line. */
 const CONTINUES = new Set(["else", "catch", "finally"]);
 
@@ -1238,7 +1504,8 @@ function rewrite(js: string, echo: boolean): Rewritten {
   for (let k = 0; k < toks.length; k += 1) {
     const tok = toks[k];
     const before = toks[k - 1];
-    const afterSemicolon = before !== undefined && before.d === 0 && before.t === "punct" && before.v === ";";
+    const afterSemicolon =
+      before !== undefined && before.d === 0 && before.t === "punct" && before.v === ";";
     if (tok.d !== 0 || tok.t === "tplc" || !(startsLine(tok) || afterSemicolon)) continue;
     if (tok.t === "punct" && (tok.v === "}" || tok.v === ")" || tok.v === "]")) continue;
     if (tok.t === "id" && CONTINUES.has(tok.v)) continue;
@@ -1247,7 +1514,8 @@ function rewrite(js: string, echo: boolean): Rewritten {
     starts.push(k);
   }
 
-  const blank = (s: number, e: number) => edits.push({ s, e, text: js.slice(s, e).replace(/[^\n]/g, "") });
+  const blank = (s: number, e: number) =>
+    edits.push({ s, e, text: js.slice(s, e).replace(/[^\n]/g, "") });
 
   for (let at = 0; at < starts.length; at += 1) {
     let first = starts[at];
@@ -1264,7 +1532,7 @@ function rewrite(js: string, echo: boolean): Rewritten {
         blank(toks[first].s, stop);
         continue;
       }
-      const drop = next.v === "default" ? toks[first + 2]?.s ?? next.e : next.s;
+      const drop = next.v === "default" ? (toks[first + 2]?.s ?? next.e) : next.s;
       edits.push({ s: toks[first].s, e: drop, text: "" });
       first += next.v === "default" ? 2 : 1;
       if (first > last) continue;
@@ -1278,7 +1546,12 @@ function rewrite(js: string, echo: boolean): Rewritten {
       continue;
     }
 
-    if (head.t === "id" && (head.v === "const" || head.v === "let" || head.v === "var") && after && (after.t === "id" || after.v === "{" || after.v === "[")) {
+    if (
+      head.t === "id" &&
+      (head.v === "const" || head.v === "let" || head.v === "var") &&
+      after &&
+      (after.t === "id" || after.v === "{" || after.v === "[")
+    ) {
       if (!semi) continue;
       // Each declarator becomes an assignment of its own. Nothing here adds or removes a line.
       edits.push({ s: head.s, e: after.s, text: "" });
@@ -1288,10 +1561,22 @@ function rewrite(js: string, echo: boolean): Rewritten {
         let patternEnd = k;
         if (toks[k].v === "{" || toks[k].v === "[") {
           patternEnd = k + 1;
-          while (patternEnd < last && !(toks[patternEnd].d === 0 && toks[patternEnd].t === "punct" && (toks[patternEnd].v === "}" || toks[patternEnd].v === "]"))) patternEnd += 1;
+          while (
+            patternEnd < last &&
+            !(
+              toks[patternEnd].d === 0 &&
+              toks[patternEnd].t === "punct" &&
+              (toks[patternEnd].v === "}" || toks[patternEnd].v === "]")
+            )
+          )
+            patternEnd += 1;
         }
         let stopAt = patternEnd + 1;
-        while (stopAt < last && !(toks[stopAt].d === 0 && toks[stopAt].v === "," && toks[stopAt].t === "punct")) stopAt += 1;
+        while (
+          stopAt < last &&
+          !(toks[stopAt].d === 0 && toks[stopAt].v === "," && toks[stopAt].t === "punct")
+        )
+          stopAt += 1;
         const initialized = toks[patternEnd + 1]?.v === "=" && patternEnd + 1 < stopAt;
         const name = toks[begin].v;
         if (initialized) {
@@ -1299,7 +1584,11 @@ function rewrite(js: string, echo: boolean): Rewritten {
           edits.push({ s: toks[stopAt - 1].e, e: toks[stopAt - 1].e, text: ")" });
         } else if (head.v === "var") {
           // A bare `var x` keeps a value x already has, and makes it exist when it does not.
-          edits.push({ s: toks[begin].s, e: toks[begin].e, text: `(${JSON.stringify(name)} in globalThis) || (${name} = void 0)` });
+          edits.push({
+            s: toks[begin].s,
+            e: toks[begin].e,
+            text: `(${JSON.stringify(name)} in globalThis) || (${name} = void 0)`,
+          });
         } else {
           edits.push({ s: toks[begin].s, e: toks[begin].e, text: `${name} = void 0` });
         }
@@ -1309,7 +1598,8 @@ function rewrite(js: string, echo: boolean): Rewritten {
       continue;
     }
 
-    const fn = head.t === "id" && (head.v === "function" || (head.v === "async" && after?.v === "function"));
+    const fn =
+      head.t === "id" && (head.v === "function" || (head.v === "async" && after?.v === "function"));
     if (fn) {
       let k = first + (head.v === "async" ? 2 : 1);
       if (toks[k]?.v === "*") k += 1;
@@ -1359,13 +1649,16 @@ function rewrite(js: string, echo: boolean): Rewritten {
     const tok = toks[k];
     if (tok.t !== "id" || tok.v !== "import" || claimed.has(tok.s)) continue;
     if (toks[k + 1].v === "(") edits.push({ s: tok.s, e: tok.e, text: "__adi.import" });
-    else if (toks[k + 1].v === "." && toks[k + 2]?.v === "meta") edits.push({ s: tok.s, e: toks[k + 2].e, text: "__adi.meta" });
+    else if (toks[k + 1].v === "." && toks[k + 2]?.v === "meta")
+      edits.push({ s: tok.s, e: toks[k + 2].e, text: "__adi.meta" });
   }
 
   /** `js` from `from` to `to` with the edits inside that range made — all of them, or all but the one that covers it. */
   const apply = (from: number, to: number, whole = true): string => {
     const inside = edits
-      .filter((edit) => edit.s >= from && edit.e <= to && (whole || !(edit.s === from && edit.e === to)))
+      .filter(
+        (edit) => edit.s >= from && edit.e <= to && (whole || !(edit.s === from && edit.e === to)),
+      )
       .sort((a, b) => a.s - b.s || a.e - b.e);
     let text = "";
     let at = from;
@@ -1392,13 +1685,19 @@ function rewrite(js: string, echo: boolean): Rewritten {
 function importStatement(text: string): string {
   const bare = /^import\s*(["'`])(.+?)\1\s*(?:with\s*\{[^}]*\})?\s*;?$/.exec(text);
   if (bare) return `await __adi.import(${JSON.stringify(bare[2])});`;
-  const from = /^import\s+([\s\S]+?)\s+from\s*(["'`])(.+?)\2\s*(?:with\s*\{[^}]*\})?\s*;?$/.exec(text);
+  const from = /^import\s+([\s\S]+?)\s+from\s*(["'`])(.+?)\2\s*(?:with\s*\{[^}]*\})?\s*;?$/.exec(
+    text,
+  );
   if (!from) return text;
   const [, clause, , spec] = from;
   const source = `await __adi.import(${JSON.stringify(spec)})`;
   const named = /\{([\s\S]*)\}/.exec(clause);
   const star = /\*\s*as\s+([\w$]+)/.exec(clause);
-  const lead = clause.replace(/\{[\s\S]*\}/, "").replace(/\*\s*as\s+[\w$]+/, "").replace(/,/g, "").trim();
+  const lead = clause
+    .replace(/\{[\s\S]*\}/, "")
+    .replace(/\*\s*as\s+[\w$]+/, "")
+    .replace(/,/g, "")
+    .trim();
   const picks: string[] = [];
   if (lead) picks.push(`default: ${lead}`);
   for (const item of named ? named[1].split(",") : []) {
@@ -1429,7 +1728,12 @@ class Cells {
   // `deadCodeElimination` off, or a bare `x` on the last line — the commonest thing a cell ends
   // with — is thrown away as having no effect. `target: "node"`, or a cell that calls `require`
   // is given a line redefining it from `import.meta`, which a cell does not have.
-  private transpiler = new Bun.Transpiler({ loader: "ts", target: "node", deadCodeElimination: false, trimUnusedImports: false } as never);
+  private transpiler = new Bun.Transpiler({
+    loader: "ts",
+    target: "node",
+    deadCodeElimination: false,
+    trimUnusedImports: false,
+  } as never);
 
   constructor() {
     Object.assign(AsyncGlobals, { sh, ShError, Sh, share, shared, fs, path, os, $: dollar });
@@ -1485,12 +1789,24 @@ class Cells {
     return {
       require,
       main: true,
-      get env() { return process.env; },
-      get dir() { return process.cwd(); },
-      get dirname() { return process.cwd(); },
-      get path() { return path.join(process.cwd(), "cell.ts"); },
-      get filename() { return path.join(process.cwd(), "cell.ts"); },
-      get url() { return pathToFileURL(path.join(process.cwd(), "cell.ts")).href; },
+      get env() {
+        return process.env;
+      },
+      get dir() {
+        return process.cwd();
+      },
+      get dirname() {
+        return process.cwd();
+      },
+      get path() {
+        return path.join(process.cwd(), "cell.ts");
+      },
+      get filename() {
+        return path.join(process.cwd(), "cell.ts");
+      },
+      get url() {
+        return pathToFileURL(path.join(process.cwd(), "cell.ts")).href;
+      },
     };
   }
 
@@ -1507,7 +1823,10 @@ class Cells {
     }
     // A cell that names `__dirname` is handed one that describes the string it was transpiled
     // from. What it means is where the conversation stands.
-    js = js.replace('var __dirname = "", __filename = "input.ts";', 'var __dirname = process.cwd(), __filename = process.cwd() + "/cell.ts";');
+    js = js.replace(
+      'var __dirname = "", __filename = "input.ts";',
+      'var __dirname = process.cwd(), __filename = process.cwd() + "/cell.ts";',
+    );
 
     // Compiled before anything runs, least ambitious last: a rewriting that is wrong about a
     // cell must cost that cell its echo, or at worst its persistence — never its validity.
@@ -1515,7 +1834,8 @@ class Cells {
     let failure: unknown;
     let plain = false;
     for (const attempt of ["echo", "keep", "plain"] as const) {
-      const { body, lines } = attempt === "plain" ? { body: js, lines: js.split("\n") } : rewrite(js, attempt === "echo");
+      const { body, lines } =
+        attempt === "plain" ? { body: js, lines: js.split("\n") } : rewrite(js, attempt === "echo");
       // For whoever is working on the rewriting itself: what a cell became, on its way to running.
       if (process.env.ADI_TSCODE_DEBUG) console.error(`[${name} ${attempt}]\n${body}\n[/${name}]`);
       try {
@@ -1547,7 +1867,9 @@ class Cells {
       return "error";
     } finally {
       if (plain) {
-        console.error("(this cell ran as written: what it declared at the top level is not kept for later calls. Assign to `globalThis.name` to keep a value.)");
+        console.error(
+          "(this cell ran as written: what it declared at the top level is not kept for later calls. Assign to `globalThis.name` to keep a value.)",
+        );
       }
     }
     return "ok";
@@ -1555,14 +1877,21 @@ class Cells {
 
   /** An error as the model should read it: what was thrown, and the lines of its own cells on the way. */
   describe(error: unknown, depth = 0): string {
-    if (!(error instanceof Error)) return `Uncaught ${Bun.inspect(error, { depth: 3, colors: false })}`;
+    if (!(error instanceof Error))
+      return `Uncaught ${Bun.inspect(error, { depth: 3, colors: false })}`;
     const out = [`${error.name}: ${error.message}`];
-    const frames = String(error.stack ?? "").split("\n").filter((line) => /^\s+at /.test(line));
+    const frames = String(error.stack ?? "")
+      .split("\n")
+      .filter((line) => /^\s+at /.test(line));
     let shown = 0;
     for (const frame of frames) {
       if (shown >= 12) break;
       // This file's own frames and the runtime's internals say nothing about the cell.
-      if (frame.includes(HERE) || /\((?:node|bun|native):|\(native\)| native:\d|at (?:node|bun):/.test(frame)) continue;
+      if (
+        frame.includes(HERE) ||
+        /\((?:node|bun|native):|\(native\)| native:\d|at (?:node|bun):/.test(frame)
+      )
+        continue;
       const cell = /^\s+at (?:(.+?) \()?(cell-\d+):(\d+):\d+\)?$/.exec(frame);
       if (cell) {
         const [, where, name, line] = cell;
@@ -1578,9 +1907,11 @@ class Cells {
       shown += 1;
     }
     if (error instanceof AggregateError) {
-      for (const inner of error.errors.slice(0, 5)) out.push("  - " + this.describe(inner, depth + 1).replace(/\n/g, "\n    "));
+      for (const inner of error.errors.slice(0, 5))
+        out.push("  - " + this.describe(inner, depth + 1).replace(/\n/g, "\n    "));
     }
-    if (error.cause !== undefined && depth < 3) out.push("Caused by: " + this.describe(error.cause, depth + 1));
+    if (error.cause !== undefined && depth < 3)
+      out.push("Caused by: " + this.describe(error.cause, depth + 1));
     return out.join("\n");
   }
 }
@@ -1620,7 +1951,11 @@ class Shared {
   private text: string | undefined;
   private carried: Record<string, string> = {};
 
-  constructor(private cwdFile: string, private envFile: string, private home: string) {}
+  constructor(
+    private cwdFile: string,
+    private envFile: string,
+    private home: string,
+  ) {}
 
   /**
    * What the conversation has exported. The file is `sh`'s own `export -p` output whenever Bash
@@ -1669,12 +2004,14 @@ class Shared {
     let text = "";
     for (const key of Object.keys(process.env).sort()) {
       const value = process.env[key];
-      if (value === undefined || UNCARRIED.has(key) || !isName(key) || base[key] === value) continue;
+      if (value === undefined || UNCARRIED.has(key) || !isName(key) || base[key] === value)
+        continue;
       carried[key] = value;
       text += `export ${key}=${quote(value)}\n`;
     }
-    const same = Object.keys(carried).length === Object.keys(this.carried).length
-      && Object.keys(carried).every((key) => this.carried[key] === carried[key]);
+    const same =
+      Object.keys(carried).length === Object.keys(this.carried).length &&
+      Object.keys(carried).every((key) => this.carried[key] === carried[key]);
     // Nothing exported, changed or removed, so the file already says this — possibly in Bash's
     // own spelling. Rewriting it in ours would only cost the next reader a parse.
     if (same && this.text !== undefined) return;
@@ -1710,7 +2047,14 @@ function printed(file: string, from: number, length: number, limit: number): str
   }
 }
 
-type Request = { op?: string; code?: string; timeout_ms?: number; max_output?: number; env?: Record<string, string>; tools?: Door };
+type Request = {
+  op?: string;
+  code?: string;
+  timeout_ms?: number;
+  max_output?: number;
+  env?: Record<string, string>;
+  tools?: Door;
+};
 
 /** One connection: a caller, the request it sent, and whether it is still there to be answered. */
 type Call = {
@@ -1771,7 +2115,12 @@ class Kernel {
     const server = net.createServer({ allowHalfOpen: true }, (conn) => this.accept(conn));
     server.listen(this.socket, () => {
       fs.chmodSync(this.socket, 0o600);
-      this.announce({ pid: process.pid, socket: this.socket, protocol: Number(this.args.protocol ?? 0), runtime: `bun ${Bun.version}` });
+      this.announce({
+        pid: process.pid,
+        socket: this.socket,
+        protocol: Number(this.args.protocol ?? 0),
+        runtime: `bun ${Bun.version}`,
+      });
     });
     const idle = Number(this.args.idle) * 1000;
     setInterval(() => {
@@ -1796,12 +2145,20 @@ class Kernel {
   private leave(why: string | undefined): never {
     if (why !== undefined && this.mine()) {
       // A tombstone, so the next call can say the interpreter it finds is a new one.
-      try { this.announce({ ended: why }); } catch {}
+      try {
+        this.announce({ ended: why });
+      } catch {}
     }
-    try { fs.unlinkSync(this.socket); } catch {}
-    try { fs.rmdirSync(this.dir); } catch {}
+    try {
+      fs.unlinkSync(this.socket);
+    } catch {}
+    try {
+      fs.rmdirSync(this.dir);
+    } catch {}
     if (stateDir) {
-      try { fs.rmSync(stateDir, { recursive: true, force: true }); } catch {}
+      try {
+        fs.rmSync(stateDir, { recursive: true, force: true });
+      } catch {}
     }
     this.exit(0);
   }
@@ -1898,7 +2255,10 @@ class Kernel {
     });
 
     // A code-only agent's cell is told where its tools are answered. For as long as it runs.
-    offer(request.tools, { before: () => this.shared.save(base), after: () => this.shared.load(base) });
+    offer(request.tools, {
+      before: () => this.shared.save(base),
+      after: () => this.shared.load(base),
+    });
     const outcome = await Promise.race([this.cells.run(request.code ?? ""), stuck]);
     offer(undefined);
     // Cleared with the cell: a deadline left armed would fire into whichever cell came next.
@@ -1912,7 +2272,8 @@ class Kernel {
       output = `[printed since your last call]\n${printed(capture, 0, before, Math.floor(limit / 4)).replace(/\n*$/, "\n")}[this call]\n${output}`;
     }
     const reply = {
-      status: outcome === "stuck" ? "stuck" : stoppedBy && outcome === "error" ? "interrupted" : outcome,
+      status:
+        outcome === "stuck" ? "stuck" : stoppedBy && outcome === "error" ? "interrupted" : outcome,
       stopped_by: stoppedBy ?? null,
       output,
       elapsed_ms: Date.now() - began,
@@ -1931,7 +2292,9 @@ class Kernel {
     }
 
     this.shared.save(base);
-    try { fs.truncateSync(capture, 0); } catch {}
+    try {
+      fs.truncateSync(capture, 0);
+    } catch {}
     if (!call.gone) conn.end(JSON.stringify(reply) + "\n");
   }
 }
@@ -1963,6 +2326,8 @@ if (mode === "kernel") {
   });
   if ((await cells.run(fs.readFileSync(rest[0], "utf8"))) !== "ok") process.exitCode = 1;
 } else {
-  console.error("usage: tscode.ts kernel --state F --capture F --shell-cwd F --shell-env F --shared PREFIX --home DIR --idle S --protocol N\n       tscode.ts run SCRIPT [--shared PREFIX]");
+  console.error(
+    "usage: tscode.ts kernel --state F --capture F --shell-cwd F --shell-env F --shared PREFIX --home DIR --idle S --protocol N\n       tscode.ts run SCRIPT [--shared PREFIX]",
+  );
   process.exitCode = 2;
 }

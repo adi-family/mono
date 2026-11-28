@@ -17,10 +17,11 @@ type ThemeToggleProps = Omit<
   | "aria-label"
   | "aria-labelledby"
   | "aria-pressed"
-> & ButtonDisabledProps & {
-  theme: Theme;
-  onThemeChange: (theme: Theme) => void;
-};
+> &
+  ButtonDisabledProps & {
+    theme: Theme;
+    onThemeChange: (theme: Theme) => void;
+  };
 
 function ThemeToggle({
   theme,

@@ -1,0 +1,23 @@
+# Dependencies & build outputs
+node_modules/
+dist/
+dist-primary/
+build/
+target/
+target.noindex/
+apps/*/build/
+apps/*/.build/
+apps/*/.build-device/
+
+# Generated code
+.astro/
+crates/adi-mesh-client/harness/pkg/
+**/*.gen.ts
+
+# Local state & vendored code
+.adi/
+.adi-dev/
+.wrangler/
+output/
+tmp/
+vendor/

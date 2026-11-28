@@ -85,7 +85,10 @@ pub use events::{
     AgentRunReported, AgentRunStarted, AgentRunStopped, AgentRunWaitingOnUnlock, AgentSaved,
     AgentSpawnRefused, RUN_REPORTED, event_catalog, event_types,
 };
-pub use lease::{CAP_ENV as LEASE_CAP_ENV, CAP_URL_ENV as LEASE_CAP_URL_ENV, LeaseCapability, LeaseRef, LeaseValues};
+pub use lease::{
+    CAP_ENV as LEASE_CAP_ENV, CAP_URL_ENV as LEASE_CAP_URL_ENV, LeaseCapability, LeaseRef,
+    LeaseValues,
+};
 pub use limits::{DEFAULT_MAX_CONCURRENT_RUNS, RunLimits, RunLoad, SpawnPolicy};
 pub use llm::{
     AgentBackendEntry, Classification, Hold, HoldKey, HoldScope, Holds, LimitClass, LimitRule,
@@ -1505,12 +1508,15 @@ impl Agents {
             workspace::resolve(&self.config, &agent.manifest, working_dir),
             lease.as_ref(),
         );
-        spec.credential = chain.as_ref().and_then(llm::PinnedChain::current).map(|row| {
-            let qualifier = row
-                .credential_env_name()
-                .and_then(|name| self.credential_qualifier(name, lease.as_ref(), &agent.manifest.secrets));
-            llm::chain::qualify_credential(&row.credential, qualifier.as_deref())
-        });
+        spec.credential = chain
+            .as_ref()
+            .and_then(llm::PinnedChain::current)
+            .map(|row| {
+                let qualifier = row.credential_env_name().and_then(|name| {
+                    self.credential_qualifier(name, lease.as_ref(), &agent.manifest.secrets)
+                });
+                llm::chain::qualify_credential(&row.credential, qualifier.as_deref())
+            });
         if let Some(row) = chain.as_ref().and_then(llm::PinnedChain::current)
             && matches!(row.runtime, Backend::ProcessCodex | Backend::PtyCodex)
         {
@@ -1521,9 +1527,14 @@ impl Agents {
         // the body's own answer is to create the session and queue the opening message rather
         // than refuse it outright (§10, §15 Q2) — so that case is read again, once the session
         // exists, just below.
-        if let Some(lease::Readiness::Fail { names, .. }) =
-            lease.as_ref().map(|l| lease::readiness(Some(l), &self.config, &agent.manifest.secrets, self.lease_values()))
-        {
+        if let Some(lease::Readiness::Fail { names, .. }) = lease.as_ref().map(|l| {
+            lease::readiness(
+                Some(l),
+                &self.config,
+                &agent.manifest.secrets,
+                self.lease_values(),
+            )
+        }) {
             return Err(Error::Unsupported(format!(
                 "{} isn't unlocked on this server",
                 names.join(", ")
@@ -1599,14 +1610,27 @@ impl Agents {
         // `pid` for display only — none of them dereferences it to find a process. Never for a
         // terminal: a pty has no queue to park a message in.
         if runner.as_terminal().is_none()
-            && let Some(lease::Readiness::Wait { user, names }) =
-                lease.as_ref().map(|l| lease::readiness(Some(l), &self.config, &agent.manifest.secrets, self.lease_values()))
+            && let Some(lease::Readiness::Wait { user, names }) = lease.as_ref().map(|l| {
+                lease::readiness(
+                    Some(l),
+                    &self.config,
+                    &agent.manifest.secrets,
+                    self.lease_values(),
+                )
+            })
         {
             // This run is never going to call `send` at all — it is parked on the queue instead,
             // and already protected from `note_finished` by that (`Pending::blocks`). Clear the
             // mark rather than leave it to time out at the grace and be misread as a lost launch.
             store.clear_launching(&agent.name, &record.id)?;
-            store.enqueue(&agent.name, &record.id, message, images, markers, QueueMode::Regular)?;
+            store.enqueue(
+                &agent.name,
+                &record.id,
+                message,
+                images,
+                markers,
+                QueueMode::Regular,
+            )?;
             self.note_waiting_on_unlock(&store, &agent.name, &record.id, &user, &names);
             return Ok(Launch::Process {
                 command: agent.manifest.runtime().to_string(),
@@ -2099,7 +2123,12 @@ impl Agents {
         // No sessions.db write left to bundle this with — `start_turn` already made its own and
         // returned — so this is `f: || Ok(())`, same durability `with_event` gives every event
         // (ADI-MONO-149), just with nothing else to make atomic with it.
-        self.with_event(|| Ok(((), Some(AgentRunStarted::of(name, &said_in(&next), &launch)))))?;
+        self.with_event(|| {
+            Ok((
+                (),
+                Some(AgentRunStarted::of(name, &said_in(&next), &launch)),
+            ))
+        })?;
         Ok(Sent::Started(launch))
     }
 
@@ -2381,9 +2410,9 @@ impl Agents {
         let live = live_content(&self.config, runner.as_ref(), &session, false);
         settle(&store, name, conv_id, &live);
 
-        let target = store
-            .turn(name, conv_id, seq)
-            .ok_or_else(|| Error::NotFound(format!("{name}: conversation {conv_id} has no turn {seq}")))?;
+        let target = store.turn(name, conv_id, seq).ok_or_else(|| {
+            Error::NotFound(format!("{name}: conversation {conv_id} has no turn {seq}"))
+        })?;
         if target.role != store::ROLE_USER {
             return Err(Error::Unsupported(
                 "only a message you sent can be edited".into(),
@@ -2477,17 +2506,27 @@ impl Agents {
                 return false;
             }
             lease::Readiness::Fail { names, .. } => {
-                let messages = store.dequeue_batch(&agent.name, conv_id).unwrap_or_default();
+                let messages = store
+                    .dequeue_batch(&agent.name, conv_id)
+                    .unwrap_or_default();
                 if messages.is_empty() {
                     return false;
                 }
-                let _ = self.fail_turn_for_missing_lease(&store, &agent.name, conv_id, &messages, &names);
+                let _ = self.fail_turn_for_missing_lease(
+                    &store,
+                    &agent.name,
+                    conv_id,
+                    &messages,
+                    &names,
+                );
                 return true;
             }
         }
         // Dropped from the queue *before* the turn starts: a message that fails to launch has still
         // had its turn, and leaving it at the head would retry it on every poll for ever.
-        let messages = store.dequeue_batch(&agent.name, conv_id).unwrap_or_default();
+        let messages = store
+            .dequeue_batch(&agent.name, conv_id)
+            .unwrap_or_default();
         if messages.is_empty() {
             return false;
         }
@@ -2497,7 +2536,11 @@ impl Agents {
         let _ = self.with_event(|| {
             Ok((
                 (),
-                Some(AgentRunStarted::of(&agent.name, &said_in(&messages), &launch)),
+                Some(AgentRunStarted::of(
+                    &agent.name,
+                    &said_in(&messages),
+                    &launch,
+                )),
             ))
         });
         true
@@ -2544,12 +2587,16 @@ impl Agents {
             session_dir(&self.config, record),
             record.lease.as_ref(),
         );
-        spec.credential = record.chain.as_ref().and_then(llm::PinnedChain::current).map(|row| {
-            let qualifier = row.credential_env_name().and_then(|name| {
-                self.credential_qualifier(name, record.lease.as_ref(), &agent.manifest.secrets)
+        spec.credential = record
+            .chain
+            .as_ref()
+            .and_then(llm::PinnedChain::current)
+            .map(|row| {
+                let qualifier = row.credential_env_name().and_then(|name| {
+                    self.credential_qualifier(name, record.lease.as_ref(), &agent.manifest.secrets)
+                });
+                llm::chain::qualify_credential(&row.credential, qualifier.as_deref())
             });
-            llm::chain::qualify_credential(&row.credential, qualifier.as_deref())
-        });
         if let Some(row) = record.chain.as_ref().and_then(llm::PinnedChain::current)
             && matches!(row.runtime, Backend::ProcessCodex | Backend::PtyCodex)
         {
@@ -2919,7 +2966,8 @@ impl Agents {
             return;
         };
         spec.env.push((lease::CAP_ENV.to_string(), capability));
-        spec.env.push((lease::CAP_URL_ENV.to_string(), url.to_string()));
+        spec.env
+            .push((lease::CAP_URL_ENV.to_string(), url.to_string()));
     }
 
     /// What a presented `X-Adi-Lease` capability resolves to: the session that minted it, and the
@@ -2934,7 +2982,11 @@ impl Agents {
         let store = self.sessions();
         let (agent, id) = store.find_by_lease_cap(&hash)?;
         let lease = store.get(&agent, &id)?.lease?;
-        Some(LeaseCapability { agent, run_id: id, user: lease.user })
+        Some(LeaseCapability {
+            agent,
+            run_id: id,
+            user: lease.user,
+        })
     }
 
     /// `name`'s own attached-secret names, or nothing for an agent that no longer exists —
@@ -3015,7 +3067,8 @@ impl Agents {
             Some(knowledge::block(&knowledge)).filter(|note| !note.trim().is_empty());
         let spawn_note =
             Some(spawn::block(&agent.manifest.can_spawn)).filter(|note| !note.trim().is_empty());
-        let mcp_servers = mcp_servers::resolve(&self.config, &agent.manifest.mcp, &agent.manifest.secrets);
+        let mcp_servers =
+            mcp_servers::resolve(&self.config, &agent.manifest.mcp, &agent.manifest.secrets);
         RunSpec {
             credential: None,
             cwd,
@@ -3240,7 +3293,9 @@ impl Agents {
         outcome: &store::RunOutcome,
     ) -> bool {
         self.with_event(|| {
-            let recorded = store.record_outcome(agent, run_id, outcome).unwrap_or(false);
+            let recorded = store
+                .record_outcome(agent, run_id, outcome)
+                .unwrap_or(false);
             let event = recorded.then(|| AgentRunFinished {
                 agent: agent.to_string(),
                 run_id: run_id.to_string(),
@@ -3346,9 +3401,9 @@ impl Agents {
         // Whose value this row's credential ran on for *this* turn
         // (P1.9) — `None` on every server until phase 2, and `None` outright for a settings-file
         // backend, which has no env var to ask about.
-        let qualifier = current
-            .credential_env_name()
-            .and_then(|name| self.credential_qualifier(name, record.lease.as_ref(), &agent.manifest.secrets));
+        let qualifier = current.credential_env_name().and_then(|name| {
+            self.credential_qualifier(name, record.lease.as_ref(), &agent.manifest.secrets)
+        });
 
         // The provider's own words: the answer text is where the adi loop's `⚠ adi loop error:` line
         // lands, and the terminal reason is what the Claude engines say instead.
@@ -4362,7 +4417,12 @@ fn launch_lost_outcome(started_at: u64) -> store::RunOutcome {
 ///
 /// `running` only keys the memo — a runner reads a live log differently from a finished one, and
 /// the two answers must not be served for each other.
-fn live_content(config: &adi_config::Config, runner: &dyn Runner, session: &SessionRef<'_>, running: bool) -> TurnContent {
+fn live_content(
+    config: &adi_config::Config,
+    runner: &dyn Runner,
+    session: &SessionRef<'_>,
+    running: bool,
+) -> TurnContent {
     let content = memo::folded_events(session.log_path(), !running, || {
         diagnostics::capture(config, session);
         let Ok(batch) = runner.events(session, None) else {
@@ -6280,7 +6340,9 @@ mod tests {
         let chain = chain_for(&store.config, &agent, None, None)
             .expect("resolve")
             .expect("a chain");
-        sessions.pin_chain("solver", &record.id, &chain).expect("pin");
+        sessions
+            .pin_chain("solver", &record.id, &chain)
+            .expect("pin");
         sessions
             .set_lease(
                 "solver",
@@ -6295,7 +6357,13 @@ mod tests {
             .append_turn("solver", &record.id, store::user_turn("go"))
             .expect("the question");
 
-        store.fail_over(&agent, &sessions, &record.id, &spent(), &store::RunOutcome::default());
+        store.fail_over(
+            &agent,
+            &sessions,
+            &record.id,
+            &spent(),
+            &store::RunOutcome::default(),
+        );
 
         let holds = llm::Holds::with_config(&store.config);
         let unqualified = holds
@@ -6342,12 +6410,20 @@ mod tests {
         let chain = chain_for(&store.config, &agent, None, None)
             .expect("resolve")
             .expect("a chain");
-        sessions.pin_chain("solver", &record.id, &chain).expect("pin");
+        sessions
+            .pin_chain("solver", &record.id, &chain)
+            .expect("pin");
         sessions
             .append_turn("solver", &record.id, store::user_turn("go"))
             .expect("the question");
 
-        store.fail_over(&agent, &sessions, &record.id, &spent(), &store::RunOutcome::default());
+        store.fail_over(
+            &agent,
+            &sessions,
+            &record.id,
+            &spent(),
+            &store::RunOutcome::default(),
+        );
 
         let holds = llm::Holds::with_config(&store.config);
         assert!(
@@ -6411,9 +6487,14 @@ mod tests {
         // one — see that gate's own tests for a bare `scratch` (no source) never starting a leased
         // turn at all, whatever `missing` says.
         let store = scratch("advance-queue-wait")
-            .with_lease_values(std::sync::Arc::new(FakeLease::default()) as std::sync::Arc<dyn LeaseValues>);
+            .with_lease_values(
+                std::sync::Arc::new(FakeLease::default()) as std::sync::Arc<dyn LeaseValues>
+            );
         let mut manifest = spec("harness:adi");
-        manifest.secrets = vec![SecretAttachment { project: None, name: "K".into() }];
+        manifest.secrets = vec![SecretAttachment {
+            project: None,
+            name: "K".into(),
+        }];
         store.save("watcher", manifest).expect("save");
         adi_secrets::UserSecretsPolicy {
             enabled: true,
@@ -6431,7 +6512,14 @@ mod tests {
             .expect("create")
             .id;
         sessions
-            .set_lease("watcher", &conv, &LeaseRef { user: "u-aaa".into(), names: vec!["K".into()] })
+            .set_lease(
+                "watcher",
+                &conv,
+                &LeaseRef {
+                    user: "u-aaa".into(),
+                    names: vec!["K".into()],
+                },
+            )
             .expect("set lease");
         sessions
             .enqueue("watcher", &conv, "do it", &[], &[], QueueMode::Regular)
@@ -6474,9 +6562,14 @@ mod tests {
     fn advance_queue_under_fail_dequeues_and_writes_the_refusal() {
         // See the `wait` test just above for why this installs an empty source rather than none.
         let store = scratch("advance-queue-fail")
-            .with_lease_values(std::sync::Arc::new(FakeLease::default()) as std::sync::Arc<dyn LeaseValues>);
+            .with_lease_values(
+                std::sync::Arc::new(FakeLease::default()) as std::sync::Arc<dyn LeaseValues>
+            );
         let mut manifest = spec("harness:adi");
-        manifest.secrets = vec![SecretAttachment { project: None, name: "K".into() }];
+        manifest.secrets = vec![SecretAttachment {
+            project: None,
+            name: "K".into(),
+        }];
         store.save("watcher", manifest).expect("save");
         adi_secrets::UserSecretsPolicy {
             enabled: true,
@@ -6494,7 +6587,14 @@ mod tests {
             .expect("create")
             .id;
         sessions
-            .set_lease("watcher", &conv, &LeaseRef { user: "u-aaa".into(), names: vec!["K".into()] })
+            .set_lease(
+                "watcher",
+                &conv,
+                &LeaseRef {
+                    user: "u-aaa".into(),
+                    names: vec!["K".into()],
+                },
+            )
             .expect("set lease");
         sessions
             .enqueue("watcher", &conv, "do it", &[], &[], QueueMode::Regular)
@@ -6504,9 +6604,17 @@ mod tests {
             .expect("enqueue");
 
         let _ = store.runs(&agent);
-        assert_eq!(sessions.queue_len("watcher", &conv), 0, "the messages have had their turn");
+        assert_eq!(
+            sessions.queue_len("watcher", &conv),
+            0,
+            "the messages have had their turn"
+        );
         let turns = sessions.turns("watcher", &conv);
-        assert_eq!(turns.len(), 3, "both questions, and one refusal for the turn they shared");
+        assert_eq!(
+            turns.len(),
+            3,
+            "both questions, and one refusal for the turn they shared"
+        );
         assert_eq!(turns[0].text, "do it");
         assert_eq!(turns[1].text, "and that");
         assert!(
@@ -6514,7 +6622,11 @@ mod tests {
             "{}",
             turns[2].text
         );
-        let outcome = sessions.get("watcher", &conv).expect("get").outcome.expect("recorded");
+        let outcome = sessions
+            .get("watcher", &conv)
+            .expect("get")
+            .outcome
+            .expect("recorded");
         assert!(outcome.is_error);
         assert_eq!(outcome.terminal_reason.as_deref(), Some("lease_missing"));
     }
@@ -6528,7 +6640,10 @@ mod tests {
     fn reply_queues_rather_than_starts_when_the_lease_isnt_live() {
         let store = scratch("reply-wait-fail");
         let mut manifest = spec("harness:adi");
-        manifest.secrets = vec![SecretAttachment { project: None, name: "K".into() }];
+        manifest.secrets = vec![SecretAttachment {
+            project: None,
+            name: "K".into(),
+        }];
         store.save("watcher", manifest).expect("save");
         let sessions = store.sessions();
         let conv = sessions
@@ -6536,7 +6651,14 @@ mod tests {
             .expect("create")
             .id;
         sessions
-            .set_lease("watcher", &conv, &LeaseRef { user: "u-aaa".into(), names: vec!["K".into()] })
+            .set_lease(
+                "watcher",
+                &conv,
+                &LeaseRef {
+                    user: "u-aaa".into(),
+                    names: vec!["K".into()],
+                },
+            )
             .expect("set lease");
 
         for missing in [adi_secrets::Missing::Wait, adi_secrets::Missing::Fail] {
@@ -6552,7 +6674,10 @@ mod tests {
                 Ok(Sent::Queued { .. }) => {}
                 other => panic!("{missing:?}: expected Queued, got {other:?}"),
             }
-            sessions.dequeue("watcher", &conv).expect("drain").expect("was there");
+            sessions
+                .dequeue("watcher", &conv)
+                .expect("drain")
+                .expect("was there");
         }
     }
 
@@ -6567,7 +6692,10 @@ mod tests {
     fn a_reply_runs_on_the_sessions_lease_user_never_a_different_ones() {
         let store = scratch("p3-5-reply-lease-user");
         let mut manifest = spec("harness:adi");
-        manifest.secrets = vec![SecretAttachment { project: None, name: "K".into() }];
+        manifest.secrets = vec![SecretAttachment {
+            project: None,
+            name: "K".into(),
+        }];
         store.save("watcher", manifest).expect("save");
         adi_secrets::UserSecretsPolicy {
             enabled: true,
@@ -6587,23 +6715,54 @@ mod tests {
             .expect("create")
             .id;
         sessions
-            .set_lease("watcher", &conv, &LeaseRef { user: "u-aaa".into(), names: vec!["K".into()] })
+            .set_lease(
+                "watcher",
+                &conv,
+                &LeaseRef {
+                    user: "u-aaa".into(),
+                    names: vec!["K".into()],
+                },
+            )
             .expect("set lease");
 
         // "B" replies — a marker naming an entirely different person than the lease's own user —
         // through the same `reply_as` `reply_run` calls, with `missing = "fail"` queued.
         sessions
-            .enqueue("watcher", &conv, "hello from B", &[], &[Marker::From { node: "laptop-b".into(), user: "u-bbb".into() }], QueueMode::Regular)
+            .enqueue(
+                "watcher",
+                &conv,
+                "hello from B",
+                &[],
+                &[Marker::From {
+                    node: "laptop-b".into(),
+                    user: "u-bbb".into(),
+                }],
+                QueueMode::Regular,
+            )
             .expect("enqueue");
         let agent = store.get("watcher").expect("get").expect("present");
         let _ = store.runs(&agent);
 
-        let outcome = sessions.get("watcher", &conv).expect("get").outcome.expect("recorded");
-        assert!(outcome.is_error, "A's lease has no live value, so the turn must fail");
-        assert_eq!(outcome.terminal_reason.as_deref(), Some(LEASE_MISSING_FAILED));
+        let outcome = sessions
+            .get("watcher", &conv)
+            .expect("get")
+            .outcome
+            .expect("recorded");
+        assert!(
+            outcome.is_error,
+            "A's lease has no live value, so the turn must fail"
+        );
+        assert_eq!(
+            outcome.terminal_reason.as_deref(),
+            Some(LEASE_MISSING_FAILED)
+        );
         let turns = sessions.turns("watcher", &conv);
         assert!(
-            turns.last().expect("the refusal").text.contains("K isn't unlocked on this server"),
+            turns
+                .last()
+                .expect("the refusal")
+                .text
+                .contains("K isn't unlocked on this server"),
             "B's live value for K was never consulted, even though one exists"
         );
     }
@@ -6638,7 +6797,10 @@ mod tests {
             Launch::Process { run_id, .. } => run_id,
             Launch::Pty { .. } => unreachable!("a process backend is not a pane"),
         };
-        let record = store.sessions().get("worker", &run_id).expect("the session");
+        let record = store
+            .sessions()
+            .get("worker", &run_id)
+            .expect("the session");
         assert_eq!(record.launched_by, "agent:some-leased-parent");
         assert_eq!(
             record.lease, None,
@@ -6656,7 +6818,10 @@ mod tests {
     fn expiry_parks_every_session_in_a_leased_tree_and_a_live_source_resumes_all_of_them() {
         let store = scratch("p3-6-expiry-tree");
         let mut manifest = spec("harness:adi");
-        manifest.secrets = vec![SecretAttachment { project: None, name: "K".into() }];
+        manifest.secrets = vec![SecretAttachment {
+            project: None,
+            name: "K".into(),
+        }];
         store.save("watcher", manifest).expect("save");
         adi_secrets::UserSecretsPolicy {
             enabled: true,
@@ -6669,12 +6834,25 @@ mod tests {
         let empty: std::sync::Arc<dyn LeaseValues> = std::sync::Arc::new(FakeLease::default());
         let store = store.with_lease_values(empty);
         let sessions = store.sessions();
-        let lease = LeaseRef { user: "u-igor".into(), names: vec!["K".into()] };
+        let lease = LeaseRef {
+            user: "u-igor".into(),
+            names: vec!["K".into()],
+        };
 
-        let parent = sessions.create("watcher", Backend::HarnessAdi, "/tmp", "go").expect("create").id;
-        sessions.set_lease("watcher", &parent, &lease).expect("set lease");
-        let child = sessions.create("watcher", Backend::HarnessAdi, "/tmp", "go").expect("create").id;
-        sessions.set_lease("watcher", &child, &lease).expect("set lease");
+        let parent = sessions
+            .create("watcher", Backend::HarnessAdi, "/tmp", "go")
+            .expect("create")
+            .id;
+        sessions
+            .set_lease("watcher", &parent, &lease)
+            .expect("set lease");
+        let child = sessions
+            .create("watcher", Backend::HarnessAdi, "/tmp", "go")
+            .expect("create")
+            .id;
+        sessions
+            .set_lease("watcher", &child, &lease)
+            .expect("set lease");
         for id in [&parent, &child] {
             sessions
                 .enqueue("watcher", id, "do it", &[], &[], QueueMode::Regular)
@@ -6683,8 +6861,16 @@ mod tests {
 
         let agent = store.get("watcher").expect("get").expect("present");
         let _ = store.runs(&agent);
-        assert_eq!(sessions.queue_len("watcher", &parent), 1, "parked, not dequeued");
-        assert_eq!(sessions.queue_len("watcher", &child), 1, "parked too — the whole tree, together");
+        assert_eq!(
+            sessions.queue_len("watcher", &parent),
+            1,
+            "parked, not dequeued"
+        );
+        assert_eq!(
+            sessions.queue_len("watcher", &child),
+            1,
+            "parked too — the whole tree, together"
+        );
 
         // The lease is live again — the same thing a renew gives it — and the very next poll
         // drains both, no distinction between the parent and the child.
@@ -6692,7 +6878,11 @@ mod tests {
             std::sync::Arc::new(FakeLease::default().with("u-igor", "K", "renewed-value"));
         let store_renewed = Agents::with_config(store.config.clone()).with_lease_values(live);
         let _ = store_renewed.runs(&agent);
-        assert_eq!(sessions.queue_len("watcher", &parent), 0, "resumed on its own");
+        assert_eq!(
+            sessions.queue_len("watcher", &parent),
+            0,
+            "resumed on its own"
+        );
         assert_eq!(
             sessions.queue_len("watcher", &child),
             0,
@@ -6709,7 +6899,10 @@ mod tests {
     fn a_leased_turn_never_starts_without_a_lease_source_even_under_missing_server() {
         let store = scratch("p3-4-no-source");
         let mut manifest = spec("harness:adi");
-        manifest.secrets = vec![SecretAttachment { project: None, name: "K".into() }];
+        manifest.secrets = vec![SecretAttachment {
+            project: None,
+            name: "K".into(),
+        }];
         store.save("watcher", manifest).expect("save");
         adi_secrets::UserSecretsPolicy {
             enabled: true,
@@ -6721,11 +6914,19 @@ mod tests {
         .expect("save policy");
         let agent = store.get("watcher").expect("get").expect("present");
         let sessions = store.sessions();
-        let lease = LeaseRef { user: "u-aaa".into(), names: vec!["K".into()] };
+        let lease = LeaseRef {
+            user: "u-aaa".into(),
+            names: vec!["K".into()],
+        };
 
         // A fresh reply: `deliver_with` must queue it, not start it.
-        let conv = sessions.create("watcher", Backend::HarnessAdi, "/tmp", "go").expect("create").id;
-        sessions.set_lease("watcher", &conv, &lease).expect("set lease");
+        let conv = sessions
+            .create("watcher", Backend::HarnessAdi, "/tmp", "go")
+            .expect("create")
+            .id;
+        sessions
+            .set_lease("watcher", &conv, &lease)
+            .expect("set lease");
         match store.reply("watcher", &conv, "hello") {
             Ok(Sent::Queued { .. }) => {}
             other => panic!("expected Queued even under missing=server, got {other:?}"),
@@ -6740,7 +6941,11 @@ mod tests {
             .enqueue("watcher", &conv, "hello", &[], &[], QueueMode::Regular)
             .expect("enqueue");
         let _ = store.runs(&agent);
-        assert_eq!(sessions.queue_len("watcher", &conv), 2, "neither message was dequeued");
+        assert_eq!(
+            sessions.queue_len("watcher", &conv),
+            2,
+            "neither message was dequeued"
+        );
 
         // The same `Agents`, with a lease source installed (standing in for `adi-app`) and a live
         // value: now it starts, same policy and same session.
@@ -6768,21 +6973,34 @@ mod tests {
         store.save("watcher", spec("harness:adi")).expect("save");
         let agent = store.get("watcher").expect("get").expect("present");
         let sessions = store.sessions();
-        let run = sessions.create("watcher", Backend::HarnessAdi, "/tmp", "go").expect("create");
+        let run = sessions
+            .create("watcher", Backend::HarnessAdi, "/tmp", "go")
+            .expect("create");
         let mut spec = store.spec_in(&agent, PathBuf::from("/tmp"), None);
         spec.env.clear();
         name_conversation(&mut spec, &run.id);
 
         // No lease at all: untouched.
         store.apply_lease_capability(&mut spec, &sessions, "watcher", &run.id);
-        assert_eq!(spec.env, vec![(workspace::CONV_ENV.to_string(), run.id.clone())]);
+        assert_eq!(
+            spec.env,
+            vec![(workspace::CONV_ENV.to_string(), run.id.clone())]
+        );
 
         // A lease, but no `lease_url` installed on this `Agents`: still untouched — nowhere for a
         // forwarded launch to land.
-        let lease = LeaseRef { user: "u-aaa".into(), names: vec!["K".into()] };
-        sessions.set_lease("watcher", &run.id, &lease).expect("set lease");
+        let lease = LeaseRef {
+            user: "u-aaa".into(),
+            names: vec!["K".into()],
+        };
+        sessions
+            .set_lease("watcher", &run.id, &lease)
+            .expect("set lease");
         store.apply_lease_capability(&mut spec, &sessions, "watcher", &run.id);
-        assert_eq!(spec.env, vec![(workspace::CONV_ENV.to_string(), run.id.clone())]);
+        assert_eq!(
+            spec.env,
+            vec![(workspace::CONV_ENV.to_string(), run.id.clone())]
+        );
 
         // Both present: pushed after `ADI_RUN_ID`, and stable across a second call.
         let store = store.with_lease_url("http://127.0.0.1:1234".to_string());
@@ -6790,14 +7008,23 @@ mod tests {
         assert_eq!(spec.env.len(), 3, "ADI_RUN_ID, ADI_LEASE, ADI_LEASE_URL");
         assert_eq!(spec.env[0].0, workspace::CONV_ENV);
         assert_eq!(spec.env[1].0, lease::CAP_ENV);
-        assert_eq!(spec.env[2], (lease::CAP_URL_ENV.to_string(), "http://127.0.0.1:1234".to_string()));
+        assert_eq!(
+            spec.env[2],
+            (
+                lease::CAP_URL_ENV.to_string(),
+                "http://127.0.0.1:1234".to_string()
+            )
+        );
         let capability = spec.env[1].1.clone();
 
         let mut spec2 = store.spec_in(&agent, PathBuf::from("/tmp"), None);
         spec2.env.clear();
         name_conversation(&mut spec2, &run.id);
         store.apply_lease_capability(&mut spec2, &sessions, "watcher", &run.id);
-        assert_eq!(spec2.env[1].1, capability, "the same capability on a second call");
+        assert_eq!(
+            spec2.env[1].1, capability,
+            "the same capability on a second call"
+        );
     }
 
     /// `missing = "fail"`: a fresh launch is refused outright, before anything is written down —
@@ -6808,7 +7035,10 @@ mod tests {
     fn a_fresh_launch_under_missing_fail_is_refused_and_creates_nothing() {
         let store = scratch("launch-fail");
         let mut manifest = spec("harness:claude-sdk");
-        manifest.secrets = vec![SecretAttachment { project: None, name: "K".into() }];
+        manifest.secrets = vec![SecretAttachment {
+            project: None,
+            name: "K".into(),
+        }];
         store.save("worker", manifest).expect("save");
         adi_secrets::UserSecretsPolicy {
             enabled: true,
@@ -6824,13 +7054,22 @@ mod tests {
                 "worker",
                 "go",
                 &LaunchOptions {
-                    lease: Some(LeaseRef { user: "u-aaa".into(), names: vec!["K".into()] }),
+                    lease: Some(LeaseRef {
+                        user: "u-aaa".into(),
+                        names: vec!["K".into()],
+                    }),
                     ..LaunchOptions::default()
                 },
             )
             .expect_err("refused");
-        assert!(err.to_string().contains("K isn't unlocked on this server"), "{err}");
-        assert!(store.sessions().list("worker").is_empty(), "nothing was written down");
+        assert!(
+            err.to_string().contains("K isn't unlocked on this server"),
+            "{err}"
+        );
+        assert!(
+            store.sessions().list("worker").is_empty(),
+            "nothing was written down"
+        );
     }
 
     /// `missing = "wait"`: the opposite call — a fresh launch creates the session (so it is
@@ -6842,7 +7081,10 @@ mod tests {
     fn a_fresh_launch_under_missing_wait_creates_the_session_and_queues_its_opening_message() {
         let store = scratch("launch-wait");
         let mut manifest = spec("harness:claude-sdk");
-        manifest.secrets = vec![SecretAttachment { project: None, name: "K".into() }];
+        manifest.secrets = vec![SecretAttachment {
+            project: None,
+            name: "K".into(),
+        }];
         store.save("worker", manifest).expect("save");
         adi_secrets::UserSecretsPolicy {
             enabled: true,
@@ -6858,7 +7100,10 @@ mod tests {
                 "worker",
                 "go",
                 &LaunchOptions {
-                    lease: Some(LeaseRef { user: "u-aaa".into(), names: vec!["K".into()] }),
+                    lease: Some(LeaseRef {
+                        user: "u-aaa".into(),
+                        names: vec!["K".into()],
+                    }),
                     ..LaunchOptions::default()
                 },
             )
@@ -6866,7 +7111,10 @@ mod tests {
         let Launch::Process { pid, run_id, .. } = launch else {
             panic!("expected a Process launch, got {launch:?}");
         };
-        assert_eq!(pid, 0, "no local process to name — addressed by run_id alone");
+        assert_eq!(
+            pid, 0,
+            "no local process to name — addressed by run_id alone"
+        );
 
         let sessions = store.sessions();
         assert_eq!(sessions.queue_len("worker", &run_id), 1, "queued, not sent");
@@ -6904,7 +7152,10 @@ mod tests {
 
         let store = scratch("e2e-real-child");
         let mut manifest = spec("harness:adi");
-        manifest.secrets = vec![SecretAttachment { project: None, name: "NAME".into() }];
+        manifest.secrets = vec![SecretAttachment {
+            project: None,
+            name: "NAME".into(),
+        }];
         store.save("worker", manifest).expect("save");
         let secrets = adi_secrets::Secrets::with_config(store.config.clone());
         secrets
@@ -6922,7 +7173,10 @@ mod tests {
         let store = store.with_lease_values(Arc::clone(&live) as Arc<dyn LeaseValues>);
         let agent = store.get("worker").expect("get").expect("present");
         let sessions = store.sessions();
-        let lease = LeaseRef { user: "u-igor".into(), names: vec!["NAME".into()] };
+        let lease = LeaseRef {
+            user: "u-igor".into(),
+            names: vec!["NAME".into()],
+        };
 
         // Spawn a real child with exactly the environment `start_turn`/`launch_run` would build
         // for this lease, and read back what it actually saw.
@@ -6961,7 +7215,8 @@ mod tests {
         // -- 1. a live lease: the real child sees the user's value, not the server's.
         let (conv_a, _pid_a, _) = spawn_with_env("seen", false);
         wait_for_exit(&sessions, "worker", &conv_a);
-        let log_a = std::fs::read_to_string(sessions.log_path("worker", &conv_a)).expect("read log");
+        let log_a =
+            std::fs::read_to_string(sessions.log_path("worker", &conv_a)).expect("read log");
         assert!(log_a.contains("seen=user-value"), "{log_a}");
 
         // -- 2. revoke stops a *second*, still-running session on the same lease.
@@ -6972,7 +7227,10 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(20));
         }
-        assert!(backends::detached::pid_alive(pid_b), "the long-lived child is up");
+        assert!(
+            backends::detached::pid_alive(pid_b),
+            "the long-lived child is up"
+        );
         let stopped = store.stop_runs_for_lease_user("u-igor");
         assert_eq!(stopped, vec![conv_b.clone()]);
         for _ in 0..100 {
@@ -6981,7 +7239,10 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-        assert!(!backends::detached::pid_alive(pid_b), "the revoke's stop actually killed it");
+        assert!(
+            !backends::detached::pid_alive(pid_b),
+            "the revoke's stop actually killed it"
+        );
         // Running it again against the same user, with nothing left alive, changes nothing and
         // is not an error (§10.1: "it runs in full even when no lease is in the table" — proven a
         // layer down in `adi-app`'s own tests; this proves the agents-side half tolerates it too).
@@ -6993,8 +7254,12 @@ mod tests {
         let store_after = Agents::with_config(store.config.clone()).with_lease_values(empty_live);
 
         // `missing = "server"`: a fresh launch's real child falls back to the server's value.
-        let record_c = sessions.create("worker", Backend::HarnessAdi, "/tmp", "go").expect("create");
-        sessions.set_lease("worker", &record_c.id, &lease).expect("set lease");
+        let record_c = sessions
+            .create("worker", Backend::HarnessAdi, "/tmp", "go")
+            .expect("create");
+        sessions
+            .set_lease("worker", &record_c.id, &lease)
+            .expect("set lease");
         let spec_c = store_after.spec_in(&agent, PathBuf::from("/tmp"), Some(&lease));
         let session_c = sessions.session("worker", &record_c.id);
         let child_c = backends::detached::spawn_child(
@@ -7003,7 +7268,11 @@ mod tests {
             session_c.log_path(),
             Path::new("/tmp"),
             "/usr/bin:/bin",
-            &["/bin/sh".to_string(), "-c".to_string(), "echo \"after=$NAME\"".to_string()],
+            &[
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "echo \"after=$NAME\"".to_string(),
+            ],
             &spec_c.env,
             &spec_c.inherited_strip,
             |_| {},
@@ -7013,7 +7282,8 @@ mod tests {
             .set_state(serde_json::json!({ "pid": child_c.pid, "started": child_c.started }))
             .expect("record");
         wait_for_exit(&sessions, "worker", &record_c.id);
-        let log_c = std::fs::read_to_string(sessions.log_path("worker", &record_c.id)).expect("read log");
+        let log_c =
+            std::fs::read_to_string(sessions.log_path("worker", &record_c.id)).expect("read log");
         assert!(log_c.contains("after=server-value"), "{log_c}");
 
         // `missing = "wait"`: a queued turn parks instead of ever reaching a spawn — and resumes,
@@ -7026,13 +7296,28 @@ mod tests {
         }
         .save(&store_after.config)
         .expect("save policy");
-        let record_d = sessions.create("worker", Backend::HarnessAdi, "/tmp", "go").expect("create");
-        sessions.set_lease("worker", &record_d.id, &lease).expect("set lease");
+        let record_d = sessions
+            .create("worker", Backend::HarnessAdi, "/tmp", "go")
+            .expect("create");
         sessions
-            .enqueue("worker", &record_d.id, "do it", &[], &[], QueueMode::Regular)
+            .set_lease("worker", &record_d.id, &lease)
+            .expect("set lease");
+        sessions
+            .enqueue(
+                "worker",
+                &record_d.id,
+                "do it",
+                &[],
+                &[],
+                QueueMode::Regular,
+            )
             .expect("enqueue");
         let _ = store_after.runs(&agent);
-        assert_eq!(sessions.queue_len("worker", &record_d.id), 1, "parked, not dequeued");
+        assert_eq!(
+            sessions.queue_len("worker", &record_d.id),
+            1,
+            "parked, not dequeued"
+        );
 
         // The lease is granted again — the same `Agents`, a live source this time — and the very
         // next poll (what the app's own listing does twice a second) drains it.
@@ -7083,7 +7368,10 @@ mod tests {
 
         let store = scratch("e2e-grandchild");
         let mut manifest = spec("harness:adi");
-        manifest.secrets = vec![SecretAttachment { project: None, name: "NAME".into() }];
+        manifest.secrets = vec![SecretAttachment {
+            project: None,
+            name: "NAME".into(),
+        }];
         store.save("worker", manifest).expect("save");
         adi_secrets::UserSecretsPolicy {
             enabled: true,
@@ -7103,8 +7391,12 @@ mod tests {
         // forwarded launch would actually start. Returns the session id, the capability it
         // minted (what a child of *this* session would forward as `$ADI_LEASE`), and the pid.
         let spawn_generation = |label: &str, lease: &LeaseRef| -> (String, String, u32) {
-            let record = sessions.create("worker", Backend::HarnessAdi, "/tmp", "go").expect("create");
-            sessions.set_lease("worker", &record.id, lease).expect("set lease");
+            let record = sessions
+                .create("worker", Backend::HarnessAdi, "/tmp", "go")
+                .expect("create");
+            sessions
+                .set_lease("worker", &record.id, lease)
+                .expect("set lease");
             let cap = sessions
                 .lease_capability("worker", &record.id)
                 .expect("mint")
@@ -7134,7 +7426,10 @@ mod tests {
             (record.id, cap, child.pid)
         };
 
-        let top = LeaseRef { user: "u-igor".into(), names: vec!["NAME".into()] };
+        let top = LeaseRef {
+            user: "u-igor".into(),
+            names: vec!["NAME".into()],
+        };
         let (parent_id, parent_cap, parent_pid) = spawn_generation("parent", &top);
 
         // The child's own lease is resolved from the *parent's* capability alone — exactly what
@@ -7145,7 +7440,10 @@ mod tests {
         assert_eq!(resolved.agent, "worker");
         assert_eq!(resolved.run_id, parent_id);
         assert_eq!(resolved.user, "u-igor");
-        let child_lease = LeaseRef { user: resolved.user, names: vec!["NAME".into()] };
+        let child_lease = LeaseRef {
+            user: resolved.user,
+            names: vec!["NAME".into()],
+        };
         let (child_id, child_cap, child_pid) = spawn_generation("child", &child_lease);
 
         // The grandchild resolves the same way, one hop further — from the *child's* capability.
@@ -7153,7 +7451,10 @@ mod tests {
             .lease_capability_session(&child_cap)
             .expect("the child's capability resolves");
         assert_eq!(resolved2.run_id, child_id);
-        let grandchild_lease = LeaseRef { user: resolved2.user, names: vec!["NAME".into()] };
+        let grandchild_lease = LeaseRef {
+            user: resolved2.user,
+            names: vec!["NAME".into()],
+        };
         let (grandchild_id, _grandchild_cap, grandchild_pid) =
             spawn_generation("grandchild", &grandchild_lease);
 
@@ -7168,10 +7469,17 @@ mod tests {
             }
             assert!(alive, "pid {pid} should be up");
         }
-        for (id, label) in [(&parent_id, "parent"), (&child_id, "child"), (&grandchild_id, "grandchild")] {
+        for (id, label) in [
+            (&parent_id, "parent"),
+            (&child_id, "child"),
+            (&grandchild_id, "grandchild"),
+        ] {
             wait_for_exit(&sessions, "worker", id);
             let log = std::fs::read_to_string(sessions.log_path("worker", id)).expect("read log");
-            assert!(log.contains(&format!("{label}=user-value")), "{label}: {log}");
+            assert!(
+                log.contains(&format!("{label}=user-value")),
+                "{label}: {log}"
+            );
         }
 
         // A revoke stops every running turn on the lease, the whole tree at once: parent, child and
@@ -9356,14 +9664,13 @@ mod tests {
             .expect("create");
         // Exactly what `launch_run` does immediately after `create_as`, before anything calls
         // `send` — the window this test has to land a listing inside of.
-        sessions.mark_launching("watcher", &record.id).expect("mark");
+        sessions
+            .mark_launching("watcher", &record.id)
+            .expect("mark");
 
         let runs = store.runs(&agent);
         assert_eq!(runs.len(), 1);
-        assert!(
-            runs[0].running,
-            "mid-launch reads as running, not finished"
-        );
+        assert!(runs[0].running, "mid-launch reads as running, not finished");
         assert!(
             runs[0].outcome.is_none(),
             "a listing mid-launch must not record an outcome"
@@ -9479,9 +9786,13 @@ mod tests {
             .expect("the child starts writing before its pid is recorded");
             let steps = store.turn_steps(&agent, &record.id, 1).expect("live steps");
             assert!(
-                matches!(steps.as_slice(), [Step::Tool {
-                    status: progress::ToolStatus::Running, ..
-                }]),
+                matches!(
+                    steps.as_slice(),
+                    [Step::Tool {
+                        status: progress::ToolStatus::Running,
+                        ..
+                    }]
+                ),
                 "launching must not close the child's live tool call: {steps:?}"
             );
             assert!(read()[1].pending);
@@ -9500,7 +9811,9 @@ mod tests {
             sessions
                 .set_runner_state("codex", &record.id, serde_json::json!({}))
                 .expect("the child has exited");
-            sessions.clear_launching("codex", &record.id).expect("clear");
+            sessions
+                .clear_launching("codex", &record.id)
+                .expect("clear");
 
             let turns = read();
             assert_eq!(turns.len(), 2);
@@ -9561,7 +9874,10 @@ mod tests {
         assert_eq!(payload["agent"], "watcher");
         assert_eq!(payload["run_id"], conv);
         assert_eq!(payload["state"], "waiting");
-        assert_eq!(payload["pending_awaits"].as_array().expect("array").len(), 1);
+        assert_eq!(
+            payload["pending_awaits"].as_array().expect("array").len(),
+            1
+        );
         // `catch_up` only reads the log — acking it, the same as any other reader of the bus, is
         // a separate call.
         bus.ack("test", idle.seq).expect("ack");
@@ -9782,7 +10098,10 @@ mod tests {
     #[test]
     fn task_is_stuck_reads_the_dispatch_rows_own_stuck_ask() {
         let store = scratch("task-stuck");
-        assert!(!store.task_is_stuck("t1"), "never touched by the dispatcher");
+        assert!(
+            !store.task_is_stuck("t1"),
+            "never touched by the dispatcher"
+        );
 
         store
             .sessions()
@@ -9802,7 +10121,10 @@ mod tests {
                 ..store::DispatchRow::default()
             })
             .expect("save");
-        assert!(!store.task_is_stuck("t1"), "cleared once the stuck ask is answered");
+        assert!(
+            !store.task_is_stuck("t1"),
+            "cleared once the stuck ask is answered"
+        );
     }
 
     #[test]
@@ -10130,13 +10452,17 @@ mod tests {
     fn everything_queued_behind_an_answer_is_asked_as_one_turn() {
         let store = scratch("queue-batch");
         store.save("talker", spec("harness:adi")).expect("save");
-        let Launch::Process { run_id, .. } = store.simulate("talker", "first").expect("simulate") else {
+        let Launch::Process { run_id, .. } = store.simulate("talker", "first").expect("simulate")
+        else {
             panic!("expected a headless run");
         };
         let agent = store.get("talker").expect("get").expect("present");
         let sessions = store.sessions();
 
-        for (place, text) in ["fix the header", "make the button blue", "no — green"].into_iter().enumerate() {
+        for (place, text) in ["fix the header", "make the button blue", "no — green"]
+            .into_iter()
+            .enumerate()
+        {
             assert_eq!(
                 store.reply("talker", &run_id, text).expect("reply"),
                 Sent::Queued { place: place + 1 },
@@ -10157,7 +10483,11 @@ mod tests {
 
         // The read is the clock: the answer has landed, so what waited behind it starts here.
         let turns = store.transcript(&agent, &run_id);
-        assert_eq!(sessions.queue_len("talker", &run_id), 0, "the whole line went at once");
+        assert_eq!(
+            sessions.queue_len("talker", &run_id),
+            0,
+            "the whole line went at once"
+        );
         let said: Vec<(&str, &str)> = turns
             .iter()
             .filter(|t| !t.pending)
@@ -10174,9 +10504,15 @@ mod tests {
             ],
             "each message is still its own turn, in the order it was typed"
         );
-        assert!(turns.iter().all(|t| !t.queued), "nothing is left waiting: {turns:?}");
         assert!(
-            store.runs(&agent).iter().any(|r| r.run_id == run_id && r.running),
+            turns.iter().all(|t| !t.queued),
+            "nothing is left waiting: {turns:?}"
+        );
+        assert!(
+            store
+                .runs(&agent)
+                .iter()
+                .any(|r| r.run_id == run_id && r.running),
             "and one turn is answering all three"
         );
 
@@ -10184,11 +10520,18 @@ mod tests {
             .simulate_turn("talker", &run_id, &[SimBlock::Text("green it is".into())])
             .expect("the batch's turn ends");
         let turns = store.transcript(&agent, &run_id);
-        assert_eq!(turns.len(), 6, "one answer for the three of them: {turns:?}");
+        assert_eq!(
+            turns.len(),
+            6,
+            "one answer for the three of them: {turns:?}"
+        );
         assert_eq!(turns[5].role, store::ROLE_ASSISTANT);
         assert_eq!(turns[5].text, "green it is");
         assert!(
-            !store.runs(&agent).iter().any(|r| r.run_id == run_id && r.running),
+            !store
+                .runs(&agent)
+                .iter()
+                .any(|r| r.run_id == run_id && r.running),
             "with nothing queued, nothing else starts"
         );
     }
@@ -10200,7 +10543,8 @@ mod tests {
     fn a_reply_to_an_idle_conversation_takes_the_waiting_line_with_it() {
         let store = scratch("queue-batch-reply");
         store.save("talker", spec("harness:adi")).expect("save");
-        let Launch::Process { run_id, .. } = store.simulate("talker", "first").expect("simulate") else {
+        let Launch::Process { run_id, .. } = store.simulate("talker", "first").expect("simulate")
+        else {
             panic!("expected a headless run");
         };
         store
@@ -10215,7 +10559,10 @@ mod tests {
         }
 
         assert!(
-            matches!(store.reply("talker", &run_id, "three").expect("reply"), Sent::Started(_)),
+            matches!(
+                store.reply("talker", &run_id, "three").expect("reply"),
+                Sent::Started(_)
+            ),
             "an idle conversation starts"
         );
         assert_eq!(sessions.queue_len("talker", &run_id), 0);
@@ -10225,7 +10572,11 @@ mod tests {
             .skip(2)
             .map(|t| t.text)
             .collect();
-        assert_eq!(asked, ["one", "two", "three"], "in the order they were said");
+        assert_eq!(
+            asked,
+            ["one", "two", "three"],
+            "in the order they were said"
+        );
     }
 
     /// What an engine that is *handed* its message receives for a batch: every message, framed,
@@ -10239,7 +10590,10 @@ mod tests {
             .store_attachment("Q3 report.pdf", "application/pdf", b"%PDF-1.7")
             .expect("store the file");
         let runner = runner_for(&Backend::HarnessClaudeSdk).expect("a runner");
-        let peer = Marker::From { node: "laptop-b".into(), user: "igor".into() };
+        let peer = Marker::From {
+            node: "laptop-b".into(),
+            user: "igor".into(),
+        };
         let messages = [
             store::QueuedMessage::text("summarise this"),
             store::QueuedMessage {
@@ -10254,20 +10608,38 @@ mod tests {
         assert_eq!(alone, "summarise this", "one message is not framed");
         assert_eq!(
             for_engine_batch(runner.as_ref(), &sessions, &messages[1..]),
-            for_engine(runner.as_ref(), &sessions, &messages[1].markers, &messages[1].text, &messages[1].images),
+            for_engine(
+                runner.as_ref(),
+                &sessions,
+                &messages[1].markers,
+                &messages[1].text,
+                &messages[1].images
+            ),
             "and is byte for byte what a single send has always been"
         );
 
         let sent = for_engine_batch(runner.as_ref(), &sessions, &messages);
         assert!(sent.starts_with("<queued count=\"2\"/>\n"), "{sent}");
-        assert!(sent.contains("<message n=\"1\">\nsummarise this\n</message>"), "{sent}");
         assert!(
-            sent.contains(&format!("<message n=\"2\">\n{} and send it to finance", peer.tag())),
+            sent.contains("<message n=\"1\">\nsummarise this\n</message>"),
+            "{sent}"
+        );
+        assert!(
+            sent.contains(&format!(
+                "<message n=\"2\">\n{} and send it to finance",
+                peer.tag()
+            )),
             "the second opens with its sender's stamp: {sent}"
         );
         let path = sessions.attachment_path(&file).display().to_string();
-        let second = sent.split("<message n=\"2\">").nth(1).expect("the second block");
-        assert!(second.contains(&path), "its file is named inside its own block: {sent}");
+        let second = sent
+            .split("<message n=\"2\">")
+            .nth(1)
+            .expect("the second block");
+        assert!(
+            second.contains(&path),
+            "its file is named inside its own block: {sent}"
+        );
         assert!(sent.ends_with("</message>"), "{sent}");
 
         assert_eq!(
@@ -10291,23 +10663,45 @@ mod tests {
             .id;
         for turn in [
             store::user_turn("one"),
-            store::assistant_turn(&TurnContent { text: "first answer".into(), ..TurnContent::default() }),
+            store::assistant_turn(&TurnContent {
+                text: "first answer".into(),
+                ..TurnContent::default()
+            }),
             store::user_turn("two"),
             store::user_turn("three"),
-            store::assistant_turn(&TurnContent { text: "answer to both".into(), ..TurnContent::default() }),
+            store::assistant_turn(&TurnContent {
+                text: "answer to both".into(),
+                ..TurnContent::default()
+            }),
         ] {
             sessions.append_turn("chat", &id, turn).expect("append");
         }
 
-        let refused = agents.rewind("chat", &id, 3).expect_err("the second of a batch");
+        let refused = agents
+            .rewind("chat", &id, 3)
+            .expect_err("the second of a batch");
         assert!(matches!(refused, Error::Unsupported(_)), "{refused}");
         assert!(refused.to_string().contains("sent together"), "{refused}");
-        assert_eq!(sessions.turn_count("chat", &id), 5, "a refusal drops nothing");
+        assert_eq!(
+            sessions.turn_count("chat", &id),
+            5,
+            "a refusal drops nothing"
+        );
 
-        let edited = agents.rewind("chat", &id, 2).expect("the first of the batch");
+        let edited = agents
+            .rewind("chat", &id, 2)
+            .expect("the first of the batch");
         assert_eq!(edited.text, "two");
-        let kept: Vec<String> = sessions.turns("chat", &id).into_iter().map(|t| t.text).collect();
-        assert_eq!(kept, ["one", "first answer"], "and the rest of the batch goes with it");
+        let kept: Vec<String> = sessions
+            .turns("chat", &id)
+            .into_iter()
+            .map(|t| t.text)
+            .collect();
+        assert_eq!(
+            kept,
+            ["one", "first answer"],
+            "and the rest of the batch goes with it"
+        );
     }
 
     #[test]
@@ -10321,9 +10715,15 @@ mod tests {
             .id;
         for turn in [
             store::user_turn("one"),
-            store::assistant_turn(&TurnContent { text: "first answer".into(), ..TurnContent::default() }),
+            store::assistant_turn(&TurnContent {
+                text: "first answer".into(),
+                ..TurnContent::default()
+            }),
             store::user_turn("two"),
-            store::assistant_turn(&TurnContent { text: "second answer".into(), ..TurnContent::default() }),
+            store::assistant_turn(&TurnContent {
+                text: "second answer".into(),
+                ..TurnContent::default()
+            }),
         ] {
             sessions.append_turn("chat", &id, turn).expect("append");
         }
@@ -10331,18 +10731,33 @@ mod tests {
             .enqueue("chat", &id, "and then", &[], &[], store::QueueMode::Regular)
             .expect("enqueue");
 
-        let refused = agents.rewind("chat", &id, 1).expect_err("an answer is not editable");
+        let refused = agents
+            .rewind("chat", &id, 1)
+            .expect_err("an answer is not editable");
         assert!(matches!(refused, Error::Unsupported(_)), "{refused}");
-        assert_eq!(sessions.turn_count("chat", &id), 4, "a refusal drops nothing");
+        assert_eq!(
+            sessions.turn_count("chat", &id),
+            4,
+            "a refusal drops nothing"
+        );
 
         let edited = agents.rewind("chat", &id, 2).expect("rewind");
         assert_eq!(edited.text, "two");
-        let kept: Vec<String> = sessions.turns("chat", &id).into_iter().map(|t| t.text).collect();
+        let kept: Vec<String> = sessions
+            .turns("chat", &id)
+            .into_iter()
+            .map(|t| t.text)
+            .collect();
         assert_eq!(kept, ["one", "first answer"]);
         assert_eq!(sessions.queue_len("chat", &id), 0);
 
         // The numbers above the cut are minted again by what is said next.
-        sessions.append_turn("chat", &id, store::user_turn("two, reworded")).expect("append");
-        assert_eq!(sessions.turn("chat", &id, 2).map(|t| t.text).as_deref(), Some("two, reworded"));
+        sessions
+            .append_turn("chat", &id, store::user_turn("two, reworded"))
+            .expect("append");
+        assert_eq!(
+            sessions.turn("chat", &id, 2).map(|t| t.text).as_deref(),
+            Some("two, reworded")
+        );
     }
 }

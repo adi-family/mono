@@ -320,7 +320,11 @@ fn print_assignment(registry: &EmbeddingBackends, settings: &EmbeddingSettings, 
         .ok()
         .flatten()
         .is_some_and(|b| b.manifest.runtime.available());
-    let flag = if resolvable { "" } else { "  [will not resolve]" };
+    let flag = if resolvable {
+        ""
+    } else {
+        "  [will not resolve]"
+    };
     println!("{consumer:<10}  {backend_id}{flag}");
 }
 
@@ -373,7 +377,11 @@ fn print_backend(backend: &EmbeddingBackend) {
 }
 
 fn blank<'a>(value: &'a str, instead: &'a str) -> &'a str {
-    if value.trim().is_empty() { instead } else { value }
+    if value.trim().is_empty() {
+        instead
+    } else {
+        value
+    }
 }
 
 #[cfg(test)]

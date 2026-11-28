@@ -2,7 +2,10 @@ import * as React from "react";
 
 import { cn } from "../lib/cn";
 
-type SwitchProps = Omit<React.ComponentProps<"button">, "onChange" | "role" | "type" | "children"> & {
+type SwitchProps = Omit<
+  React.ComponentProps<"button">,
+  "onChange" | "role" | "type" | "children"
+> & {
   checked: boolean;
   onCheckedChange?: (checked: boolean) => void;
 };

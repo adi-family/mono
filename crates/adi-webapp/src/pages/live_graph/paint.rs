@@ -145,7 +145,11 @@ impl Palette {
             // primary ink on the canvas.
             Kind::Chat => Style {
                 fill: if hovered { &self.active } else { &self.raise },
-                border: if hovered { &self.ink_3 } else { &self.line_strong },
+                border: if hovered {
+                    &self.ink_3
+                } else {
+                    &self.line_strong
+                },
                 edge: 1.0,
                 text: &self.ink,
                 size: self.fs_ui_sm,
@@ -218,7 +222,9 @@ pub(crate) fn draw(canvas: &HtmlCanvasElement, g: &Graph, v: Viewport, hover: Op
     if canvas.height() != bh {
         canvas.set_height(bh);
     }
-    let Some(ink) = Palette::read(canvas) else { return };
+    let Some(ink) = Palette::read(canvas) else {
+        return;
+    };
 
     let _ = ctx.set_transform(dpr, 0.0, 0.0, dpr, 0.0, 0.0);
     ctx.clear_rect(0.0, 0.0, w, h);
@@ -355,7 +361,10 @@ fn nodes(
         // A graph is mostly off screen at any useful zoom; a node that cannot be seen is not
         // measured, cut to fit, or drawn.
         let (w2, h2) = (n.w() / 2.0, n.h() / 2.0);
-        if n.x + w2 < visible.0 || n.x - w2 > visible.2 || n.y + h2 < visible.1 || n.y - h2 > visible.3
+        if n.x + w2 < visible.0
+            || n.x - w2 > visible.2
+            || n.y + h2 < visible.1
+            || n.y - h2 > visible.3
         {
             continue;
         }

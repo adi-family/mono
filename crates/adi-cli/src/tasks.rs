@@ -367,7 +367,10 @@ fn print_task_show(task: &TaskView) {
         println!("  adi-mono tasks complete {}", task.task.id);
     }
     println!("To give up:");
-    println!("  adi-mono tasks give-up {} --reason \"<why>\"", task.task.id);
+    println!(
+        "  adi-mono tasks give-up {} --reason \"<why>\"",
+        task.task.id
+    );
 }
 
 /// Pretty-print `value` indented two spaces, for the blocks `print_task_show` shows under

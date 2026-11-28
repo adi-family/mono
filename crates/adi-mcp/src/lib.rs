@@ -139,7 +139,9 @@ impl McpServers {
     /// Open the registry backed by the standard store (`~/.adi/mono`, honoring `$ADI_DIR`).
     #[must_use]
     pub fn open() -> Self {
-        Self { config: Config::open() }
+        Self {
+            config: Config::open(),
+        }
     }
 
     /// Open the registry backed by a caller-supplied [`Config`] — for tests or alternate installs.
@@ -219,13 +221,18 @@ impl McpServers {
         validate_id(id)?;
         let now = adi_config::now_unix();
         let existing = self.get(id)?;
-        manifest.created_at = existing.as_ref().map_or(now, |server| server.manifest.created_at);
+        manifest.created_at = existing
+            .as_ref()
+            .map_or(now, |server| server.manifest.created_at);
         manifest.updated_at = now;
         if manifest.name.trim().is_empty() {
             manifest.name = id.to_string();
         }
         self.module().manifest_file(id).save(&manifest)?;
-        Ok(McpServer { id: id.to_string(), manifest })
+        Ok(McpServer {
+            id: id.to_string(),
+            manifest,
+        })
     }
 
     /// Permanently delete a server definition. Returns `false` if it wasn't there.
@@ -256,7 +263,9 @@ impl McpServers {
                 continue;
             }
             server.manifest.project = Some(to.to_string());
-            self.module().manifest_file(&server.id).save(&server.manifest)?;
+            self.module()
+                .manifest_file(&server.id)
+                .save(&server.manifest)?;
             changed += 1;
         }
         Ok(changed)
@@ -279,13 +288,18 @@ mod tests {
     }
 
     fn http(url: &str) -> Transport {
-        Transport::Http { url: url.to_string(), headers: BTreeMap::new() }
+        Transport::Http {
+            url: url.to_string(),
+            headers: BTreeMap::new(),
+        }
     }
 
     #[test]
     fn save_then_get_round_trips_and_stamps_timestamps() {
         let store = scratch("round-trip");
-        let saved = store.save("n8n", Manifest::new("n8n", http("http://n8n.adi/mcp/"))).expect("save");
+        let saved = store
+            .save("n8n", Manifest::new("n8n", http("http://n8n.adi/mcp/")))
+            .expect("save");
         assert!(saved.manifest.created_at > 0);
         assert_eq!(saved.manifest.created_at, saved.manifest.updated_at);
 
@@ -306,14 +320,18 @@ mod tests {
     #[test]
     fn re_saving_keeps_created_at_but_moves_updated_at() {
         let store = scratch("re-save");
-        let first = store.save("n8n", Manifest::new("n8n", http("http://n8n.adi/mcp/"))).expect("save");
+        let first = store
+            .save("n8n", Manifest::new("n8n", http("http://n8n.adi/mcp/")))
+            .expect("save");
         std::thread::sleep(std::time::Duration::from_millis(1100));
         let second = store
             .save("n8n", Manifest::new("n8n", http("http://n8n.adi/other")))
             .expect("re-save");
         assert_eq!(second.manifest.created_at, first.manifest.created_at);
         assert!(second.manifest.updated_at >= first.manifest.updated_at);
-        assert!(matches!(second.manifest.transport, Transport::Http { ref url, .. } if url == "http://n8n.adi/other"));
+        assert!(
+            matches!(second.manifest.transport, Transport::Http { ref url, .. } if url == "http://n8n.adi/other")
+        );
     }
 
     #[test]
@@ -326,12 +344,21 @@ mod tests {
     #[test]
     fn delete_removes_it_and_list_reflects_the_change() {
         let store = scratch("delete");
-        store.save("a", Manifest::new("a", http("http://a"))).expect("save a");
-        store.save("b", Manifest::new("b", http("http://b"))).expect("save b");
+        store
+            .save("a", Manifest::new("a", http("http://a")))
+            .expect("save a");
+        store
+            .save("b", Manifest::new("b", http("http://b")))
+            .expect("save b");
         assert_eq!(store.list().expect("list").len(), 2);
 
         assert!(store.delete("a").expect("delete"));
-        let ids: Vec<String> = store.list().expect("list").into_iter().map(|s| s.id).collect();
+        let ids: Vec<String> = store
+            .list()
+            .expect("list")
+            .into_iter()
+            .map(|s| s.id)
+            .collect();
         assert_eq!(ids, ["b"]);
     }
 
@@ -341,7 +368,10 @@ mod tests {
         for id in ["", ".", "..", "a/b", "sneaky/../x"] {
             assert!(matches!(store.get(id), Err(Error::InvalidId(_))), "{id:?}");
             assert!(
-                matches!(store.save(id, Manifest::new("x", http("http://x"))), Err(Error::InvalidId(_))),
+                matches!(
+                    store.save(id, Manifest::new("x", http("http://x"))),
+                    Err(Error::InvalidId(_))
+                ),
                 "{id:?}"
             );
         }
@@ -351,17 +381,35 @@ mod tests {
     fn rename_project_refiles_only_the_matching_servers() {
         let store = scratch("rename-project");
         store
-            .save("mine", Manifest::new("mine", http("http://x")).with_project("acme"))
+            .save(
+                "mine",
+                Manifest::new("mine", http("http://x")).with_project("acme"),
+            )
             .expect("save");
-        store.save("global", Manifest::new("global", http("http://y"))).expect("save");
+        store
+            .save("global", Manifest::new("global", http("http://y")))
+            .expect("save");
 
         let changed = store.rename_project("acme", "acme-2").expect("rename");
         assert_eq!(changed, 1);
         assert_eq!(
-            store.get("mine").expect("get").expect("exists").manifest.project,
+            store
+                .get("mine")
+                .expect("get")
+                .expect("exists")
+                .manifest
+                .project,
             Some("acme-2".to_string())
         );
-        assert_eq!(store.get("global").expect("get").expect("exists").manifest.project, None);
+        assert_eq!(
+            store
+                .get("global")
+                .expect("get")
+                .expect("exists")
+                .manifest
+                .project,
+            None
+        );
     }
 
     #[test]

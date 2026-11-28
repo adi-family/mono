@@ -60,14 +60,19 @@ pub async fn recheck_licences_once(state: &AppState) {
     for (fingerprint, licence_code) in rows {
         match licence.verify(&licence_code, &fingerprint).await {
             Ok(outcome) => {
-                if let Err(e) = state
-                    .store
-                    .set_licence_status(&fingerprint, &licence_code, outcome.valid, outcome.checked_at)
-                {
+                if let Err(e) = state.store.set_licence_status(
+                    &fingerprint,
+                    &licence_code,
+                    outcome.valid,
+                    outcome.checked_at,
+                ) {
                     tracing::warn!(error = %e, %fingerprint, "recording a licence recheck failed");
                     continue;
                 }
-                if let Err(e) = state.store.set_endpoints_paused(&fingerprint, !outcome.valid) {
+                if let Err(e) = state
+                    .store
+                    .set_endpoints_paused(&fingerprint, !outcome.valid)
+                {
                     tracing::warn!(error = %e, %fingerprint, "(un)pausing endpoints after a licence recheck failed");
                 }
             }
@@ -93,7 +98,10 @@ pub async fn run_licence_recheck_loop(state: Arc<AppState>) {
 
 impl AppState {
     fn licence_recheck_interval(&self) -> Option<Duration> {
-        self.config.licence.as_ref().map(|l| Duration::from_secs(l.recheck_interval_secs))
+        self.config
+            .licence
+            .as_ref()
+            .map(|l| Duration::from_secs(l.recheck_interval_secs))
     }
 }
 
@@ -103,8 +111,8 @@ mod tests {
     use crate::config::Config;
     use crate::licence::LicenceClient;
     use crate::store::Store;
-    use ed25519_dalek::{SigningKey, Signer as _, Signature};
     use base64::Engine as _;
+    use ed25519_dalek::{Signature, Signer as _, SigningKey};
 
     fn enterprise_state(service_url: String, public_key: ed25519_dalek::VerifyingKey) -> AppState {
         let config = Config::parse(&format!(
@@ -123,13 +131,19 @@ mod tests {
 
     #[test]
     fn purge_once_does_not_panic_on_an_empty_store() {
-        let state = enterprise_state("https://x".into(), SigningKey::from_bytes(&[1u8; 32]).verifying_key());
+        let state = enterprise_state(
+            "https://x".into(),
+            SigningKey::from_bytes(&[1u8; 32]).verifying_key(),
+        );
         purge_once(&state); // must not panic
     }
 
     #[tokio::test]
     async fn recheck_skips_a_fingerprint_with_no_licence_client() {
-        let config = Config::parse("mode=\"public\"\nbind=\"0.0.0.0:8080\"\ndb_path=\"x\"\nhostname=\"h\"\n").unwrap();
+        let config = Config::parse(
+            "mode=\"public\"\nbind=\"0.0.0.0:8080\"\ndb_path=\"x\"\nhostname=\"h\"\n",
+        )
+        .unwrap();
         let state = AppState {
             store: Store::open_in_memory().unwrap(),
             config,
@@ -143,7 +157,10 @@ mod tests {
 
     #[test]
     fn licence_recheck_interval_is_none_without_a_licence_section() {
-        let config = Config::parse("mode=\"public\"\nbind=\"0.0.0.0:8080\"\ndb_path=\"x\"\nhostname=\"h\"\n").unwrap();
+        let config = Config::parse(
+            "mode=\"public\"\nbind=\"0.0.0.0:8080\"\ndb_path=\"x\"\nhostname=\"h\"\n",
+        )
+        .unwrap();
         let state = AppState {
             store: Store::open_in_memory().unwrap(),
             config,
@@ -176,20 +193,29 @@ mod tests {
         recheck_licences_once(&state).await;
 
         let endpoints = state.store.list_endpoints("fp1").unwrap();
-        assert!(endpoints[0].paused, "a decided expired verdict must pause the endpoint");
+        assert!(
+            endpoints[0].paused,
+            "a decided expired verdict must pause the endpoint"
+        );
         assert!(!state.store.get_licence_status("fp1").unwrap().unwrap().0);
     }
 
     /// A minimal in-process HTTP server answering `/v1/verify` with one fixed, correctly signed
     /// verdict — just enough to exercise `LicenceClient::verify`'s real network path from this
     /// test module, without any external service.
-    async fn fake_licence_server(signing: SigningKey, status: &'static str, fingerprint: &'static str) -> String {
+    async fn fake_licence_server(
+        signing: SigningKey,
+        status: &'static str,
+        fingerprint: &'static str,
+    ) -> String {
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
             loop {
-                let Ok((mut stream, _)) = listener.accept().await else { return };
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    return;
+                };
                 let signing = signing.clone();
                 tokio::spawn(async move {
                     let mut buf = [0u8; 4096];
@@ -204,13 +230,18 @@ mod tests {
                             break 0;
                         }
                         received.extend_from_slice(&buf[..n]);
-                        let Some(head_end) = received.windows(4).position(|w| w == b"\r\n\r\n") else {
+                        let Some(head_end) = received.windows(4).position(|w| w == b"\r\n\r\n")
+                        else {
                             continue;
                         };
                         let head_text = String::from_utf8_lossy(&received[..head_end]);
                         let declared = head_text
                             .lines()
-                            .find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().to_string()))
+                            .find_map(|l| {
+                                l.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|v| v.trim().to_string())
+                            })
                             .and_then(|v| v.parse::<usize>().ok())
                             .unwrap_or(0);
                         if received.len() >= head_end + 4 + declared {
@@ -225,7 +256,8 @@ mod tests {
                         .and_then(|rest| rest.split('"').next())
                         .unwrap_or("")
                         .to_string();
-                    let deployment_id = crate::licence::LicenceClient::synthetic_deployment_id(fingerprint);
+                    let deployment_id =
+                        crate::licence::LicenceClient::synthetic_deployment_id(fingerprint);
                     let verdict = serde_json::json!({
                         "checked_at": crate::now_secs(),
                         "company": "Test",

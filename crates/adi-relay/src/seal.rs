@@ -47,7 +47,11 @@ impl Sealed {
     ///
     /// # Errors
     /// `Err` with a short reason if any field isn't valid base64 or isn't the expected length.
-    pub fn from_b64(ephemeral_pubkey: &str, nonce: &str, ciphertext: &str) -> Result<Self, &'static str> {
+    pub fn from_b64(
+        ephemeral_pubkey: &str,
+        nonce: &str,
+        ciphertext: &str,
+    ) -> Result<Self, &'static str> {
         let b64 = base64::engine::general_purpose::STANDARD;
         let ephemeral_pubkey: [u8; 32] = b64
             .decode(ephemeral_pubkey)
@@ -85,7 +89,12 @@ pub fn aad(endpoint_id: &str, record_id: i64) -> String {
 /// Never in practice: encryption only fails on a key/nonce-size mismatch, and both are fixed by
 /// this function's own types.
 #[must_use]
-pub fn seal(sealing_public: &[u8; 32], endpoint_id: &str, record_id: i64, plaintext: &[u8]) -> Sealed {
+pub fn seal(
+    sealing_public: &[u8; 32],
+    endpoint_id: &str,
+    record_id: i64,
+    plaintext: &[u8],
+) -> Sealed {
     let ephemeral_secret = EphemeralSecret::random_from_rng(OsRng);
     let ephemeral_public = PublicKey::from(&ephemeral_secret);
     let shared = ephemeral_secret.diffie_hellman(&PublicKey::from(*sealing_public));
@@ -219,7 +228,10 @@ mod tests {
         )
         .expect("rebuilds");
         assert_eq!(rebuilt, sealed);
-        assert_eq!(&*open(&secret, "wh_abc", 7, &rebuilt).expect("open"), b"payload bytes");
+        assert_eq!(
+            &*open(&secret, "wh_abc", 7, &rebuilt).expect("open"),
+            b"payload bytes"
+        );
     }
 
     #[test]

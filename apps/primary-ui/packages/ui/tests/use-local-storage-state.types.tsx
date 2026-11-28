@@ -44,7 +44,9 @@ export function acceptedLocalStorageExamples(storageKey: string | undefined) {
     ...jsonStorageCodec,
     parse: (stored) => {
       const value = jsonStorageCodec.parse(stored);
-      return Array.isArray(value) && value.every((item) => typeof item === "string") ? value : undefined;
+      return Array.isArray(value) && value.every((item) => typeof item === "string")
+        ? value
+        : undefined;
     },
   };
   const [list] = useLocalStorageState("list", [], listCodec);
@@ -59,7 +61,10 @@ export function rejectedLocalStorageExamples() {
   setCount("many");
 
   // @ts-expect-error — a codec must match the fallback's type.
-  useLocalStorageState<number>("width", 0, { parse: (stored) => stored, serialize: (value: string) => value });
+  useLocalStorageState<number>("width", 0, {
+    parse: (stored) => stored,
+    serialize: (value: string) => value,
+  });
 
   // @ts-expect-error — a fallback is required.
   useLocalStorageState("count");

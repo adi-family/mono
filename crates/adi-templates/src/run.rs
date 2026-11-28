@@ -185,7 +185,11 @@ mod tests {
 
     #[test]
     fn a_missing_required_cli_refuses_before_running_and_names_it() {
-        let t = template("bash", vec!["definitely-not-a-real-cli-xyz"], "echo should never run");
+        let t = template(
+            "bash",
+            vec!["definitely-not-a-real-cli-xyz"],
+            "echo should never run",
+        );
         let root = scratch("missing-requires");
         let err = create(
             &t,
@@ -229,7 +233,10 @@ mod tests {
         .expect("runs");
 
         let cwd = std::fs::read_to_string(root.join("cwd.txt")).expect("cwd.txt");
-        assert_eq!(cwd.trim(), root.canonicalize().expect("canon").to_string_lossy());
+        assert_eq!(
+            cwd.trim(),
+            root.canonicalize().expect("canon").to_string_lossy()
+        );
         let env = std::fs::read_to_string(root.join("env.txt")).expect("env.txt");
         assert_eq!(
             env,
@@ -257,7 +264,11 @@ mod tests {
         )
         .expect_err("fails");
         match err {
-            RunError::Failed { status, stdout, stderr } => {
+            RunError::Failed {
+                status,
+                stdout,
+                stderr,
+            } => {
                 assert_eq!(status, Some(7));
                 assert!(stdout.contains("out-line"), "{stdout}");
                 assert!(stderr.contains("err-line"), "{stderr}");

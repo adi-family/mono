@@ -143,8 +143,14 @@ fn invite_spec(body: &[u8]) -> Result<InviteSpec, Response> {
         .transpose()
         .map_err(|e| error(400, &format!("invalid role: {e}")))?;
     Ok(InviteSpec {
-        petname: req.petname.map(|p| p.trim().to_string()).filter(|p| !p.is_empty()),
-        username: req.username.map(|u| u.trim().to_string()).filter(|u| !u.is_empty()),
+        petname: req
+            .petname
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty()),
+        username: req
+            .username
+            .map(|u| u.trim().to_string())
+            .filter(|u| !u.is_empty()),
         role,
         grants,
         labels: req.labels,
@@ -360,7 +366,11 @@ pub fn fleet_unpair(store: &Config, body: &[u8]) -> Response {
 /// actually holds a lease table and a runner (`adi-app`) can revoke it and stop every run on it
 /// (§10.1, ADI-MONO-181 P2.6). The plain [`fleet_unpair`] above is every other caller, including
 /// every existing test, which has nothing to act on that with.
-pub fn fleet_unpair_revoking(store: &Config, body: &[u8], on_user_removed: impl FnOnce(&str)) -> Response {
+pub fn fleet_unpair_revoking(
+    store: &Config,
+    body: &[u8],
+    on_user_removed: impl FnOnce(&str),
+) -> Response {
     let petname = match node_ref(body) {
         Ok(petname) => petname,
         Err(response) => return response,
@@ -538,7 +548,8 @@ impl DroppedSources {
     }
 
     fn remove(&mut self, key: &str, paired_at: u64) {
-        self.nodes.retain(|n| !(n.key == key && n.paired_at == paired_at));
+        self.nodes
+            .retain(|n| !(n.key == key && n.paired_at == paired_at));
     }
 
     fn add(&mut self, key: &str, paired_at: u64) {
@@ -1056,7 +1067,10 @@ mod tests {
         // Dropping the viewer too leaves nothing, so it unpairs.
         let v = ok_body(&fleet_drop_viewer(&store, br#"{"petname":"laptop-b"}"#));
         assert!(node(&v, "laptop-b").is_none());
-        assert!(DroppedSources::load(&store).nodes.is_empty(), "its entry went with it");
+        assert!(
+            DroppedSources::load(&store).nodes.is_empty(),
+            "its entry went with it"
+        );
 
         // A source that views nothing here unpairs on its own drop.
         let v = ok_body(&fleet_drop_source(&store, br#"{"petname":"desk"}"#));
@@ -1068,17 +1082,29 @@ mod tests {
         let mut registry = FleetRegistry::load_from(&store).expect("load");
         registry.get_mut("laptop-b").expect("paired").paired_at += 1;
         registry.save_to(&store).expect("save");
-        assert_eq!(node(&ok_body(&fleet(&store)), "laptop-b").unwrap()["source"], true);
+        assert_eq!(
+            node(&ok_body(&fleet(&store)), "laptop-b").unwrap()["source"],
+            true
+        );
     }
 
     #[test]
     fn dropping_a_viewer_that_is_a_source_only_takes_its_grants() {
         let store = temp_store();
-        pair(&store, "laptop-b", "laptop-b", &["http:app", "http:nosh"], false);
+        pair(
+            &store,
+            "laptop-b",
+            "laptop-b",
+            &["http:app", "http:nosh"],
+            false,
+        );
         let v = ok_body(&fleet_drop_viewer(&store, br#"{"petname":"laptop-b"}"#));
         assert_eq!(v["nodes"][0]["grants"], serde_json::json!([]));
         assert_eq!(v["nodes"][0]["source"], true);
-        assert_eq!(fleet_drop_viewer(&store, br#"{"petname":"gone"}"#).status, 404);
+        assert_eq!(
+            fleet_drop_viewer(&store, br#"{"petname":"gone"}"#).status,
+            404
+        );
     }
 
     #[test]
@@ -1173,7 +1199,10 @@ mod tests {
         let _ = fleet_unpair_revoking(&store, br#"{"petname":"laptop-b"}"#, |user| {
             notified = Some(user.to_string());
         });
-        assert_eq!(notified, None, "phone-b still carries u-aaa — not the last peer yet");
+        assert_eq!(
+            notified, None,
+            "phone-b still carries u-aaa — not the last peer yet"
+        );
 
         let mut notified = None;
         let _ = fleet_unpair_revoking(&store, br#"{"petname":"phone-b"}"#, |user| {
@@ -1424,7 +1453,10 @@ mod tests {
         let laptop = nodes.iter().find(|n| n["petname"] == "laptop-b").unwrap();
         let desk = nodes.iter().find(|n| n["petname"] == "desk").unwrap();
 
-        assert_eq!(laptop["active"], true, "seen 10s ago, well inside the window");
+        assert_eq!(
+            laptop["active"], true,
+            "seen 10s ago, well inside the window"
+        );
         assert_eq!(laptop["last_seen"], now - 10);
 
         assert_eq!(desk["active"], false, "seen an hour ago: known, not active");
@@ -1475,16 +1507,16 @@ mod tests {
 
         // A second call is a second invite: minting is never idempotent, or two nodes would race
         // for one nonce and the second would be told it was replayed.
-        let again = mint(&store, Some(sample_endpoint()), now, InviteSpec::default())
-            .expect("mint again");
+        let again =
+            mint(&store, Some(sample_endpoint()), now, InviteSpec::default()).expect("mint again");
         assert_ne!(again.token, invite.token);
     }
 
     #[test]
     fn minting_without_a_running_mesh_is_refused_rather_than_answered_with_a_dead_token() {
         let store = temp_store();
-        let response = mint(&store, None, 1_700_000_000, InviteSpec::default())
-            .expect_err("nothing to dial");
+        let response =
+            mint(&store, None, 1_700_000_000, InviteSpec::default()).expect_err("nothing to dial");
         assert_eq!(response.status, 409, "{}", response.body);
         assert!(
             response.body.contains("mesh is not running"),
@@ -1511,10 +1543,7 @@ mod tests {
             grant_back: true,
         })
         .expect("a body");
-        assert_eq!(
-            fleet_join_token(&body, now).expect("live"),
-            (token, true)
-        );
+        assert_eq!(fleet_join_token(&body, now).expect("live"), (token, true));
     }
 
     /// Everything refusable about a token is refused *before* the dial, so the operator reads why
@@ -1583,17 +1612,24 @@ mod tests {
             spec.grants,
             vec!["http:app".parse().unwrap(), "http:hub".parse().unwrap()]
         );
-        assert_eq!(spec.labels.get("principal").map(String::as_str), Some("p42"));
+        assert_eq!(
+            spec.labels.get("principal").map(String::as_str),
+            Some("p42")
+        );
     }
 
     #[test]
     fn an_invalid_grant_or_role_in_the_body_is_a_400() {
         assert_eq!(
-            invite_spec(br#"{"grants":["ftp:*"]}"#).expect_err("bad grant").status,
+            invite_spec(br#"{"grants":["ftp:*"]}"#)
+                .expect_err("bad grant")
+                .status,
             400
         );
         assert_eq!(
-            invite_spec(br#"{"role":"owner"}"#).expect_err("bad role").status,
+            invite_spec(br#"{"role":"owner"}"#)
+                .expect_err("bad role")
+                .status,
             400
         );
         assert_eq!(invite_spec(b"not json").expect_err("bad json").status, 400);
@@ -1632,8 +1668,7 @@ mod tests {
         let store = temp_store();
         let response = fleet_invite(&store, b"");
         let invite: FleetInvite = serde_json::from_str(&response.body).expect("a fleet invite");
-        let decoded =
-            adi_mesh::join::decode_invite(&invite.token, 1_700_000_000).expect("live");
+        let decoded = adi_mesh::join::decode_invite(&invite.token, 1_700_000_000).expect("live");
         let book = adi_mesh::join::InviteBook::load_from(&store).expect("the book");
         let pending = book
             .invites
@@ -1678,7 +1713,10 @@ mod tests {
             fleet_invite_cancel(&store, br#"{"nonce":"deadbeef"}"#).status,
             404
         );
-        assert_eq!(fleet_invite_cancel(&store, br#"{"nonce":"  "}"#).status, 400);
+        assert_eq!(
+            fleet_invite_cancel(&store, br#"{"nonce":"  "}"#).status,
+            400
+        );
 
         // And the cancelled nonce can no longer be spent.
         let mut registry = FleetRegistry::default();

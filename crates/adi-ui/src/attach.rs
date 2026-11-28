@@ -343,7 +343,9 @@ fn wants_files(text: Option<&str>, file_count: usize) -> bool {
 #[must_use]
 pub(crate) fn pasted(ev: &ev::ClipboardEvent) -> Vec<web_sys::File> {
     let files = files_of(ev.clipboard_data());
-    let text = ev.clipboard_data().and_then(|d| d.get_data("text/plain").ok());
+    let text = ev
+        .clipboard_data()
+        .and_then(|d| d.get_data("text/plain").ok());
     if wants_files(text.as_deref(), files.len()) {
         files
     } else {

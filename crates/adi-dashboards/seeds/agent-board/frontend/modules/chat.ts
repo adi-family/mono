@@ -158,7 +158,11 @@ function calls(steps: Step[]): HTMLElement | null {
   const tools = steps.filter((s) => s.kind === "tool");
   if (!tools.length) return null;
   const last = tools[tools.length - 1].name ?? "tool";
-  return el("div", "ab-calls", `${tools.length} ${tools.length === 1 ? "call" : "calls"} · ${last}`);
+  return el(
+    "div",
+    "ab-calls",
+    `${tools.length} ${tools.length === 1 ? "call" : "calls"} · ${last}`,
+  );
 }
 
 function title(run: RunRow): string {
@@ -239,7 +243,10 @@ export function chat(root: HTMLElement): void {
 
   function drawLog() {
     const turns = peek?.turns ?? [];
-    const sig = JSON.stringify([runId, turns.map((t) => [t.role, t.text, t.pending, t.queued, t.steps?.length])]);
+    const sig = JSON.stringify([
+      runId,
+      turns.map((t) => [t.role, t.text, t.pending, t.queued, t.steps?.length]),
+    ]);
     if (sig === signature) return;
     signature = sig;
     const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
@@ -252,7 +259,8 @@ export function chat(root: HTMLElement): void {
       if (turn.role === "user") {
         const t = el("div", "ab-turn is-user", turn.text);
         log.append(t);
-        if (turn.queued) log.append(el("div", "ab-note", "Queued — sent when the answer in flight is done"));
+        if (turn.queued)
+          log.append(el("div", "ab-note", "Queued — sent when the answer in flight is done"));
         continue;
       }
       const t = el("div", "ab-turn is-agent");
@@ -267,9 +275,12 @@ export function chat(root: HTMLElement): void {
 
   async function loadAgents() {
     const { agents } = await call<{ agents: Agent[] }>("/agents");
-    const names = (agents ?? []).filter((a) => a.runnable !== false).map((a) => a.name).sort(
-      (a, b) => Number(a !== DEFAULT_AGENT) - Number(b !== DEFAULT_AGENT) || a.localeCompare(b),
-    );
+    const names = (agents ?? [])
+      .filter((a) => a.runnable !== false)
+      .map((a) => a.name)
+      .sort(
+        (a, b) => Number(a !== DEFAULT_AGENT) - Number(b !== DEFAULT_AGENT) || a.localeCompare(b),
+      );
     agentPick.replaceChildren(
       ...names.map((n) => {
         const o = el("option", undefined, n);
@@ -320,7 +331,12 @@ export function chat(root: HTMLElement): void {
     signature = "";
     await loadRuns();
     const saved = localStorage.getItem(`ab-run:${agent}`);
-    runId = saved === "" ? null : runs.some((r) => r.run_id === saved) ? saved : runs[0]?.run_id ?? null;
+    runId =
+      saved === ""
+        ? null
+        : runs.some((r) => r.run_id === saved)
+          ? saved
+          : (runs[0]?.run_id ?? null);
     runPick.value = runId ?? "";
     remember();
     await tick();
@@ -381,9 +397,7 @@ export function chat(root: HTMLElement): void {
 
   drawControls();
   drawLog();
-  void loadAgents()
-    .then(openAgent)
-    .catch(fail);
+  void loadAgents().then(openAgent).catch(fail);
 }
 
 /** The board's page: the chat as its panel. */

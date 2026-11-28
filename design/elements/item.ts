@@ -2,8 +2,7 @@ import { AdiElement, define } from "./base.ts";
 import "./icon.ts";
 import "./status.ts";
 
-class AdiKbd extends AdiElement {
-}
+class AdiKbd extends AdiElement {}
 
 class AdiItem extends AdiElement {
   static observedAttributes = ["label", "meta", "shortcut", "icon", "href", "live", "active"];

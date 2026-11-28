@@ -165,21 +165,11 @@ fn project_task_rows(state: State, route: RwSignal<Route>) -> AnyView {
                 let store = |s: State, ts: TasksState| s.tasks.set(Some(ts));
                 let item = if is_finished(&t.effective) {
                     menu_item(state, "Reopen", false, move || {
-                        apply_mutation(
-                            state,
-                            None,
-                            store,
-                            fetch::reopen_task(id.clone()),
-                        );
+                        apply_mutation(state, None, store, fetch::reopen_task(id.clone()));
                     })
                 } else {
                     menu_item(state, "Archive", false, move || {
-                        apply_mutation(
-                            state,
-                            None,
-                            store,
-                            fetch::archive_task(id.clone()),
-                        );
+                        apply_mutation(state, None, store, fetch::archive_task(id.clone()));
                     })
                 };
                 row_actions(state, format!("ptask:{}", t.id), (), vec![item])

@@ -476,7 +476,10 @@ mod tests {
     fn endpoint_short_names_the_invites_own_key() {
         let id = SecretKey::from_bytes(&[9u8; 32]).public();
         let addr = EndpointAddr::new(id);
-        let ticket = format!("{TICKET_PREFIX}{}", to_hex(&serde_json::to_vec(&addr).unwrap()));
+        let ticket = format!(
+            "{TICKET_PREFIX}{}",
+            to_hex(&serde_json::to_vec(&addr).unwrap())
+        );
         let invite = Invite {
             v: VERSION,
             endpoint: ticket,

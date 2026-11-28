@@ -37,7 +37,10 @@ export async function panel(path: string, payload?: unknown): Promise<Response> 
       base = null;
     }
   }
-  return Response.json({ error: `the control panel is not answering: ${lastErr}` }, { status: 503 });
+  return Response.json(
+    { error: `the control panel is not answering: ${lastErr}` },
+    { status: 503 },
+  );
 }
 
 /** The request's JSON body, or `{}` — the panel says what is missing better than we could. */
@@ -79,7 +82,10 @@ export async function relay(req: Request, path: string): Promise<Response> {
       base = null;
     }
   }
-  return Response.json({ error: `the control panel is not answering: ${lastErr}` }, { status: 503 });
+  return Response.json(
+    { error: `the control panel is not answering: ${lastErr}` },
+    { status: 503 },
+  );
 }
 
 /** Where the chat's own files come from (`design/elements`, served by every panel at
@@ -119,7 +125,10 @@ export async function element(file: string): Promise<Response> {
       const res = await fetch(`${from}/elements/${file}`, { signal: AbortSignal.timeout(10_000) });
       if (res.ok) {
         return new Response(res.body, {
-          headers: { "content-type": res.headers.get("content-type") ?? "text/javascript", "cache-control": "no-store" },
+          headers: {
+            "content-type": res.headers.get("content-type") ?? "text/javascript",
+            "cache-control": "no-store",
+          },
         });
       }
     } catch {

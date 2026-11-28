@@ -274,7 +274,10 @@ pub(crate) fn run_triggers(adi: Adi, command: TriggersCommand) -> Result<(), Str
             println!(
                 "Moved trigger {name}'s inline hook secret to {} ({}). The manifest now holds only the reference.",
                 migrated.secret_name,
-                migrated.project.as_deref().map_or_else(|| "global".to_string(), |p| format!("project {p}")),
+                migrated
+                    .project
+                    .as_deref()
+                    .map_or_else(|| "global".to_string(), |p| format!("project {p}")),
             );
         }
     }
@@ -285,8 +288,16 @@ pub(crate) fn run_triggers(adi: Adi, command: TriggersCommand) -> Result<(), Str
 /// included) goes through this rather than the raw [`adi_core::Trigger`], so a value already on
 /// an old manifest never prints again. `secret_ref` is left alone: it's a name, not the value.
 fn redacted(mut trigger: Trigger) -> Trigger {
-    if trigger.manifest.extra.get(HOOK_SECRET_EXTRA).is_some_and(|v| !v.is_empty()) {
-        trigger.manifest.extra.insert(HOOK_SECRET_EXTRA.to_string(), redaction_note(&trigger.name));
+    if trigger
+        .manifest
+        .extra
+        .get(HOOK_SECRET_EXTRA)
+        .is_some_and(|v| !v.is_empty())
+    {
+        trigger
+            .manifest
+            .extra
+            .insert(HOOK_SECRET_EXTRA.to_string(), redaction_note(&trigger.name));
     }
     trigger
 }
@@ -308,13 +319,17 @@ fn register_relay_if_needed(
 ) -> Result<(), String> {
     let previous = store.get(name).map_err(|e| e.to_string())?;
     let previous_extra = previous.as_ref().map(|t| &t.manifest.extra);
-    if matches!(adi_relay::register::plan(previous_extra, manifest_extra), adi_relay::register::Plan::Unchanged) {
+    if matches!(
+        adi_relay::register::plan(previous_extra, manifest_extra),
+        adi_relay::register::Plan::Unchanged
+    ) {
         // `--extra` rebuilds the manifest from scratch every invocation, with no
         // `relay_endpoint` of its own to carry forward — unlike the panel's edit form.
         adi_relay::register::keep_unchanged_endpoint(previous_extra, manifest_extra);
         return Ok(());
     }
-    let identity = std::sync::Arc::new(adi_relay::keys::load_or_create().map_err(|e| e.to_string())?);
+    let identity =
+        std::sync::Arc::new(adi_relay::keys::load_or_create().map_err(|e| e.to_string())?);
     // `Cleanup::Await`, not `::Spawn`: this process exits right after, with nothing left around
     // to let a merely-spawned best-effort delete actually run (see `Cleanup`'s own doc comment).
     block_on(adi_relay::register::register_on_save(
@@ -494,7 +509,10 @@ mod tests {
     fn manifest_with(extra: &[(&str, &str)]) -> TriggerManifest {
         TriggerManifest {
             kind: adi_core::KIND_WEBHOOK.to_string(),
-            extra: extra.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            extra: extra
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
             ..TriggerManifest::default()
         }
     }
@@ -504,7 +522,13 @@ mod tests {
     async fn respond(stream: &mut tokio::net::TcpStream, status: &str, body: &str) {
         use tokio::io::AsyncWriteExt as _;
         stream
-            .write_all(format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes())
+            .write_all(
+                format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
             .await
             .unwrap();
     }
@@ -515,14 +539,17 @@ mod tests {
     fn a_trigger_with_no_relay_is_left_alone() {
         let store = scratch_store("no-relay");
         let mut extra = std::collections::BTreeMap::new();
-        register_relay_if_needed(&store, "hook", &mut extra).expect("no relay named, nothing to do");
+        register_relay_if_needed(&store, "hook", &mut extra)
+            .expect("no relay named, nothing to do");
         assert!(extra.is_empty());
     }
 
     /// Spawn a fake relay on its own thread (its own runtime, never the test's — a tokio socket
     /// crossing runtimes is a bug waiting to happen), bound before this returns so the caller
     /// never races the first request against the bind.
-    fn fake_relay(respond_with: impl FnOnce(&str) -> (&'static str, String) + Send + 'static) -> std::net::SocketAddr {
+    fn fake_relay(
+        respond_with: impl FnOnce(&str) -> (&'static str, String) + Send + 'static,
+    ) -> std::net::SocketAddr {
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             block_on(async move {
@@ -555,7 +582,10 @@ mod tests {
 
         let trigger = Trigger {
             name: "hook".to_string(),
-            manifest: TriggerManifest { extra, ..manifest_with(&[]) },
+            manifest: TriggerManifest {
+                extra,
+                ..manifest_with(&[])
+            },
         };
         assert_eq!(
             relay_public_url(&trigger),
@@ -568,7 +598,12 @@ mod tests {
     #[test]
     fn a_failed_registration_fails_the_save_with_the_relays_reason() {
         let store = scratch_store("save-fails");
-        let addr = fake_relay(|_request| ("500 Internal Server Error", "{\"message\":\"relay is down\"}".to_string()));
+        let addr = fake_relay(|_request| {
+            (
+                "500 Internal Server Error",
+                "{\"message\":\"relay is down\"}".to_string(),
+            )
+        });
 
         let mut extra = manifest_with(&[("relay", &format!("custom:http://{addr}"))]).extra;
         let error = register_relay_if_needed(&store, "hook", &mut extra).unwrap_err();
@@ -624,7 +659,14 @@ mod tests {
             name: "hook".to_string(),
             manifest: manifest_with(&[("secret_ref", "MY_SECRET")]),
         });
-        assert_eq!(referenced.manifest.extra.get("secret_ref").map(String::as_str), Some("MY_SECRET"));
+        assert_eq!(
+            referenced
+                .manifest
+                .extra
+                .get("secret_ref")
+                .map(String::as_str),
+            Some("MY_SECRET")
+        );
     }
 
     /// `triggers migrate-hook-secret` moves the plaintext into `adi-secrets` and switches the

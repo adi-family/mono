@@ -235,7 +235,9 @@ pub fn brief(evidence: &Evidence<'_>, path: &Path) -> String {
     let _ = writeln!(
         out,
         "Under review: agent `{}`, session `{}`, on `{}`.",
-        evidence.agent.name, evidence.run_id, evidence.agent.manifest.runtime()
+        evidence.agent.name,
+        evidence.run_id,
+        evidence.agent.manifest.runtime()
     );
     let _ = writeln!(
         out,

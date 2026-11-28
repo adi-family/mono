@@ -24,7 +24,10 @@ describe("health", () => {
   it("reports both telegram and slack enabled once both are configured", async () => {
     const res = await handle(new Request("https://router.example/health"), env, NOW);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ service: "adi-channel-router", providers: ["telegram", "slack"] });
+    expect(await res.json()).toEqual({
+      service: "adi-channel-router",
+      providers: ["telegram", "slack"],
+    });
   });
 
   it("GET / answers the same as /health", async () => {
@@ -67,17 +70,17 @@ describe("POST /register", () => {
   });
 
   it("400s a missing target", async () => {
-    const res = await handle(
-      registerRequest({ node: "node-1", provider: "telegram" }),
-      env,
-      NOW,
-    );
+    const res = await handle(registerRequest({ node: "node-1", provider: "telegram" }), env, NOW);
     expect(res.status).toBe(400);
   });
 
   it("404s an unknown or unsupported provider", async () => {
     const res = await handle(
-      registerRequest({ node: "node-1", provider: "discord", target: { kind: "agent", agent: "a" } }),
+      registerRequest({
+        node: "node-1",
+        provider: "discord",
+        target: { kind: "agent", agent: "a" },
+      }),
       env,
       NOW,
     );
@@ -114,7 +117,11 @@ describe("POST /register", () => {
 
   it("has no install_url_group for a provider with no such concept", async () => {
     const res = await handle(
-      registerRequest({ node: `node-no-group-${Math.random()}`, provider: "slack", target: { kind: "agent", agent: "a" } }),
+      registerRequest({
+        node: `node-no-group-${Math.random()}`,
+        provider: "slack",
+        target: { kind: "agent", agent: "a" },
+      }),
       env,
       NOW,
     );
@@ -125,10 +132,18 @@ describe("POST /register", () => {
   it("reuses the same node token across two connections, but mints a fresh connection/code each time", async () => {
     const node = `node-reuse-${Math.random()}`;
     const first = (await (
-      await handle(registerRequest({ node, provider: "telegram", target: { kind: "agent", agent: "a" } }), env, NOW)
+      await handle(
+        registerRequest({ node, provider: "telegram", target: { kind: "agent", agent: "a" } }),
+        env,
+        NOW,
+      )
     ).json()) as { token: string; connection: string; link_code: string };
     const second = (await (
-      await handle(registerRequest({ node, provider: "telegram", target: { kind: "agent", agent: "b" } }), env, NOW)
+      await handle(
+        registerRequest({ node, provider: "telegram", target: { kind: "agent", agent: "b" } }),
+        env,
+        NOW,
+      )
     ).json()) as { token: string; connection: string; link_code: string };
 
     expect(second.token).toBe(first.token);
@@ -159,7 +174,11 @@ describe("POST /register", () => {
 
     // The same IP, but with the admin bearer, is never throttled.
     const res = await handle(
-      registerRequest({ node: `node-ratelimit-admin-${Math.random()}`, provider: "telegram", target: { kind: "agent", agent: "a" } }),
+      registerRequest({
+        node: `node-ratelimit-admin-${Math.random()}`,
+        provider: "telegram",
+        target: { kind: "agent", agent: "a" },
+      }),
       env,
       NOW,
     );
@@ -198,7 +217,11 @@ describe("POST /register", () => {
         new Request("https://router.example/register", {
           method: "POST",
           headers: { "cf-connecting-ip": `ip-${Math.random()}` },
-          body: JSON.stringify({ node, provider: "telegram", target: { kind: "agent", agent: "a" } }),
+          body: JSON.stringify({
+            node,
+            provider: "telegram",
+            target: { kind: "agent", agent: "a" },
+          }),
         }),
         env,
         NOW,
@@ -235,7 +258,10 @@ describe("POST /webhook/<provider> -- signature check", () => {
     const res = await handle(
       new Request("https://router.example/webhook/telegram", {
         method: "POST",
-        body: JSON.stringify({ update_id: 1, message: { message_id: 1, chat: { id: 1 }, text: "hi" } }),
+        body: JSON.stringify({
+          update_id: 1,
+          message: { message_id: 1, chat: { id: 1 }, text: "hi" },
+        }),
       }),
       env,
       NOW,
@@ -248,7 +274,10 @@ describe("POST /webhook/<provider> -- signature check", () => {
       new Request("https://router.example/webhook/telegram", {
         method: "POST",
         headers: { "x-telegram-bot-api-secret-token": "nope" },
-        body: JSON.stringify({ update_id: 1, message: { message_id: 1, chat: { id: 1 }, text: "hi" } }),
+        body: JSON.stringify({
+          update_id: 1,
+          message: { message_id: 1, chat: { id: 1 }, text: "hi" },
+        }),
       }),
       env,
       NOW,
@@ -291,7 +320,9 @@ describe("POST /subscribe -- auth", () => {
 
   it("401s an invalid token", async () => {
     const res = await handle(
-      new Request("https://router.example/subscribe", { headers: { authorization: "Bearer garbage" } }),
+      new Request("https://router.example/subscribe", {
+        headers: { authorization: "Bearer garbage" },
+      }),
       env,
       NOW,
     );
@@ -325,7 +356,11 @@ describe("POST /send -- auth", () => {
   it("400s a well-authenticated request missing { connection, text }", async () => {
     const node = `node-send-shape-${Math.random()}`;
     const { token } = (await (
-      await handle(registerRequest({ node, provider: "telegram", target: { kind: "agent", agent: "a" } }), env, NOW)
+      await handle(
+        registerRequest({ node, provider: "telegram", target: { kind: "agent", agent: "a" } }),
+        env,
+        NOW,
+      )
     ).json()) as { token: string };
 
     const res = await handle(
@@ -343,7 +378,11 @@ describe("POST /send -- auth", () => {
   it("404s a valid token against a connection that was never linked", async () => {
     const node = `node-send-unlinked-${Math.random()}`;
     const { token, connection } = (await (
-      await handle(registerRequest({ node, provider: "telegram", target: { kind: "agent", agent: "a" } }), env, NOW)
+      await handle(
+        registerRequest({ node, provider: "telegram", target: { kind: "agent", agent: "a" } }),
+        env,
+        NOW,
+      )
     ).json()) as { token: string; connection: string };
 
     const res = await handle(
@@ -359,7 +398,10 @@ describe("POST /send -- auth", () => {
   });
 });
 
-async function signedSlackRequest(bodyObj: unknown, timestamp = String(NOW / 1000)): Promise<Request> {
+async function signedSlackRequest(
+  bodyObj: unknown,
+  timestamp = String(NOW / 1000),
+): Promise<Request> {
   const body = JSON.stringify(bodyObj);
   const enc = new TextEncoder();
   const key = await crypto.subtle.importKey(
@@ -409,13 +451,18 @@ describe("Slack install + OAuth link", () => {
     // Unique to this test -- isolatedStorage is off for this whole suite, so a hardcoded team id
     // shared with another test file's own Slack link would collide on the D1 row.
     const teamId = `T-LINK-${Math.random()}`;
-    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
-      new Response(JSON.stringify({ ok: true, access_token: "xoxb-1", team: { id: teamId } }), { status: 200 }),
+    const fetchMock = vi.fn(
+      async (_url: string, _init?: RequestInit) =>
+        new Response(JSON.stringify({ ok: true, access_token: "xoxb-1", team: { id: teamId } }), {
+          status: 200,
+        }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
     const res = await handle(
-      new Request(`https://router.example/link/slack?code=oauth-code&state=${encodeURIComponent(link_code)}`),
+      new Request(
+        `https://router.example/link/slack?code=oauth-code&state=${encodeURIComponent(link_code)}`,
+      ),
       env,
       NOW,
     );
@@ -426,7 +473,9 @@ describe("Slack install + OAuth link", () => {
       expect.anything(),
     );
 
-    const row = await env.ROUTING_KEYS.prepare("SELECT node_id FROM routing_keys WHERE provider = ? AND routing_key = ?")
+    const row = await env.ROUTING_KEYS.prepare(
+      "SELECT node_id FROM routing_keys WHERE provider = ? AND routing_key = ?",
+    )
       .bind("slack", teamId)
       .first<{ node_id: string }>();
     expect(row?.node_id).toBe(node);
@@ -445,21 +494,31 @@ describe("Slack install + OAuth link", () => {
     const firstNode = `node-slack-steal-first-${Math.random()}`;
     const { link_code: firstCode } = (await (
       await handle(
-        registerRequest({ node: firstNode, provider: "slack", target: { kind: "agent", agent: "a" } }),
+        registerRequest({
+          node: firstNode,
+          provider: "slack",
+          target: { kind: "agent", agent: "a" },
+        }),
         env,
         NOW,
       )
     ).json()) as { link_code: string };
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () =>
-        new Response(JSON.stringify({ ok: true, access_token: "xoxb-first", team: { id: "T-STEAL" } }), {
-          status: 200,
-        }),
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ ok: true, access_token: "xoxb-first", team: { id: "T-STEAL" } }),
+            {
+              status: 200,
+            },
+          ),
       ),
     );
     const firstLink = await handle(
-      new Request(`https://router.example/link/slack?code=oauth-code&state=${encodeURIComponent(firstCode)}`),
+      new Request(
+        `https://router.example/link/slack?code=oauth-code&state=${encodeURIComponent(firstCode)}`,
+      ),
       env,
       NOW,
     );
@@ -468,28 +527,40 @@ describe("Slack install + OAuth link", () => {
     const secondNode = `node-slack-steal-second-${Math.random()}`;
     const { link_code: secondCode } = (await (
       await handle(
-        registerRequest({ node: secondNode, provider: "slack", target: { kind: "agent", agent: "a" } }),
+        registerRequest({
+          node: secondNode,
+          provider: "slack",
+          target: { kind: "agent", agent: "a" },
+        }),
         env,
         NOW,
       )
     ).json()) as { link_code: string };
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () =>
-        new Response(JSON.stringify({ ok: true, access_token: "xoxb-second", team: { id: "T-STEAL" } }), {
-          status: 200,
-        }),
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ ok: true, access_token: "xoxb-second", team: { id: "T-STEAL" } }),
+            {
+              status: 200,
+            },
+          ),
       ),
     );
     const secondLink = await handle(
-      new Request(`https://router.example/link/slack?code=oauth-code&state=${encodeURIComponent(secondCode)}`),
+      new Request(
+        `https://router.example/link/slack?code=oauth-code&state=${encodeURIComponent(secondCode)}`,
+      ),
       env,
       NOW,
     );
     expect(secondLink.status).toBe(200);
     expect(await secondLink.text()).toContain("already connected to another ADI");
 
-    const row = await env.ROUTING_KEYS.prepare("SELECT node_id FROM routing_keys WHERE provider = ? AND routing_key = ?")
+    const row = await env.ROUTING_KEYS.prepare(
+      "SELECT node_id FROM routing_keys WHERE provider = ? AND routing_key = ?",
+    )
       .bind("slack", "T-STEAL")
       .first<{ node_id: string }>();
     expect(row?.node_id).toBe(firstNode);
@@ -507,10 +578,15 @@ describe("Slack install + OAuth link", () => {
 
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response(JSON.stringify({ ok: false, error: "invalid_code" }), { status: 200 })),
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ ok: false, error: "invalid_code" }), { status: 200 }),
+      ),
     );
     const res = await handle(
-      new Request(`https://router.example/link/slack?code=bad&state=${encodeURIComponent(link_code)}`),
+      new Request(
+        `https://router.example/link/slack?code=bad&state=${encodeURIComponent(link_code)}`,
+      ),
       env,
       NOW,
     );
@@ -571,7 +647,11 @@ describe("POST /disconnect -- auth", () => {
   it("400s a well-authenticated request missing { connection }", async () => {
     const node = `node-disconnect-shape-${Math.random()}`;
     const { token } = (await (
-      await handle(registerRequest({ node, provider: "telegram", target: { kind: "agent", agent: "a" } }), env, NOW)
+      await handle(
+        registerRequest({ node, provider: "telegram", target: { kind: "agent", agent: "a" } }),
+        env,
+        NOW,
+      )
     ).json()) as { token: string };
 
     const res = await handle(
@@ -589,7 +669,11 @@ describe("POST /disconnect -- auth", () => {
   it("404s a valid token against an unknown connection", async () => {
     const node = `node-disconnect-unknown-${Math.random()}`;
     const { token } = (await (
-      await handle(registerRequest({ node, provider: "telegram", target: { kind: "agent", agent: "a" } }), env, NOW)
+      await handle(
+        registerRequest({ node, provider: "telegram", target: { kind: "agent", agent: "a" } }),
+        env,
+        NOW,
+      )
     ).json()) as { token: string };
 
     const res = await handle(

@@ -131,7 +131,8 @@ pub(crate) fn run_mcp(adi: Adi, command: McpCommand) -> Result<(), String> {
             env,
             json,
         } => {
-            let transport = build_transport(transport.as_deref(), url, headers, command, args, env)?;
+            let transport =
+                build_transport(transport.as_deref(), url, headers, command, args, env)?;
             let mut manifest = McpManifest::new(name.unwrap_or_else(|| id.clone()), transport);
             if let Some(description) = description {
                 manifest = manifest.with_description(description);
@@ -143,7 +144,11 @@ pub(crate) fn run_mcp(adi: Adi, command: McpCommand) -> Result<(), String> {
             if json {
                 print_json(&server);
             } else {
-                println!("Saved mcp server {} ({}).", server.display_name(), server.id);
+                println!(
+                    "Saved mcp server {} ({}).",
+                    server.display_name(),
+                    server.id
+                );
                 print_server(&server);
             }
         }
@@ -171,7 +176,11 @@ fn build_transport(
     let kind = match transport.map(str::trim) {
         Some("http") => "http",
         Some("stdio") => "stdio",
-        Some(other) => return Err(format!("--transport must be 'http' or 'stdio', got {other:?}")),
+        Some(other) => {
+            return Err(format!(
+                "--transport must be 'http' or 'stdio', got {other:?}"
+            ));
+        }
         None if url.is_some() => "http",
         None if command.is_some() => "stdio",
         None => {
@@ -228,14 +237,20 @@ fn render_value(value: &McpValue) -> String {
     match value {
         McpValue::Literal(text) => text.clone(),
         McpValue::Secret { secret, prefix } if prefix.is_empty() => format!("secret:{secret}"),
-        McpValue::Secret { secret, prefix } if prefix == adi_core::MCP_BEARER_PREFIX => format!("bearer:{secret}"),
+        McpValue::Secret { secret, prefix } if prefix == adi_core::MCP_BEARER_PREFIX => {
+            format!("bearer:{secret}")
+        }
         McpValue::Secret { secret, prefix } => format!("secret:{secret} (prefix {prefix:?})"),
     }
 }
 
 fn print_server(server: &McpServer) {
     let project = server.manifest.project.as_deref().unwrap_or("global");
-    println!("{} — {project} [{}]", server.id, transport_label(&server.manifest.transport));
+    println!(
+        "{} — {project} [{}]",
+        server.id,
+        transport_label(&server.manifest.transport)
+    );
     if let Some(description) = &server.manifest.description {
         println!("  {description}");
     }
@@ -258,10 +273,17 @@ fn print_server(server: &McpServer) {
         let secrets = adi_core::Secrets::open();
         let missing: Vec<&String> = required
             .iter()
-            .filter(|name| !secrets.resolve(server.manifest.project.as_deref()).is_ok_and(|m| m.contains_key(*name)))
+            .filter(|name| {
+                !secrets
+                    .resolve(server.manifest.project.as_deref())
+                    .is_ok_and(|m| m.contains_key(*name))
+            })
             .collect();
         if missing.is_empty() {
-            println!("  secrets: {} (all set)", required.into_iter().collect::<Vec<_>>().join(", "));
+            println!(
+                "  secrets: {} (all set)",
+                required.into_iter().collect::<Vec<_>>().join(", ")
+            );
         } else {
             println!(
                 "  secrets: {} — missing on this machine: {}",
@@ -317,9 +339,16 @@ mod tests {
 
     #[test]
     fn stdio_args_may_start_with_a_hyphen() {
-        let McpCommand::Save { args, .. } =
-            parse(&["save", "n8n", "--command", "npx", "--arg", "-y", "--arg", "n8n-mcp"])
-        else {
+        let McpCommand::Save { args, .. } = parse(&[
+            "save",
+            "n8n",
+            "--command",
+            "npx",
+            "--arg",
+            "-y",
+            "--arg",
+            "n8n-mcp",
+        ]) else {
             panic!("expected save");
         };
         assert_eq!(args, vec!["-y".to_string(), "n8n-mcp".to_string()]);
@@ -327,15 +356,24 @@ mod tests {
 
     #[test]
     fn a_header_value_prefixed_secret_colon_is_a_secret_reference() {
-        assert_eq!(parse_value("secret:N8N_TOKEN"), McpValue::secret("N8N_TOKEN"));
-        assert_eq!(parse_value("application/json"), McpValue::literal("application/json"));
+        assert_eq!(
+            parse_value("secret:N8N_TOKEN"),
+            McpValue::secret("N8N_TOKEN")
+        );
+        assert_eq!(
+            parse_value("application/json"),
+            McpValue::literal("application/json")
+        );
         assert_eq!(render_value(&McpValue::secret("X")), "secret:X");
         assert_eq!(render_value(&McpValue::literal("y")), "y");
     }
 
     #[test]
     fn a_header_value_prefixed_bearer_colon_is_a_secret_with_the_bearer_prefix() {
-        assert_eq!(parse_value("bearer:N8N_MCP_ACCESS_TOKEN"), McpValue::bearer("N8N_MCP_ACCESS_TOKEN"));
+        assert_eq!(
+            parse_value("bearer:N8N_MCP_ACCESS_TOKEN"),
+            McpValue::bearer("N8N_MCP_ACCESS_TOKEN")
+        );
         assert_eq!(render_value(&McpValue::bearer("X")), "bearer:X");
         // The raw token is never stored with 'Bearer ' baked in — that's the whole point.
         assert_eq!(
@@ -347,7 +385,10 @@ mod tests {
     #[test]
     fn a_value_may_contain_its_own_equals_sign() {
         let values = parse_values(vec!["Authorization=Bearer a=b".to_string()]).expect("parse");
-        assert_eq!(values.get("Authorization"), Some(&McpValue::literal("Bearer a=b")));
+        assert_eq!(
+            values.get("Authorization"),
+            Some(&McpValue::literal("Bearer a=b"))
+        );
     }
 
     #[test]
@@ -355,7 +396,9 @@ mod tests {
         assert!(build_transport(None, None, vec![], None, vec![], vec![]).is_err());
         assert!(build_transport(Some("http"), None, vec![], None, vec![], vec![]).is_err());
         assert!(build_transport(Some("stdio"), None, vec![], None, vec![], vec![]).is_err());
-        assert!(build_transport(Some("carrier-pigeon"), None, vec![], None, vec![], vec![]).is_err());
+        assert!(
+            build_transport(Some("carrier-pigeon"), None, vec![], None, vec![], vec![]).is_err()
+        );
     }
 
     #[test]

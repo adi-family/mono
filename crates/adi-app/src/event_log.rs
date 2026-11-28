@@ -39,7 +39,10 @@ fn run(tasks: &Tasks, events: &Events) {
         std::thread::sleep(SWEEP);
         match tasks.relay_pending_events() {
             Ok(0) => {}
-            Ok(relayed) => info!(relayed, "relayed a backlog of task events into the shared log"),
+            Ok(relayed) => info!(
+                relayed,
+                "relayed a backlog of task events into the shared log"
+            ),
             Err(error) => warn!(%error, "couldn't relay pending task events"),
         }
         match events.retain(RETENTION) {

@@ -33,7 +33,9 @@ pub enum RouterFrame {
 pub enum NodeFrame {
     /// Acknowledge delivery of the [`RouterFrame::Event`] with this `id`, so the router's queue
     /// drops it.
-    Ack { id: String },
+    Ack {
+        id: String,
+    },
     Pong,
 }
 

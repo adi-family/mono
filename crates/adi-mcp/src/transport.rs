@@ -54,13 +54,19 @@ impl Value {
     /// A reference to a secret by name, resolved verbatim.
     #[must_use]
     pub fn secret(name: impl Into<String>) -> Self {
-        Self::Secret { secret: name.into(), prefix: String::new() }
+        Self::Secret {
+            secret: name.into(),
+            prefix: String::new(),
+        }
     }
 
     /// A reference to a secret by name, with `prefix` glued onto its resolved value.
     #[must_use]
     pub fn secret_with_prefix(name: impl Into<String>, prefix: impl Into<String>) -> Self {
-        Self::Secret { secret: name.into(), prefix: prefix.into() }
+        Self::Secret {
+            secret: name.into(),
+            prefix: prefix.into(),
+        }
     }
 
     /// A reference to a secret by name, rendered as `Bearer <token>` — the shape almost every
@@ -124,7 +130,10 @@ impl Transport {
             Self::Http { headers, .. } => Box::new(headers.values()),
             Self::Stdio { env, .. } => Box::new(env.values()),
         };
-        values.filter_map(Value::secret_name).map(str::to_string).collect()
+        values
+            .filter_map(Value::secret_name)
+            .map(str::to_string)
+            .collect()
     }
 }
 
@@ -145,7 +154,10 @@ mod tests {
     fn a_secret_reference_round_trips_as_a_table_with_no_prefix_field() {
         let value = Value::secret("N8N_TOKEN");
         let json = serde_json::to_string(&value).expect("serialize");
-        assert_eq!(json, "{\"secret\":\"N8N_TOKEN\"}", "an empty prefix is never written out");
+        assert_eq!(
+            json, "{\"secret\":\"N8N_TOKEN\"}",
+            "an empty prefix is never written out"
+        );
         let back: Value = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back, value);
         assert_eq!(value.prefix(), "");
@@ -155,7 +167,10 @@ mod tests {
     fn a_bearer_secret_round_trips_carrying_its_prefix() {
         let value = Value::bearer("N8N_MCP_ACCESS_TOKEN");
         let json = serde_json::to_string(&value).expect("serialize");
-        assert_eq!(json, "{\"secret\":\"N8N_MCP_ACCESS_TOKEN\",\"prefix\":\"Bearer \"}");
+        assert_eq!(
+            json,
+            "{\"secret\":\"N8N_MCP_ACCESS_TOKEN\",\"prefix\":\"Bearer \"}"
+        );
         let back: Value = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back, value);
         assert_eq!(value.prefix(), BEARER_PREFIX);
@@ -175,7 +190,10 @@ mod tests {
         let transport = Transport::Http {
             url: "http://n8n.adi/mcp/".into(),
             headers: BTreeMap::from([
-                ("Content-Type".to_string(), Value::literal("application/json")),
+                (
+                    "Content-Type".to_string(),
+                    Value::literal("application/json"),
+                ),
                 ("Authorization".to_string(), Value::bearer("N8N_TOKEN")),
             ]),
         };
@@ -217,7 +235,12 @@ mod tests {
     fn an_old_toml_manifest_with_no_prefix_field_still_parses() {
         let text = "kind = \"http\"\nurl = \"http://n8n.adi/mcp/\"\n[headers]\nAuthorization = { secret = \"N8N_TOKEN\" }\n";
         let transport: Transport = toml::from_str(text).expect("deserialize");
-        let Transport::Http { headers, .. } = &transport else { panic!("http") };
-        assert_eq!(headers.get("Authorization"), Some(&Value::secret("N8N_TOKEN")));
+        let Transport::Http { headers, .. } = &transport else {
+            panic!("http")
+        };
+        assert_eq!(
+            headers.get("Authorization"),
+            Some(&Value::secret("N8N_TOKEN"))
+        );
     }
 }

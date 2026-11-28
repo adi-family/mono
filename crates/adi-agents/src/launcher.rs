@@ -56,7 +56,9 @@ pub fn is_human(launched_by: &str) -> bool {
 /// bare [`HUMAN`] launch, which names nobody in particular.
 #[must_use]
 pub fn human_user(launched_by: &str) -> Option<&str> {
-    launched_by.strip_prefix(HUMAN_PREFIX).filter(|u| !u.is_empty())
+    launched_by
+        .strip_prefix(HUMAN_PREFIX)
+        .filter(|u| !u.is_empty())
 }
 
 /// Whether this vocabulary's owner counts as "mine" for the **Agents page's** Mine filter — a
@@ -97,7 +99,11 @@ mod tests {
     fn human_user_names_only_a_tagged_launch() {
         assert_eq!(human_user(HUMAN), None);
         assert_eq!(human_user("human:igor"), Some("igor"));
-        assert_eq!(human_user("human:"), None, "an empty name is no name at all");
+        assert_eq!(
+            human_user("human:"),
+            None,
+            "an empty name is no name at all"
+        );
         assert_eq!(human_user(AUTOMATION), None);
     }
 

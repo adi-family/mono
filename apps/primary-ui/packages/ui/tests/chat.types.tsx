@@ -44,12 +44,16 @@ export function acceptedChatExamples(disabled: boolean) {
           name: "message",
           maxLength: 2000,
           "aria-describedby": "message-help",
-          onKeyDown: (event) => { if (event.key === "Escape") event.preventDefault(); },
+          onKeyDown: (event) => {
+            if (event.key === "Escape") event.preventDefault();
+          },
         }}
       />
       <ChatThread ref={threadRef} autoScroll={false} aria-live="off">
         <ChatMessage from="assistant" ref={articleRef} aria-label="Assistant">
-          <ChatMessageContent><strong>Hello</strong></ChatMessageContent>
+          <ChatMessageContent>
+            <strong>Hello</strong>
+          </ChatMessageContent>
         </ChatMessage>
         <ChatMessage from="user" />
         <ChatMessage from="system" />
@@ -68,7 +72,11 @@ export function rejectedChatExamples(disabled: boolean) {
   // @ts-expect-error A composer must have a send handler.
   <ChatComposer value="Hello" onValueChange={draftProps.onValueChange} />;
   // @ts-expect-error Uncontrolled defaults cannot replace the controlled draft contract.
-  <ChatComposer defaultValue="Hello" onValueChange={draftProps.onValueChange} onSend={draftProps.onSend} />;
+  <ChatComposer
+    defaultValue="Hello"
+    onValueChange={draftProps.onValueChange}
+    onSend={draftProps.onSend}
+  />;
   // @ts-expect-error The send lifecycle cannot be bypassed through a native submit handler.
   <ChatComposer {...draftProps} onSubmit={() => {}} />;
 
@@ -79,7 +87,10 @@ export function rejectedChatExamples(disabled: boolean) {
   // @ts-expect-error Wrappers retain the disabled explanation contract.
   <ComposerWrapper {...draftProps} disabled />;
   // @ts-expect-error React's inferred props retain the disabled explanation contract.
-  const invalidDisabled: React.ComponentProps<typeof ChatComposer> = { ...draftProps, disabled: true };
+  const invalidDisabled: React.ComponentProps<typeof ChatComposer> = {
+    ...draftProps,
+    disabled: true,
+  };
 
   // @ts-expect-error Textarea values belong to the composer.
   <ChatComposer {...draftProps} textareaProps={{ value: "Other draft" }} />;
@@ -95,7 +106,9 @@ export function rejectedChatExamples(disabled: boolean) {
   <ChatComposer {...draftProps} textareaProps={{ form: "another-form" }} />;
 
   // @ts-expect-error Every message must specify its speaker role.
-  <ChatMessage><ChatMessageContent>Hello</ChatMessageContent></ChatMessage>;
+  <ChatMessage>
+    <ChatMessageContent>Hello</ChatMessageContent>
+  </ChatMessage>;
   // @ts-expect-error Speaker roles are limited to the supported message variants.
   <ChatMessage from="tool" />;
 

@@ -118,8 +118,9 @@ pub fn event_types() -> Vec<EventType> {
                 run_key: "weekly-report@2026-01-05T05:00:00Z".into(),
                 workflow: "weekly-report".into(),
                 root_task: "t42".into(),
-                reason: "output did not match the workflow's declared shape: /posted: expected boolean"
-                    .into(),
+                reason:
+                    "output did not match the workflow's declared shape: /posted: expected boolean"
+                        .into(),
                 caused_by_run: "weekly-report@2026-01-05T05:00:00Z".into(),
             },
         ),

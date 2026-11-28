@@ -339,15 +339,21 @@ impl Events {
         let conn = self.connect()?;
         match conn.execute(
             "INSERT INTO events (idempotency_key, name, payload, emitted_at) VALUES (?1,?2,?3,?4)",
-            params![idempotency_key, record.name, record.payload, record.emitted_at],
+            params![
+                idempotency_key,
+                record.name,
+                record.payload,
+                record.emitted_at
+            ],
         ) {
             Ok(_) => Ok(seq_of(conn.last_insert_rowid())),
-            Err(e) if is_unique_violation(&e) => Ok(conn.query_row(
-                "SELECT seq FROM events WHERE idempotency_key = ?1",
-                [idempotency_key],
-                |row| row.get::<_, i64>(0),
-            )
-            .map(seq_of)?),
+            Err(e) if is_unique_violation(&e) => Ok(conn
+                .query_row(
+                    "SELECT seq FROM events WHERE idempotency_key = ?1",
+                    [idempotency_key],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map(seq_of)?),
             Err(e) => Err(e.into()),
         }
     }
@@ -470,7 +476,8 @@ impl Events {
     /// [`Error::Sqlite`] on a read failure.
     pub fn head(&self) -> Result<u64> {
         let conn = self.connect()?;
-        let seq: Option<i64> = conn.query_row("SELECT MAX(seq) FROM events", [], |row| row.get(0))?;
+        let seq: Option<i64> =
+            conn.query_row("SELECT MAX(seq) FROM events", [], |row| row.get(0))?;
         Ok(seq.map_or(0, seq_of))
     }
 
@@ -783,7 +790,8 @@ mod tests {
     fn a_subscriber_that_never_ran_catches_up_from_the_very_start() {
         let bus = scratch("downtime");
         for i in 0..3 {
-            bus.emit_event(&Tick { n: i }).expect("emit while nobody was watching");
+            bus.emit_event(&Tick { n: i })
+                .expect("emit while nobody was watching");
         }
         // A brand new subscriber showing up well after the fact still gets everything, in order.
         let caught_up = bus.catch_up("late-subscriber", 100).expect("catch up");
@@ -848,7 +856,11 @@ mod tests {
         assert_eq!(bus.lag("sub").expect("lag").behind, 1);
         bus.ack("sub", caught[1].seq).expect("ack");
         assert_eq!(bus.lag("sub").expect("lag").behind, 0);
-        assert_eq!(bus.lag("other").expect("lag").behind, 2, "cursors are independent");
+        assert_eq!(
+            bus.lag("other").expect("lag").behind,
+            2,
+            "cursors are independent"
+        );
     }
 
     #[test]

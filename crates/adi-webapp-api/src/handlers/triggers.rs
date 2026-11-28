@@ -121,7 +121,12 @@ pub fn parse_save_trigger(body: &[u8]) -> Result<(String, TriggerManifest, bool)
 /// Saving is also how a background trigger is started and stopped: the supervisor runs exactly
 /// the enabled ones, so it is poked here to pick the change up now rather than at its next tick.
 #[must_use]
-pub fn commit_trigger(store: &Triggers, supervisor: &Supervisor, name: &str, manifest: TriggerManifest) -> Response {
+pub fn commit_trigger(
+    store: &Triggers,
+    supervisor: &Supervisor,
+    name: &str,
+    manifest: TriggerManifest,
+) -> Response {
     match store.save(name, manifest) {
         Ok(_) => {
             supervisor.poke();
@@ -143,7 +148,11 @@ pub fn save_trigger(store: &Triggers, supervisor: &Supervisor, body: &[u8]) -> R
     match parse_save_trigger(body) {
         Ok((name, mut manifest, clear_hook_secret)) => {
             let previous_extra = store.get(&name).ok().flatten().map(|t| t.manifest.extra);
-            adi_triggers::reconcile_hook_secret(previous_extra.as_ref(), clear_hook_secret, &mut manifest.extra);
+            adi_triggers::reconcile_hook_secret(
+                previous_extra.as_ref(),
+                clear_hook_secret,
+                &mut manifest.extra,
+            );
             commit_trigger(store, supervisor, &name, manifest)
         }
         Err(resp) => resp,
@@ -289,7 +298,10 @@ pub fn hook_trigger(
         // have, which is a misconfiguration to fix, never a reason to let every caller through.
         HookSecret::Missing => return error(403, "bad or missing secret"),
         HookSecret::Value(expected) => {
-            let presented = headers.get(HOOK_SECRET_HEADER).map(String::as_str).or_else(|| query_param(query, "secret"));
+            let presented = headers
+                .get(HOOK_SECRET_HEADER)
+                .map(String::as_str)
+                .or_else(|| query_param(query, "secret"));
             if !presented.is_some_and(|p| constant_time_eq(p, &expected)) {
                 return error(403, "bad or missing secret");
             }

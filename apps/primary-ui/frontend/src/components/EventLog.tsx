@@ -1,4 +1,11 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type RefObject } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type RefObject,
+} from "react";
 import { createPortal } from "react-dom";
 import { ScrollText, X } from "lucide-react";
 
@@ -6,7 +13,22 @@ import { Button, cn } from "@design-system/ui";
 
 import { NodeSelector } from "./NodeSelector";
 import { conversationAge } from "../lib/app-chat-sidebar";
-import { machineLog, readLogMachine, saveLogMachine, markEventsSeen, mergeDiagnostics, queryDiagnostics, refreshDiagnostics, setEventLogOpen, unreadEvents, useEventLog, useEventLogOpen, type AppEvent, type AppEventLevel, type DiagnosticRecord } from "../lib/event-log";
+import {
+  machineLog,
+  readLogMachine,
+  saveLogMachine,
+  markEventsSeen,
+  mergeDiagnostics,
+  queryDiagnostics,
+  refreshDiagnostics,
+  setEventLogOpen,
+  unreadEvents,
+  useEventLog,
+  useEventLogOpen,
+  type AppEvent,
+  type AppEventLevel,
+  type DiagnosticRecord,
+} from "../lib/event-log";
 import { useIsMobile } from "../lib/use-is-mobile";
 
 const panelWidth = 480;
@@ -14,29 +36,69 @@ const panelWidth = 480;
 function EventRow({ event, isNew, now }: { event: AppEvent; isNew: boolean; now: number }) {
   const when = new Date(event.lastSeen);
   return (
-    <li data-slot="event-log-item" data-level={event.level} className="flex gap-2.5 rounded-md px-2 py-1.5">
-      <span aria-hidden="true" className={cn("mt-1.75 size-1.5 shrink-0 rounded-full", event.level === "error" ? "bg-destructive" : "bg-foreground/40")} />
+    <li
+      data-slot="event-log-item"
+      data-level={event.level}
+      className="flex gap-2.5 rounded-md px-2 py-1.5"
+    >
+      <span
+        aria-hidden="true"
+        className={cn(
+          "mt-1.75 size-1.5 shrink-0 rounded-full",
+          event.level === "error" ? "bg-destructive" : "bg-foreground/40",
+        )}
+      />
       <div className="min-w-0 flex-1">
         <p className="text-xs leading-5 wrap-anywhere">
           <span className="sr-only">{event.level}: </span>
           {event.message}
         </p>
-        {event.context != null && <details className="mt-1 text-xs">
-          <summary className="text-muted-foreground cursor-pointer">Details</summary>
-          <pre className="bg-muted mt-1 max-h-48 overflow-auto rounded p-2 whitespace-pre-wrap wrap-anywhere">{JSON.stringify(event.context, null, 2)}</pre>
-        </details>}
+        {event.context != null && (
+          <details className="mt-1 text-xs">
+            <summary className="text-muted-foreground cursor-pointer">Details</summary>
+            <pre className="bg-muted mt-1 max-h-48 overflow-auto rounded p-2 whitespace-pre-wrap wrap-anywhere">
+              {JSON.stringify(event.context, null, 2)}
+            </pre>
+          </details>
+        )}
         <p className="text-muted-foreground flex min-w-0 flex-wrap items-center gap-x-1.5 text-[11px] leading-4">
-          <span className="truncate">{event.machine ?? "This machine"} · {event.source ?? "Browser"} · {event.area}</span>
-          <time dateTime={when.toISOString()} title={`Last seen: ${when.toLocaleString()}`}>{conversationAge(event.lastSeen, now) ?? ""}</time>
-          {event.count > 1 && <span title={`Repeated ${event.count} times since ${new Date(event.firstSeen).toLocaleString()}`}>×{event.count}</span>}
-          {isNew && <span data-slot="event-log-new" className="text-foreground">New</span>}
+          <span className="truncate">
+            {event.machine ?? "This machine"} · {event.source ?? "Browser"} · {event.area}
+          </span>
+          <time dateTime={when.toISOString()} title={`Last seen: ${when.toLocaleString()}`}>
+            {conversationAge(event.lastSeen, now) ?? ""}
+          </time>
+          {event.count > 1 && (
+            <span
+              title={`Repeated ${event.count} times since ${new Date(event.firstSeen).toLocaleString()}`}
+            >
+              ×{event.count}
+            </span>
+          )}
+          {isNew && (
+            <span data-slot="event-log-new" className="text-foreground">
+              New
+            </span>
+          )}
         </p>
       </div>
     </li>
   );
 }
 
-function EventLogPanel({ anchor, seenBefore, onClose, machine, onMachineChange }: { anchor: RefObject<HTMLButtonElement | null>; seenBefore: number; onClose: (restoreFocus?: boolean) => void; machine: string; onMachineChange: (machine: string) => void }) {
+function EventLogPanel({
+  anchor,
+  seenBefore,
+  onClose,
+  machine,
+  onMachineChange,
+}: {
+  anchor: RefObject<HTMLButtonElement | null>;
+  seenBefore: number;
+  onClose: (restoreFocus?: boolean) => void;
+  machine: string;
+  onMachineChange: (machine: string) => void;
+}) {
   const log = machineLog(useEventLog(), machine || undefined);
   const isMobile = useIsMobile();
   const element = useRef<HTMLDivElement>(null);
@@ -52,32 +114,64 @@ function EventLogPanel({ anchor, seenBefore, onClose, machine, onMachineChange }
   const queryVersion = useRef(0);
   useEffect(() => {
     const version = ++queryVersion.current;
-    setRecords(null); setLoading(true); setError("");
+    setRecords(null);
+    setLoading(true);
+    setError("");
     const timer = window.setTimeout(() => {
-      void queryDiagnostics({ search: search || undefined, level: level || undefined }, machine || undefined).then((rows) => {
-        if (version !== queryVersion.current) return;
-        setRecords(rows); setMore(rows.length === 100);
-      }).catch((reason: unknown) => {
-        if (version === queryVersion.current) setError(reason instanceof Error ? reason.message : "Could not load stored logs.");
-      }).finally(() => { if (version === queryVersion.current) setLoading(false); });
+      void queryDiagnostics(
+        { search: search || undefined, level: level || undefined },
+        machine || undefined,
+      )
+        .then((rows) => {
+          if (version !== queryVersion.current) return;
+          setRecords(rows);
+          setMore(rows.length === 100);
+        })
+        .catch((reason: unknown) => {
+          if (version === queryVersion.current)
+            setError(reason instanceof Error ? reason.message : "Could not load stored logs.");
+        })
+        .finally(() => {
+          if (version === queryVersion.current) setLoading(false);
+        });
     }, 200);
-    return () => { window.clearTimeout(timer); queryVersion.current++; };
+    return () => {
+      window.clearTimeout(timer);
+      queryVersion.current++;
+    };
   }, [search, level, revision, machine]);
-  const matches = (event: AppEvent) => (!level || event.level === level)
-    && (!search || `${event.message} ${event.area} ${event.source} ${JSON.stringify(event.context)}`.toLowerCase().includes(search.toLowerCase()));
-  const cached = !search && !level ? log.events : log.events.filter((e) => !e.id.startsWith("stored:"));
-  const events = (records === null ? log.events : mergeDiagnostics({ ...log, events: cached }, records, machine || undefined).events).filter(matches);
+  const matches = (event: AppEvent) =>
+    (!level || event.level === level) &&
+    (!search ||
+      `${event.message} ${event.area} ${event.source} ${JSON.stringify(event.context)}`
+        .toLowerCase()
+        .includes(search.toLowerCase()));
+  const cached =
+    !search && !level ? log.events : log.events.filter((e) => !e.id.startsWith("stored:"));
+  const events = (
+    records === null
+      ? log.events
+      : mergeDiagnostics({ ...log, events: cached }, records, machine || undefined).events
+  ).filter(matches);
   const loadMore = async () => {
     const before = records?.at(-1)?.id;
     if (!before) return;
     const version = queryVersion.current;
     setLoading(true);
     try {
-      const rows = await queryDiagnostics({ before, search: search || undefined, level: level || undefined }, machine || undefined);
+      const rows = await queryDiagnostics(
+        { before, search: search || undefined, level: level || undefined },
+        machine || undefined,
+      );
       if (version !== queryVersion.current) return;
-      setRecords((old) => [...(old ?? []), ...rows]); setMore(rows.length === 100); setError("");
-    } catch (reason) { if (version === queryVersion.current) setError(String(reason)); }
-    finally { if (version === queryVersion.current) setLoading(false); }
+      setRecords((old) => [...(old ?? []), ...rows]);
+      setMore(rows.length === 100);
+      setError("");
+    } catch (reason) {
+      if (version === queryVersion.current) setError(String(reason));
+    } finally {
+      if (version === queryVersion.current) setLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -89,16 +183,32 @@ function EventLogPanel({ anchor, seenBefore, onClose, machine, onMachineChange }
     const bounds = anchor.current?.getBoundingClientRect();
     if (!bounds) return;
     // Desktop: beside the rail, bottom edge level with the button. Phone: a sheet above the tab bar.
-    setStyle(isMobile
-      ? { left: 8, right: 8, bottom: window.innerHeight - bounds.top + 8, maxHeight: "60svh" }
-      : { left: Math.min(bounds.right + 8, window.innerWidth - panelWidth - 8), bottom: Math.max(8, window.innerHeight - bounds.bottom), width: panelWidth, maxHeight: "min(70svh, calc(100svh - 1rem))" });
+    setStyle(
+      isMobile
+        ? { left: 8, right: 8, bottom: window.innerHeight - bounds.top + 8, maxHeight: "60svh" }
+        : {
+            left: Math.min(bounds.right + 8, window.innerWidth - panelWidth - 8),
+            bottom: Math.max(8, window.innerHeight - bounds.bottom),
+            width: panelWidth,
+            maxHeight: "min(70svh, calc(100svh - 1rem))",
+          },
+    );
     element.current?.focus({ preventScroll: true });
   }, [anchor, isMobile]);
 
   useEffect(() => {
     const outside = (event: PointerEvent) => {
-      if (event.target instanceof Element && event.target.closest('[data-node-selector-owner="event-log"]')) return;
-      if (event.target instanceof Node && !element.current?.contains(event.target) && !anchor.current?.contains(event.target)) onClose(false);
+      if (
+        event.target instanceof Element &&
+        event.target.closest('[data-node-selector-owner="event-log"]')
+      )
+        return;
+      if (
+        event.target instanceof Node &&
+        !element.current?.contains(event.target) &&
+        !anchor.current?.contains(event.target)
+      )
+        onClose(false);
     };
     // Escape is read at the document so it still closes the panel when focus has drifted, for
     // instance after the Clear button removed itself. A menu that handled it first is left alone.
@@ -128,37 +238,95 @@ function EventLogPanel({ anchor, seenBefore, onClose, machine, onMachineChange }
     >
       <div className="flex shrink-0 items-center gap-1 border-b px-3 py-2">
         <h2 className="mr-auto shrink-0 text-sm font-semibold">Event log</h2>
-        <NodeSelector owner="event-log" selection={{
-          heading: "Event logs from", label: "Log machine", multiple: false,
-          chosen: [machine || undefined], isChosen: (source) => (source ?? "") === machine,
-          choose: (source) => onMachineChange(source ?? ""),
-        }} />
-        <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => setRevision((v) => v + 1)}>Refresh</Button>
-        <Button type="button" size="icon" variant="ghost" className="size-7" aria-label="Close event log" onClick={() => onClose()}>
+        <NodeSelector
+          owner="event-log"
+          selection={{
+            heading: "Event logs from",
+            label: "Log machine",
+            multiple: false,
+            chosen: [machine || undefined],
+            isChosen: (source) => (source ?? "") === machine,
+            choose: (source) => onMachineChange(source ?? ""),
+          }}
+        />
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className="h-7 px-2 text-xs"
+          onClick={() => setRevision((v) => v + 1)}
+        >
+          Refresh
+        </Button>
+        <Button
+          type="button"
+          size="icon"
+          variant="ghost"
+          className="size-7"
+          aria-label="Close event log"
+          onClick={() => onClose()}
+        >
           <X aria-hidden="true" className="size-3.5" />
         </Button>
       </div>
       <div className="flex shrink-0 gap-2 border-b p-2">
-        <input aria-label="Search stored logs" placeholder="Search messages and context…" value={search} onChange={(e) => setSearch(e.target.value)} className="min-w-0 flex-1 rounded border bg-transparent px-2 py-1 text-xs" />
-        <select aria-label="Log severity" value={level} onChange={(e) => setLevel(e.target.value as AppEventLevel | "")} className="rounded border bg-popover px-2 text-xs">
-          <option value="">All levels</option><option value="error">Errors</option><option value="warning">Warnings</option><option value="info">Info</option>
+        <input
+          aria-label="Search stored logs"
+          placeholder="Search messages and context…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="min-w-0 flex-1 rounded border bg-transparent px-2 py-1 text-xs"
+        />
+        <select
+          aria-label="Log severity"
+          value={level}
+          onChange={(e) => setLevel(e.target.value as AppEventLevel | "")}
+          className="rounded border bg-popover px-2 text-xs"
+        >
+          <option value="">All levels</option>
+          <option value="error">Errors</option>
+          <option value="warning">Warnings</option>
+          <option value="info">Info</option>
         </select>
       </div>
-      {error && <p role="alert" className="text-destructive px-3 py-2 text-xs">{error} Showing available cached entries.</p>}
-      {loading && <p role="status" className="text-muted-foreground px-3 py-1 text-xs">Loading logs…</p>}
+      {error && (
+        <p role="alert" className="text-destructive px-3 py-2 text-xs">
+          {error} Showing available cached entries.
+        </p>
+      )}
+      {loading && (
+        <p role="status" className="text-muted-foreground px-3 py-1 text-xs">
+          Loading logs…
+        </p>
+      )}
       {events.length === 0 ? (
         <div className="px-4 py-6 text-center">
           <p className="text-sm font-medium">Nothing to report</p>
-          <p className="text-muted-foreground mt-1 text-xs leading-relaxed">No matching entries. Process and browser diagnostics are stored on the selected machine for up to 30 days.</p>
+          <p className="text-muted-foreground mt-1 text-xs leading-relaxed">
+            No matching entries. Process and browser diagnostics are stored on the selected machine
+            for up to 30 days.
+          </p>
         </div>
       ) : (
         <ul aria-label="Events" className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1">
-          {events.map((event) => <EventRow key={event.id} event={event} isNew={event.lastSeen > seenBefore} now={now} />)}
+          {events.map((event) => (
+            <EventRow key={event.id} event={event} isNew={event.lastSeen > seenBefore} now={now} />
+          ))}
         </ul>
       )}
       <div className="flex shrink-0 items-center border-t px-3 py-2 text-xs text-muted-foreground">
         <span className="mr-auto">{machine || "This machine"} · up to 30 days</span>
-        {more && <Button size="sm" variant="ghost" disabled={loading} disabledReason="Loading logs" onClick={() => void loadMore()}>Load older</Button>}
+        {more && (
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={loading}
+            disabledReason="Loading logs"
+            onClick={() => void loadMore()}
+          >
+            Load older
+          </Button>
+        )}
       </div>
     </div>,
     document.body,
@@ -182,11 +350,18 @@ export function EventLogButton({ tabClass }: { tabClass: (active: boolean) => st
     let disposed = false;
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
-      try { await refreshDiagnostics(machine || undefined); } catch { /* Opening the panel shows retrieval errors. */ }
+      try {
+        await refreshDiagnostics(machine || undefined);
+      } catch {
+        /* Opening the panel shows retrieval errors. */
+      }
       if (!disposed) timer = setTimeout(() => void poll(), 10_000);
     };
     void poll();
-    return () => { disposed = true; clearTimeout(timer); };
+    return () => {
+      disposed = true;
+      clearTimeout(timer);
+    };
   }, [machine]);
 
   // Opening marks the log read, but the panel still points out what arrived since the last look;
@@ -232,7 +407,19 @@ export function EventLogButton({ tabClass }: { tabClass: (active: boolean) => st
         )}
         <span className="md:sr-only">Events</span>
       </button>
-      {open && <EventLogPanel key={machine} anchor={anchor} seenBefore={seenBefore} onClose={close} machine={machine} onMachineChange={(next) => { saveLogMachine(next); setMachine(next); }} />}
+      {open && (
+        <EventLogPanel
+          key={machine}
+          anchor={anchor}
+          seenBefore={seenBefore}
+          onClose={close}
+          machine={machine}
+          onMachineChange={(next) => {
+            saveLogMachine(next);
+            setMachine(next);
+          }}
+        />
+      )}
     </>
   );
 }

@@ -17,19 +17,31 @@ const PORT = Number(process.env.PORT ?? process.env.PORT_HTTP ?? 5173);
 const UI_SRC = path.resolve(import.meta.dirname, "../packages/ui/src");
 
 export default defineConfig({
-  plugins: [react(), tailwindcss(), {
-    name: "primary-app-metadata",
-    transformIndexHtml(html) {
-      if (process.env.VITE_APP_API_BASE !== "/api") return html;
-      return {
-        html: html.replace(/<title>[^<]*<\/title>/, "<title>ADI</title>"),
-        tags: [
-          { tag: "link", attrs: { rel: "icon", href: "/assets/mark.svg", type: "image/svg+xml" }, injectTo: "head" as const },
-          { tag: "link", attrs: { rel: "manifest", href: "/manifest.webmanifest" }, injectTo: "head" as const },
-        ],
-      };
+  plugins: [
+    react(),
+    tailwindcss(),
+    {
+      name: "primary-app-metadata",
+      transformIndexHtml(html) {
+        if (process.env.VITE_APP_API_BASE !== "/api") return html;
+        return {
+          html: html.replace(/<title>[^<]*<\/title>/, "<title>ADI</title>"),
+          tags: [
+            {
+              tag: "link",
+              attrs: { rel: "icon", href: "/assets/mark.svg", type: "image/svg+xml" },
+              injectTo: "head" as const,
+            },
+            {
+              tag: "link",
+              attrs: { rel: "manifest", href: "/manifest.webmanifest" },
+              injectTo: "head" as const,
+            },
+          ],
+        };
+      },
     },
-  }],
+  ],
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "./src"),

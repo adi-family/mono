@@ -120,7 +120,10 @@ export class NodeConnection implements DurableObject {
         if (!connection.linked) pending++;
       }
       if (pending >= MAX_PENDING_CONNECTIONS) {
-        return Response.json({ error: "too many pending connections on this node" }, { status: 429 });
+        return Response.json(
+          { error: "too many pending connections on this node" },
+          { status: 429 },
+        );
       }
     }
 
@@ -195,7 +198,8 @@ export class NodeConnection implements DurableObject {
     };
     const record = await this.ctx.storage.get<Connection>(`conn:${connection}`);
     if (!record) return Response.json({ ok: false, reason: "unknown connection" }, { status: 404 });
-    if (record.linked) return Response.json({ ok: false, reason: "already linked" }, { status: 409 });
+    if (record.linked)
+      return Response.json({ ok: false, reason: "already linked" }, { status: 409 });
 
     const previousId = await this.ctx.storage.get<string>(`route:${routing_key}`);
     if (previousId && previousId !== connection) {
@@ -245,7 +249,11 @@ export class NodeConnection implements DurableObject {
    * removes it, which is what makes a disconnect-before-ack redeliver on reconnect. */
   private async deliver(request: Request): Promise<Response> {
     const { message } = (await request.json()) as { message: ChannelMessage };
-    await this.enqueue({ id: message.id, needsAck: true, frame: { type: "event", id: message.id, message } });
+    await this.enqueue({
+      id: message.id,
+      needsAck: true,
+      frame: { type: "event", id: message.id, message },
+    });
     return Response.json({ ok: true });
   }
 
@@ -273,7 +281,11 @@ export class NodeConnection implements DurableObject {
       tokenRevoked = true;
     }
 
-    return Response.json({ ok: true, routing_key: record.routing_key, token_revoked: tokenRevoked });
+    return Response.json({
+      ok: true,
+      routing_key: record.routing_key,
+      token_revoked: tokenRevoked,
+    });
   }
 
   private async enqueue(entry: QueuedFrame): Promise<void> {

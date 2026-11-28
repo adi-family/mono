@@ -147,10 +147,14 @@ fn process_one(
     now: u64,
 ) -> Option<Dispatched> {
     let store = agents.sessions();
-    let mut row = store.dispatch_row(&task.id).ok().flatten().unwrap_or(DispatchRow {
-        task_id: task.id.clone(),
-        ..DispatchRow::default()
-    });
+    let mut row = store
+        .dispatch_row(&task.id)
+        .ok()
+        .flatten()
+        .unwrap_or(DispatchRow {
+            task_id: task.id.clone(),
+            ..DispatchRow::default()
+        });
 
     // The last attempt's own lifecycle, read once — `None` for a task never yet attempted, or one
     // whose run has aged out of the listing (pruned past `MAX_SESSIONS`) before this got to read
@@ -223,7 +227,8 @@ fn process_one(
     // may yet bring it back), is still being worked — redispatching over the top of it would run
     // the task twice.
     if let Some(info) = &info {
-        let working = matches!(info.state, RunLifecycle::Running | RunLifecycle::Waiting) || open_goal;
+        let working =
+            matches!(info.state, RunLifecycle::Running | RunLifecycle::Waiting) || open_goal;
         if working {
             if info.state == RunLifecycle::Running {
                 silence_alarm(&store, &mut row, now);
@@ -264,7 +269,11 @@ fn backoff_secs(attempts: u32) -> u64 {
 /// platform's load, not the task's fault, either. Everything else, `launch_failed` and
 /// `launch_lost` (ADI-MONO-218) above all, counts.
 fn fold_outcome(row: &mut DispatchRow, info: &RunInfo) {
-    match info.outcome.as_ref().and_then(|o| o.terminal_reason.as_deref()) {
+    match info
+        .outcome
+        .as_ref()
+        .and_then(|o| o.terminal_reason.as_deref())
+    {
         None | Some("api_error") => {}
         // Neither ever reached an engine: `launch_failed` means `send` ran and said why,
         // `launch_lost` means the launcher died before `send` was even called. Both are the
@@ -549,7 +558,14 @@ mod tests {
         let (agents, tasks) = scratch("dispatched");
         worker(&agents, "solver", true);
         let task = tasks
-            .create("ship it".into(), None, None, None, None, Some("/tmp".into()))
+            .create(
+                "ship it".into(),
+                None,
+                None,
+                None,
+                None,
+                Some("/tmp".into()),
+            )
             .expect("create")
             .task;
         tasks
@@ -632,7 +648,9 @@ mod tests {
         worker(&agents, "busy", true);
         worker(&agents, "solver", true);
         // Fill the one slot the cap allows with an unrelated running conversation.
-        let Launch::Process { .. } = agents.force_run_in("busy", "stay busy", None).expect("force")
+        let Launch::Process { .. } = agents
+            .force_run_in("busy", "stay busy", None)
+            .expect("force")
         else {
             panic!("expected a headless run");
         };
@@ -654,7 +672,10 @@ mod tests {
         assert!(tick(&agents).is_empty(), "the cap is full");
         // Refused before anything was ever written down: no row exists at all, which is itself
         // "nothing about it is spent" — there is nothing to roll back if there was never a row.
-        assert_eq!(agents.sessions().dispatch_row(&task.id).expect("read"), None);
+        assert_eq!(
+            agents.sessions().dispatch_row(&task.id).expect("read"),
+            None
+        );
 
         cleanup(&agents);
     }
@@ -692,7 +713,11 @@ mod tests {
         };
         agents.stop_run("solver", &run_id).expect("stop");
         assert!(
-            store.get("solver", &run_id).expect("session").outcome.is_none(),
+            store
+                .get("solver", &run_id)
+                .expect("session")
+                .outcome
+                .is_none(),
             "nothing has recorded an ending yet — the scenario this test is for"
         );
         store
@@ -711,7 +736,10 @@ mod tests {
             1,
             "retried after noticing the vanished run, not stuck"
         );
-        assert_ne!(dispatched[0].run_id, run_id, "a fresh attempt, not the vanished one");
+        assert_ne!(
+            dispatched[0].run_id, run_id,
+            "a fresh attempt, not the vanished one"
+        );
         let row = store.dispatch_row(&task.id).expect("read").expect("row");
         assert_eq!(row.attempts, 0, "the vanished run was never counted");
 
@@ -804,9 +832,14 @@ mod tests {
             .create("ship it".into(), None, None, None, None, None)
             .expect("create")
             .task;
-        tasks.give_up(&task.id, "no route to the target host").expect("give up");
+        tasks
+            .give_up(&task.id, "no route to the target host")
+            .expect("give up");
 
-        assert!(tick(&agents).is_empty(), "nothing is assigned yet; nothing to dispatch at all");
+        assert!(
+            tick(&agents).is_empty(),
+            "nothing is assigned yet; nothing to dispatch at all"
+        );
         cleanup(&agents);
     }
 
@@ -831,16 +864,26 @@ mod tests {
             )
             .expect("assign");
         let launched = tick(&agents);
-        assert_eq!(launched.len(), 1, "one attempt happens before it ever gives up");
+        assert_eq!(
+            launched.len(),
+            1,
+            "one attempt happens before it ever gives up"
+        );
 
         tasks
             .give_up(&task.id, "no route to the target host")
             .expect("give up");
-        assert!(tick(&agents).is_empty(), "stuck at once — attempts never reached the budget");
+        assert!(
+            tick(&agents).is_empty(),
+            "stuck at once — attempts never reached the budget"
+        );
 
         let store = agents.sessions();
         let row = store.dispatch_row(&task.id).expect("read").expect("row");
-        assert_eq!(row.attempts, 0, "give-up is its own path, not a counted failure");
+        assert_eq!(
+            row.attempts, 0,
+            "give-up is its own path, not a counted failure"
+        );
         let ask = store
             .question_history(&row.agent, &row.run_id)
             .into_iter()
@@ -1012,7 +1055,10 @@ mod tests {
             })
             .expect("save row");
 
-        assert!(tick(&agents).is_empty(), "stuck, and never relaunched over a live goal");
+        assert!(
+            tick(&agents).is_empty(),
+            "stuck, and never relaunched over a live goal"
+        );
         let row = store.dispatch_row(&task.id).expect("read").expect("row");
         assert!(!row.stuck_ask_id.is_empty());
 
@@ -1063,12 +1109,18 @@ mod tests {
             })
             .expect("save row");
 
-        assert!(tick(&agents).is_empty(), "never relaunched while still running");
+        assert!(
+            tick(&agents).is_empty(),
+            "never relaunched while still running"
+        );
         let row = store.dispatch_row(&task.id).expect("read").expect("row");
         assert!(!row.silence_ask_id.is_empty());
         assert!(store.pending_question("solver", &run_id).is_some());
 
-        assert!(tick(&agents).is_empty(), "still silent, still never relaunched");
+        assert!(
+            tick(&agents).is_empty(),
+            "still silent, still never relaunched"
+        );
         assert_eq!(
             store.question_history("solver", &run_id).len(),
             1,

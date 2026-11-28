@@ -99,7 +99,10 @@ pub(super) fn Palette(
 
     let filtered = move || {
         let needle = query.get().to_lowercase();
-        items().into_iter().filter(|i| i.matches(&needle)).collect::<Vec<Item>>()
+        items()
+            .into_iter()
+            .filter(|i| i.matches(&needle))
+            .collect::<Vec<Item>>()
     };
 
     // The filtered rows and the cursor pulled back inside them — one place, so what is drawn
@@ -125,7 +128,10 @@ pub(super) fn Palette(
         else {
             return;
         };
-        let (b, r) = (list.get_bounding_client_rect(), row.get_bounding_client_rect());
+        let (b, r) = (
+            list.get_bounding_client_rect(),
+            row.get_bounding_client_rect(),
+        );
         // The first row's section label sits above it; wrapping back to the top shows it too.
         if i == 0 {
             list.set_scroll_top(0);

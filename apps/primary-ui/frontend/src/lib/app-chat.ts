@@ -1,5 +1,12 @@
 import { appApiBase } from "./app-api";
-import { readSaved, readSavedIn, writeSaved, writeSavedIn, type Saved, type SavedFamily } from "./saved-results";
+import {
+  readSaved,
+  readSavedIn,
+  writeSaved,
+  writeSavedIn,
+  type Saved,
+  type SavedFamily,
+} from "./saved-results";
 
 export interface ConversationRef {
   agent: string;
@@ -91,7 +98,15 @@ export type AgentStep =
   | { kind: "message"; text: string }
   | { kind: "thinking"; text: string }
   | { kind: "tool"; name: string; input: string; status: AgentToolStatus; output: string }
-  | { kind: "calls"; from: number; to: number; count: number; tools: string[]; preview: string; status: AgentToolStatus }
+  | {
+      kind: "calls";
+      from: number;
+      to: number;
+      count: number;
+      tools: string[];
+      preview: string;
+      status: AgentToolStatus;
+    }
   | { kind: "unknown" };
 
 export interface AgentAttachment {
@@ -232,8 +247,14 @@ function statsOf(value: unknown): AgentChatStats | undefined {
   }
   let total = 0;
   for (const use of value.by_tool) {
-    if (!isObject(use) || typeof use.tool !== "string" || !isCount(use.calls) ||
-      !isCount(use.failed) || use.failed > use.calls) return;
+    if (
+      !isObject(use) ||
+      typeof use.tool !== "string" ||
+      !isCount(use.calls) ||
+      !isCount(use.failed) ||
+      use.failed > use.calls
+    )
+      return;
     total += use.failed;
     if (!Number.isSafeInteger(total)) return;
     by_tool.push({ tool: use.tool, calls: use.calls, failed: use.failed });
@@ -242,13 +263,20 @@ function statsOf(value: unknown): AgentChatStats | undefined {
   return { failed, by_tool };
 }
 
-async function request(path: string, signal?: AbortSignal, body?: JsonObject, source?: string): Promise<JsonObject> {
+async function request(
+  path: string,
+  signal?: AbortSignal,
+  body?: JsonObject,
+  source?: string,
+): Promise<JsonObject> {
   const response = await fetch(`${appApiBase(source)}${path}`, {
     method: body === undefined ? "GET" : "POST",
-    ...(body === undefined ? {} : {
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }),
+    ...(body === undefined
+      ? {}
+      : {
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        }),
     signal,
   });
   const raw = await response.text();
@@ -257,15 +285,18 @@ async function request(path: string, signal?: AbortSignal, body?: JsonObject, so
     data = JSON.parse(raw);
   } catch {
     throw new AppChatError(
-      response.ok ? "The app returned an invalid response." : `The app returned HTTP ${response.status}.`,
+      response.ok
+        ? "The app returned an invalid response."
+        : `The app returned HTTP ${response.status}.`,
       response.status,
     );
   }
   if (!response.ok || (isObject(data) && data.ok === false)) {
     throw new AppChatError(
-      (isObject(data) && text(data.error)) || (response.ok
-        ? "The app could not complete the request."
-        : `The app returned HTTP ${response.status}.`),
+      (isObject(data) && text(data.error)) ||
+        (response.ok
+          ? "The app could not complete the request."
+          : `The app returned HTTP ${response.status}.`),
       response.status,
     );
   }
@@ -288,14 +319,23 @@ function stepOf(value: unknown): AgentStep {
       return { kind: step.kind, text: text(step.text) };
     case "tool":
       return {
-        kind: "tool", name: text(step.name), input: text(step.input),
-        status: toolStatus(step.status), output: text(step.output),
+        kind: "tool",
+        name: text(step.name),
+        input: text(step.input),
+        status: toolStatus(step.status),
+        output: text(step.output),
       };
     case "calls":
       return {
-        kind: "calls", from: number(step.from), to: number(step.to), count: number(step.count),
-        tools: Array.isArray(step.tools) ? step.tools.filter((tool): tool is string => typeof tool === "string") : [],
-        preview: text(step.preview), status: toolStatus(step.status),
+        kind: "calls",
+        from: number(step.from),
+        to: number(step.to),
+        count: number(step.count),
+        tools: Array.isArray(step.tools)
+          ? step.tools.filter((tool): tool is string => typeof tool === "string")
+          : [],
+        preview: text(step.preview),
+        status: toolStatus(step.status),
       };
     default:
       return { kind: "unknown" };
@@ -305,13 +345,18 @@ function stepOf(value: unknown): AgentStep {
 function askOf(value: unknown): AgentAsk {
   const ask = object(value);
   return {
-    id: requiredText(ask.id), note: text(ask.note), headline: text(ask.headline),
+    id: requiredText(ask.id),
+    note: text(ask.note),
+    headline: text(ask.headline),
     asked_at: number(ask.asked_at),
-    ...(ask.deadline === null || typeof ask.deadline === "number" ? { deadline: ask.deadline } : {}),
+    ...(ask.deadline === null || typeof ask.deadline === "number"
+      ? { deadline: ask.deadline }
+      : {}),
     questions: array(ask.questions).map((value) => {
       const question = object(value);
       return {
-        header: text(question.header), question: text(question.question),
+        header: text(question.header),
+        question: text(question.question),
         multi_select: question.multi_select === true,
         options: (Array.isArray(question.options) ? question.options : []).map((value) => {
           const option = object(value);
@@ -325,22 +370,33 @@ function askOf(value: unknown): AgentAsk {
 function markerOf(value: unknown): TurnMarker {
   const marker = object(value);
   switch (marker.kind) {
-    case "from": return { kind: "from", node: text(marker.node), user: text(marker.user) };
-    case "await-woken": return {
-      kind: "await-woken", id: text(marker.id), cause: text(marker.cause),
-      event: text(marker.event), check: marker.check === true,
-    };
-    case "ask-answered": return { kind: "ask-answered", id: text(marker.id), by: text(marker.by) };
-    case "goal-check": return { kind: "goal-check", open: number(marker.open) };
-    case "pre-run": return { kind: "pre-run", ran: number(marker.ran), dropped: number(marker.dropped) };
-    default: return { kind: "unknown" };
+    case "from":
+      return { kind: "from", node: text(marker.node), user: text(marker.user) };
+    case "await-woken":
+      return {
+        kind: "await-woken",
+        id: text(marker.id),
+        cause: text(marker.cause),
+        event: text(marker.event),
+        check: marker.check === true,
+      };
+    case "ask-answered":
+      return { kind: "ask-answered", id: text(marker.id), by: text(marker.by) };
+    case "goal-check":
+      return { kind: "goal-check", open: number(marker.open) };
+    case "pre-run":
+      return { kind: "pre-run", ran: number(marker.ran), dropped: number(marker.dropped) };
+    default:
+      return { kind: "unknown" };
   }
 }
 
 function awaitOf(value: unknown): AgentAwait {
   const item = object(value);
   return {
-    id: text(item.id), note: text(item.note), summary: text(item.summary),
+    id: text(item.id),
+    note: text(item.note),
+    summary: text(item.summary),
     ...(typeof item.check === "string" ? { check: item.check } : {}),
   };
 }
@@ -350,23 +406,37 @@ function peekOf(data: JsonObject): AgentPeek {
   const turns = (Array.isArray(data.turns) ? data.turns : []).map((value, position): AgentTurn => {
     const turn = object(value);
     return {
-      role: text(turn.role), text: text(turn.text),
+      role: text(turn.role),
+      text: text(turn.text),
       seq: number(turn.seq) || position,
-      at: number(turn.at), pending: turn.pending === true, queued: turn.queued === true,
+      at: number(turn.at),
+      pending: turn.pending === true,
+      queued: turn.queued === true,
       ...(turn.mode === "regular" || turn.mode === "asap" ? { mode: turn.mode } : {}),
       images: (Array.isArray(turn.images) ? turn.images : []).map((value) => {
         const image = object(value);
-        return { id: requiredText(image.id), name: text(image.name), media_type: text(image.media_type), size: number(image.size) };
+        return {
+          id: requiredText(image.id),
+          name: text(image.name),
+          media_type: text(image.media_type),
+          size: number(image.size),
+        };
       }),
       steps: (Array.isArray(turn.steps) ? turn.steps : []).map(stepOf),
       ...(Array.isArray(turn.markers) ? { markers: turn.markers.map(markerOf) } : {}),
     };
   });
   return {
-    name: text(data.name), run_id: text(data.run_id), running: data.running === true,
-    answerable: data.answerable === true, interactive: data.interactive === true,
-    caps: caps(data.caps), cwd: text(data.cwd), output: text(data.output),
-    turns, total_turns: number(data.total_turns) || turns.length,
+    name: text(data.name),
+    run_id: text(data.run_id),
+    running: data.running === true,
+    answerable: data.answerable === true,
+    interactive: data.interactive === true,
+    caps: caps(data.caps),
+    cwd: text(data.cwd),
+    output: text(data.output),
+    turns,
+    total_turns: number(data.total_turns) || turns.length,
     ...(typeof data.state === "string" ? { state: data.state } : {}),
     ...(isObject(data.pending_question) ? { pending_question: askOf(data.pending_question) } : {}),
     awaits: (Array.isArray(data.awaits) ? data.awaits : []).map(awaitOf),
@@ -391,9 +461,16 @@ const savedThreads: SavedFamily = { prefix: "adi.chat.thread.v1:", keep: 8 };
 /** The list's first message is only ever shown as a preview; a stored copy needs no more of it. */
 const savedMessageLength = 600;
 
-const kept = (value: unknown, fields: readonly string[]): JsonObject => isObject(value)
-  ? Object.fromEntries(fields.filter((field) => Object.hasOwn(value, field)).map((field) => [field, value[field]])) : {};
-const fromSaved = <T>(parse: (data: JsonObject) => T) => (payload: unknown) => parse(object(payload));
+const kept = (value: unknown, fields: readonly string[]): JsonObject =>
+  isObject(value)
+    ? Object.fromEntries(
+        fields.filter((field) => Object.hasOwn(value, field)).map((field) => [field, value[field]]),
+      )
+    : {};
+const fromSaved =
+  <T>(parse: (data: JsonObject) => T) =>
+  (payload: unknown) =>
+    parse(object(payload));
 
 function fleetNodesOf(data: JsonObject): FleetNode[] {
   return array(data.nodes).map((value) => {
@@ -412,13 +489,24 @@ export function savedFleetNodes(storage?: Storage): Saved<FleetNode[]> | undefin
   return readSaved(savedFleetKey, fromSaved(fleetNodesOf), storage);
 }
 
-const agentFields = ["name", "running", "starred", "project", "created_by", "runnable", "backend", "caps"];
+const agentFields = [
+  "name",
+  "running",
+  "starred",
+  "project",
+  "created_by",
+  "runnable",
+  "backend",
+  "caps",
+];
 
 function agentsOf(data: JsonObject, source?: string): Agent[] {
   return array(data.agents).map((value) => {
     const agent = object(value);
     return {
-      name: requiredText(agent.name), running: agent.running === true, starred: agent.starred === true,
+      name: requiredText(agent.name),
+      running: agent.running === true,
+      starred: agent.starred === true,
       ...(source === undefined ? {} : { source }),
       ...(typeof agent.project === "string" ? { project: agent.project } : {}),
       ...(typeof agent.created_by === "string" ? { createdBy: agent.created_by } : {}),
@@ -433,12 +521,19 @@ export async function getAgents(signal?: AbortSignal, source?: string): Promise<
   const data = await request("/agents", signal, undefined, source);
   const agents = agentsOf(data, source);
   // An agent's full definition is hundreds of times the few fields the chat reads.
-  writeSavedIn(savedAgentLists, source ?? "", { agents: array(data.agents).map((agent) => kept(agent, agentFields)) });
+  writeSavedIn(savedAgentLists, source ?? "", {
+    agents: array(data.agents).map((agent) => kept(agent, agentFields)),
+  });
   return agents;
 }
 
 export function savedAgents(source?: string, storage?: Storage): Saved<Agent[]> | undefined {
-  return readSavedIn(savedAgentLists, source ?? "", fromSaved((data) => agentsOf(data, source)), storage);
+  return readSavedIn(
+    savedAgentLists,
+    source ?? "",
+    fromSaved((data) => agentsOf(data, source)),
+    storage,
+  );
 }
 
 function conversationIndexOf(data: JsonObject, source?: string): ConversationIndex {
@@ -448,51 +543,88 @@ function conversationIndexOf(data: JsonObject, source?: string): ConversationInd
     return {
       ...(typeof group.project === "string" ? { project: group.project } : {}),
       label: text(group.label),
-      agents: new Set((Array.isArray(group.agents) ? group.agents : []).filter((agent): agent is string => typeof agent === "string")),
+      agents: new Set(
+        (Array.isArray(group.agents) ? group.agents : []).filter(
+          (agent): agent is string => typeof agent === "string",
+        ),
+      ),
       total: number(group.total),
     };
   });
-  const conversations = array(data.agents).flatMap((value) => {
-    const agent = object(value);
-    const agentName = requiredText(agent.name);
-    const agentCaps = caps(agent.caps);
-    const project = groupData.find((group) => group.agents.has(agentName));
-    return array(agent.runs).map((value): Conversation => {
-      const run = object(value);
-      // A historical session keeps its own backend even if the agent definition changed.
-      const runCaps = isObject(run.caps) ? caps(run.caps) : agentCaps;
-      const message = text(run.message);
-      return {
-        agent: agentName, runId: requiredText(run.run_id),
-        ...(source === undefined ? {} : { source }),
-        title: text(run.title).trim() || message.trim().replace(/\s+/g, " ").slice(0, 120) || "Untitled chat",
-        message, running: run.running === true,
-        lastActivity: number(run.last_activity) || number(run.started_at),
-        answerable: typeof runCaps.answerable === "boolean" ? runCaps.answerable : agent.answerable === true,
-        interactive: typeof runCaps.interactive === "boolean" ? runCaps.interactive : agent.interactive === true,
-        launchedBy: text(run.launched_by), pendingQuestion: isObject(run.pending_question),
-        awaiting: Array.isArray(run.awaits) && run.awaits.length > 0,
-        hidden: run.hidden === true, starred: run.starred === true, askingUser,
-        ...(typeof agent.starred === "boolean" ? { agentStarred: agent.starred } : {}),
-        ...(project ? { project: project.project, projectName: project.label } : {}),
-        ...(typeof run.state === "string" ? { state: run.state } : {}),
-      };
-    });
-  }).sort((a, b) => b.lastActivity - a.lastActivity);
+  const conversations = array(data.agents)
+    .flatMap((value) => {
+      const agent = object(value);
+      const agentName = requiredText(agent.name);
+      const agentCaps = caps(agent.caps);
+      const project = groupData.find((group) => group.agents.has(agentName));
+      return array(agent.runs).map((value): Conversation => {
+        const run = object(value);
+        // A historical session keeps its own backend even if the agent definition changed.
+        const runCaps = isObject(run.caps) ? caps(run.caps) : agentCaps;
+        const message = text(run.message);
+        return {
+          agent: agentName,
+          runId: requiredText(run.run_id),
+          ...(source === undefined ? {} : { source }),
+          title:
+            text(run.title).trim() ||
+            message.trim().replace(/\s+/g, " ").slice(0, 120) ||
+            "Untitled chat",
+          message,
+          running: run.running === true,
+          lastActivity: number(run.last_activity) || number(run.started_at),
+          answerable:
+            typeof runCaps.answerable === "boolean"
+              ? runCaps.answerable
+              : agent.answerable === true,
+          interactive:
+            typeof runCaps.interactive === "boolean"
+              ? runCaps.interactive
+              : agent.interactive === true,
+          launchedBy: text(run.launched_by),
+          pendingQuestion: isObject(run.pending_question),
+          awaiting: Array.isArray(run.awaits) && run.awaits.length > 0,
+          hidden: run.hidden === true,
+          starred: run.starred === true,
+          askingUser,
+          ...(typeof agent.starred === "boolean" ? { agentStarred: agent.starred } : {}),
+          ...(project ? { project: project.project, projectName: project.label } : {}),
+          ...(typeof run.state === "string" ? { state: run.state } : {}),
+        };
+      });
+    })
+    .sort((a, b) => b.lastActivity - a.lastActivity);
   return {
-    conversations, total: typeof data.total === "number" ? number(data.total) : conversations.length, askingUser,
-    groups: groupData.map(({ agents, ...group }) => ({ ...group, conversations: conversations.filter((conversation) => agents.has(conversation.agent)) })),
+    conversations,
+    total: typeof data.total === "number" ? number(data.total) : conversations.length,
+    askingUser,
+    groups: groupData.map(({ agents, ...group }) => ({
+      ...group,
+      conversations: conversations.filter((conversation) => agents.has(conversation.agent)),
+    })),
   };
 }
 
 const indexCaps = ["answerable", "interactive"];
-const indexRunFields = ["run_id", "title", "running", "last_activity", "started_at", "launched_by", "hidden", "starred", "state"];
+const indexRunFields = [
+  "run_id",
+  "title",
+  "running",
+  "last_activity",
+  "started_at",
+  "launched_by",
+  "hidden",
+  "starred",
+  "state",
+];
 
 /** The list's answer cut down to what `conversationIndexOf` reads; the parser gives it the same meaning. */
 function keptIndex(data: JsonObject): JsonObject {
   return {
     ...kept(data, ["total", "asking_user"]),
-    ...(Array.isArray(data.groups) ? { groups: data.groups.map((group) => kept(group, ["project", "label", "agents", "total"])) } : {}),
+    ...(Array.isArray(data.groups)
+      ? { groups: data.groups.map((group) => kept(group, ["project", "label", "agents", "total"])) }
+      : {}),
     agents: array(data.agents).map((value) => {
       const agent = object(value);
       return {
@@ -515,46 +647,79 @@ function keptIndex(data: JsonObject): JsonObject {
 }
 
 const includesHidden = (options: ConversationIndexOptions) => options.hidden === "include";
-const savedIndexId = (source: string | undefined, options: ConversationIndexOptions) => JSON.stringify(
-  [source ?? "", options.filter ?? "all", options.group ?? "flat", ...(includesHidden(options) ? ["hidden"] : [])],
-);
+const savedIndexId = (source: string | undefined, options: ConversationIndexOptions) =>
+  JSON.stringify([
+    source ?? "",
+    options.filter ?? "all",
+    options.group ?? "flat",
+    ...(includesHidden(options) ? ["hidden"] : []),
+  ]);
 /** A view a page can open with: a first page of the list, with no project expanded further. */
 function isFirstPage(options: ConversationIndexOptions): boolean {
-  return options.hidden !== true && (options.limit ?? 100) === 100 && (options.groupLimit ?? 3) === 3
-    && !Object.values(options.groupMore ?? {}).some((count) => count > 0);
+  return (
+    options.hidden !== true &&
+    (options.limit ?? 100) === 100 &&
+    (options.groupLimit ?? 3) === 3 &&
+    !Object.values(options.groupMore ?? {}).some((count) => count > 0)
+  );
 }
 
 export async function getConversationIndex(
-  signal?: AbortSignal, source?: string, options: ConversationIndexOptions = {},
+  signal?: AbortSignal,
+  source?: string,
+  options: ConversationIndexOptions = {},
 ): Promise<ConversationIndex> {
   // Without the parameter the machine answers with hidden and listed conversations alike.
-  const params = new URLSearchParams(includesHidden(options) ? {} : { hidden: String(options.hidden ?? false) });
+  const params = new URLSearchParams(
+    includesHidden(options) ? {} : { hidden: String(options.hidden ?? false) },
+  );
   // Hidden alone is deliberately unpaged in the main app, so every put-away conversation is reachable.
-  if (options.hidden !== true || options.limit !== undefined) params.set("limit", String(options.limit ?? 100));
+  if (options.hidden !== true || options.limit !== undefined)
+    params.set("limit", String(options.limit ?? 100));
   if (options.filter && options.filter !== "all") params.set("filter", options.filter);
   if (options.group === "project") {
     params.set("group", "project");
     params.set("group_limit", String(options.groupLimit ?? 3));
-    const more = Object.entries(options.groupMore ?? {}).filter(([, count]) => Number.isSafeInteger(count) && count > 0)
-      .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0).map(([project, count]) => `${project}:${count}`).join(",");
+    const more = Object.entries(options.groupMore ?? {})
+      .filter(([, count]) => Number.isSafeInteger(count) && count > 0)
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+      .map(([project, count]) => `${project}:${count}`)
+      .join(",");
     if (more) params.set("group_more", more);
   }
   const data = await request(`/agents/runs/all?${params}`, signal, undefined, source);
-  const index: ConversationIndex = { ...conversationIndexOf(data, source), ...(includesHidden(options) ? { includesHidden: true } : {}) };
-  if (isFirstPage(options)) writeSavedIn(savedIndexes, savedIndexId(source, options), keptIndex(data));
+  const index: ConversationIndex = {
+    ...conversationIndexOf(data, source),
+    ...(includesHidden(options) ? { includesHidden: true } : {}),
+  };
+  if (isFirstPage(options))
+    writeSavedIn(savedIndexes, savedIndexId(source, options), keptIndex(data));
   return index;
 }
 
 /** One machine's list as this browser last read it, marked `saved`. Only the first page is ever kept. */
-export function savedConversationIndex(source: string | undefined, options: ConversationIndexOptions, storage?: Storage): Saved<ConversationIndex> | undefined {
+export function savedConversationIndex(
+  source: string | undefined,
+  options: ConversationIndexOptions,
+  storage?: Storage,
+): Saved<ConversationIndex> | undefined {
   if (!isFirstPage(options)) return undefined;
-  return readSavedIn(savedIndexes, savedIndexId(source, options), fromSaved((data): ConversationIndex => ({
-    ...conversationIndexOf(data, source), saved: true, ...(includesHidden(options) ? { includesHidden: true } : {}),
-  })), storage);
+  return readSavedIn(
+    savedIndexes,
+    savedIndexId(source, options),
+    fromSaved((data): ConversationIndex => ({
+      ...conversationIndexOf(data, source),
+      saved: true,
+      ...(includesHidden(options) ? { includesHidden: true } : {}),
+    })),
+    storage,
+  );
 }
 
 export async function getConversations(
-  signal?: AbortSignal, source?: string, options?: ConversationIndexOptions,
+  signal?: AbortSignal,
+  source?: string,
+  options?: ConversationIndexOptions,
 ): Promise<Conversation[]> {
   return (await getConversationIndex(signal, source, options)).conversations;
 }
@@ -563,33 +728,62 @@ export async function getConversations(
 export const snapshotPageSize = 20;
 
 type ThreadView = { limit?: number; before?: number };
-const savedThreadId = (ref: ConversationRef) => JSON.stringify([ref.source ?? "", ref.agent, ref.runId]);
-const isLatestPage = (view: ThreadView) => view.before === undefined && (view.limit ?? snapshotPageSize) === snapshotPageSize;
+const savedThreadId = (ref: ConversationRef) =>
+  JSON.stringify([ref.source ?? "", ref.agent, ref.runId]);
+const isLatestPage = (view: ThreadView) =>
+  view.before === undefined && (view.limit ?? snapshotPageSize) === snapshotPageSize;
 
 export async function getConversation(
   ref: ConversationRef,
   signal?: AbortSignal,
   view: ThreadView = {},
 ): Promise<AgentPeek> {
-  const peek = peekOf(await request("/agents/run/peek", signal, {
-    ...runBody(ref), limit: view.limit ?? snapshotPageSize, fold: true,
-    ...(view.before === undefined ? {} : { before: view.before }),
-  }, ref.source));
+  const peek = peekOf(
+    await request(
+      "/agents/run/peek",
+      signal,
+      {
+        ...runBody(ref),
+        limit: view.limit ?? snapshotPageSize,
+        fold: true,
+        ...(view.before === undefined ? {} : { before: view.before }),
+      },
+      ref.source,
+    ),
+  );
   // The parsed page is the server's own field names, so it is stored as it is and parsed again.
   if (isLatestPage(view)) writeSavedIn(savedThreads, savedThreadId(ref), peek);
   return peek;
 }
 
 /** A conversation as this browser last read it, marked `saved`. Only its latest page is ever kept. */
-export function savedConversation(ref: ConversationRef, view: ThreadView = {}, storage?: Storage): Saved<AgentPeek> | undefined {
+export function savedConversation(
+  ref: ConversationRef,
+  view: ThreadView = {},
+  storage?: Storage,
+): Saved<AgentPeek> | undefined {
   if (!isLatestPage(view)) return undefined;
-  return readSavedIn(savedThreads, savedThreadId(ref), fromSaved((data): AgentPeek => ({ ...peekOf(data), saved: true })), storage);
+  return readSavedIn(
+    savedThreads,
+    savedThreadId(ref),
+    fromSaved((data): AgentPeek => ({ ...peekOf(data), saved: true })),
+    storage,
+  );
 }
 
 export async function getSteps(
-  ref: ConversationRef, turn: number, from: number, to: number, signal?: AbortSignal,
+  ref: ConversationRef,
+  turn: number,
+  from: number,
+  to: number,
+  signal?: AbortSignal,
 ): Promise<AgentStep[]> {
-  const data = await request("/agents/run/steps", signal, { ...runBody(ref), turn, from, to }, ref.source);
+  const data = await request(
+    "/agents/run/steps",
+    signal,
+    { ...runBody(ref), turn, from, to },
+    ref.source,
+  );
   return array(data.steps).map(stepOf);
 }
 
@@ -606,19 +800,40 @@ export interface ReplyOptions {
 }
 
 export async function startConversation(
-  agent: string, message: string, { signal, source, attachments = [] }: StartConversationOptions = {},
+  agent: string,
+  message: string,
+  { signal, source, attachments = [] }: StartConversationOptions = {},
 ): Promise<ConversationRef> {
-  const data = await request("/agents/run", signal, { name: agent, message, attachments, launched_by: "human" }, source);
+  const data = await request(
+    "/agents/run",
+    signal,
+    { name: agent, message, attachments, launched_by: "human" },
+    source,
+  );
   if (!text(data.run_id)) throw new Error("This agent did not open a conversation.");
   return { agent, runId: text(data.run_id), ...(source === undefined ? {} : { source }) };
 }
 
 export async function replyToConversation(
-  ref: ConversationRef, message: string, { signal, attachments = [], mode = "regular" }: ReplyOptions = {},
+  ref: ConversationRef,
+  message: string,
+  { signal, attachments = [], mode = "regular" }: ReplyOptions = {},
 ): Promise<AgentPeek> {
-  return peekOf(await request("/agents/run/reply", signal, {
-    ...runBody(ref), message, attachments, mode, limit: snapshotPageSize, fold: true,
-  }, ref.source));
+  return peekOf(
+    await request(
+      "/agents/run/reply",
+      signal,
+      {
+        ...runBody(ref),
+        message,
+        attachments,
+        mode,
+        limit: snapshotPageSize,
+        fold: true,
+      },
+      ref.source,
+    ),
+  );
 }
 
 export async function stopConversation(ref: ConversationRef, signal?: AbortSignal): Promise<void> {
@@ -637,19 +852,33 @@ export function queuedTurns(snapshot: AgentPeek): AgentTurn[] {
  */
 export function sentWithPrevious(turns: AgentTurn[], index: number): boolean {
   const [before, turn] = [turns[index - 1], turns[index]];
-  return Boolean(before && turn) && turn.role === "user" && !turn.queued && before.role === "user" && !before.queued;
+  return (
+    Boolean(before && turn) &&
+    turn.role === "user" &&
+    !turn.queued &&
+    before.role === "user" &&
+    !before.queued
+  );
 }
 
 function sameQueuedMessage(left: AgentTurn, right: AgentTurn): boolean {
-  return left.text === right.text && left.mode === right.mode && left.images.length === right.images.length
-    && left.images.every((image, position) => image.id === right.images[position].id);
+  return (
+    left.text === right.text &&
+    left.mode === right.mode &&
+    left.images.length === right.images.length &&
+    left.images.every((image, position) => image.id === right.images[position].id)
+  );
 }
 
 /**
  * Where a queued message sits now, given where it sat in an older snapshot.
  * Messages join at the back and leave from anywhere, so a waiting one's position can only fall.
  */
-export function queuedPosition(snapshot: AgentPeek, target: AgentTurn, lastKnown: number): number | null {
+export function queuedPosition(
+  snapshot: AgentPeek,
+  target: AgentTurn,
+  lastKnown: number,
+): number | null {
   const queue = queuedTurns(snapshot);
   for (let position = Math.min(lastKnown, queue.length - 1); position >= 0; position -= 1) {
     if (sameQueuedMessage(queue[position], target)) return position;
@@ -663,39 +892,84 @@ export function queuedPosition(snapshot: AgentPeek, target: AgentTurn, lastKnown
  * different message by now, so the position is read again immediately before the write.
  */
 export async function cancelQueuedMessage(
-  ref: ConversationRef, target: AgentTurn, lastKnown: number, signal?: AbortSignal,
+  ref: ConversationRef,
+  target: AgentTurn,
+  lastKnown: number,
+  signal?: AbortSignal,
 ): Promise<AgentPeek> {
   const current = await getConversation(ref, signal);
   const index = queuedPosition(current, target, lastKnown);
   // Already asked: there is nothing left to cancel, and the fresh snapshot says so.
   if (index === null) return current;
-  return peekOf(await request("/agents/run/unqueue", signal, {
-    ...runBody(ref), index, limit: snapshotPageSize, fold: true,
-  }, ref.source));
+  return peekOf(
+    await request(
+      "/agents/run/unqueue",
+      signal,
+      {
+        ...runBody(ref),
+        index,
+        limit: snapshotPageSize,
+        fold: true,
+      },
+      ref.source,
+    ),
+  );
 }
 
 /**
  * Cuts the conversation back to just before the user message numbered `seq`.
  * That message and everything after it are dropped, in the transcript and in the agent's memory.
  */
-export async function rewindConversation(ref: ConversationRef, seq: number, signal?: AbortSignal): Promise<AgentPeek> {
-  return peekOf(await request("/agents/run/rewind", signal, {
-    ...runBody(ref), seq, limit: snapshotPageSize, fold: true,
-  }, ref.source));
+export async function rewindConversation(
+  ref: ConversationRef,
+  seq: number,
+  signal?: AbortSignal,
+): Promise<AgentPeek> {
+  return peekOf(
+    await request(
+      "/agents/run/rewind",
+      signal,
+      {
+        ...runBody(ref),
+        seq,
+        limit: snapshotPageSize,
+        fold: true,
+      },
+      ref.source,
+    ),
+  );
 }
 
 /** Drops one pending await and returns what the conversation is still waiting on. */
-export async function cancelAwait(ref: ConversationRef, id: string, signal?: AbortSignal): Promise<AgentAwait[]> {
+export async function cancelAwait(
+  ref: ConversationRef,
+  id: string,
+  signal?: AbortSignal,
+): Promise<AgentAwait[]> {
   const data = await request("/agents/await/ignore", signal, { ...runBody(ref), id }, ref.source);
   return (Array.isArray(data.awaits) ? data.awaits : []).map(awaitOf);
 }
 
 export async function answerQuestion(
-  ref: ConversationRef, ask: string, replies: string[], signal?: AbortSignal,
+  ref: ConversationRef,
+  ask: string,
+  replies: string[],
+  signal?: AbortSignal,
 ): Promise<AgentPeek> {
-  return peekOf(await request("/agents/run/answer", signal, {
-    ...runBody(ref), ask, replies, limit: 20, fold: true,
-  }, ref.source));
+  return peekOf(
+    await request(
+      "/agents/run/answer",
+      signal,
+      {
+        ...runBody(ref),
+        ask,
+        replies,
+        limit: 20,
+        fold: true,
+      },
+      ref.source,
+    ),
+  );
 }
 
 export function attachmentUrl(id: string, source?: string): string {
@@ -706,13 +980,21 @@ export async function uploadImage(file: File, source?: string): Promise<AgentAtt
   const mediaType = file.type || "application/octet-stream";
   const isImage = ["image/png", "image/jpeg", "image/webp", "image/gif"].includes(mediaType);
   const limit = isImage ? 5 : 25;
-  if (file.size > limit * 1024 * 1024) throw new Error(`${isImage ? "Images" : "Files"} must be ${limit} MB or smaller.`);
+  if (file.size > limit * 1024 * 1024)
+    throw new Error(`${isImage ? "Images" : "Files"} must be ${limit} MB or smaller.`);
   const response = await fetch(`${appApiBase(source)}/agents/attachment`, {
-    method: "POST", headers: { "Content-Type": mediaType, "X-Adi-Filename": file.name.replace(/[^\x20-\x7e]/g, "_") }, body: file,
+    method: "POST",
+    headers: {
+      "Content-Type": mediaType,
+      "X-Adi-Filename": file.name.replace(/[^\x20-\x7e]/g, "_"),
+    },
+    body: file,
   });
   const data = await response.json();
-  if (!response.ok || data.ok === false) throw new Error(data.error || "File could not be uploaded. Try again.");
-  if (typeof data.id !== "string" || !data.id) throw new Error("The app returned an invalid attachment reference.");
+  if (!response.ok || data.ok === false)
+    throw new Error(data.error || "File could not be uploaded. Try again.");
+  if (typeof data.id !== "string" || !data.id)
+    throw new Error("The app returned an invalid attachment reference.");
   return { id: data.id, name: file.name, media_type: mediaType, size: file.size };
 }
 
@@ -726,16 +1008,36 @@ export async function starConversation(ref: ConversationRef, starred: boolean): 
 }
 
 export async function renameConversation(ref: ConversationRef, title: string): Promise<void> {
-  await request("/agents/run/rename", undefined, { ...runBody(ref), title: title.trim() }, ref.source);
+  await request(
+    "/agents/run/rename",
+    undefined,
+    { ...runBody(ref), title: title.trim() },
+    ref.source,
+  );
 }
 
-export interface VoiceEngine { id: string; label: string; ready: boolean; in_browser: boolean; detail: string }
+export interface VoiceEngine {
+  id: string;
+  label: string;
+  ready: boolean;
+  in_browser: boolean;
+  detail: string;
+}
 type Voice = { engines: VoiceEngine[]; default_engine: string };
 function voiceOf(data: JsonObject): Voice {
-  return { engines: array(data.engines).map((value) => {
-    const item = object(value);
-    return { id: text(item.id), label: text(item.label), ready: item.ready === true, in_browser: item.in_browser === true, detail: text(item.detail) };
-  }), default_engine: text(data.default_engine) || "browser" };
+  return {
+    engines: array(data.engines).map((value) => {
+      const item = object(value);
+      return {
+        id: text(item.id),
+        label: text(item.label),
+        ready: item.ready === true,
+        in_browser: item.in_browser === true,
+        detail: text(item.detail),
+      };
+    }),
+    default_engine: text(data.default_engine) || "browser",
+  };
 }
 export async function getVoice(): Promise<Voice> {
   const voice = voiceOf(await request("/voice"));
@@ -745,12 +1047,23 @@ export async function getVoice(): Promise<Voice> {
 export function savedVoice(storage?: Storage): Saved<Voice> | undefined {
   return readSaved(savedVoiceKey, fromSaved(voiceOf), storage);
 }
-export async function transcribeAudio(audio: Blob, engine: string, signal?: AbortSignal): Promise<string> {
-  const response = await fetch(`${appApiBase()}/voice/transcribe?engine=${encodeURIComponent(engine)}`, {
-    method: "POST", headers: { "Content-Type": audio.type || "audio/webm" }, body: audio, signal,
-  });
+export async function transcribeAudio(
+  audio: Blob,
+  engine: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const response = await fetch(
+    `${appApiBase()}/voice/transcribe?engine=${encodeURIComponent(engine)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": audio.type || "audio/webm" },
+      body: audio,
+      signal,
+    },
+  );
   const data = await response.json();
-  if (!response.ok || data.ok === false) throw new Error(data.error || "Could not transcribe this recording.");
+  if (!response.ok || data.ok === false)
+    throw new Error(data.error || "Could not transcribe this recording.");
   if (typeof data.text !== "string") throw new Error("The app returned an invalid transcript.");
   return data.text;
 }

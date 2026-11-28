@@ -19,14 +19,16 @@ import {
 } from "../src/components";
 
 const command = 'git diff -- "<chat>&.tsx" && printf "$USER is literal"';
-const output = '<script>window.__toolMarkupExecuted = true</script>\nfile: <chat>&.tsx\n' + "long-output-".repeat(80);
+const output =
+  "<script>window.__toolMarkupExecuted = true</script>\nfile: <chat>&.tsx\n" +
+  "long-output-".repeat(80);
 const agentTitle = "Layout reviewer · Check chat layout";
 const agentResult = "The compact activity row fits <mobile> widths & keeps details optional.";
 const diffLines: readonly ChatToolDiffLine[] = [
   { type: "context", content: "function render() {", oldLineNumber: 9, newLineNumber: 9 },
   { type: "deletion", content: '  return "<script>old</script>";', oldLineNumber: 10 },
   { type: "addition", content: '  return "<script>new</script> & safe";', newLineNumber: 10 },
-  { type: "addition", content: '  // ' + "long-diff-".repeat(80), newLineNumber: 11 },
+  { type: "addition", content: "  // " + "long-diff-".repeat(80), newLineNumber: 11 },
   { type: "context", content: "}", oldLineNumber: 11, newLineNumber: 12 },
 ];
 
@@ -64,7 +66,15 @@ function FixtureMessage({ message, index }: { message: string; index: number }) 
       <div style={{ minWidth: 0 }}>
         <ChatMessageMeta>{index % 2 ? "You" : "Assistant"} · Just now</ChatMessageMeta>
         <ChatMessageContent>{message}</ChatMessageContent>
-        {index === 0 && <button id="test-message-state" type="button" onClick={() => setCount((value) => value + 1)}>Saved reactions: {count}</button>}
+        {index === 0 && (
+          <button
+            id="test-message-state"
+            type="button"
+            onClick={() => setCount((value) => value + 1)}
+          >
+            Saved reactions: {count}
+          </button>
+        )}
       </div>
     </ChatMessage>
   );
@@ -80,7 +90,12 @@ function Fixture() {
   const [toolStatus, setToolStatus] = useState<ChatToolCallStatus>("pending");
   const [toolOpen, setToolOpen] = useState(false);
   const [agentStatus, setAgentStatus] = useState<ChatToolCallStatus>("completed");
-  const [messages, setMessages] = useState(Array.from({ length: 18 }, (_, index) => `Message ${index + 1}: ${"A long chat message that wraps safely. ".repeat(3)}`));
+  const [messages, setMessages] = useState(
+    Array.from(
+      { length: 18 },
+      (_, index) => `Message ${index + 1}: ${"A long chat message that wraps safely. ".repeat(3)}`,
+    ),
+  );
 
   Object.assign(state, {
     setDisabled,
@@ -92,7 +107,11 @@ function Fixture() {
     setToolStatus,
     setToolOpen,
     setAgentStatus,
-    append: () => setMessages((current) => [...current, `Message ${current.length + 1}: ${"Appended content. ".repeat(12)}`]),
+    append: () =>
+      setMessages((current) => [
+        ...current,
+        `Message ${current.length + 1}: ${"Appended content. ".repeat(12)}`,
+      ]),
   });
 
   function send(message: string) {
@@ -104,9 +123,24 @@ function Fixture() {
   }
 
   return (
-    <main style={{ boxSizing: "border-box", width: "100%", maxWidth: 640, padding: 24, margin: "0 auto", display: "grid", gap: 20 }}>
+    <main
+      style={{
+        boxSizing: "border-box",
+        width: "100%",
+        maxWidth: 640,
+        padding: 24,
+        margin: "0 auto",
+        display: "grid",
+        gap: 20,
+      }}
+    >
       <h1>Chat browser fixtures</h1>
-      <ChatThread id="test-thread" label="Test conversation" direction={direction} style={{ height: 280 }}>
+      <ChatThread
+        id="test-thread"
+        label="Test conversation"
+        direction={direction}
+        style={{ height: 280 }}
+      >
         {messages.map((message, index) => (
           <FixtureMessage key={index} message={message} index={index} />
         ))}
@@ -121,7 +155,10 @@ function Fixture() {
         disabledReason="Your connection must be restored before sending."
         isGenerating={generating}
         sendOnEnter={sendOnEnter}
-        onStop={() => { state.stops++; setGenerating(false); }}
+        onStop={() => {
+          state.stops++;
+          setGenerating(false);
+        }}
         textareaProps={{
           id: "test-draft",
           name: "message",
@@ -131,17 +168,34 @@ function Fixture() {
           },
         }}
       >
-        <button id="test-toolbar" type="button">Attach a file</button>
+        <button id="test-toolbar" type="button">
+          Attach a file
+        </button>
       </ChatComposer>
       <output id="test-draft-value">{draft}</output>
-      <ChatThread id="test-manual-thread" label="Manual conversation" autoScroll={false} style={{ height: 180 }}>
+      <ChatThread
+        id="test-manual-thread"
+        label="Manual conversation"
+        autoScroll={false}
+        style={{ height: 180 }}
+      >
         {messages.map((message, index) => (
-          <ChatMessage from="assistant" key={index}><ChatMessageContent>{message}</ChatMessageContent></ChatMessage>
+          <ChatMessage from="assistant" key={index}>
+            <ChatMessageContent>{message}</ChatMessageContent>
+          </ChatMessage>
         ))}
       </ChatThread>
-      <ChatThread id="test-manual-reverse-thread" label="Manual reverse conversation" direction={manualDirection} autoScroll={false} style={{ height: 180 }}>
+      <ChatThread
+        id="test-manual-reverse-thread"
+        label="Manual reverse conversation"
+        direction={manualDirection}
+        autoScroll={false}
+        style={{ height: 180 }}
+      >
         {messages.map((message, index) => (
-          <ChatMessage from="assistant" key={index} data-message-number={index + 1}><ChatMessageContent>{message}</ChatMessageContent></ChatMessage>
+          <ChatMessage from="assistant" key={index} data-message-number={index + 1}>
+            <ChatMessageContent>{message}</ChatMessageContent>
+          </ChatMessage>
         ))}
       </ChatThread>
       <ChatMessage id="test-overflow-message" from="assistant">
@@ -149,14 +203,32 @@ function Fixture() {
         <div style={{ minWidth: 0 }}>
           <ChatMessageMeta>Assistant</ChatMessageMeta>
           <ChatMessageContent>{"A".repeat(400)}</ChatMessageContent>
-          <ChatMessageActions><button id="test-copy" type="button">Copy message</button></ChatMessageActions>
+          <ChatMessageActions>
+            <button id="test-copy" type="button">
+              Copy message
+            </button>
+          </ChatMessageActions>
         </div>
       </ChatMessage>
-      <ChatMessage from="system"><ChatMessageContent>Conversation started</ChatMessageContent></ChatMessage>
+      <ChatMessage from="system">
+        <ChatMessageContent>Conversation started</ChatMessageContent>
+      </ChatMessage>
       <ChatTypingIndicator id="test-typing" />
-      <section id="test-tool-calls" aria-label="Tool call fixtures" style={{ minWidth: 0, display: "grid", gap: 12 }}>
-        <ChatToolCall id="test-tool-disclosure" title={command} kind="terminal" status={toolStatus} meta="0.4 s">
-          <ChatToolOutput id="test-tool-output" label="Verification output">{output}</ChatToolOutput>
+      <section
+        id="test-tool-calls"
+        aria-label="Tool call fixtures"
+        style={{ minWidth: 0, display: "grid", gap: 12 }}
+      >
+        <ChatToolCall
+          id="test-tool-disclosure"
+          title={command}
+          kind="terminal"
+          status={toolStatus}
+          meta="0.4 s"
+        >
+          <ChatToolOutput id="test-tool-output" label="Verification output">
+            {output}
+          </ChatToolOutput>
         </ChatToolCall>
         <ChatToolCall
           id="test-tool-controlled"
@@ -165,26 +237,65 @@ function Fixture() {
           kind="git"
           status={toolStatus}
           open={toolOpen}
-          onOpenChange={(open) => { state.toolOpenRequests.push(open); }}
+          onOpenChange={(open) => {
+            state.toolOpenRequests.push(open);
+          }}
         >
           <ChatToolOutput>{" M packages/ui/src/components/chat.tsx"}</ChatToolOutput>
         </ChatToolCall>
         <ChatToolCall id="test-tool-edit" title="Update chat rendering" kind="edit" defaultOpen>
-          <ChatToolDiff id="test-tool-diff" file={"packages/ui/src/components/" + "chat-".repeat(20) + ".tsx"} lines={diffLines} />
+          <ChatToolDiff
+            id="test-tool-diff"
+            file={"packages/ui/src/components/" + "chat-".repeat(20) + ".tsx"}
+            lines={diffLines}
+          />
         </ChatToolCall>
-        <ChatToolCall id="test-tool-summary" title="Cancelled lookup" kind="tool" status="cancelled" />
-        <ChatToolCall id="test-tool-group" title="8 tool calls" status="error" group={{ errorCount: 1 }}>
+        <ChatToolCall
+          id="test-tool-summary"
+          title="Cancelled lookup"
+          kind="tool"
+          status="cancelled"
+        />
+        <ChatToolCall
+          id="test-tool-group"
+          title="8 tool calls"
+          status="error"
+          group={{ errorCount: 1 }}
+        >
           <div className="px-3 py-1">
-            <ChatToolCall id="test-tool-group-success" title="git status --short" kind="git" status="completed" />
-            <ChatToolCall id="test-tool-group-failure" title="bun run lint" kind="terminal" status="error" />
+            <ChatToolCall
+              id="test-tool-group-success"
+              title="git status --short"
+              kind="git"
+              status="completed"
+            />
+            <ChatToolCall
+              id="test-tool-group-failure"
+              title="bun run lint"
+              kind="terminal"
+              status="error"
+            />
           </div>
         </ChatToolCall>
         <ChatToolCall id="test-tool-group-zero" title="8 tool calls" group={{ errorCount: 0 }} />
         <ChatToolCall id="test-tool-group-unknown" title="8 tool calls" status="error" group={{}} />
-        <ChatToolCall id="test-tool-group-plural" title="8 tool calls" status="error" group={{ errorCount: 3 }} />
+        <ChatToolCall
+          id="test-tool-group-plural"
+          title="8 tool calls"
+          status="error"
+          group={{ errorCount: 3 }}
+        />
         <ChatToolCall id="test-tool-group-complete" title="8 tool calls" group={{}} />
-        <ChatToolCall id="test-tool-agent" title={agentTitle} kind="agent" status={agentStatus} description="Started by Design System">
-          <p id="test-agent-result" className="p-3 text-sm">{agentResult}</p>
+        <ChatToolCall
+          id="test-tool-agent"
+          title={agentTitle}
+          kind="agent"
+          status={agentStatus}
+          description="Started by Design System"
+        >
+          <p id="test-agent-result" className="p-3 text-sm">
+            {agentResult}
+          </p>
         </ChatToolCall>
         <ChatToolCall
           id="test-tool-agent-link"
@@ -192,16 +303,27 @@ function Fixture() {
           kind="agent"
           status={agentStatus}
           href="#agent-chat-destination"
-          linkProps={{ title: "Open the layout reviewer conversation", onClick: () => { state.agentLinkActivations++; } }}
+          linkProps={{
+            title: "Open the layout reviewer conversation",
+            onClick: () => {
+              state.agentLinkActivations++;
+            },
+          }}
         >
-          <p id="test-agent-link-result" className="p-3 text-sm">{agentResult}</p>
+          <p id="test-agent-link-result" className="p-3 text-sm">
+            {agentResult}
+          </p>
         </ChatToolCall>
       </section>
       <section id="agent-chat-destination" aria-labelledby="test-agent-chat-heading">
         <h2 id="test-agent-chat-heading">Layout reviewer conversation</h2>
         <ChatThread label="Linked agent conversation" autoScroll={false}>
-          <ChatMessage from="user"><ChatMessageContent>Check the compact chat layout.</ChatMessageContent></ChatMessage>
-          <ChatMessage from="assistant"><ChatMessageContent>{agentResult}</ChatMessageContent></ChatMessage>
+          <ChatMessage from="user">
+            <ChatMessageContent>Check the compact chat layout.</ChatMessageContent>
+          </ChatMessage>
+          <ChatMessage from="assistant">
+            <ChatMessageContent>{agentResult}</ChatMessageContent>
+          </ChatMessage>
         </ChatThread>
       </section>
     </main>

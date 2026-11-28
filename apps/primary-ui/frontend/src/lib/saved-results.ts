@@ -8,9 +8,15 @@
  */
 
 /** A result as it was last read, and when: a query starts from it and still refreshes. */
-export interface Saved<T> { data: T; savedAt: number }
+export interface Saved<T> {
+  data: T;
+  savedAt: number;
+}
 /** Saved results of one kind, one per id, of which only the most recently saved are kept. */
-export interface SavedFamily { prefix: string; keep: number }
+export interface SavedFamily {
+  prefix: string;
+  keep: number;
+}
 
 /** One result larger than this is not worth the quota: it is left out, and so is its old copy. */
 const maxEntryChars = 400_000;
@@ -18,33 +24,49 @@ const maxEntryChars = 400_000;
 const written = new WeakMap<Storage, Map<string, string>>();
 
 export function browserStorage(): Storage | undefined {
-  try { return window.localStorage; } catch { return undefined; }
+  try {
+    return window.localStorage;
+  } catch {
+    return undefined;
+  }
 }
 
 function fingerprint(body: string): string {
   let hash = 0x811c9dc5;
-  for (let index = 0; index < body.length; index++) hash = Math.imul(hash ^ body.charCodeAt(index), 0x01000193);
+  for (let index = 0; index < body.length; index++)
+    hash = Math.imul(hash ^ body.charCodeAt(index), 0x01000193);
   return `${body.length}:${hash >>> 0}`;
 }
 
 function seenBy(storage: Storage): Map<string, string> {
   let seen = written.get(storage);
-  if (!seen) written.set(storage, seen = new Map());
+  if (!seen) written.set(storage, (seen = new Map()));
   return seen;
 }
 
-export function readSaved<T>(key: string, parse: (payload: unknown) => T, storage = browserStorage()): Saved<T> | undefined {
+export function readSaved<T>(
+  key: string,
+  parse: (payload: unknown) => T,
+  storage = browserStorage(),
+): Saved<T> | undefined {
   try {
     const saved: unknown = JSON.parse(storage?.getItem(key) ?? "null");
     if (typeof saved !== "object" || saved === null) return undefined;
     const { savedAt, payload } = saved as { savedAt?: unknown; payload?: unknown };
     if (typeof savedAt !== "number" || !Number.isFinite(savedAt)) return undefined;
     return { data: parse(payload), savedAt };
-  } catch { return undefined; }
+  } catch {
+    return undefined;
+  }
 }
 
 /** Stores `payload` under `key`. Answers whether anything was written. */
-export function writeSaved(key: string, payload: unknown, storage = browserStorage(), now = Date.now()): boolean {
+export function writeSaved(
+  key: string,
+  payload: unknown,
+  storage = browserStorage(),
+  now = Date.now(),
+): boolean {
   if (!storage) return false;
   try {
     const body = JSON.stringify(payload);
@@ -61,7 +83,9 @@ export function writeSaved(key: string, payload: unknown, storage = browserStora
     storage.setItem(key, `{"savedAt":${Math.floor(now)},"payload":${body}}`);
     seen.set(key, mark);
     return true;
-  } catch { return false; /* Private mode or a full store: the next visit starts without it. */ }
+  } catch {
+    return false; /* Private mode or a full store: the next visit starts without it. */
+  }
 }
 
 function prune({ prefix, keep }: SavedFamily, storage: Storage) {
@@ -79,16 +103,33 @@ function prune({ prefix, keep }: SavedFamily, storage: Storage) {
   }
 }
 
-export function readSavedIn<T>(family: SavedFamily, id: string, parse: (payload: unknown) => T, storage = browserStorage()): Saved<T> | undefined {
+export function readSavedIn<T>(
+  family: SavedFamily,
+  id: string,
+  parse: (payload: unknown) => T,
+  storage = browserStorage(),
+): Saved<T> | undefined {
   return readSaved(family.prefix + id, parse, storage);
 }
 
 /** Stores one member of a family and, the first time this page stores it, drops the family's oldest beyond `keep`. */
-export function writeSavedIn(family: SavedFamily, id: string, payload: unknown, storage = browserStorage(), now = Date.now()): boolean {
+export function writeSavedIn(
+  family: SavedFamily,
+  id: string,
+  payload: unknown,
+  storage = browserStorage(),
+  now = Date.now(),
+): boolean {
   if (!storage) return false;
   const key = family.prefix + id;
   const known = seenBy(storage).has(key);
   const stored = writeSaved(key, payload, storage, now);
-  if (stored && !known) { try { prune(family, storage); } catch { /* A store that cannot be listed keeps what it has. */ } }
+  if (stored && !known) {
+    try {
+      prune(family, storage);
+    } catch {
+      /* A store that cannot be listed keeps what it has. */
+    }
+  }
   return stored;
 }

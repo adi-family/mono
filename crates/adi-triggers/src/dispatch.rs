@@ -468,8 +468,12 @@ mod tests {
             project: None,
         };
         let first_payload = first_event.to_record().expect("record").payload;
-        bus.emit_event(&first_event).expect("emit while nothing was running");
-        assert!(store.read_log("on-item").is_none(), "nothing could have fired yet");
+        bus.emit_event(&first_event)
+            .expect("emit while nothing was running");
+        assert!(
+            store.read_log("on-item").is_none(),
+            "nothing could have fired yet"
+        );
 
         // The app "starts" — a dispatcher that has never run before on this store.
         let first = EventDispatcher::start(store.clone());
@@ -488,7 +492,8 @@ mod tests {
             project: None,
         };
         let second_payload = second_event.to_record().expect("record").payload;
-        bus.emit_event(&second_event).expect("emit after the restart");
+        bus.emit_event(&second_event)
+            .expect("emit after the restart");
         let second = EventDispatcher::start(store.clone());
         assert!(
             wait_until(|| store.read_log("on-item").as_deref() == Some(second_payload.as_str()))

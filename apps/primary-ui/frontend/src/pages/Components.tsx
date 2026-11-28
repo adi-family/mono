@@ -27,7 +27,14 @@ import { ScrollSidebarExample } from "../components/ScrollSidebarExample";
 
 const variants = ["default", "secondary", "outline", "ghost", "link", "destructive"] as const;
 const sizes = ["sm", "default", "lg"] as const;
-const helpPositions = ["top-right", "right", "top-left", "left", "bottom-right", "bottom-left"] as const;
+const helpPositions = [
+  "top-right",
+  "right",
+  "top-left",
+  "left",
+  "bottom-right",
+  "bottom-left",
+] as const;
 
 const buttonCode = `<Button>Default</Button>
 <Button variant="secondary">Secondary</Button>
@@ -91,7 +98,11 @@ export function Components() {
   }, []);
 
   return (
-    <main id="gallery" tabIndex={-1} className="flex min-w-0 flex-col gap-8 scroll-mt-36 outline-none md:scroll-mt-8">
+    <main
+      id="gallery"
+      tabIndex={-1}
+      className="flex min-w-0 flex-col gap-8 scroll-mt-36 outline-none md:scroll-mt-8"
+    >
       <header>
         <p className="text-muted-foreground mb-1 text-sm">@design-system/ui</p>
         <p className="text-muted-foreground text-sm">
@@ -153,7 +164,9 @@ export function Components() {
             <select
               id="help-position"
               value={helpPosition}
-              onChange={(event) => setHelpPosition(event.target.value as (typeof helpPositions)[number])}
+              onChange={(event) =>
+                setHelpPosition(event.target.value as (typeof helpPositions)[number])
+              }
               className="border-input bg-background focus-visible:border-ring focus-visible:ring-ring/50 h-9 rounded-md border px-3 text-sm outline-none focus-visible:ring-[3px]"
             >
               {helpPositions.map((position) => (
@@ -185,8 +198,8 @@ export function Components() {
             </HelpTooltip>
           </div>
           <p className="text-muted-foreground text-sm">
-            The help popup has its own placement: the storage example opens to the right when
-            space allows. Hover, focus, or tap either question mark to try it.
+            The help popup has its own placement: the storage example opens to the right when space
+            allows. Hover, focus, or tap either question mark to try it.
           </p>
           <div className="flex items-center gap-3 border-t pt-4">
             <QuestionMark />
@@ -201,12 +214,17 @@ export function Components() {
         </CardContent>
       </Card>
 
-      <Card id="disabled-buttons" tabIndex={-1} className="scroll-mt-36 md:scroll-mt-8" data-preview-animations={previewAnimations}>
+      <Card
+        id="disabled-buttons"
+        tabIndex={-1}
+        className="scroll-mt-36 md:scroll-mt-8"
+        data-preview-animations={previewAnimations}
+      >
         <CardHeader>
           <CardTitle>Disabled buttons</CardTitle>
           <CardDescription>
-            Hover Export report to highlight the ? at its top-right corner. Waves pulse around the icon when
-            motion is allowed; with Reduce Motion enabled, you get a steady ring instead.
+            Hover Export report to highlight the ? at its top-right corner. Waves pulse around the
+            icon when motion is allowed; with Reduce Motion enabled, you get a steady ring instead.
             Hover, focus, or tap the ? to learn why the action is disabled.
           </CardDescription>
         </CardHeader>
@@ -285,7 +303,9 @@ export function Components() {
       <Card id="theme-toggle-example" tabIndex={-1} className="scroll-mt-36 md:scroll-mt-8">
         <CardHeader>
           <CardTitle>Theme toggle</CardTitle>
-          <CardDescription>A controlled switch. The host applies the selected theme to the document.</CardDescription>
+          <CardDescription>
+            A controlled switch. The host applies the selected theme to the document.
+          </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <div className="flex flex-wrap items-center gap-3">
@@ -304,8 +324,12 @@ export function Components() {
         <CardContent className="flex flex-col gap-4">
           <p className="text-muted-foreground text-sm">
             Cards compose a header (title + description) and content. Add a component by dropping
-            <code className="break-all font-mono"> packages/ui/src/components/&lt;name&gt;.tsx</code>, exporting
-            it from <code className="font-mono">components.ts</code>, then adding it here.
+            <code className="break-all font-mono">
+              {" "}
+              packages/ui/src/components/&lt;name&gt;.tsx
+            </code>
+            , exporting it from <code className="font-mono">components.ts</code>, then adding it
+            here.
           </p>
           <CodeExample code={cardCode} label="Card" />
         </CardContent>

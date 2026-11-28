@@ -207,9 +207,18 @@ fn elsewhere_note(node: String) -> AnyView {
 
 fn outage_banner(watch: SystemWatch) -> Option<AnyView> {
     let (kind, text) = match watch.outage.get()? {
-        Outage::ComingBack => ("note", "Coming back \u{2014} waiting for this machine to answer again\u{2026}"),
-        Outage::TimedOut => ("err", "Still not answering. Check the logs on this machine, or reload this page yourself once it is."),
-        Outage::Off => ("note", "adi is off on this machine. Turn it back on above to reach the rest of this panel."),
+        Outage::ComingBack => (
+            "note",
+            "Coming back \u{2014} waiting for this machine to answer again\u{2026}",
+        ),
+        Outage::TimedOut => (
+            "err",
+            "Still not answering. Check the logs on this machine, or reload this page yourself once it is.",
+        ),
+        Outage::Off => (
+            "note",
+            "adi is off on this machine. Turn it back on above to reach the rest of this panel.",
+        ),
     };
     Some(view! { <div class="adi-flash" data-kind=kind>{text}</div> }.into_any())
 }
@@ -354,11 +363,9 @@ fn set_power(state: State, watch: SystemWatch, on: bool, live_runs: u32) {
     spawn_local(async move {
         match fetch::set_system_power(on).await {
             Ok(_) => {
-                watch.outage.set(Some(if on {
-                    Outage::ComingBack
-                } else {
-                    Outage::Off
-                }));
+                watch
+                    .outage
+                    .set(Some(if on { Outage::ComingBack } else { Outage::Off }));
                 if on {
                     wait_then_reload(watch);
                 }
@@ -426,11 +433,16 @@ fn report_view(state: State, watch: SystemWatch, updates: UpdateWatch) -> AnyVie
     let (note, button_label, collecting) = match &report {
         ReportState::Idle => (
             "Collect the logs, routes and every service's state into one file, then open an \
-             issue with it.".to_string(),
+             issue with it."
+                .to_string(),
             "Create report",
             false,
         ),
-        ReportState::Collecting => ("Reading logs, services and routes\u{2026}".to_string(), "Create report", true),
+        ReportState::Collecting => (
+            "Reading logs, services and routes\u{2026}".to_string(),
+            "Create report",
+            true,
+        ),
         ReportState::Ready(r) => {
             let note = if r.findings.is_empty() {
                 "Download it and drag it into the issue you open.".to_string()
@@ -444,7 +456,11 @@ fn report_view(state: State, watch: SystemWatch, updates: UpdateWatch) -> AnyVie
             };
             (note, "Create another report", false)
         }
-        ReportState::Failed => ("It could not be written. Try again.".to_string(), "Create report", false),
+        ReportState::Failed => (
+            "It could not be written. Try again.".to_string(),
+            "Create report",
+            false,
+        ),
     };
     let body = issue_body(
         watch.status.get_untracked().as_ref(),
@@ -561,7 +577,10 @@ fn issue_body(
             })
             .collect();
         lines.push(String::new());
-        lines.push(format!("**Services** \u{2014} {}", lines_of_state.join(" \u{b7} ")));
+        lines.push(format!(
+            "**Services** \u{2014} {}",
+            lines_of_state.join(" \u{b7} ")
+        ));
     }
     if let Some(bundle) = report {
         if !bundle.findings.is_empty() {
@@ -606,7 +625,10 @@ mod tests {
     #[test]
     fn runs_clause_is_singular_only_at_one() {
         assert_eq!(runs_clause(0), "No agent runs are live right now.");
-        assert_eq!(runs_clause(1), "1 agent run is live right now and will end with it.");
+        assert_eq!(
+            runs_clause(1),
+            "1 agent run is live right now and will end with it."
+        );
         assert_eq!(
             runs_clause(2),
             "2 agent runs are live right now and will end with it."

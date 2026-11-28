@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 
 use adi_config::Config;
 use adi_events::Events;
-use adi_tasks::{NewTask, Tasks, TaskStatus};
+use adi_tasks::{NewTask, TaskStatus, Tasks};
 
 use crate::pour::WorkflowRunPourer;
 use crate::rpc::Request;
@@ -38,8 +38,11 @@ const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(300);
 /// Indexed by `streak - 1`; only `[0]`/`[1]` are ever read, since a run that reaches
 /// [`MAX_CRASH_STREAK`] fails outright rather than waiting out the third tier for an attempt it
 /// would also deny — kept at the spec's own length anyway, for anyone checking this against it.
-const CRASH_BACKOFF: [Duration; 3] =
-    [Duration::from_secs(30), Duration::from_secs(120), Duration::from_secs(600)];
+const CRASH_BACKOFF: [Duration; 3] = [
+    Duration::from_secs(30),
+    Duration::from_secs(120),
+    Duration::from_secs(600),
+];
 
 /// How many consecutive transient `bun` crashes one run tolerates before the run itself fails —
 /// "a bun crash is transient, not permanent," up to a point (ADI-MONO-151).
@@ -121,9 +124,17 @@ impl Attempt {
         // this run was carrying — checked here, ahead of `finalize`, so a crash streak bump for
         // *this same* attempt (one that made progress and *then* crashed before its terminal
         // message) still starts counting fresh at 1, not on top of whatever came before.
-        let steps_before = self.store.list_steps(&run.run_key).map(|s| s.len()).unwrap_or(0);
+        let steps_before = self
+            .store
+            .list_steps(&run.run_key)
+            .map(|s| s.len())
+            .unwrap_or(0);
         let outcome = self.attempt_once_bounded(run, HOST_ATTEMPT_DEADLINE);
-        let steps_after = self.store.list_steps(&run.run_key).map(|s| s.len()).unwrap_or(0);
+        let steps_after = self
+            .store
+            .list_steps(&run.run_key)
+            .map(|s| s.len())
+            .unwrap_or(0);
         if steps_after > steps_before {
             let _ = self.store.clear_crash_streak(&run.run_key);
         }
@@ -166,11 +177,15 @@ impl Attempt {
     fn attempt_once(&self, run: &RunRow) -> Outcome {
         let pinned = match crate::pin::require_pinned(&self.config, &run.file_hash) {
             Ok(path) => path,
-            Err(e) => return Outcome::Failed(format!("couldn't find the pinned workflow source: {e}")),
+            Err(e) => {
+                return Outcome::Failed(format!("couldn't find the pinned workflow source: {e}"));
+            }
         };
         let run_dir = match self.ensure_run_dir(&run.run_key) {
             Ok(dir) => dir,
-            Err(e) => return Outcome::Failed(format!("couldn't create the run's own directory: {e}")),
+            Err(e) => {
+                return Outcome::Failed(format!("couldn't create the run's own directory: {e}"));
+            }
         };
         let slot = run
             .cause
@@ -211,7 +226,10 @@ impl Attempt {
         let watchdog = Arc::clone(&child);
         std::thread::spawn(move || {
             std::thread::sleep(ATTEMPT_TIMEOUT);
-            let _ = watchdog.lock().unwrap_or_else(std::sync::PoisonError::into_inner).kill();
+            let _ = watchdog
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .kill();
         });
 
         let outcome = loop {
@@ -261,7 +279,10 @@ impl Attempt {
             }
         };
 
-        let _ = child.lock().unwrap_or_else(std::sync::PoisonError::into_inner).wait();
+        let _ = child
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .wait();
         outcome
     }
 
@@ -313,7 +334,11 @@ impl Attempt {
                 },
                 None,
             ),
-            Request::Run { key, workflow, input } => self.on_run(run, key, workflow, input.clone()),
+            Request::Run {
+                key,
+                workflow,
+                input,
+            } => self.on_run(run, key, workflow, input.clone()),
             Request::WaitFor {
                 key,
                 event,
@@ -321,14 +346,21 @@ impl Attempt {
                 timeout_ms,
             } => self.on_wait_for(run, key, event, where_clause.as_ref(), *timeout_ms),
             Request::Sleep { key, until } => self.on_sleep(run, key, *until),
-            Request::Result { .. } | Request::Error { .. } | Request::GaveUp { .. } | Request::Suspend {} => {
+            Request::Result { .. }
+            | Request::Error { .. }
+            | Request::GaveUp { .. }
+            | Request::Suspend {} => {
                 unreachable!("terminal requests never reach dispatch")
             }
         }
     }
 
     fn on_step(&self, run: &RunRow, key: &str) -> Result<Value, String> {
-        match self.store.get_step(&run.run_key, key).map_err(|e| store_err(&e))? {
+        match self
+            .store
+            .get_step(&run.run_key, key)
+            .map_err(|e| store_err(&e))?
+        {
             Some(record) => match record.outcome {
                 StepOutcome::Ok(value) => Ok(json!({"cached": true, "value": value})),
                 StepOutcome::GaveUp(_) | StepOutcome::TimedOut => {
@@ -341,7 +373,9 @@ impl Attempt {
 
     fn on_step_save(&self, run: &RunRow, key: &str, value: &Value) -> Result<Value, String> {
         let record = StepRecord::new(key, StepKind::Step, StepOutcome::Ok(value.clone()));
-        self.store.put_step(&run.run_key, &record).map_err(|e| store_err(&e))?;
+        self.store
+            .put_step(&run.run_key, &record)
+            .map_err(|e| store_err(&e))?;
         Ok(json!({"ok": true}))
     }
 
@@ -356,7 +390,11 @@ impl Attempt {
         new_task: NewTask,
         timeout_ms: Option<u64>,
     ) -> Result<Value, String> {
-        if let Some(record) = self.store.get_step(&run.run_key, key).map_err(|e| store_err(&e))? {
+        if let Some(record) = self
+            .store
+            .get_step(&run.run_key, key)
+            .map_err(|e| store_err(&e))?
+        {
             return Ok(outcome_to_reply(&record.outcome));
         }
         let existing = self
@@ -389,12 +427,26 @@ impl Attempt {
         self.resolve_task_step(run, key, kind, &task, timeout_ms)
     }
 
-    fn on_run(&self, run: &RunRow, key: &str, workflow: &str, input: Option<Value>) -> Result<Value, String> {
-        if let Some(record) = self.store.get_step(&run.run_key, key).map_err(|e| store_err(&e))? {
+    fn on_run(
+        &self,
+        run: &RunRow,
+        key: &str,
+        workflow: &str,
+        input: Option<Value>,
+    ) -> Result<Value, String> {
+        if let Some(record) = self
+            .store
+            .get_step(&run.run_key, key)
+            .map_err(|e| store_err(&e))?
+        {
             return Ok(outcome_to_reply(&record.outcome));
         }
         let child_run_key = format!("{workflow}@{}/{key}", run.run_key);
-        let child = if let Some(row) = self.store.get_run(&child_run_key).map_err(|e| store_err(&e))? {
+        let child = if let Some(row) = self
+            .store
+            .get_run(&child_run_key)
+            .map_err(|e| store_err(&e))?
+        {
             row
         } else {
             self.pourer().pour_for_workflow(
@@ -407,7 +459,9 @@ impl Attempt {
             self.store
                 .get_run(&child_run_key)
                 .map_err(|e| store_err(&e))?
-                .ok_or_else(|| format!("couldn't start child workflow {workflow:?} — does it exist?"))?
+                .ok_or_else(|| {
+                    format!("couldn't start child workflow {workflow:?} — does it exist?")
+                })?
         };
         let Some(task_id) = child.root_task.clone() else {
             return Ok(json!({"state": "pending"}));
@@ -425,7 +479,11 @@ impl Attempt {
             // with `task_id` set; re-journal here with `ref_key` added — cheap (one row, same
             // key, `put_step` always upserts-by-insert-once) and simpler than threading `ref_key`
             // all the way through a function `on_task_like` also calls.
-            if let Some(record) = self.store.get_step(&run.run_key, key).map_err(|e| store_err(&e))? {
+            if let Some(record) = self
+                .store
+                .get_step(&run.run_key, key)
+                .map_err(|e| store_err(&e))?
+            {
                 let mut record = record;
                 record.ref_key = Some(child_run_key.clone());
                 self.restamp_step(&run.run_key, &record)?;
@@ -447,14 +505,18 @@ impl Attempt {
         if let Some(reason) = &task.task.give_up_reason {
             let record = StepRecord::new(key, kind, StepOutcome::GaveUp(reason.clone()))
                 .with_task(task.task.id.clone());
-            self.store.put_step(&run.run_key, &record).map_err(|e| store_err(&e))?;
+            self.store
+                .put_step(&run.run_key, &record)
+                .map_err(|e| store_err(&e))?;
             return Ok(json!({"state": "gave_up", "reason": reason}));
         }
         if task.task.status == TaskStatus::Done {
             let value = task.task.result.clone().unwrap_or(Value::Null);
             let record = StepRecord::new(key, kind, StepOutcome::Ok(value.clone()))
                 .with_task(task.task.id.clone());
-            self.store.put_step(&run.run_key, &record).map_err(|e| store_err(&e))?;
+            self.store
+                .put_step(&run.run_key, &record)
+                .map_err(|e| store_err(&e))?;
             return Ok(json!({"state": "ok", "value": value}));
         }
         if let Some(timeout_ms) = timeout_ms {
@@ -483,9 +545,11 @@ impl Attempt {
                 {
                     return Err(format!("couldn't close a timed-out step's task: {e}"));
                 }
-                let record =
-                    StepRecord::new(key, kind, StepOutcome::TimedOut).with_task(task.task.id.clone());
-                self.store.put_step(&run.run_key, &record).map_err(|e| store_err(&e))?;
+                let record = StepRecord::new(key, kind, StepOutcome::TimedOut)
+                    .with_task(task.task.id.clone());
+                self.store
+                    .put_step(&run.run_key, &record)
+                    .map_err(|e| store_err(&e))?;
                 return Ok(json!({"state": "timed_out"}));
             }
         }
@@ -500,19 +564,31 @@ impl Attempt {
         where_clause: Option<&serde_json::Map<String, Value>>,
         timeout_ms: Option<u64>,
     ) -> Result<Value, String> {
-        if let Some(record) = self.store.get_step(&run.run_key, key).map_err(|e| store_err(&e))? {
+        if let Some(record) = self
+            .store
+            .get_step(&run.run_key, key)
+            .map_err(|e| store_err(&e))?
+        {
             return Ok(outcome_to_reply(&record.outcome));
         }
         let now = crate::now_ms();
-        let (since_seq, started_at_ms) = if let Some(state) =
-            self.store.get_pending(&run.run_key, key).map_err(|e| store_err(&e))?
+        let (since_seq, started_at_ms) = if let Some(state) = self
+            .store
+            .get_pending(&run.run_key, key)
+            .map_err(|e| store_err(&e))?
         {
             (
                 state.get("since_seq").and_then(Value::as_u64).unwrap_or(0),
-                state.get("started_at_ms").and_then(Value::as_u64).unwrap_or(now),
+                state
+                    .get("started_at_ms")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(now),
             )
         } else {
-            let head = self.events.head().map_err(|e| format!("couldn't read the event log: {e}"))?;
+            let head = self
+                .events
+                .head()
+                .map_err(|e| format!("couldn't read the event log: {e}"))?;
             // `timeout_ms` rides along here too, same reason as `on_task_like`'s own pending
             // write — `crate::readiness` reads it back without spawning `bun`.
             self.store
@@ -530,21 +606,27 @@ impl Attempt {
             .map_err(|e| format!("couldn't read the event log: {e}"))?;
         let matched = batch.into_iter().find(|logged| {
             adi_events::matches(event, &logged.record.name) && {
-                let payload: Value = serde_json::from_str(&logged.record.payload).unwrap_or(Value::Null);
+                let payload: Value =
+                    serde_json::from_str(&logged.record.payload).unwrap_or(Value::Null);
                 crate::where_matches(where_clause, &payload)
             }
         });
         if let Some(logged) = matched {
-            let payload: Value = serde_json::from_str(&logged.record.payload).unwrap_or(Value::Null);
+            let payload: Value =
+                serde_json::from_str(&logged.record.payload).unwrap_or(Value::Null);
             let record = StepRecord::new(key, StepKind::Wait, StepOutcome::Ok(payload.clone()));
-            self.store.put_step(&run.run_key, &record).map_err(|e| store_err(&e))?;
+            self.store
+                .put_step(&run.run_key, &record)
+                .map_err(|e| store_err(&e))?;
             return Ok(json!({"state": "ok", "value": payload}));
         }
         if let Some(timeout_ms) = timeout_ms {
             let age_ms = now.saturating_sub(started_at_ms);
             if age_ms >= timeout_ms {
                 let record = StepRecord::new(key, StepKind::Wait, StepOutcome::TimedOut);
-                self.store.put_step(&run.run_key, &record).map_err(|e| store_err(&e))?;
+                self.store
+                    .put_step(&run.run_key, &record)
+                    .map_err(|e| store_err(&e))?;
                 return Ok(json!({"state": "timed_out"}));
             }
         }
@@ -552,13 +634,20 @@ impl Attempt {
     }
 
     fn on_sleep(&self, run: &RunRow, key: &str, until_ms: i64) -> Result<Value, String> {
-        if self.store.get_step(&run.run_key, key).map_err(|e| store_err(&e))?.is_some() {
+        if self
+            .store
+            .get_step(&run.run_key, key)
+            .map_err(|e| store_err(&e))?
+            .is_some()
+        {
             return Ok(json!({"state": "ok"}));
         }
         let now = i64::try_from(crate::now_ms()).unwrap_or(i64::MAX);
         if now >= until_ms {
             let record = StepRecord::new(key, StepKind::Sleep, StepOutcome::Ok(Value::Null));
-            self.store.put_step(&run.run_key, &record).map_err(|e| store_err(&e))?;
+            self.store
+                .put_step(&run.run_key, &record)
+                .map_err(|e| store_err(&e))?;
             return Ok(json!({"state": "ok"}));
         }
         // Persisted host-side so `crate::readiness` can tell when this deadline passes without
@@ -574,7 +663,9 @@ impl Attempt {
     /// `ref_key` to a `ctx.run` step just after [`resolve_task_step`](Self::resolve_task_step)
     /// journaled it without one.
     fn restamp_step(&self, run_key: &str, record: &StepRecord) -> Result<(), String> {
-        self.store.restamp_step(run_key, record).map_err(|e| store_err(&e))
+        self.store
+            .restamp_step(run_key, record)
+            .map_err(|e| store_err(&e))
     }
 
     /// `<workflows-runs>/attempts/<sha256 of run_key>` — a run key can carry `@`, `:`, `/`, none
@@ -604,7 +695,11 @@ impl Attempt {
             Outcome::Completed(value) => {
                 if let Err(e) = self.tasks.complete(&root_task, Some(value.clone())) {
                     tracing::warn!(run_key = %run.run_key, error = %e, "a workflow returned, but its root task refused the result; failing the run instead");
-                    self.fail(run, &root_task, &format!("the workflow's result didn't fit its own output shape: {e}"));
+                    self.fail(
+                        run,
+                        &root_task,
+                        &format!("the workflow's result didn't fit its own output shape: {e}"),
+                    );
                     return;
                 }
                 let _ = self.store.mark_finished(&run.run_key);
@@ -651,12 +746,20 @@ impl Attempt {
             } else {
                 reason.to_string()
             };
-            self.fail(run, root_task, &format!("bun attempt crashed {streak} times: {tail}"));
+            self.fail(
+                run,
+                root_task,
+                &format!("bun attempt crashed {streak} times: {tail}"),
+            );
             return;
         }
         let backoff = CRASH_BACKOFF[usize::try_from(streak - 1).unwrap_or(0)];
-        let next_attempt_at = crate::now_ms().saturating_add(u64::try_from(backoff.as_millis()).unwrap_or(u64::MAX));
-        if let Err(e) = self.store.set_next_attempt_at(&run.run_key, next_attempt_at) {
+        let next_attempt_at =
+            crate::now_ms().saturating_add(u64::try_from(backoff.as_millis()).unwrap_or(u64::MAX));
+        if let Err(e) = self
+            .store
+            .set_next_attempt_at(&run.run_key, next_attempt_at)
+        {
             tracing::warn!(run_key = %run.run_key, error = %e, "couldn't schedule a crashed run's next retry");
         }
     }
@@ -677,7 +780,9 @@ impl Attempt {
         };
         let reason = format!("run {run_key} finished");
         for view in open {
-            if view.task.workflow_run.as_deref() == Some(run_key) && view.task.give_up_reason.is_none() {
+            if view.task.workflow_run.as_deref() == Some(run_key)
+                && view.task.give_up_reason.is_none()
+            {
                 let _ = self.tasks.give_up(&view.task.id, &reason);
             }
         }
@@ -703,7 +808,10 @@ fn store_err(e: &crate::error::Error) -> String {
 /// [`Attempt::attempt_once_bounded`]'s own backstop. `None` means `f` hadn't reported back in
 /// time; the spawned thread is left running regardless (nothing here can safely stop it), and
 /// whatever it eventually sends has no receiver left to reach, so it's silently dropped.
-fn run_bounded<T: Send + 'static>(deadline: Duration, f: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+fn run_bounded<T: Send + 'static>(
+    deadline: Duration,
+    f: impl FnOnce() -> T + Send + 'static,
+) -> Option<T> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let _ = tx.send(f());
@@ -770,7 +878,9 @@ mod tests {
             return;
         };
         for view in all {
-            if view.task.workflow_run.as_deref() == Some(run_key) && titles.contains(&view.task.title.as_str()) {
+            if view.task.workflow_run.as_deref() == Some(run_key)
+                && titles.contains(&view.task.title.as_str())
+            {
                 let _ = tasks.complete(&view.task.id, Some(json!({"ok": true})));
             }
         }
@@ -828,7 +938,9 @@ mod tests {
              });\n",
         );
 
-        let started = engine.start_manual("plain", &json!({}), "req-1").expect("start");
+        let started = engine
+            .start_manual("plain", &json!({}), "req-1")
+            .expect("start");
         let tasks = Tasks::with_config(config.clone());
         let ran = engine.run_tick();
         assert_eq!(ran.len(), 1);
@@ -896,7 +1008,11 @@ mod tests {
         let events = Events::with_config(config.clone());
         drive_to_done(&engine, &tasks, &events, &started.run_key, "tour.go", 40);
 
-        let run = engine.runs().get_run(&started.run_key).expect("read").expect("exists");
+        let run = engine
+            .runs()
+            .get_run(&started.run_key)
+            .expect("read")
+            .expect("exists");
         let root = run.root_task.clone().expect("root task");
         let view = tasks.get(&root).expect("task");
         assert_eq!(
@@ -944,7 +1060,9 @@ mod tests {
              });\n",
         );
 
-        let started = engine.start_manual("dup", &json!({}), "req-1").expect("start");
+        let started = engine
+            .start_manual("dup", &json!({}), "req-1")
+            .expect("start");
         let ran = engine.run_tick();
         assert_eq!(ran.len(), 1);
         match &ran[0].outcome {
@@ -964,8 +1082,17 @@ mod tests {
             .root_task
             .unwrap();
         let view = tasks.get(&root).expect("task");
-        assert_eq!(view.task.status, TaskStatus::Open, "give-up never changes stored status");
-        assert!(view.task.give_up_reason.unwrap().contains("duplicate step key"));
+        assert_eq!(
+            view.task.status,
+            TaskStatus::Open,
+            "give-up never changes stored status"
+        );
+        assert!(
+            view.task
+                .give_up_reason
+                .unwrap()
+                .contains("duplicate step key")
+        );
     }
 
     /// A run stays pinned to the exact content it started with — editing the live file mid-run
@@ -988,7 +1115,9 @@ mod tests {
              });\n",
         );
 
-        let started = engine.start_manual("versioned", &json!({}), "req-1").expect("start");
+        let started = engine
+            .start_manual("versioned", &json!({}), "req-1")
+            .expect("start");
         let tasks = Tasks::with_config(config.clone());
         // First attempt: creates the "review" task and suspends before ever reaching `v`.
         let first = engine.run_tick();
@@ -1035,10 +1164,16 @@ mod tests {
         // A generous timeout, well past anything a `bun` spawn plus `describe()`'s own (pour
         // already ran one to fetch the output shape) could plausibly cost even under load —
         // the point under test is the *timing logic*, not how fast this machine is right now.
-        let started = engine.start_manual("slow", &json!({}), "req-1").expect("start");
+        let started = engine
+            .start_manual("slow", &json!({}), "req-1")
+            .expect("start");
         let tasks = Tasks::with_config(config.clone());
         let first = engine.run_tick();
-        assert_eq!(first[0].outcome, Outcome::Suspended, "too soon for the 3s timeout");
+        assert_eq!(
+            first[0].outcome,
+            Outcome::Suspended,
+            "too soon for the 3s timeout"
+        );
 
         let gate = tasks
             .list(None, None, Some(TaskStatus::Open), None)
@@ -1050,20 +1185,42 @@ mod tests {
         std::thread::sleep(Duration::from_millis(3200));
         let second = engine.run_tick();
         assert_eq!(second[0].run_key, started.run_key);
-        assert_eq!(second[0].outcome, Outcome::Completed(json!({"r": {"timed_out": true}})));
+        assert_eq!(
+            second[0].outcome,
+            Outcome::Completed(json!({"r": {"timed_out": true}}))
+        );
 
         let view = tasks.get(&gate.task.id).expect("task");
-        assert_eq!(view.task.status, TaskStatus::Open, "give-up never changes stored status");
-        let reason = view.task.give_up_reason.expect("closed as a fact once timed out");
-        assert!(reason.contains("timed out after 3s"), "unexpected reason: {reason}");
-        assert!(reason.contains(&started.run_key), "unexpected reason: {reason}");
+        assert_eq!(
+            view.task.status,
+            TaskStatus::Open,
+            "give-up never changes stored status"
+        );
+        let reason = view
+            .task
+            .give_up_reason
+            .expect("closed as a fact once timed out");
+        assert!(
+            reason.contains("timed out after 3s"),
+            "unexpected reason: {reason}"
+        );
+        assert!(
+            reason.contains(&started.run_key),
+            "unexpected reason: {reason}"
+        );
 
         // Replaying the same resolution again (another attempt reaching the already-journaled
         // step) must not re-stamp it or error — the journal's own cache hit short-circuits before
         // `resolve_task_step` ever runs a second time.
         let third = engine.run_tick();
-        assert!(third.is_empty(), "the run is already finished — nothing left to attempt");
-        assert_eq!(tasks.get(&gate.task.id).unwrap().task.give_up_reason, Some(reason));
+        assert!(
+            third.is_empty(),
+            "the run is already finished — nothing left to attempt"
+        );
+        assert_eq!(
+            tasks.get(&gate.task.id).unwrap().task.give_up_reason,
+            Some(reason)
+        );
     }
 
     /// ADI-MONO-151: when a run ends for any reason, every task of its own that's still
@@ -1102,23 +1259,43 @@ mod tests {
             })
             .expect("gate task");
         // A task on a *different* run must never be touched.
-        let stranger = tasks.create("stranger".into(), None, None, None, None, None).expect("stranger");
+        let stranger = tasks
+            .create("stranger".into(), None, None, None, None, None)
+            .expect("stranger");
 
         let run = store.get_run("r@1").unwrap().unwrap();
         attempt.finalize(&run, &Outcome::Failed("boom".into()));
 
         let root_view = tasks.get(&root.task.id).expect("root");
-        assert_eq!(root_view.task.give_up_reason.as_deref(), Some("boom"), "the real failure reason is preserved");
+        assert_eq!(
+            root_view.task.give_up_reason.as_deref(),
+            Some("boom"),
+            "the real failure reason is preserved"
+        );
 
         let gate_view = tasks.get(&gate.task.id).expect("gate");
-        assert_eq!(gate_view.task.give_up_reason.as_deref(), Some("run r@1 finished"));
+        assert_eq!(
+            gate_view.task.give_up_reason.as_deref(),
+            Some("run r@1 finished")
+        );
 
         let stranger_view = tasks.get(&stranger.task.id).expect("stranger");
-        assert_eq!(stranger_view.task.give_up_reason, None, "a different run's task is untouched");
+        assert_eq!(
+            stranger_view.task.give_up_reason, None,
+            "a different run's task is untouched"
+        );
 
         // Calling finalize again (a replay) must not re-stamp the already-closed task.
         attempt.finalize(&run, &Outcome::Failed("boom".into()));
-        assert_eq!(tasks.get(&gate.task.id).unwrap().task.give_up_reason.as_deref(), Some("run r@1 finished"));
+        assert_eq!(
+            tasks
+                .get(&gate.task.id)
+                .unwrap()
+                .task
+                .give_up_reason
+                .as_deref(),
+            Some("run r@1 finished")
+        );
     }
 
     /// An uncaught `TaskGaveUp` fails the whole run: the root task is given up on (never
@@ -1140,7 +1317,9 @@ mod tests {
              });\n",
         );
 
-        let started = engine.start_manual("gives-up", &json!({}), "req-1").expect("start");
+        let started = engine
+            .start_manual("gives-up", &json!({}), "req-1")
+            .expect("start");
         let tasks = Tasks::with_config(config.clone());
         let events = Events::with_config(config);
         assert_eq!(engine.run_tick()[0].outcome, Outcome::Suspended);
@@ -1151,7 +1330,9 @@ mod tests {
             .into_iter()
             .find(|t| t.task.title == "review")
             .expect("review task exists");
-        tasks.give_up(&review.task.id, "no API key").expect("give up");
+        tasks
+            .give_up(&review.task.id, "no API key")
+            .expect("give up");
 
         let second = engine.run_tick();
         match &second[0].outcome {
@@ -1172,7 +1353,9 @@ mod tests {
 
         let caught = events.catch_up("test-giveup", 50).expect("catch up");
         assert!(
-            caught.iter().any(|e| e.record.name == "adi.workflows.run.failed"),
+            caught
+                .iter()
+                .any(|e| e.record.name == "adi.workflows.run.failed"),
             "{caught:?}"
         );
     }
@@ -1196,7 +1379,9 @@ mod tests {
              });\n",
         );
 
-        let started = engine.start_manual("redo", &json!({}), "req-1").expect("start");
+        let started = engine
+            .start_manual("redo", &json!({}), "req-1")
+            .expect("start");
         let tasks = Tasks::with_config(config.clone());
         assert_eq!(engine.run_tick()[0].outcome, Outcome::Suspended);
 
@@ -1222,7 +1407,11 @@ mod tests {
         );
 
         let resumed = engine.run_tick();
-        assert_eq!(resumed[0].outcome, Outcome::Suspended, "the redo creates a brand-new task");
+        assert_eq!(
+            resumed[0].outcome,
+            Outcome::Suspended,
+            "the redo creates a brand-new task"
+        );
         let second_review = tasks
             .list(None, None, Some(TaskStatus::Open), None)
             .unwrap()
@@ -1269,15 +1458,21 @@ mod tests {
         attempt.finalize(&run, &Outcome::Crashed("segfault".into()));
 
         let after = store.get_run("r@1").unwrap().unwrap();
-        assert!(after.finished_at.is_none(), "one crash must not fail the run");
+        assert!(
+            after.finished_at.is_none(),
+            "one crash must not fail the run"
+        );
         assert_eq!(after.crash_streak, 1);
-        let next = after.next_attempt_at.expect("a backoff deadline must be set");
+        let next = after
+            .next_attempt_at
+            .expect("a backoff deadline must be set");
         assert!(
             (before + 29_000..=before + 35_000).contains(&next),
             "expected roughly the 30s tier, got {next} (now was {before})"
         );
         assert_eq!(
-            tasks.get(&root.task.id).unwrap().task.give_up_reason, None,
+            tasks.get(&root.task.id).unwrap().task.give_up_reason,
+            None,
             "a retryable crash must not touch the root task at all"
         );
     }
@@ -1314,14 +1509,19 @@ mod tests {
         attempt.finalize(&run, &Outcome::Crashed("boom3".into()));
 
         let after = store.get_run("r@1").unwrap().unwrap();
-        assert!(after.finished_at.is_some(), "the third consecutive crash must fail the run");
+        assert!(
+            after.finished_at.is_some(),
+            "the third consecutive crash must fail the run"
+        );
         let view = tasks.get(&root.task.id).expect("root");
         let reason = view.task.give_up_reason.expect("given up");
         assert_eq!(reason, "bun attempt crashed 3 times: boom3");
 
         let caught = events.catch_up("test-crash-exhaust", 50).expect("catch up");
         assert!(
-            caught.iter().any(|e| e.record.name == "adi.workflows.run.failed"),
+            caught
+                .iter()
+                .any(|e| e.record.name == "adi.workflows.run.failed"),
             "{caught:?}"
         );
     }
@@ -1344,7 +1544,9 @@ mod tests {
              \x20 return { a };\n\
              });\n",
         );
-        let started = engine.start_manual("plain", &json!({}), "req-1").expect("start");
+        let started = engine
+            .start_manual("plain", &json!({}), "req-1")
+            .expect("start");
         let store = WorkflowStore::with_config(config.clone());
         let tasks = Tasks::with_config(config.clone());
         let events = Events::with_config(config.clone());
@@ -1354,7 +1556,14 @@ mod tests {
         // Two simulated crashes, same as the dedicated backoff test above.
         attempt.finalize(&run, &Outcome::Crashed("boom1".into()));
         attempt.finalize(&run, &Outcome::Crashed("boom2".into()));
-        assert_eq!(store.get_run(&started.run_key).unwrap().unwrap().crash_streak, 2);
+        assert_eq!(
+            store
+                .get_run(&started.run_key)
+                .unwrap()
+                .unwrap()
+                .crash_streak,
+            2
+        );
 
         // A real attempt now succeeds outright — `Attempt::run` (not `finalize` alone) is what
         // detects the journal's own growth and resets the streak ahead of `finalize`.
@@ -1394,10 +1603,21 @@ mod tests {
         attempt.finalize(&run, &Outcome::Failed("bad input".into()));
 
         let after = store.get_run("r@1").unwrap().unwrap();
-        assert!(after.finished_at.is_some(), "a thrown error fails the run on the spot");
-        assert_eq!(after.crash_streak, 0, "never bumped — this was never a crash");
+        assert!(
+            after.finished_at.is_some(),
+            "a thrown error fails the run on the spot"
+        );
         assert_eq!(
-            tasks.get(&root.task.id).unwrap().task.give_up_reason.as_deref(),
+            after.crash_streak, 0,
+            "never bumped — this was never a crash"
+        );
+        assert_eq!(
+            tasks
+                .get(&root.task.id)
+                .unwrap()
+                .task
+                .give_up_reason
+                .as_deref(),
             Some("bad input")
         );
     }
@@ -1419,11 +1639,17 @@ mod tests {
              \x20 return { r };\n\
              });\n",
         );
-        let started = engine.start_manual("gate", &json!({}), "req-1").expect("start");
+        let started = engine
+            .start_manual("gate", &json!({}), "req-1")
+            .expect("start");
         let tasks = Tasks::with_config(config.clone());
 
         let first = engine.run_tick();
-        assert_eq!(first.len(), 1, "never attempted before — the first tick always tries");
+        assert_eq!(
+            first.len(),
+            1,
+            "never attempted before — the first tick always tries"
+        );
         assert_eq!(first[0].outcome, Outcome::Suspended);
 
         let mut extra_spawns = 0;
@@ -1446,8 +1672,15 @@ mod tests {
             .expect("complete");
 
         let woke = engine.run_tick();
-        assert_eq!(woke.len(), 1, "the task's own completion must wake the run within one tick");
-        assert_eq!(woke[0].outcome, Outcome::Completed(json!({"r": {"ok": true}})));
+        assert_eq!(
+            woke.len(),
+            1,
+            "the task's own completion must wake the run within one tick"
+        );
+        assert_eq!(
+            woke[0].outcome,
+            Outcome::Completed(json!({"r": {"ok": true}}))
+        );
         let _ = started;
     }
 
@@ -1469,7 +1702,9 @@ mod tests {
              \x20 return { r };\n\
              });\n",
         );
-        let started = engine.start_manual("stuck", &json!({}), "req-1").expect("start");
+        let started = engine
+            .start_manual("stuck", &json!({}), "req-1")
+            .expect("start");
 
         let first = engine.run_tick();
         assert_eq!(first.len(), 1);
@@ -1483,7 +1718,8 @@ mod tests {
         std::thread::sleep(safety_interval + Duration::from_millis(80));
         let safety_tick = engine.run_tick();
         assert_eq!(
-            safety_tick.len(), 1,
+            safety_tick.len(),
+            1,
             "the safety interval must force a re-attempt even though nothing visible changed"
         );
         assert_eq!(
@@ -1540,7 +1776,11 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         let woke = engine.run_tick();
-        assert_eq!(woke.len(), 1, "the deadline passing must wake the run on its own");
+        assert_eq!(
+            woke.len(),
+            1,
+            "the deadline passing must wake the run on its own"
+        );
         assert_eq!(woke[0].outcome, Outcome::Completed(json!({"done": true})));
         let _ = started;
     }
@@ -1555,7 +1795,10 @@ mod tests {
             std::thread::sleep(Duration::from_secs(5));
             "too late"
         });
-        assert_eq!(result, None, "the closure hadn't finished — must not be waited for");
+        assert_eq!(
+            result, None,
+            "the closure hadn't finished — must not be waited for"
+        );
         assert!(
             start.elapsed() < Duration::from_millis(500),
             "must return close to the deadline, not anywhere near the closure's own 5s: {:?}",
@@ -1593,7 +1836,9 @@ mod tests {
         let store = WorkflowStore::with_config(config.clone());
         let tasks = Tasks::with_config(config.clone());
         let events = Events::with_config(config.clone());
-        let started = engine.start_manual("slow", &json!({}), "req-1").expect("start");
+        let started = engine
+            .start_manual("slow", &json!({}), "req-1")
+            .expect("start");
         let run = store.get_run(&started.run_key).unwrap().unwrap();
         let attempt = Attempt::new(config, store, tasks, events);
 

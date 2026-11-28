@@ -103,7 +103,11 @@ pub fn mic(value: RwSignal<String>, chat: Option<AgentChat>) -> impl IntoView {
     // In a chat the button is the voice agent by default (confirmed once the capability lands
     // below); everywhere else it dictates, as it always has. A remembered choice still wins.
     let engine = RwSignal::new(stored_engine().unwrap_or_else(|| {
-        if chat.is_some() { AGENT.to_string() } else { BROWSER.to_string() }
+        if chat.is_some() {
+            AGENT.to_string()
+        } else {
+            BROWSER.to_string()
+        }
     }));
     let agent_ready = RwSignal::new(false);
     let agent_detail = RwSignal::new(String::new());
@@ -170,7 +174,11 @@ pub fn mic(value: RwSignal<String>, chat: Option<AgentChat>) -> impl IntoView {
         }
         // AGENT with no chat should be unreachable (the picker hides it and the fetch above resets
         // it), but if it is ever reached, dictate rather than send "agent" to the transcriber.
-        let engine_id = if engine_id == AGENT { BROWSER.to_string() } else { engine_id };
+        let engine_id = if engine_id == AGENT {
+            BROWSER.to_string()
+        } else {
+            engine_id
+        };
         let started = if engine_id == BROWSER {
             start_browser(value, state)
         } else {
@@ -189,7 +197,11 @@ pub fn mic(value: RwSignal<String>, chat: Option<AgentChat>) -> impl IntoView {
         let id = engine.get();
         if id == AGENT {
             let detail = agent_detail.get();
-            return if detail.is_empty() { "voice agent".to_string() } else { detail };
+            return if detail.is_empty() {
+                "voice agent".to_string()
+            } else {
+                detail
+            };
         }
         engines
             .get()
@@ -948,7 +960,8 @@ async fn open_agent_call(
     }
 
     // 3. The peer connection: the mic going up it, OpenAI's voice coming back on an `ontrack`.
-    let pc = RtcPeerConnection::new().map_err(|_| "a WebRTC connection would not open".to_string())?;
+    let pc =
+        RtcPeerConnection::new().map_err(|_| "a WebRTC connection would not open".to_string())?;
     for track in mic.get_tracks().iter() {
         if let Ok(track) = track.dyn_into::<MediaStreamTrack>() {
             pc.add_track_0(&track, &mic);

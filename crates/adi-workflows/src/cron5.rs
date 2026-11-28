@@ -43,8 +43,14 @@ mod tests {
 
     #[test]
     fn a_standard_five_field_expression_gets_a_leading_seconds_field() {
-        assert_eq!(normalize_five_field("0 5 * * MON").unwrap(), "0 0 5 * * MON");
-        assert_eq!(normalize_five_field("*/15 * * * *").unwrap(), "0 */15 * * * *");
+        assert_eq!(
+            normalize_five_field("0 5 * * MON").unwrap(),
+            "0 0 5 * * MON"
+        );
+        assert_eq!(
+            normalize_five_field("*/15 * * * *").unwrap(),
+            "0 */15 * * * *"
+        );
     }
 
     #[test]

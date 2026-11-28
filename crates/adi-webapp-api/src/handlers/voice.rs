@@ -207,13 +207,25 @@ fn agent_instructions(req: &RealtimeSessionRequest) -> String {
     let mut s = String::from(
         "You are a voice assistant the operator is talking to while they look at a chat. Help them with THIS conversation, out loud: answer their questions about it, tell them what the latest messages say, summarize what happened, explain or translate — from the transcript below. Keep your answers short and spoken, the way you would say them, not written out. ",
     );
-    if let Some(name) = req.agent.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
-        s.push_str(&format!("The chat is with an assistant called \"{name}\". "));
+    if let Some(name) = req
+        .agent
+        .as_deref()
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+    {
+        s.push_str(&format!(
+            "The chat is with an assistant called \"{name}\". "
+        ));
     }
     s.push_str(
         "Send a message only when the operator clearly asks you to (for example 'reply …', 'tell them …', 'send …', 'answer that'). When they do, compose the exact message and call the `commit_reply` function with it to send it — no need to ask again or read it all back first. If they are only asking you about the chat, just answer them and do not send anything. Speak the operator's own language.",
     );
-    if let Some(ctx) = req.context.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
+    if let Some(ctx) = req
+        .context
+        .as_deref()
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+    {
         s.push_str("\n\nThe conversation so far, oldest first and the latest message last:\n");
         s.push_str(ctx);
     }
@@ -293,10 +305,10 @@ fn mint_session(key: &str, req: &RealtimeSessionRequest) -> Result<RealtimeSessi
                 text.chars().take(200).collect::<String>()
             )
         })?;
-    let expires_at = json
-        .get("expires_at")
-        .and_then(Value::as_i64)
-        .or_else(|| json.pointer("/client_secret/expires_at").and_then(Value::as_i64));
+    let expires_at = json.get("expires_at").and_then(Value::as_i64).or_else(|| {
+        json.pointer("/client_secret/expires_at")
+            .and_then(Value::as_i64)
+    });
 
     Ok(RealtimeSessionDto {
         client_secret,

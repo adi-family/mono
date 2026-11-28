@@ -16,11 +16,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use adi_ui::{Icon, Lucide, Row as TableRow, Table};
 use adi_webapp_api::types::{
     AgentFieldOwner, AgentFormField, AgentFormFieldKind, AgentFormSpec, ContextWarningDto,
     LimitRuleDto, LlmBackendDto, LlmBackendsDto, ProbeDto, SaveLlmBackend, SaveLlmSettings,
 };
-use adi_ui::{Icon, Lucide, Row as TableRow, Table};
 use leptos::prelude::*;
 
 use wasm_bindgen_futures::spawn_local;
@@ -71,8 +71,14 @@ const SCOPES: [(&str, &str); 2] = [
 
 /// Where the wait comes from when a rule fires.
 const RESUMES: [(&str, &str); 3] = [
-    ("from_message", "from the provider's own words, else the fallback"),
-    ("retry_after", "from the Retry-After header, else the fallback"),
+    (
+        "from_message",
+        "from the provider's own words, else the fallback",
+    ),
+    (
+        "retry_after",
+        "from the Retry-After header, else the fallback",
+    ),
     ("fixed", "always the fallback below"),
 ];
 
@@ -590,7 +596,8 @@ fn runtime_sections(form: LlmBackendsForm, schema: Memo<Option<AgentFormSpec>>) 
         .into_any();
     }
     let Some(spec) = schema.get() else {
-        return view! { <p class="adi-hint">"Loading what this runtime takes\u{2026}"</p> }.into_any();
+        return view! { <p class="adi-hint">"Loading what this runtime takes\u{2026}"</p> }
+            .into_any();
     };
     view! {
         {login_view(form, &spec, &runtime)}
@@ -761,7 +768,11 @@ fn group_add_view(state: State, form: LlmBackendsForm) -> AnyView {
 
 /// The registry as this page reads it — empty until `/api/llm/backends` has landed.
 fn llm_registry(state: State) -> Vec<LlmBackendDto> {
-    state.llm_backends.get().map(|b| b.backends).unwrap_or_default()
+    state
+        .llm_backends
+        .get()
+        .map(|b| b.backends)
+        .unwrap_or_default()
 }
 
 /// Move the member at `from` to `to`, keeping every other member's order. Out-of-range indices are
@@ -832,10 +843,7 @@ fn login_view(form: LlmBackendsForm, spec: &AgentFormSpec, runtime: &str) -> Any
 /// The line that names login fields carrying a value this runtime will not read. Said before the
 /// click rather than discovered after it: the save drops them, and a login that changed without
 /// being mentioned is a hold recorded against the wrong subscription.
-fn stale_login_view(
-    form: LlmBackendsForm,
-    unread: &[LoginField],
-) -> AnyView {
+fn stale_login_view(form: LlmBackendsForm, unread: &[LoginField]) -> AnyView {
     let stale: Vec<&str> = unread
         .iter()
         .filter(|(_, signal)| !signal(form).get().trim().is_empty())
@@ -914,7 +922,9 @@ fn model_view(form: LlmBackendsForm, spec: &AgentFormSpec, runtime: &str) -> Any
         .map(|b| b.model_placeholder.clone())
         .filter(|p| !p.is_empty())
         .unwrap_or_else(|| "model alias".to_string());
-    let suggestions = option.map(|b| b.model_suggestions.clone()).unwrap_or_default();
+    let suggestions = option
+        .map(|b| b.model_suggestions.clone())
+        .unwrap_or_default();
     view! {
         <div class="adi-form">
             <div class="adi-field adi-field--grow">
@@ -1098,7 +1108,11 @@ fn control(
     let hint = field.hint.clone();
     let placeholder = field.placeholder.clone();
     let options = field.options.clone();
-    let grow = if field.wide { "adi-field adi-field--grow" } else { "adi-field" };
+    let grow = if field.wide {
+        "adi-field adi-field--grow"
+    } else {
+        "adi-field"
+    };
     let mut class = String::from("adi-input");
     if field.wide {
         class.push_str(" adi-input--wide");
@@ -1428,7 +1442,11 @@ fn body_from_form(state: State, form: LlmBackendsForm) -> Result<SaveLlmBackend,
                     && field_applies(f, &runtime, &form.provider.get())
             })
         });
-        if applies { value.trim().to_string() } else { String::new() }
+        if applies {
+            value.trim().to_string()
+        } else {
+            String::new()
+        }
     };
     let (settings, provider, base_url, api_key_env) = (
         login("settings", form.settings.get()),
@@ -1515,7 +1533,6 @@ fn run_test(state: State, form: LlmBackendsForm) {
     });
 }
 
-
 /// The dials as they go on the wire: the "anything else" box, with every typed control laid over
 /// it.
 ///
@@ -1533,15 +1550,13 @@ fn dial_params(
         if text.is_empty() {
             continue;
         }
-        let kind = spec.and_then(|spec| {
-            spec.fields
-                .iter()
-                .find(|f| f.name == name)
-                .map(|f| f.kind)
-        });
-        params.insert(name.clone(), dial_value(kind, &text).ok_or_else(|| {
-            format!("{name} takes a number, and {text} is not one.")
-        })?);
+        let kind =
+            spec.and_then(|spec| spec.fields.iter().find(|f| f.name == name).map(|f| f.kind));
+        params.insert(
+            name.clone(),
+            dial_value(kind, &text)
+                .ok_or_else(|| format!("{name} takes a number, and {text} is not one."))?,
+        );
     }
     Ok(params)
 }
@@ -1714,7 +1729,12 @@ mod tests {
         declared_dials, dial_value, fields_for, move_member, parse_params, short, tokens,
     };
 
-    fn field(name: &str, owner: AgentFieldOwner, ids: &[&str], providers: &[&str]) -> AgentFormField {
+    fn field(
+        name: &str,
+        owner: AgentFieldOwner,
+        ids: &[&str],
+        providers: &[&str],
+    ) -> AgentFormField {
         AgentFormField {
             name: name.to_string(),
             label: name.to_string(),
@@ -1739,9 +1759,24 @@ mod tests {
             backends: Vec::new(),
             presets: Vec::new(),
             fields: vec![
-                field("settings", AgentFieldOwner::Credential, &["harness:claude-sdk"], &[]),
-                field("base_url", AgentFieldOwner::Credential, &["harness:adi"], &[]),
-                field("effort", AgentFieldOwner::Dial, &["harness:claude-sdk"], &[]),
+                field(
+                    "settings",
+                    AgentFieldOwner::Credential,
+                    &["harness:claude-sdk"],
+                    &[],
+                ),
+                field(
+                    "base_url",
+                    AgentFieldOwner::Credential,
+                    &["harness:adi"],
+                    &[],
+                ),
+                field(
+                    "effort",
+                    AgentFieldOwner::Dial,
+                    &["harness:claude-sdk"],
+                    &[],
+                ),
                 field("top_p", AgentFieldOwner::Dial, &[], &["ollama"]),
                 field("system_prompt", AgentFieldOwner::Agent, &[], &[]),
             ],
@@ -1779,7 +1814,10 @@ mod tests {
         let declared = declared_dials(Some(&spec));
         assert!(declared.contains("effort") && declared.contains("top_p"));
         assert!(!declared.contains("settings") && !declared.contains("system_prompt"));
-        assert!(declared_dials(None).is_empty(), "no schema declares nothing");
+        assert!(
+            declared_dials(None).is_empty(),
+            "no schema declares nothing"
+        );
     }
 
     /// A whole number stays whole. `8192.0` decodes fine, but these files are edited by hand too,
@@ -1789,7 +1827,11 @@ mod tests {
         let number = Some(AgentFormFieldKind::Number);
         assert_eq!(dial_value(number, "8192"), Some(serde_json::json!(8192)));
         assert_eq!(dial_value(number, "0.9"), Some(serde_json::json!(0.9)));
-        assert_eq!(dial_value(number, "high"), None, "a number box holding a word");
+        assert_eq!(
+            dial_value(number, "high"),
+            None,
+            "a number box holding a word"
+        );
     }
 
     /// Everything else is text, and a checkbox is a boolean — the field's kind decides, not the
@@ -1827,7 +1869,10 @@ mod tests {
         let long = "/Users/somebody/.config/some-provider/profiles/work/settings.json";
         let short = short(long);
         assert!(short.starts_with('\u{2026}'), "{short}");
-        assert!(long.ends_with(short.trim_start_matches('\u{2026}')), "{short}");
+        assert!(
+            long.ends_with(short.trim_start_matches('\u{2026}')),
+            "{short}"
+        );
         assert_eq!(short.chars().count(), 28);
     }
 
@@ -1864,14 +1909,20 @@ mod tests {
     fn moving_a_member_down_keeps_everything_else_in_order() {
         let mut members = vec!["a".to_string(), "b".to_string(), "c".to_string()];
         move_member(&mut members, 0, 2);
-        assert_eq!(members, vec!["b".to_string(), "c".to_string(), "a".to_string()]);
+        assert_eq!(
+            members,
+            vec!["b".to_string(), "c".to_string(), "a".to_string()]
+        );
     }
 
     #[test]
     fn moving_a_member_up_keeps_everything_else_in_order() {
         let mut members = vec!["a".to_string(), "b".to_string(), "c".to_string()];
         move_member(&mut members, 2, 0);
-        assert_eq!(members, vec!["c".to_string(), "a".to_string(), "b".to_string()]);
+        assert_eq!(
+            members,
+            vec!["c".to_string(), "a".to_string(), "b".to_string()]
+        );
     }
 
     /// A move that lands nowhere — out of range, or onto the member it started from — changes

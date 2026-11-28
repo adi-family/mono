@@ -310,10 +310,7 @@ pub(crate) fn tool_actions(
         let del_id = id.clone();
         let del_short = short_id(&id);
         let mut items = vec![menu_item(state, "Restore", false, move || {
-            apply_tools(
-                state,
-                fetch::unarchive_tool(restore_id.clone()),
-            );
+            apply_tools(state, fetch::unarchive_tool(restore_id.clone()));
         })];
         if !t.system {
             items.push(menu_item(state, "Delete", true, move || {
@@ -323,10 +320,7 @@ pub(crate) fn tool_actions(
                 )) {
                     return;
                 }
-                apply_tools(
-                    state,
-                    fetch::remove_tool(del_id.clone()),
-                );
+                apply_tools(state, fetch::remove_tool(del_id.clone()));
             }));
         }
         row_actions(state, key, (), items)
@@ -351,10 +345,7 @@ pub(crate) fn tool_actions(
                 );
             }),
             menu_item(state, "Archive", false, move || {
-                apply_tools(
-                    state,
-                    fetch::archive_tool(arch_id.clone()),
-                );
+                apply_tools(state, fetch::archive_tool(arch_id.clone()));
             }),
         ];
         row_actions(state, key, (), items)

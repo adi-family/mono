@@ -774,20 +774,14 @@ fn row_action(
             )) {
                 return;
             }
-            apply_dashboards(
-                state,
-                fetch::delete_dashboard(delete_id.clone()),
-            );
+            apply_dashboards(state, fetch::delete_dashboard(delete_id.clone()));
         });
         return row_actions(state, key, start, vec![transfer, delete]);
     }
     if archived {
         let restore_id = id.clone();
         let restore = menu_item(state, "Restore", false, move || {
-            apply_dashboards(
-                state,
-                fetch::unarchive_dashboard(restore_id.clone()),
-            );
+            apply_dashboards(state, fetch::unarchive_dashboard(restore_id.clone()));
         });
         let delete = menu_item(state, "Delete", true, move || {
             if !confirm(&format!(
@@ -796,18 +790,12 @@ fn row_action(
             )) {
                 return;
             }
-            apply_dashboards(
-                state,
-                fetch::delete_dashboard(id.clone()),
-            );
+            apply_dashboards(state, fetch::delete_dashboard(id.clone()));
         });
         row_actions(state, key, (), vec![restore, transfer, delete])
     } else {
         let archive = menu_item(state, "Archive", false, move || {
-            apply_dashboards(
-                state,
-                fetch::archive_dashboard(id.clone()),
-            );
+            apply_dashboards(state, fetch::archive_dashboard(id.clone()));
         });
         row_actions(state, key, (), vec![transfer, archive])
     }

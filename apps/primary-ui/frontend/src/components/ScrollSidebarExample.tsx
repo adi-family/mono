@@ -44,16 +44,22 @@ export function ScrollSidebarExample() {
       <CardHeader>
         <CardTitle>Scroll sidebar</CardTitle>
         <CardDescription>
-          Grouped section links with automatic selection as you scroll. The gallery navigation uses this component.
+          Grouped section links with automatic selection as you scroll. The gallery navigation uses
+          this component.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         <div className="bg-canvas w-full max-w-xs rounded-lg border p-3">
-          <ScrollSidebar title="Try the links" browseLabel="Browse examples" navigationLabel="Sidebar example navigation" groups={groups} />
+          <ScrollSidebar
+            title="Try the links"
+            browseLabel="Browse examples"
+            navigationLabel="Sidebar example navigation"
+            groups={groups}
+          />
         </div>
         <p className="text-muted-foreground text-sm">
-          On small screens, the links collapse into a menu. Select a section to jump to it;
-          its selection stays visible even when a short section is near the end of the page.
+          On small screens, the links collapse into a menu. Select a section to jump to it; its
+          selection stays visible even when a short section is near the end of the page.
         </p>
         <CodeExample code={sidebarCode} label="Scroll sidebar" />
       </CardContent>

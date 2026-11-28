@@ -25,10 +25,17 @@ use crate::routing::{
 use crate::state::{Flash, State, WorkflowsConsole};
 use crate::ui::flash_view;
 
-use super::workflows::{refresh, refresh_run_detail, refresh_runs, refresh_source, run_timeline_view, runs_view, source_view, toggle_enabled};
+use super::workflows::{
+    refresh, refresh_run_detail, refresh_runs, refresh_source, run_timeline_view, runs_view,
+    source_view, toggle_enabled,
+};
 
 /// The workflow detail page.
-pub(crate) fn workflow_detail_view(state: State, route: RwSignal<Route>, console: WorkflowsConsole) -> AnyView {
+pub(crate) fn workflow_detail_view(
+    state: State,
+    route: RwSignal<Route>,
+    console: WorkflowsConsole,
+) -> AnyView {
     // Load the shared list once per visit to this page — same as the global list's own mount
     // effect, so a deep link or a reload (nothing loaded yet) and a click from the list (already
     // loaded) both end up with it fresh.
@@ -274,7 +281,9 @@ fn run_manually(state: State, console: WorkflowsConsole, workflow_id: String) {
         match serde_json::from_str(&raw) {
             Ok(v) => Some(v),
             Err(e) => {
-                state.flash.set(Some(Flash::err(format!("the input box isn't valid JSON: {e}"))));
+                state.flash.set(Some(Flash::err(format!(
+                    "the input box isn't valid JSON: {e}"
+                ))));
                 return;
             }
         }
@@ -365,7 +374,11 @@ fn skeleton_from_schema(schema: &Value) -> Value {
     if let Some(v) = schema.get("default") {
         return v.clone();
     }
-    if let Some(first) = schema.get("examples").and_then(Value::as_array).and_then(|a| a.first()) {
+    if let Some(first) = schema
+        .get("examples")
+        .and_then(Value::as_array)
+        .and_then(|a| a.first())
+    {
         return first.clone();
     }
     match schema.get("type").and_then(Value::as_str) {

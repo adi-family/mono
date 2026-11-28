@@ -100,7 +100,9 @@ impl std::fmt::Display for MigrateError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NotFound => write!(f, "no such trigger"),
-            Self::NothingToMigrate => write!(f, "this trigger has no inline hook secret to migrate"),
+            Self::NothingToMigrate => {
+                write!(f, "this trigger has no inline hook secret to migrate")
+            }
             Self::NameTaken(name) => write!(
                 f,
                 "a secret named {name} already exists in this trigger's scope — pass --secret-name to pick another"
@@ -118,7 +120,13 @@ impl std::fmt::Display for MigrateError {
 pub fn default_secret_name(trigger_name: &str) -> String {
     let mut sanitized: String = trigger_name
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_uppercase() } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
         .collect();
     if sanitized.starts_with(|c: char| c.is_ascii_digit()) {
         sanitized.insert(0, 'T');
@@ -138,7 +146,11 @@ impl Triggers {
     /// if it has no inline secret, [`MigrateError::NameTaken`] if the target name is already a
     /// secret in scope, or [`MigrateError::Secrets`]/[`MigrateError::Store`] on a read/write
     /// failure.
-    pub fn migrate_hook_secret(&self, name: &str, secret_name: Option<&str>) -> Result<Migrated, MigrateError> {
+    pub fn migrate_hook_secret(
+        &self,
+        name: &str,
+        secret_name: Option<&str>,
+    ) -> Result<Migrated, MigrateError> {
         let trigger = self
             .get(name)
             .map_err(|e| MigrateError::Store(e.to_string()))?
@@ -166,16 +178,24 @@ impl Triggers {
                 project.as_deref(),
                 &secret_name,
                 &value,
-                Some(&format!("migrated from trigger {name}'s inline hook secret")),
+                Some(&format!(
+                    "migrated from trigger {name}'s inline hook secret"
+                )),
             )
             .map_err(|e| MigrateError::Secrets(e.to_string()))?;
 
         let mut manifest = trigger.manifest;
         manifest.extra.remove(HOOK_SECRET_EXTRA);
-        manifest.extra.insert(HOOK_SECRET_REF_EXTRA.to_string(), secret_name.clone());
-        self.save(name, manifest).map_err(|e| MigrateError::Store(e.to_string()))?;
+        manifest
+            .extra
+            .insert(HOOK_SECRET_REF_EXTRA.to_string(), secret_name.clone());
+        self.save(name, manifest)
+            .map_err(|e| MigrateError::Store(e.to_string()))?;
 
-        Ok(Migrated { secret_name, project })
+        Ok(Migrated {
+            secret_name,
+            project,
+        })
     }
 }
 
@@ -193,13 +213,19 @@ impl Triggers {
 ///   the panel resaving an unrelated field): carry both forward from `previous_extra` unchanged,
 ///   the same way `adi_relay::register::keep_unchanged_endpoint` carries `relay_endpoint`
 ///   forward for a save that never touched the relay section either.
-pub fn reconcile_hook_secret(previous_extra: Option<&BTreeMap<String, String>>, clear: bool, extra: &mut BTreeMap<String, String>) {
+pub fn reconcile_hook_secret(
+    previous_extra: Option<&BTreeMap<String, String>>,
+    clear: bool,
+    extra: &mut BTreeMap<String, String>,
+) {
     if clear {
         extra.remove(HOOK_SECRET_EXTRA);
         extra.remove(HOOK_SECRET_REF_EXTRA);
         return;
     }
-    let has_ref = extra.get(HOOK_SECRET_REF_EXTRA).is_some_and(|s| !s.is_empty());
+    let has_ref = extra
+        .get(HOOK_SECRET_REF_EXTRA)
+        .is_some_and(|s| !s.is_empty());
     let has_inline = extra.get(HOOK_SECRET_EXTRA).is_some_and(|s| !s.is_empty());
     if has_ref {
         extra.remove(HOOK_SECRET_EXTRA);
@@ -241,7 +267,10 @@ mod tests {
                 kind: KIND_WEBHOOK.to_string(),
                 code: "true".to_string(),
                 project: project.map(str::to_string),
-                extra: extra.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+                extra: extra
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
                 ..TriggerManifest::default()
             },
         }
@@ -269,7 +298,10 @@ mod tests {
             .set(None, "MY_HOOK", "from-global", None)
             .expect("set");
         let t = webhook(&[(HOOK_SECRET_REF_EXTRA, "MY_HOOK")], None);
-        assert_eq!(store.hook_secret(&t), HookSecret::Value("from-global".to_string()));
+        assert_eq!(
+            store.hook_secret(&t),
+            HookSecret::Value("from-global".to_string())
+        );
     }
 
     /// A project-scoped secret of the same name overrides the global one — the same precedence
@@ -278,14 +310,24 @@ mod tests {
     fn a_project_scoped_secret_overrides_global_of_the_same_name() {
         let store = store("ref-project-override");
         let secrets = adi_secrets::Secrets::with_config(store.config().clone());
-        secrets.set(None, "MY_HOOK", "global-value", None).expect("set global");
-        secrets.set(Some("proj"), "MY_HOOK", "project-value", None).expect("set project");
+        secrets
+            .set(None, "MY_HOOK", "global-value", None)
+            .expect("set global");
+        secrets
+            .set(Some("proj"), "MY_HOOK", "project-value", None)
+            .expect("set project");
         let t = webhook(&[(HOOK_SECRET_REF_EXTRA, "MY_HOOK")], Some("proj"));
-        assert_eq!(store.hook_secret(&t), HookSecret::Value("project-value".to_string()));
+        assert_eq!(
+            store.hook_secret(&t),
+            HookSecret::Value("project-value".to_string())
+        );
 
         // A sibling project with no override of its own still falls back to global.
         let other = webhook(&[(HOOK_SECRET_REF_EXTRA, "MY_HOOK")], Some("other"));
-        assert_eq!(store.hook_secret(&other), HookSecret::Value("global-value".to_string()));
+        assert_eq!(
+            store.hook_secret(&other),
+            HookSecret::Value("global-value".to_string())
+        );
     }
 
     /// A reference naming a secret that isn't set anywhere must never fall open.
@@ -304,10 +346,16 @@ mod tests {
             .set(None, "MY_HOOK", "ref-value", None)
             .expect("set");
         let t = webhook(
-            &[(HOOK_SECRET_EXTRA, "inline-value"), (HOOK_SECRET_REF_EXTRA, "MY_HOOK")],
+            &[
+                (HOOK_SECRET_EXTRA, "inline-value"),
+                (HOOK_SECRET_REF_EXTRA, "MY_HOOK"),
+            ],
             None,
         );
-        assert_eq!(store.hook_secret(&t), HookSecret::Value("ref-value".to_string()));
+        assert_eq!(
+            store.hook_secret(&t),
+            HookSecret::Value("ref-value".to_string())
+        );
     }
 
     #[test]
@@ -321,10 +369,14 @@ mod tests {
     #[test]
     fn reconcile_lets_an_explicit_ref_retire_a_stale_inline_value() {
         let previous = BTreeMap::from([(HOOK_SECRET_EXTRA.to_string(), "old-inline".to_string())]);
-        let mut extra = BTreeMap::from([(HOOK_SECRET_REF_EXTRA.to_string(), "NEW_NAME".to_string())]);
+        let mut extra =
+            BTreeMap::from([(HOOK_SECRET_REF_EXTRA.to_string(), "NEW_NAME".to_string())]);
         reconcile_hook_secret(Some(&previous), false, &mut extra);
         assert_eq!(extra.get(HOOK_SECRET_EXTRA), None);
-        assert_eq!(extra.get(HOOK_SECRET_REF_EXTRA).map(String::as_str), Some("NEW_NAME"));
+        assert_eq!(
+            extra.get(HOOK_SECRET_REF_EXTRA).map(String::as_str),
+            Some("NEW_NAME")
+        );
     }
 
     /// A save that touches neither hook-secret key (the panel resaving some other field) keeps
@@ -335,7 +387,10 @@ mod tests {
         let previous = BTreeMap::from([(HOOK_SECRET_EXTRA.to_string(), "kept".to_string())]);
         let mut extra = BTreeMap::from([("description".to_string(), "unrelated".to_string())]);
         reconcile_hook_secret(Some(&previous), false, &mut extra);
-        assert_eq!(extra.get(HOOK_SECRET_EXTRA).map(String::as_str), Some("kept"));
+        assert_eq!(
+            extra.get(HOOK_SECRET_EXTRA).map(String::as_str),
+            Some("kept")
+        );
     }
 
     /// Same, but for a reference — a resave that touches neither key keeps the ref too.
@@ -344,6 +399,9 @@ mod tests {
         let previous = BTreeMap::from([(HOOK_SECRET_REF_EXTRA.to_string(), "KEPT".to_string())]);
         let mut extra = BTreeMap::new();
         reconcile_hook_secret(Some(&previous), false, &mut extra);
-        assert_eq!(extra.get(HOOK_SECRET_REF_EXTRA).map(String::as_str), Some("KEPT"));
+        assert_eq!(
+            extra.get(HOOK_SECRET_REF_EXTRA).map(String::as_str),
+            Some("KEPT")
+        );
     }
 }

@@ -31,7 +31,12 @@ pub(super) struct Site {
 impl Site {
     /// Unique on the screen, and the item id's key ([`super::arrange`]): machine first.
     pub(super) fn key(&self) -> String {
-        format!("{}:{}{}", self.machine.as_deref().unwrap_or(""), self.host, self.path)
+        format!(
+            "{}:{}{}",
+            self.machine.as_deref().unwrap_or(""),
+            self.host,
+            self.path
+        )
     }
 
     /// What its tile says: the host, without the zone every ADI name ends in.
@@ -46,7 +51,12 @@ impl Site {
 
     /// Where it opens from here, if anywhere.
     pub(super) fn url(&self) -> Option<String> {
-        address(&self.host, &self.path, self.machine.as_deref(), origin::viewing_node().as_deref())
+        address(
+            &self.host,
+            &self.path,
+            self.machine.as_deref(),
+            origin::viewing_node().as_deref(),
+        )
     }
 }
 
@@ -78,7 +88,11 @@ pub(super) fn parse(typed: &str) -> Option<(String, String, Option<String>)> {
     if let [service @ .., node, "n", "adi"] = labels.as_slice()
         && !service.is_empty()
     {
-        return Some((format!("{}.adi", service.join(".")), path.to_string(), Some((*node).to_string())));
+        return Some((
+            format!("{}.adi", service.join(".")),
+            path.to_string(),
+            Some((*node).to_string()),
+        ));
     }
     // A name without a dot is no domain, however it was written.
     let literal = (exact && host.contains('.'))
@@ -167,7 +181,11 @@ impl Sites {
 ///
 /// The palette's floating surface, and its keys: arrows move between machines, Enter adds.
 #[component]
-pub(super) fn AddSite(sites: Sites, fleet: Fleet, #[prop(into)] light: Signal<bool>) -> impl IntoView {
+pub(super) fn AddSite(
+    sites: Sites,
+    fleet: Fleet,
+    #[prop(into)] light: Signal<bool>,
+) -> impl IntoView {
     let open = sites.adding;
     let typed = RwSignal::new(String::new());
     let cursor = RwSignal::new(0usize);
@@ -208,7 +226,9 @@ pub(super) fn AddSite(sites: Sites, fleet: Fleet, #[prop(into)] light: Signal<bo
     // A pasted fleet address names its machine: that row comes first under the cursor.
     Effect::new(move |_| {
         if let Some((_, _, Some(node))) = parsed()
-            && let Some(i) = machines().iter().position(|m| m.as_deref() == Some(node.as_str()))
+            && let Some(i) = machines()
+                .iter()
+                .position(|m| m.as_deref() == Some(node.as_str()))
         {
             cursor.set(i);
         }
@@ -218,7 +238,11 @@ pub(super) fn AddSite(sites: Sites, fleet: Fleet, #[prop(into)] light: Signal<bo
         let Some((host, path, _)) = parsed() else {
             return;
         };
-        let site = Site { host, path, machine };
+        let site = Site {
+            host,
+            path,
+            machine,
+        };
         if site.url().is_none() || busy.get_untracked() {
             return;
         }
@@ -367,15 +391,31 @@ mod tests {
 
     #[test]
     fn what_was_typed_becomes_a_host_and_a_path() {
-        assert_eq!(p("app.nosh1.adi"), ("app.nosh1.adi".into(), "/".into(), None));
-        assert_eq!(p(" http://crm/deals "), ("crm.adi".into(), "/deals".into(), None));
+        assert_eq!(
+            p("app.nosh1.adi"),
+            ("app.nosh1.adi".into(), "/".into(), None)
+        );
+        assert_eq!(
+            p(" http://crm/deals "),
+            ("crm.adi".into(), "/deals".into(), None)
+        );
         assert_eq!(p("app.nosh1"), ("app.nosh1.adi".into(), "/".into(), None));
-        assert_eq!(p("https://example.com"), ("example.com".into(), "/".into(), None));
-        assert_eq!(p("localhost:3000/x"), ("localhost:3000".into(), "/x".into(), None));
+        assert_eq!(
+            p("https://example.com"),
+            ("example.com".into(), "/".into(), None)
+        );
+        assert_eq!(
+            p("localhost:3000/x"),
+            ("localhost:3000".into(), "/x".into(), None)
+        );
         assert_eq!(p("10.0.0.2"), ("10.0.0.2".into(), "/".into(), None));
         assert_eq!(
             p("http://app.nosh1.hetzner-nosh.n.adi/login"),
-            ("app.nosh1.adi".into(), "/login".into(), Some("hetzner-nosh".into()))
+            (
+                "app.nosh1.adi".into(),
+                "/login".into(),
+                Some("hetzner-nosh".into())
+            )
         );
         assert!(parse("  ").is_none());
     }
@@ -386,7 +426,10 @@ mod tests {
             address("app.nosh1.adi", "/", Some("hetzner-nosh"), None).as_deref(),
             Some("http://app.nosh1.hetzner-nosh.n.adi/")
         );
-        assert_eq!(address("app.nosh1.adi", "/", None, None).as_deref(), Some("http://app.nosh1.adi/"));
+        assert_eq!(
+            address("app.nosh1.adi", "/", None, None).as_deref(),
+            Some("http://app.nosh1.adi/")
+        );
         assert_eq!(
             address("example.com", "/x", Some("hetzner-nosh"), None).as_deref(),
             Some("http://example.com/x")
@@ -402,7 +445,11 @@ mod tests {
 
     #[test]
     fn a_site_is_keyed_by_its_machine_first() {
-        let s = Site { host: "app.nosh1.adi".into(), path: "/".into(), machine: Some("hetzner-nosh".into()) };
+        let s = Site {
+            host: "app.nosh1.adi".into(),
+            path: "/".into(),
+            machine: Some("hetzner-nosh".into()),
+        };
         assert_eq!(s.key(), "hetzner-nosh:app.nosh1.adi/");
         assert_eq!(s.name(), "app.nosh1");
     }

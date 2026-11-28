@@ -4,16 +4,29 @@ import { useForm } from "react-hook-form";
 import { Button, useStateWithDeps } from "@design-system/ui";
 import type { ConversationRef } from "../lib/app-chat";
 
-export function ChatTitle({ title, conversation, onRename, starred, onStar }: {
-  title: string; conversation: ConversationRef | null;
-  starred: boolean; onStar: (conversation: ConversationRef, starred: boolean) => Promise<void>;
+export function ChatTitle({
+  title,
+  conversation,
+  onRename,
+  starred,
+  onStar,
+}: {
+  title: string;
+  conversation: ConversationRef | null;
+  starred: boolean;
+  onStar: (conversation: ConversationRef, starred: boolean) => Promise<void>;
   onRename: (conversation: ConversationRef, title: string) => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
-  const { register, handleSubmit, reset } = useForm<{ name: string }>({ defaultValues: { name: title } });
+  const { register, handleSubmit, reset } = useForm<{ name: string }>({
+    defaultValues: { name: title },
+  });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [copiedId, setCopiedId] = useStateWithDeps(() => "", [conversation?.agent, conversation?.runId, conversation?.source]);
+  const [copiedId, setCopiedId] = useStateWithDeps(
+    () => "",
+    [conversation?.agent, conversation?.runId, conversation?.source],
+  );
   useEffect(() => {
     if (!copiedId) return;
     const timer = window.setTimeout(() => setCopiedId(""), 2000);
@@ -41,55 +54,189 @@ export function ChatTitle({ title, conversation, onRename, starred, onStar }: {
     setError("");
     try {
       if (navigator.clipboard) {
-        try { await navigator.clipboard.writeText(id); } catch { fallback(); }
-      } else { fallback(); }
+        try {
+          await navigator.clipboard.writeText(id);
+        } catch {
+          fallback();
+        }
+      } else {
+        fallback();
+      }
       setCopiedId(id);
-    } catch { setCopiedId(""); setError("Could not copy the chat ID. Try again."); }
+    } catch {
+      setCopiedId("");
+      setError("Could not copy the chat ID. Try again.");
+    }
   }
   const inFlight = useRef(false);
   const input = useRef<HTMLInputElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
-  useEffect(() => { if (editing) { input.current?.focus(); input.current?.select(); } }, [editing]);
+  useEffect(() => {
+    if (editing) {
+      input.current?.focus();
+      input.current?.select();
+    }
+  }, [editing]);
   const nameField = register("name");
-  function close() { setEditing(false); setError(""); requestAnimationFrame(() => trigger.current?.focus()); }
+  function close() {
+    setEditing(false);
+    setError("");
+    requestAnimationFrame(() => trigger.current?.focus());
+  }
   const submit = handleSubmit(async ({ name }) => {
     if (!conversation || inFlight.current) return;
-    inFlight.current = true; setSaving(true); setError("");
-    try { const result = onRename(conversation, name); close(); await result; }
-    catch (cause) { setError(cause instanceof Error ? cause.message : "Could not rename this chat. Try again."); }
-    finally { inFlight.current = false; setSaving(false); }
+    inFlight.current = true;
+    setSaving(true);
+    setError("");
+    try {
+      const result = onRename(conversation, name);
+      close();
+      await result;
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not rename this chat. Try again.");
+    } finally {
+      inFlight.current = false;
+      setSaving(false);
+    }
   });
-  return editing ? <form data-slot="chat-rename" aria-label="Rename chat" onSubmit={submit} className="min-w-0" onKeyDown={(event) => {
-    if (event.key === "Escape" && !saving) { event.preventDefault(); close(); }
-  }}>
+  return editing ? (
+    <form
+      data-slot="chat-rename"
+      aria-label="Rename chat"
+      onSubmit={submit}
+      className="min-w-0"
+      onKeyDown={(event) => {
+        if (event.key === "Escape" && !saving) {
+          event.preventDefault();
+          close();
+        }
+      }}
+    >
+      <div className="flex min-w-0 items-center gap-1">
+        <input
+          {...nameField}
+          ref={(node) => {
+            nameField.ref(node);
+            input.current = node;
+          }}
+          aria-label="Chat name"
+          disabled={saving}
+          placeholder="Default chat title"
+          className="border-input focus-visible:ring-ring min-w-0 flex-1 rounded-md border px-2 py-1 text-sm outline-none focus-visible:ring-2"
+        />
+        <Button
+          type="submit"
+          size="icon"
+          variant="ghost"
+          className="size-7 shrink-0"
+          aria-label="Save chat name"
+          disabled={saving}
+          disabledReason="The chat name is being saved."
+        >
+          {saving ? (
+            <LoaderCircle aria-hidden="true" className="size-3.5 motion-safe:animate-spin" />
+          ) : (
+            <Check aria-hidden="true" className="size-3.5" />
+          )}
+        </Button>
+        <Button
+          type="button"
+          size="icon"
+          variant="ghost"
+          className="size-7 shrink-0"
+          aria-label="Cancel rename"
+          disabled={saving}
+          disabledReason="The chat name is being saved."
+          onClick={close}
+        >
+          <X aria-hidden="true" className="size-3.5" />
+        </Button>
+      </div>
+      <p className="text-muted-foreground mt-1 text-[11px]">
+        Leave empty to restore the default title.
+      </p>
+      {error && (
+        <p role="alert" className="text-destructive mt-1 text-xs">
+          {error}
+        </p>
+      )}
+    </form>
+  ) : (
     <div className="flex min-w-0 items-center gap-1">
-      <input
-        {...nameField}
-        ref={(node) => { nameField.ref(node); input.current = node; }}
-        aria-label="Chat name"
-        disabled={saving}
-        placeholder="Default chat title"
-        className="border-input focus-visible:ring-ring min-w-0 flex-1 rounded-md border px-2 py-1 text-sm outline-none focus-visible:ring-2"
-      />
-      <Button type="submit" size="icon" variant="ghost" className="size-7 shrink-0" aria-label="Save chat name" disabled={saving} disabledReason="The chat name is being saved.">{saving ? <LoaderCircle aria-hidden="true" className="size-3.5 motion-safe:animate-spin" /> : <Check aria-hidden="true" className="size-3.5" />}</Button>
-      <Button type="button" size="icon" variant="ghost" className="size-7 shrink-0" aria-label="Cancel rename" disabled={saving} disabledReason="The chat name is being saved." onClick={close}><X aria-hidden="true" className="size-3.5" /></Button>
+      <h1 className="truncate text-sm font-medium" title={title}>
+        {title}
+      </h1>
+      {conversation && (
+        <Button
+          type="button"
+          size="icon"
+          variant="ghost"
+          className="text-muted-foreground size-6 shrink-0"
+          aria-label={starred ? "Unstar chat" : "Star chat"}
+          aria-pressed={starred}
+          disabled={saving}
+          disabledReason="The chat is being updated."
+          onClick={async () => {
+            if (inFlight.current) return;
+            inFlight.current = true;
+            setSaving(true);
+            setError("");
+            try {
+              await onStar(conversation, !starred);
+            } catch (cause) {
+              setError(
+                cause instanceof Error ? cause.message : "Could not update this chat. Try again.",
+              );
+            } finally {
+              inFlight.current = false;
+              setSaving(false);
+            }
+          }}
+        >
+          <Star aria-hidden="true" className={starred ? "size-3 fill-current" : "size-3"} />
+        </Button>
+      )}
+      {conversation && (
+        <Button
+          type="button"
+          size="icon"
+          variant="ghost"
+          className="text-muted-foreground size-6 shrink-0"
+          aria-label="Copy chat ID"
+          title={`Copy chat ID: ${conversation.runId}`}
+          onClick={copyId}
+        >
+          {copiedId === conversation.runId ? (
+            <Check aria-hidden="true" className="size-3" />
+          ) : (
+            <Copy aria-hidden="true" className="size-3" />
+          )}
+        </Button>
+      )}
+      <span role="status" className="sr-only">
+        {copiedId && copiedId === conversation?.runId ? "Chat ID copied" : ""}
+      </span>
+      {error && (
+        <p role="alert" className="text-destructive text-xs">
+          {error}
+        </p>
+      )}
+      {conversation && (
+        <Button
+          ref={trigger}
+          type="button"
+          size="icon"
+          variant="ghost"
+          className="text-muted-foreground size-6 shrink-0"
+          aria-label="Rename chat"
+          onClick={() => {
+            reset({ name: title });
+            setEditing(true);
+          }}
+        >
+          <Pencil aria-hidden="true" className="size-3" />
+        </Button>
+      )}
     </div>
-    <p className="text-muted-foreground mt-1 text-[11px]">Leave empty to restore the default title.</p>
-    {error && <p role="alert" className="text-destructive mt-1 text-xs">{error}</p>}
-  </form> : <div className="flex min-w-0 items-center gap-1">
-    <h1 className="truncate text-sm font-medium" title={title}>{title}</h1>
-    {conversation && <Button type="button" size="icon" variant="ghost" className="text-muted-foreground size-6 shrink-0" aria-label={starred ? "Unstar chat" : "Star chat"} aria-pressed={starred} disabled={saving} disabledReason="The chat is being updated." onClick={async () => {
-      if (inFlight.current) return;
-      inFlight.current = true; setSaving(true); setError("");
-      try { await onStar(conversation, !starred); }
-      catch (cause) { setError(cause instanceof Error ? cause.message : "Could not update this chat. Try again."); }
-      finally { inFlight.current = false; setSaving(false); }
-    }}><Star aria-hidden="true" className={starred ? "size-3 fill-current" : "size-3"} /></Button>}
-    {conversation && <Button type="button" size="icon" variant="ghost" className="text-muted-foreground size-6 shrink-0" aria-label="Copy chat ID" title={`Copy chat ID: ${conversation.runId}`} onClick={copyId}>
-      {copiedId === conversation.runId ? <Check aria-hidden="true" className="size-3" /> : <Copy aria-hidden="true" className="size-3" />}
-    </Button>}
-    <span role="status" className="sr-only">{copiedId && copiedId === conversation?.runId ? "Chat ID copied" : ""}</span>
-    {error && <p role="alert" className="text-destructive text-xs">{error}</p>}
-    {conversation && <Button ref={trigger} type="button" size="icon" variant="ghost" className="text-muted-foreground size-6 shrink-0" aria-label="Rename chat" onClick={() => { reset({ name: title }); setEditing(true); }}><Pencil aria-hidden="true" className="size-3" /></Button>}
-  </div>;
+  );
 }

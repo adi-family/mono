@@ -10,15 +10,27 @@ import { Home } from "./pages/Home";
 import { AppChatProvider } from "./lib/app-chat-state";
 import { legacyChatDestination } from "./lib/primary-routes";
 
-const Components = lazy(() => import("./pages/Components").then((module) => ({ default: module.Components })));
-const Interface = lazy(() => import("./pages/Interface").then((module) => ({ default: module.Interface })));
-const AgentChat = lazy(() => import("./pages/AgentChat").then((module) => ({ default: module.AgentChat })));
+const Components = lazy(() =>
+  import("./pages/Components").then((module) => ({ default: module.Components })),
+);
+const Interface = lazy(() =>
+  import("./pages/Interface").then((module) => ({ default: module.Interface })),
+);
+const AgentChat = lazy(() =>
+  import("./pages/AgentChat").then((module) => ({ default: module.AgentChat })),
+);
 
-const Marketplace = lazy(() => import("./pages/Marketplace").then((module) => ({ default: module.Marketplace })));
+const Marketplace = lazy(() =>
+  import("./pages/Marketplace").then((module) => ({ default: module.Marketplace })),
+);
 
-const MarketplacePackage = lazy(() => import("./pages/MarketplacePackage").then((module) => ({ default: module.MarketplacePackage })));
+const MarketplacePackage = lazy(() =>
+  import("./pages/MarketplacePackage").then((module) => ({ default: module.MarketplacePackage })),
+);
 
-const Settings = lazy(() => import("./pages/Settings").then((module) => ({ default: module.Settings })));
+const Settings = lazy(() =>
+  import("./pages/Settings").then((module) => ({ default: module.Settings })),
+);
 
 function HomeEntry() {
   const { key } = useLocation();
@@ -42,7 +54,13 @@ export default function App() {
 
   return (
     <AppChatProvider>
-      <Suspense fallback={<p role="status" className="text-muted-foreground p-5 text-sm">Loading…</p>}>
+      <Suspense
+        fallback={
+          <p role="status" className="text-muted-foreground p-5 text-sm">
+            Loading…
+          </p>
+        }
+      >
         <Routes>
           <Route path="/index.html" element={<Navigate to="/" replace />} />
           <Route path="/chat/*" element={<LegacyChatRedirect />} />

@@ -48,7 +48,12 @@ fn wrap_aad(user: &str, name: &str) -> String {
 ///
 /// # Errors
 /// [`Error::Crypto`] if the underlying AEAD call fails (not expected to happen in practice).
-pub fn seal_value(dek: &[u8; 32], user: &str, name: &str, plaintext: &[u8]) -> Result<(String, String)> {
+pub fn seal_value(
+    dek: &[u8; 32],
+    user: &str,
+    name: &str,
+    plaintext: &[u8],
+) -> Result<(String, String)> {
     encrypt(dek, &value_aad(user, name), plaintext)
 }
 
@@ -57,7 +62,13 @@ pub fn seal_value(dek: &[u8; 32], user: &str, name: &str, plaintext: &[u8]) -> R
 /// # Errors
 /// [`Error::Decrypt`] for a wrong key, a tampered ciphertext, or a value bound to a different
 /// user or name.
-pub fn open_value(dek: &[u8; 32], user: &str, name: &str, nonce: &str, ciphertext: &str) -> Result<Vec<u8>> {
+pub fn open_value(
+    dek: &[u8; 32],
+    user: &str,
+    name: &str,
+    nonce: &str,
+    ciphertext: &str,
+) -> Result<Vec<u8>> {
     decrypt(dek, &value_aad(user, name), nonce, ciphertext)
 }
 
@@ -66,7 +77,12 @@ pub fn open_value(dek: &[u8; 32], user: &str, name: &str, nonce: &str, ciphertex
 ///
 /// # Errors
 /// [`Error::Crypto`] if the underlying AEAD call fails.
-pub fn wrap_dek(wrap_key: &[u8; 32], user: &str, name: &str, dek: &[u8; 32]) -> Result<(String, String)> {
+pub fn wrap_dek(
+    wrap_key: &[u8; 32],
+    user: &str,
+    name: &str,
+    dek: &[u8; 32],
+) -> Result<(String, String)> {
     encrypt(wrap_key, &wrap_aad(user, name), dek)
 }
 
@@ -76,7 +92,13 @@ pub fn wrap_dek(wrap_key: &[u8; 32], user: &str, name: &str, dek: &[u8; 32]) -> 
 /// [`Error::Decrypt`] for a wrong device key, a tampered wrap, or one bound to a different user
 /// or name — including the common case of a device that isn't the one this secret was wrapped
 /// to.
-pub fn unwrap_dek(wrap_key: &[u8; 32], user: &str, name: &str, nonce: &str, wrapped: &str) -> Result<[u8; 32]> {
+pub fn unwrap_dek(
+    wrap_key: &[u8; 32],
+    user: &str,
+    name: &str,
+    nonce: &str,
+    wrapped: &str,
+) -> Result<[u8; 32]> {
     let bytes = decrypt(wrap_key, &wrap_aad(user, name), nonce, wrapped)?;
     bytes.try_into().map_err(|_| Error::Decrypt)
 }
@@ -123,14 +145,20 @@ mod tests {
         let wrap_key = generate_dek(); // any 32 random bytes will do for a key-wrapping key
         let dek = generate_dek();
         let (nonce, wrapped) = wrap_dek(&wrap_key, "u-aaa", "K", &dek).expect("wrap");
-        assert_eq!(unwrap_dek(&wrap_key, "u-aaa", "K", &nonce, &wrapped).expect("unwrap"), dek);
+        assert_eq!(
+            unwrap_dek(&wrap_key, "u-aaa", "K", &nonce, &wrapped).expect("unwrap"),
+            dek
+        );
     }
 
     #[test]
     fn a_value_round_trips_through_seal_and_open() {
         let dek = generate_dek();
         let (nonce, ct) = seal_value(&dek, "u-aaa", "K", b"sk-mine").expect("seal");
-        assert_eq!(open_value(&dek, "u-aaa", "K", &nonce, &ct).expect("open"), b"sk-mine");
+        assert_eq!(
+            open_value(&dek, "u-aaa", "K", &nonce, &ct).expect("open"),
+            b"sk-mine"
+        );
     }
 
     #[test]

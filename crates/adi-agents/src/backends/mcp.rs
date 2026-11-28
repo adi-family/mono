@@ -133,8 +133,10 @@ fn server_json(resolved: &crate::mcp_servers::ResolvedMcpServer) -> Value {
         ResolvedTransport::Http { url, headers } => {
             // Rendered, not the resolved struct itself: a Claude engine wants the wire string
             // (`Bearer <token>`), never the prefix/raw split Codex's bearer knob alone needs.
-            let headers: std::collections::BTreeMap<&String, String> =
-                headers.iter().map(|(name, value)| (name, value.rendered())).collect();
+            let headers: std::collections::BTreeMap<&String, String> = headers
+                .iter()
+                .map(|(name, value)| (name, value.rendered()))
+                .collect();
             json!({ "type": "http", "url": url, "headers": headers })
         }
         ResolvedTransport::Stdio { command, args, env } => json!({
@@ -178,7 +180,11 @@ pub(crate) fn refuse_unless_supported(
     }
     Err(Error::Launch(format!(
         "{backend} has no MCP support: it cannot be given the MCP server(s) this agent declares          ({}). Run it on harness:claude-sdk, pty:claude, process:claude, process:codex, or          process:antigravity instead, or detach the servers with `agents save --no-mcp`",
-        servers.iter().map(|s| s.id.as_str()).collect::<Vec<_>>().join(", "),
+        servers
+            .iter()
+            .map(|s| s.id.as_str())
+            .collect::<Vec<_>>()
+            .join(", "),
     )))
 }
 
@@ -307,7 +313,10 @@ pub(crate) fn scope_tools(allowed: Option<&str>) -> ToolScope {
 /// a server here is naming it as a whole capability, and `tools/list` is how the model learns
 /// what it can call on it — a second, finer-grained allowlist of individual `mcp__<id>__<tool>`
 /// names would be a thing nothing here can derive without first asking the server.
-pub(crate) fn grant_servers(scope: &mut ToolScope, servers: &[crate::mcp_servers::ResolvedMcpServer]) {
+pub(crate) fn grant_servers(
+    scope: &mut ToolScope,
+    servers: &[crate::mcp_servers::ResolvedMcpServer],
+) {
     for resolved in servers {
         let grant = format!("mcp__{}", resolved.id);
         if scope.allowed.split(',').any(|g| g == grant) {
@@ -745,8 +754,14 @@ mod tests {
                 .map(|t| t["name"].as_str().expect("name").to_string())
                 .collect()
         };
-        let python = CodeTools { python: true, ..CodeTools::default() };
-        let typescript = CodeTools { typescript: true, ..CodeTools::default() };
+        let python = CodeTools {
+            python: true,
+            ..CodeTools::default()
+        };
+        let typescript = CodeTools {
+            typescript: true,
+            ..CodeTools::default()
+        };
         assert_eq!(names(python), ["Bash", "PyCode", "Await", "Ask"]);
         assert_eq!(names(typescript), ["Bash", "TsCode", "Await", "Ask"]);
         assert_eq!(names(CodeTools::BOTH), SERVED);
@@ -792,7 +807,9 @@ mod tests {
         assert_eq!(listed[0]["name"], "TsCode");
         let description = listed[0]["description"].as_str().expect("description");
         assert!(
-            description.starts_with("**This is your only tool.** Your other tools — `Read`, `Write`, `Edit`, `Bash`,"),
+            description.starts_with(
+                "**This is your only tool.** Your other tools — `Read`, `Write`, `Edit`, `Bash`,"
+            ),
             "{description}"
         );
         assert!(
@@ -801,9 +818,16 @@ mod tests {
             description.chars().count()
         );
 
-        assert_eq!(replies[1]["error"]["code"], -32601, "the shell is not a tool: {:?}", replies[1]);
+        assert_eq!(
+            replies[1]["error"]["code"], -32601,
+            "the shell is not a tool: {:?}",
+            replies[1]
+        );
         assert_eq!(replies[2]["result"]["isError"], false, "{:?}", replies[2]);
-        assert_eq!(replies[2]["result"]["content"][0]["text"], "through the door");
+        assert_eq!(
+            replies[2]["result"]["content"][0]["text"],
+            "through the door"
+        );
     }
 
     /// What a code-only agent's engine is launched with: none of its own tools, whatever the
@@ -836,10 +860,17 @@ mod tests {
             mcp_servers: vec![server.clone()],
             code,
         };
-        let session = FakeSession { log: std::env::temp_dir().join("conv-1.log") };
+        let session = FakeSession {
+            log: std::env::temp_dir().join("conv-1.log"),
+        };
         let servers = |spec: &RunSpec| -> Vec<String> {
             let config: Value = serde_json::from_str(&config(spec, &session)).expect("json");
-            config["mcpServers"].as_object().expect("servers").keys().cloned().collect()
+            config["mcpServers"]
+                .as_object()
+                .expect("servers")
+                .keys()
+                .cloned()
+                .collect()
         };
 
         let usual = spec(CodeTools::default());
@@ -850,9 +881,16 @@ mod tests {
 
         let only = spec(CodeTools::ONLY_TYPESCRIPT);
         let scope = run_scope(&only, Some("Read,Edit,WebSearch"));
-        assert_eq!(scope.builtins, "", "not one built-in, whatever its list says");
+        assert_eq!(
+            scope.builtins, "",
+            "not one built-in, whatever its list says"
+        );
         assert_eq!(scope.allowed, "mcp__adi", "and only this run's own server");
-        assert_eq!(servers(&only), ["adi"], "its servers are reached from code, not by the engine");
+        assert_eq!(
+            servers(&only),
+            ["adi"],
+            "its servers are reached from code, not by the engine"
+        );
     }
 
     /// A backend that cannot take every tool but one away refuses a code-only agent, rather than
@@ -862,13 +900,25 @@ mod tests {
     fn a_backend_that_cannot_be_code_only_refuses_such_an_agent() {
         use crate::backend::Backend;
         for backend in [Backend::ProcessCodex, Backend::PtyCodex] {
-            assert!(refuse_code_only(&backend, CodeTools::default()).is_ok(), "{backend}");
-            assert!(refuse_code_only(&backend, CodeTools::BOTH).is_ok(), "{backend}: the switches are not the mode");
+            assert!(
+                refuse_code_only(&backend, CodeTools::default()).is_ok(),
+                "{backend}"
+            );
+            assert!(
+                refuse_code_only(&backend, CodeTools::BOTH).is_ok(),
+                "{backend}: the switches are not the mode"
+            );
             let refused = refuse_code_only(&backend, CodeTools::ONLY_PYTHON)
                 .expect_err("codex keeps its own tools")
                 .to_string();
-            assert!(refused.contains("cannot run a code-only agent"), "{refused}");
-            assert!(refused.contains("--no-code-only"), "and how to get out of it: {refused}");
+            assert!(
+                refused.contains("cannot run a code-only agent"),
+                "{refused}"
+            );
+            assert!(
+                refused.contains("--no-code-only"),
+                "and how to get out of it: {refused}"
+            );
         }
     }
 
@@ -886,7 +936,12 @@ mod tests {
         };
         let replies = talk_as(
             CodeTools::BOTH,
-            &[call(1, "const x: number = 20;"), call(2, "x + 1;"), call(3, "(null as any).y;")].join("\n"),
+            &[
+                call(1, "const x: number = 20;"),
+                call(2, "x + 1;"),
+                call(3, "(null as any).y;"),
+            ]
+            .join("\n"),
         );
         let text = |i: usize| {
             replies[i]["result"]["content"][0]["text"]
@@ -896,7 +951,11 @@ mod tests {
         };
 
         assert_eq!(replies[0]["result"]["isError"], false, "{:?}", replies[0]);
-        assert_eq!(text(1), "21", "the second call saw what the first one declared");
+        assert_eq!(
+            text(1),
+            "21",
+            "the second call saw what the first one declared"
+        );
         assert_eq!(replies[2]["result"]["isError"], true, "{:?}", replies[2]);
         assert!(text(2).contains("TypeError"), "{}", text(2));
     }
@@ -913,7 +972,10 @@ mod tests {
             })
             .to_string()
         };
-        let replies = talk_as(CodeTools::BOTH, &[call(1, "x = 20"), call(2, "x + 1"), call(3, "x / 0")].join("\n"));
+        let replies = talk_as(
+            CodeTools::BOTH,
+            &[call(1, "x = 20"), call(2, "x + 1"), call(3, "x / 0")].join("\n"),
+        );
         let text = |i: usize| {
             replies[i]["result"]["content"][0]["text"]
                 .as_str()
@@ -922,7 +984,11 @@ mod tests {
         };
 
         assert_eq!(replies[0]["result"]["isError"], false, "{:?}", replies[0]);
-        assert_eq!(text(1), "21", "the second call saw the first one's variable");
+        assert_eq!(
+            text(1),
+            "21",
+            "the second call saw the first one's variable"
+        );
         assert_eq!(replies[2]["result"]["isError"], true, "{:?}", replies[2]);
         assert!(text(2).contains("ZeroDivisionError"), "{}", text(2));
     }
@@ -1050,9 +1116,15 @@ mod tests {
             .expect("save definition");
 
         let resolved = crate::mcp_servers::resolve(&store_config, &["echo".to_string()], &[]);
-        assert_eq!(resolved.len(), 1, "the definition just saved should resolve with no secrets needed");
+        assert_eq!(
+            resolved.len(),
+            1,
+            "the definition just saved should resolve with no secrets needed"
+        );
 
-        let session = FakeSession { log: dir.join("conv-1.log") };
+        let session = FakeSession {
+            log: dir.join("conv-1.log"),
+        };
         let spec = RunSpec {
             credential: None,
             cwd: dir.clone(),
@@ -1101,7 +1173,8 @@ mod tests {
                 r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"protocolVersion":"2025-11-25"}}}}"#
             )
             .expect("write initialize");
-            writeln!(stdin, r#"{{"jsonrpc":"2.0","id":2,"method":"tools/list"}}"#).expect("write tools/list");
+            writeln!(stdin, r#"{{"jsonrpc":"2.0","id":2,"method":"tools/list"}}"#)
+                .expect("write tools/list");
         }
         let mut lines = {
             use std::io::{BufRead as _, BufReader};
@@ -1109,12 +1182,17 @@ mod tests {
             BufReader::new(stdout).lines()
         };
         let initialize_reply: Value =
-            serde_json::from_str(&lines.next().expect("a reply").expect("read line")).expect("json");
+            serde_json::from_str(&lines.next().expect("a reply").expect("read line"))
+                .expect("json");
         assert_eq!(initialize_reply["result"]["protocolVersion"], "2025-11-25");
-        assert_eq!(initialize_reply["result"]["serverInfo"]["name"], "echo-test");
+        assert_eq!(
+            initialize_reply["result"]["serverInfo"]["name"],
+            "echo-test"
+        );
 
         let list_reply: Value =
-            serde_json::from_str(&lines.next().expect("a reply").expect("read line")).expect("json");
+            serde_json::from_str(&lines.next().expect("a reply").expect("read line"))
+                .expect("json");
         assert_eq!(list_reply["result"]["tools"][0]["name"], "Echo");
 
         let _ = child.kill();

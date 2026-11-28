@@ -66,8 +66,8 @@ pub(crate) fn scrub_ambient(
         .into_iter()
         .filter(|(key, _)| {
             let named_to_strip = strip.iter().any(|name| name == key);
-            let run_identity = key.starts_with("ADI_")
-                && !adi_config::FLAVOR_ENV_KEYS.contains(&key.as_str());
+            let run_identity =
+                key.starts_with("ADI_") && !adi_config::FLAVOR_ENV_KEYS.contains(&key.as_str());
             !named_to_strip && !run_identity
         })
         .collect()
@@ -569,7 +569,11 @@ mod tests {
     fn a_second_turn_archives_the_first_instead_of_erasing_it() {
         let dir = scratch_dir("archive");
         let log = dir.join("run-1.log");
-        let exit_now = vec!["/bin/sh".to_string(), "-c".to_string(), "echo first".to_string()];
+        let exit_now = vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            "echo first".to_string(),
+        ];
 
         spawn_child(&dir, "run-1", &log, &dir, "", &exit_now, &[], &[], |_| {})
             .expect("first turn");
@@ -578,7 +582,11 @@ mod tests {
         assert!(first_turn.contains("turn started"), "{first_turn}");
         assert!(first_turn.contains("first"), "{first_turn}");
 
-        let exit_again = vec!["/bin/sh".to_string(), "-c".to_string(), "echo second".to_string()];
+        let exit_again = vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            "echo second".to_string(),
+        ];
         spawn_child(&dir, "run-1", &log, &dir, "", &exit_again, &[], &[], |_| {})
             .expect("second turn");
         wait_for(|| std::fs::read_to_string(&log).is_ok_and(|s| s.contains("turn ended")));
@@ -595,7 +603,11 @@ mod tests {
             .filter(|name| name.starts_with("run-1.") && name != "run-1.log")
             .filter(|name| name.ends_with(".log"))
             .collect();
-        assert_eq!(archived.len(), 1, "exactly the first turn went aside: {archived:?}");
+        assert_eq!(
+            archived.len(),
+            1,
+            "exactly the first turn went aside: {archived:?}"
+        );
         let kept = std::fs::read_to_string(dir.join(&archived[0])).expect("archived log");
         assert_eq!(kept, first_turn, "archived whole, markers and all");
 
@@ -608,7 +620,11 @@ mod tests {
     fn a_first_turn_archives_nothing() {
         let dir = scratch_dir("archive-first");
         let log = dir.join("run-1.log");
-        let argv = vec!["/bin/sh".to_string(), "-c".to_string(), "exit 0".to_string()];
+        let argv = vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            "exit 0".to_string(),
+        ];
 
         spawn_child(&dir, "run-1", &log, &dir, "", &argv, &[], &[], |_| {}).expect("spawn");
         wait_for(|| std::fs::read_to_string(&log).is_ok_and(|s| s.contains("turn ended")));
@@ -675,7 +691,10 @@ mod tests {
     fn scrub_ambient_strips_adi_star_even_with_an_empty_strip_list() {
         let ambient = vec![
             ("ADI_LEASE".to_string(), "cap".to_string()),
-            ("ADI_LEASE_URL".to_string(), "http://127.0.0.1:8000".to_string()),
+            (
+                "ADI_LEASE_URL".to_string(),
+                "http://127.0.0.1:8000".to_string(),
+            ),
         ];
         assert!(scrub_ambient(ambient, &[]).is_empty());
     }
@@ -696,7 +715,10 @@ mod tests {
         ];
         let scrubbed = scrub_ambient(ambient, &[]);
 
-        assert_eq!(scrubbed.get("ADI_DIR").map(String::as_str), Some(".adi-dev"));
+        assert_eq!(
+            scrubbed.get("ADI_DIR").map(String::as_str),
+            Some(".adi-dev")
+        );
         assert_eq!(scrubbed.get("ADI_FLAVOR").map(String::as_str), Some("dev"));
         assert!(
             !scrubbed.contains_key("ADI_AGENT"),

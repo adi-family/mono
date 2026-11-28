@@ -95,7 +95,10 @@ pub fn list_templates(templates_dir: &Path) -> Vec<Template> {
 pub fn seed_defaults(templates_dir: &Path) -> std::io::Result<()> {
     for (id, toml) in [
         ("plain", include_str!("../seed/plain/template.toml")),
-        ("vite-react", include_str!("../seed/vite-react/template.toml")),
+        (
+            "vite-react",
+            include_str!("../seed/vite-react/template.toml"),
+        ),
     ] {
         let dir = templates_dir.join(id);
         if dir.is_dir() {
@@ -172,8 +175,11 @@ mod tests {
         let root = scratch("broken");
         let dir = root.join("broken");
         std::fs::create_dir_all(&dir).expect("dir");
-        std::fs::write(dir.join(TEMPLATE_FILE), "label = \"No command\"\nengine = \"bash\"\n")
-            .expect("toml");
+        std::fs::write(
+            dir.join(TEMPLATE_FILE),
+            "label = \"No command\"\nengine = \"bash\"\n",
+        )
+        .expect("toml");
         assert_eq!(read_template(&dir), None);
     }
 
@@ -206,7 +212,11 @@ mod tests {
         assert!(plain.command.contains("dashboard-plain"));
         let vite = read_template(&root.join("vite-react")).expect("vite-react seeded");
         assert!(vite.command.contains("dashboard-vite-react"));
-        assert!(!vite.command.contains("ref"), "no ref/version/pin field: {}", vite.command);
+        assert!(
+            !vite.command.contains("ref"),
+            "no ref/version/pin field: {}",
+            vite.command
+        );
 
         // An operator's own edit survives a second seeding pass — the folder already exists.
         std::fs::write(
@@ -215,6 +225,11 @@ mod tests {
         )
         .expect("overwrite by hand");
         seed_defaults(&root).expect("seed again");
-        assert_eq!(read_template(&root.join("plain")).expect("still there").label, "Mine now");
+        assert_eq!(
+            read_template(&root.join("plain"))
+                .expect("still there")
+                .label,
+            "Mine now"
+        );
     }
 }

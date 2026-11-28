@@ -15,17 +15,17 @@ use crate::types::{
     AgentAsk, AgentAttachment, AgentAwait, AgentAwaits, AgentBackendOption, AgentBackendRowDto,
     AgentCapabilities, AgentChatStats, AgentChoice, AgentDto, AgentFieldOwner, AgentFormField,
     AgentFormFieldKind, AgentFormOption, AgentFormSpec, AgentGoal, AgentGoals, AgentKeys,
-    AgentNearDup, AgentPeek, AgentPrompt, AgentPrompts, AgentQuestion, AgentRef, AgentRepeat, AgentRepeatShape,
-    AgentReviewStarted, AgentRunInfo, AgentRunOutcome, AgentRunResult, AgentRuns, AgentSetupPreset,
-    AgentSetupSecret, AgentSimBlock, AgentSimField, AgentSimFieldKind, AgentSimResult,
-    AgentSimSection, AgentSimState, AgentSimTool, AgentSimTurn, AgentStep, AgentSteps, AgentToken,
-    AgentTokenSite, AgentTokenSource, AgentTokenSplit, AgentTokens, AgentToolStatus, AgentTurn,
-    AgentTurnMetrics, AgentsState, AllAgentRuns, AnswerRun, CanSpawnRuleDto, CloseGoal, GoalsOf,
-    HideRun, IgnoreAwait, PendingAsk, PendingAsks, ProjectRunLimit, PromptsOf, QueueMode, RenameRun,
-    ReplyToRun, ReviewRun, RunAgent, RunGroup, RunRef, RunState, RunSteps, SaveAgent,
-    SecretRef, SetAutoTitle, SetGoal, SetRunLimit, SetSpawnPolicy, SimulateAgent, SimulateTurn,
-    SpawnRefusalDto, SpawnRuleEdit, SpawnedByDto, StarRun, TranscriptView, TurnMarker,
-    RewindConversation, UnqueueFromRun,
+    AgentNearDup, AgentPeek, AgentPrompt, AgentPrompts, AgentQuestion, AgentRef, AgentRepeat,
+    AgentRepeatShape, AgentReviewStarted, AgentRunInfo, AgentRunOutcome, AgentRunResult, AgentRuns,
+    AgentSetupPreset, AgentSetupSecret, AgentSimBlock, AgentSimField, AgentSimFieldKind,
+    AgentSimResult, AgentSimSection, AgentSimState, AgentSimTool, AgentSimTurn, AgentStep,
+    AgentSteps, AgentToken, AgentTokenSite, AgentTokenSource, AgentTokenSplit, AgentTokens,
+    AgentToolStatus, AgentTurn, AgentTurnMetrics, AgentsState, AllAgentRuns, AnswerRun,
+    CanSpawnRuleDto, CloseGoal, GoalsOf, HideRun, IgnoreAwait, PendingAsk, PendingAsks,
+    ProjectRunLimit, PromptsOf, QueueMode, RenameRun, ReplyToRun, ReviewRun, RewindConversation,
+    RunAgent, RunGroup, RunRef, RunState, RunSteps, SaveAgent, SecretRef, SetAutoTitle, SetGoal,
+    SetRunLimit, SetSpawnPolicy, SimulateAgent, SimulateTurn, SpawnRefusalDto, SpawnRuleEdit,
+    SpawnedByDto, StarRun, TranscriptView, TurnMarker, UnqueueFromRun,
 };
 
 use super::response::{FromBody, Response, clean, error, ok_json, parse_body};
@@ -352,7 +352,13 @@ pub fn run_agent_leased(store: &Agents, body: &[u8], capability: &str) -> Respon
     // claims (§11: "This also hardens ADI-MONO-113's `spawn_policy`, which today believes
     // whatever `ADI_AGENT` says").
     let forced_launched_by = format!("{}{}", adi_agents::launcher::AGENT_PREFIX, resolved.agent);
-    run_agent_as(store, body, None, Some(resolved.user), Some(forced_launched_by))
+    run_agent_as(
+        store,
+        body,
+        None,
+        Some(resolved.user),
+        Some(forced_launched_by),
+    )
 }
 
 /// The shared body of [`run_agent`] and [`run_agent_leased`]. `forced_launched_by`, when given,
@@ -3046,7 +3052,11 @@ fn agent_form_spec() -> AgentFormSpec {
     let mut settings = txt_field(
         "settings",
         "Settings file",
-        &["harness:claude-sdk", "pty:antigravity", "process:antigravity"],
+        &[
+            "harness:claude-sdk",
+            "pty:antigravity",
+            "process:antigravity",
+        ],
         "~/.claude/settings.glm.json",
         "engine settings JSON (path or inline) — its `env` block chooses the account and models",
     );
@@ -3086,11 +3096,7 @@ fn agent_form_spec() -> AgentFormSpec {
         "allow tool calls without confirmation (--dangerously-skip-permissions)".into();
     fields.push(overridable(skip_perms));
 
-    let mut term_sandbox = chk_field(
-        "terminal_sandbox",
-        "Terminal sandbox",
-        ANTIGRAVITY_BACKENDS,
-    );
+    let mut term_sandbox = chk_field("terminal_sandbox", "Terminal sandbox", ANTIGRAVITY_BACKENDS);
     term_sandbox.hint =
         "run shell commands inside the Antigravity terminal sandbox (--sandbox)".into();
     fields.push(term_sandbox);
@@ -3344,9 +3350,12 @@ fn agent_form_spec() -> AgentFormSpec {
                    on the machine; reaches Claude engines, process:antigravity, and harness:adi"
         .into();
     fields.push(pycode);
-    let mut tscode = agent_field("tscode", "TypeScript (TsCode)", AgentFormFieldKind::Checkbox);
-    tscode.hint = "the same in TypeScript, run by bun. Either, both or neither may be on"
-        .into();
+    let mut tscode = agent_field(
+        "tscode",
+        "TypeScript (TsCode)",
+        AgentFormFieldKind::Checkbox,
+    );
+    tscode.hint = "the same in TypeScript, run by bun. Either, both or neither may be on".into();
     fields.push(tscode);
     // The mode over both: one interpreter as the agent's only tool. A capability like the two
     // above, and so not overridable per run either.
@@ -4083,7 +4092,10 @@ mod tests {
         let resaved = serde_json::json!({
             "name": "solver", "backend": "pty:claude", "created_by": "agent:reviewer",
         });
-        assert_eq!(save_agent(&store, resaved.to_string().as_bytes(), None).status, 200);
+        assert_eq!(
+            save_agent(&store, resaved.to_string().as_bytes(), None).status,
+            200
+        );
         assert_eq!(
             saved(&store).created_by,
             adi_agents::launcher::HUMAN,
@@ -4099,7 +4111,10 @@ mod tests {
         let with = serde_json::json!({
             "name": "solver", "backend": "pty:claude", "created_by": "agent:reviewer",
         });
-        assert_eq!(save_agent(&store, with.to_string().as_bytes(), None).status, 200);
+        assert_eq!(
+            save_agent(&store, with.to_string().as_bytes(), None).status,
+            200
+        );
         assert_eq!(saved(&store).created_by, "agent:reviewer");
     }
 
@@ -4235,7 +4250,10 @@ mod tests {
         let with = serde_json::json!({
             "name": "solver", "backend": "pty:claude", "bin_tools": ["sys-tasks", "sys-status"],
         });
-        assert_eq!(save_agent(&store, with.to_string().as_bytes(), None).status, 200);
+        assert_eq!(
+            save_agent(&store, with.to_string().as_bytes(), None).status,
+            200
+        );
 
         // A body from a form that never offered the checkboxes.
         assert_eq!(save_agent(&store, &body(None, None), None).status, 200);
@@ -4245,7 +4263,10 @@ mod tests {
         let none = serde_json::json!({
             "name": "solver", "backend": "pty:claude", "bin_tools": [],
         });
-        assert_eq!(save_agent(&store, none.to_string().as_bytes(), None).status, 200);
+        assert_eq!(
+            save_agent(&store, none.to_string().as_bytes(), None).status,
+            200
+        );
         assert!(saved(&store).bin_tools.is_empty());
     }
 
@@ -4259,7 +4280,10 @@ mod tests {
             "name": "solver", "backend": "pty:claude",
             "knowledge": ["global/runbooks", "agent:reviewer/memory"], "memory": true,
         });
-        assert_eq!(save_agent(&store, with.to_string().as_bytes(), None).status, 200);
+        assert_eq!(
+            save_agent(&store, with.to_string().as_bytes(), None).status,
+            200
+        );
 
         // A body from a form that never offered them.
         assert_eq!(save_agent(&store, &body(None, None), None).status, 200);
@@ -4271,7 +4295,10 @@ mod tests {
         let none = serde_json::json!({
             "name": "solver", "backend": "pty:claude", "knowledge": [], "memory": false,
         });
-        assert_eq!(save_agent(&store, none.to_string().as_bytes(), None).status, 200);
+        assert_eq!(
+            save_agent(&store, none.to_string().as_bytes(), None).status,
+            200
+        );
         let m = saved(&store);
         assert!(m.knowledge.is_empty());
         assert!(!m.memory);
@@ -4289,7 +4316,10 @@ mod tests {
             "name": "caller", "backend": "pty:claude",
             "arguments": { "model": "opus" }, "tags": ["prod"],
         });
-        assert_eq!(save_agent(&store, with.to_string().as_bytes(), None).status, 200);
+        assert_eq!(
+            save_agent(&store, with.to_string().as_bytes(), None).status,
+            200
+        );
 
         let req = serde_json::json!({ "agent": "caller", "rule": "b", "add": true });
         let resp = set_spawn_rule(&store, req.to_string().as_bytes());
@@ -4297,7 +4327,10 @@ mod tests {
 
         let m = store.get("caller").expect("get").expect("agent").manifest;
         assert_eq!(m.can_spawn, ["b"]);
-        assert_eq!(m.arguments.get("model"), Some(&serde_json::Value::from("opus")));
+        assert_eq!(
+            m.arguments.get("model"),
+            Some(&serde_json::Value::from("opus"))
+        );
         assert_eq!(m.tags, ["prod"]);
     }
 
@@ -4308,12 +4341,23 @@ mod tests {
         let with = serde_json::json!({
             "name": "caller", "backend": "pty:claude", "can_spawn": ["dr-*", "b"],
         });
-        assert_eq!(save_agent(&store, with.to_string().as_bytes(), None).status, 200);
+        assert_eq!(
+            save_agent(&store, with.to_string().as_bytes(), None).status,
+            200
+        );
 
         let req = serde_json::json!({ "agent": "caller", "rule": "b", "add": false });
-        assert_eq!(set_spawn_rule(&store, req.to_string().as_bytes()).status, 200);
         assert_eq!(
-            store.get("caller").expect("get").expect("agent").manifest.can_spawn,
+            set_spawn_rule(&store, req.to_string().as_bytes()).status,
+            200
+        );
+        assert_eq!(
+            store
+                .get("caller")
+                .expect("get")
+                .expect("agent")
+                .manifest
+                .can_spawn,
             ["dr-*"]
         );
     }
@@ -4327,7 +4371,10 @@ mod tests {
         let with = serde_json::json!({
             "name": "caller", "backend": "pty:claude", "can_spawn": ["dr-*", "solo"],
         });
-        assert_eq!(save_agent(&store, with.to_string().as_bytes(), None).status, 200);
+        assert_eq!(
+            save_agent(&store, with.to_string().as_bytes(), None).status,
+            200
+        );
         for name in ["dr-1", "dr-2", "solo", "unrelated"] {
             assert_eq!(
                 save_agent(
@@ -4343,12 +4390,22 @@ mod tests {
         }
 
         let state = agents_state(&store).expect("state");
-        let caller = state.agents.iter().find(|a| a.name == "caller").expect("caller");
+        let caller = state
+            .agents
+            .iter()
+            .find(|a| a.name == "caller")
+            .expect("caller");
         assert_eq!(
             caller.can_spawn,
             vec![
-                CanSpawnRuleDto { rule: "dr-*".into(), matches: 2 },
-                CanSpawnRuleDto { rule: "solo".into(), matches: 1 },
+                CanSpawnRuleDto {
+                    rule: "dr-*".into(),
+                    matches: 2
+                },
+                CanSpawnRuleDto {
+                    rule: "solo".into(),
+                    matches: 1
+                },
             ]
         );
     }
@@ -4363,7 +4420,10 @@ mod tests {
             ("d", serde_json::json!(["targ*"])),
         ] {
             let with = serde_json::json!({ "name": name, "backend": "pty:claude", "can_spawn": can_spawn });
-            assert_eq!(save_agent(&store, with.to_string().as_bytes(), None).status, 200);
+            assert_eq!(
+                save_agent(&store, with.to_string().as_bytes(), None).status,
+                200
+            );
         }
         assert_eq!(
             save_agent(
@@ -4378,14 +4438,26 @@ mod tests {
         );
 
         let state = agents_state(&store).expect("state");
-        let target = state.agents.iter().find(|a| a.name == "target").expect("target");
+        let target = state
+            .agents
+            .iter()
+            .find(|a| a.name == "target")
+            .expect("target");
         let mut by = target.spawned_by.clone();
         by.sort_by(|a, b| a.caller.cmp(&b.caller));
         assert_eq!(
             by,
             vec![
-                SpawnedByDto { caller: "a".into(), via: "target".into(), exact: true },
-                SpawnedByDto { caller: "d".into(), via: "targ*".into(), exact: false },
+                SpawnedByDto {
+                    caller: "a".into(),
+                    via: "target".into(),
+                    exact: true
+                },
+                SpawnedByDto {
+                    caller: "d".into(),
+                    via: "targ*".into(),
+                    exact: false
+                },
             ]
         );
     }
@@ -4394,14 +4466,20 @@ mod tests {
     fn set_spawn_rule_rejects_a_blank_rule() {
         let store = scratch("spawn-rule-blank");
         let req = serde_json::json!({ "agent": "caller", "rule": "  ", "add": true });
-        assert_eq!(set_spawn_rule(&store, req.to_string().as_bytes()).status, 400);
+        assert_eq!(
+            set_spawn_rule(&store, req.to_string().as_bytes()).status,
+            400
+        );
     }
 
     #[test]
     fn set_spawn_rule_404s_on_an_unknown_agent() {
         let store = scratch("spawn-rule-missing");
         let req = serde_json::json!({ "agent": "ghost", "rule": "b", "add": true });
-        assert_eq!(set_spawn_rule(&store, req.to_string().as_bytes()).status, 404);
+        assert_eq!(
+            set_spawn_rule(&store, req.to_string().as_bytes()).status,
+            404
+        );
     }
 
     /// `GET /api/agents` state carries the "would have been refused" list the panel's Allow button
@@ -4416,7 +4494,12 @@ mod tests {
             save_agent(&store, br#"{"name":"caller","backend":"pty:claude"}"#, None).status,
             200
         );
-        assert!(agents_state(&store).expect("state").spawn_refusals.is_empty());
+        assert!(
+            agents_state(&store)
+                .expect("state")
+                .spawn_refusals
+                .is_empty()
+        );
     }
 
     /// `unattended` is omit-to-keep for the same reason `path` and `env` are: only the full agent
@@ -4428,7 +4511,10 @@ mod tests {
         let on = serde_json::json!({
             "name": "solver", "backend": "pty:claude", "unattended": true,
         });
-        assert_eq!(save_agent(&store, on.to_string().as_bytes(), None).status, 200);
+        assert_eq!(
+            save_agent(&store, on.to_string().as_bytes(), None).status,
+            200
+        );
         assert!(saved(&store).unattended);
 
         // A body from a form that never offered it.
@@ -4439,7 +4525,10 @@ mod tests {
         let off = serde_json::json!({
             "name": "solver", "backend": "pty:claude", "unattended": false,
         });
-        assert_eq!(save_agent(&store, off.to_string().as_bytes(), None).status, 200);
+        assert_eq!(
+            save_agent(&store, off.to_string().as_bytes(), None).status,
+            200
+        );
         assert!(!saved(&store).unattended);
     }
 
@@ -4454,13 +4543,24 @@ mod tests {
             for (key, value) in extra.as_object().expect("an object") {
                 request[key] = value.clone();
             }
-            assert_eq!(save_agent(&store, request.to_string().as_bytes(), None).status, 200);
+            assert_eq!(
+                save_agent(&store, request.to_string().as_bytes(), None).status,
+                200
+            );
             let now = saved(&store);
             (now.pycode, now.tscode)
         };
 
-        assert_eq!(save(serde_json::json!({})), (false, false), "off until somebody says so");
-        assert_eq!(save(serde_json::json!({ "tscode": true })), (false, true), "one without the other");
+        assert_eq!(
+            save(serde_json::json!({})),
+            (false, false),
+            "off until somebody says so"
+        );
+        assert_eq!(
+            save(serde_json::json!({ "tscode": true })),
+            (false, true),
+            "one without the other"
+        );
         assert_eq!(
             save(serde_json::json!({ "pycode": true })),
             (true, true),
@@ -4479,10 +4579,19 @@ mod tests {
 
         // …and the editor is told what it has, so the boxes it draws are the truth.
         let state: AgentsState = serde_json::from_str(&agents(&store).body).expect("json");
-        let dto = state.agents.iter().find(|a| a.name == "solver").expect("listed");
+        let dto = state
+            .agents
+            .iter()
+            .find(|a| a.name == "solver")
+            .expect("listed");
         assert_eq!((dto.pycode, dto.tscode), (false, true));
         for name in ["pycode", "tscode"] {
-            let field = state.form.fields.iter().find(|f| f.name == name).expect("a box to tick");
+            let field = state
+                .form
+                .fields
+                .iter()
+                .find(|f| f.name == name)
+                .expect("a box to tick");
             assert_eq!(field.kind, AgentFormFieldKind::Checkbox);
             assert!(!field.run_override, "a run cannot grant itself a tool");
         }
@@ -4506,7 +4615,11 @@ mod tests {
             saved(&store).code_only
         };
 
-        assert_eq!(save(serde_json::json!({})), None, "off until somebody says so");
+        assert_eq!(
+            save(serde_json::json!({})),
+            None,
+            "off until somebody says so"
+        );
         assert_eq!(
             save(serde_json::json!({ "code_only": "typescript" })),
             Some(CodeOnly::TypeScript)
@@ -4516,26 +4629,57 @@ mod tests {
             Some(CodeOnly::TypeScript),
             "a save about something else keeps it"
         );
-        assert_eq!(save(serde_json::json!({ "code_only": "python" })), Some(CodeOnly::Python));
+        assert_eq!(
+            save(serde_json::json!({ "code_only": "python" })),
+            Some(CodeOnly::Python)
+        );
 
         let refused = request(serde_json::json!({ "code_only": "ruby" }));
         assert_eq!(refused.status, 400, "{}", refused.body);
-        assert!(refused.body.contains("typescript"), "it says what it could have been: {}", refused.body);
-        assert_eq!(saved(&store).code_only, Some(CodeOnly::Python), "and nothing was written");
+        assert!(
+            refused.body.contains("typescript"),
+            "it says what it could have been: {}",
+            refused.body
+        );
+        assert_eq!(
+            saved(&store).code_only,
+            Some(CodeOnly::Python),
+            "and nothing was written"
+        );
 
         // The editor is told what the agent has, and offers the choice as one — not as a box.
         let state: AgentsState = serde_json::from_str(&agents(&store).body).expect("json");
-        let dto = state.agents.iter().find(|a| a.name == "solver").expect("listed");
+        let dto = state
+            .agents
+            .iter()
+            .find(|a| a.name == "solver")
+            .expect("listed");
         assert_eq!(dto.code_only.as_deref(), Some("python"));
-        let field = state.form.fields.iter().find(|f| f.name == "code_only").expect("a field");
+        let field = state
+            .form
+            .fields
+            .iter()
+            .find(|f| f.name == "code_only")
+            .expect("a field");
         assert_eq!(field.kind, AgentFormFieldKind::Select);
         let values: Vec<&str> = field.options.iter().map(|o| o.value.as_str()).collect();
         assert_eq!(values, ["", "typescript", "python"]);
-        assert!(!field.run_override, "a run cannot take its own tools away or hand them back");
+        assert!(
+            !field.run_override,
+            "a run cannot take its own tools away or hand them back"
+        );
 
-        assert_eq!(save(serde_json::json!({ "code_only": "" })), None, "empty is off, said out loud");
+        assert_eq!(
+            save(serde_json::json!({ "code_only": "" })),
+            None,
+            "empty is off, said out loud"
+        );
         let state: AgentsState = serde_json::from_str(&agents(&store).body).expect("json");
-        let dto = state.agents.iter().find(|a| a.name == "solver").expect("listed");
+        let dto = state
+            .agents
+            .iter()
+            .find(|a| a.name == "solver")
+            .expect("listed");
         assert_eq!(dto.code_only, None);
     }
 
@@ -4551,7 +4695,10 @@ mod tests {
             "tags": ["bugbounty", "v2"], "starred": true, "project": "bugbounty",
             "secrets": [{ "project": null, "name": "VIRUSTOTAL_API" }],
         });
-        assert_eq!(save_agent(&store, full.to_string().as_bytes(), None).status, 200);
+        assert_eq!(
+            save_agent(&store, full.to_string().as_bytes(), None).status,
+            200
+        );
 
         // A body from a form that never offered any of them — the meta setup's shape.
         let partial = serde_json::json!({ "name": "solver", "backend": "pty:claude" });
@@ -4883,7 +5030,10 @@ mod tests {
             "path": ["  ", "~/node22/bin", ""],
             "env": { "  ": "ignored", "NODE_ENV": "dev" },
         });
-        assert_eq!(save_agent(&store, body.to_string().as_bytes(), None).status, 200);
+        assert_eq!(
+            save_agent(&store, body.to_string().as_bytes(), None).status,
+            200
+        );
 
         let m = saved(&store);
         assert_eq!(m.path, vec!["~/node22/bin".to_string()]);
@@ -5265,7 +5415,10 @@ mod tests {
         let store = scratch("page");
         for name in ["solver", "looper"] {
             let save = serde_json::json!({ "name": name, "backend": "harness:adi" });
-            assert_eq!(save_agent(&store, save.to_string().as_bytes(), None).status, 200);
+            assert_eq!(
+                save_agent(&store, save.to_string().as_bytes(), None).status,
+                200
+            );
         }
         let sessions =
             adi_agents::store::SessionStore::new(store.config().module("sessions").dir());
@@ -5383,7 +5536,11 @@ mod tests {
         let no_star = std::collections::HashSet::new();
 
         let as_igor = filter_by_run(agents.clone(), RunFilter::Me, &no_star, Some("igor"));
-        assert_eq!(kept(&as_igor), ["solver-500"], "only the run named for the asker");
+        assert_eq!(
+            kept(&as_igor),
+            ["solver-500"],
+            "only the run named for the asker"
+        );
 
         let as_nobody = filter_by_run(agents, RunFilter::Me, &no_star, None);
         assert_eq!(

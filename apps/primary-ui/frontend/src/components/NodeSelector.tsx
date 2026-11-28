@@ -12,7 +12,8 @@ import { useMarketplaceSource } from "../lib/marketplace-source";
 import { useSettingsSource } from "../lib/settings-source";
 import { useIsMobile } from "../lib/use-is-mobile";
 
-const menuItemClass = "focus:bg-accent hover:bg-accent flex min-h-8 w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs outline-none disabled:opacity-50 disabled:hover:bg-transparent";
+const menuItemClass =
+  "focus:bg-accent hover:bg-accent flex min-h-8 w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs outline-none disabled:opacity-50 disabled:hover:bg-transparent";
 
 /** What the machine choice drives on the current page. The chat list merges sessions from any
  * number of machines, and Home lists the apps of that same set; a marketplace, with its sources
@@ -33,7 +34,9 @@ function useSelection(): NodeSelection {
   const [settingsSource, setSettingsSource] = useSettingsSource();
   if (pathname === "/settings" || pathname.startsWith("/settings/")) {
     return {
-      heading: "Settings of", label: "Settings machine", multiple: false,
+      heading: "Settings of",
+      label: "Settings machine",
+      multiple: false,
       chosen: [settingsSource],
       isChosen: (source) => source === settingsSource,
       choose: setSettingsSource,
@@ -41,28 +44,44 @@ function useSelection(): NodeSelection {
   }
   if (pathname === "/marketplace" || pathname.startsWith("/marketplace/")) {
     return {
-      heading: "Marketplace on", label: "Marketplace machine", multiple: false,
+      heading: "Marketplace on",
+      label: "Marketplace machine",
+      multiple: false,
       chosen: [marketplaceSource],
       isChosen: (source) => source === marketplaceSource,
       choose: setMarketplaceSource,
     };
   }
   return {
-    heading: pathname === "/" ? "Apps and sessions from" : "Sessions from", label: "Conversation sources", multiple: true,
+    heading: pathname === "/" ? "Apps and sessions from" : "Sessions from",
+    label: "Conversation sources",
+    multiple: true,
     chosen: selectedSources(sources),
     isChosen: (source) => hasSource(sources, source),
     choose: toggleSource,
   };
 }
 
-function NodeSelectorMenu({ anchor, selection, onClose, owner }: { anchor: RefObject<HTMLButtonElement | null>; selection: NodeSelection; onClose: (restoreFocus?: boolean) => void; owner?: string }) {
+function NodeSelectorMenu({
+  anchor,
+  selection,
+  onClose,
+  owner,
+}: {
+  anchor: RefObject<HTMLButtonElement | null>;
+  selection: NodeSelection;
+  onClose: (restoreFocus?: boolean) => void;
+  owner?: string;
+}) {
   const { fleetNodes, fleetLoading, fleetError } = useChatSelection();
   const element = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ left: 0, top: 0 });
   const role = selection.multiple ? "menuitemcheckbox" : "menuitemradio";
   const onlyLocal = selection.multiple && selection.isChosen() && selection.chosen.length === 1;
   // Chosen machines remain listed, and removable, if the fleet is offline or they were unpaired.
-  const stored = selection.chosen.filter((source): source is string => !!source && !fleetNodes.some((node) => node.node === source));
+  const stored = selection.chosen.filter(
+    (source): source is string => !!source && !fleetNodes.some((node) => node.node === source),
+  );
   const pick = (source?: string) => {
     selection.choose(source);
     if (!selection.multiple) onClose();
@@ -72,16 +91,25 @@ function NodeSelectorMenu({ anchor, selection, onClose, owner }: { anchor: RefOb
     const bounds = anchor.current?.getBoundingClientRect();
     if (bounds) {
       const height = element.current?.getBoundingClientRect().height ?? 0;
-      setPosition({ left: Math.max(8, Math.min(bounds.left, window.innerWidth - 248)), top: Math.max(8, Math.min(bounds.bottom + 5, window.innerHeight - height - 8)) });
+      setPosition({
+        left: Math.max(8, Math.min(bounds.left, window.innerWidth - 248)),
+        top: Math.max(8, Math.min(bounds.bottom + 5, window.innerHeight - height - 8)),
+      });
     }
-    const selected = element.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]:not(:disabled)')
-      ?? element.current?.querySelector<HTMLButtonElement>('[role^="menuitem"]:not(:disabled)');
+    const selected =
+      element.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]:not(:disabled)') ??
+      element.current?.querySelector<HTMLButtonElement>('[role^="menuitem"]:not(:disabled)');
     selected?.focus();
   }, [anchor]);
 
   useEffect(() => {
     const outside = (event: PointerEvent) => {
-      if (event.target instanceof Node && !element.current?.contains(event.target) && !anchor.current?.contains(event.target)) onClose(false);
+      if (
+        event.target instanceof Node &&
+        !element.current?.contains(event.target) &&
+        !anchor.current?.contains(event.target)
+      )
+        onClose(false);
     };
     const reposition = () => onClose(false);
     document.addEventListener("pointerdown", outside);
@@ -108,39 +136,97 @@ function NodeSelectorMenu({ anchor, selection, onClose, owner }: { anchor: RefOb
           onClose();
         } else if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
           event.preventDefault();
-          const items = [...(element.current?.querySelectorAll<HTMLElement>('[role^="menuitem"]:not(:disabled)') ?? [])];
+          const items = [
+            ...(element.current?.querySelectorAll<HTMLElement>(
+              '[role^="menuitem"]:not(:disabled)',
+            ) ?? []),
+          ];
           const current = items.indexOf(document.activeElement as HTMLElement);
-          const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : (current + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+          const next =
+            event.key === "Home"
+              ? 0
+              : event.key === "End"
+                ? items.length - 1
+                : (current + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
           items[next]?.focus();
         } else if (event.key === "Tab") onClose();
       }}
     >
-      <p className="text-muted-foreground px-2 py-1.5 text-[11px] font-medium">{selection.heading}</p>
-      <button type="button" role={role} aria-checked={selection.isChosen()} title={onlyLocal ? "Keep at least one source selected." : undefined} className={menuItemClass} onClick={() => pick()}>
-        <Check aria-hidden="true" className={cn("size-3.5 shrink-0", !selection.isChosen() && "invisible")} />
+      <p className="text-muted-foreground px-2 py-1.5 text-[11px] font-medium">
+        {selection.heading}
+      </p>
+      <button
+        type="button"
+        role={role}
+        aria-checked={selection.isChosen()}
+        title={onlyLocal ? "Keep at least one source selected." : undefined}
+        className={menuItemClass}
+        onClick={() => pick()}
+      >
+        <Check
+          aria-hidden="true"
+          className={cn("size-3.5 shrink-0", !selection.isChosen() && "invisible")}
+        />
         This machine
       </button>
       {fleetNodes.map((node) => {
         const selected = selection.isChosen(node.node);
         return (
-          <button key={node.node} type="button" role={role} aria-checked={selected} disabled={node.locked && !selected} title={node.locked && !selected ? "Unlock this source on the Fleet page first." : undefined} className={menuItemClass} onClick={() => pick(node.node)}>
-            <Check aria-hidden="true" className={cn("size-3.5 shrink-0", !selected && "invisible")} />
+          <button
+            key={node.node}
+            type="button"
+            role={role}
+            aria-checked={selected}
+            disabled={node.locked && !selected}
+            title={
+              node.locked && !selected ? "Unlock this source on the Fleet page first." : undefined
+            }
+            className={menuItemClass}
+            onClick={() => pick(node.node)}
+          >
+            <Check
+              aria-hidden="true"
+              className={cn("size-3.5 shrink-0", !selected && "invisible")}
+            />
             <span className="min-w-0 flex-1 truncate">{node.node}</span>
-            {node.locked && <LockKeyhole aria-hidden="true" className="text-muted-foreground size-3 shrink-0" />}
+            {node.locked && (
+              <LockKeyhole aria-hidden="true" className="text-muted-foreground size-3 shrink-0" />
+            )}
           </button>
         );
       })}
       {stored.map((source) => (
-        <button key={source} type="button" role={role} aria-checked="true" className={menuItemClass} onClick={() => pick(source)}>
+        <button
+          key={source}
+          type="button"
+          role={role}
+          aria-checked="true"
+          className={menuItemClass}
+          onClick={() => pick(source)}
+        >
           <Check aria-hidden="true" className="size-3.5 shrink-0" />
           <span className="min-w-0 truncate">{source}</span>
         </button>
       ))}
-      {fleetLoading && <p role="status" className="text-muted-foreground px-2 py-2 text-xs">Loading sources…</p>}
-      {fleetError && <p role="alert" className="text-muted-foreground px-2 py-2 text-xs leading-relaxed">{fleetError}</p>}
-      {!fleetLoading && !fleetError && fleetNodes.length === 0 && <p className="text-muted-foreground px-2 py-2 text-xs leading-relaxed">No paired nodes yet.</p>}
+      {fleetLoading && (
+        <p role="status" className="text-muted-foreground px-2 py-2 text-xs">
+          Loading sources…
+        </p>
+      )}
+      {fleetError && (
+        <p role="alert" className="text-muted-foreground px-2 py-2 text-xs leading-relaxed">
+          {fleetError}
+        </p>
+      )}
+      {!fleetLoading && !fleetError && fleetNodes.length === 0 && (
+        <p className="text-muted-foreground px-2 py-2 text-xs leading-relaxed">
+          No paired nodes yet.
+        </p>
+      )}
       <div role="separator" className="bg-border my-1 h-px" />
-      <a role="menuitem" href={appHref("/extended/settings/fleet")} className={menuItemClass}>Manage sources in Fleet</a>
+      <a role="menuitem" href={appHref("/extended/settings/fleet")} className={menuItemClass}>
+        Manage sources in Fleet
+      </a>
     </div>,
     document.body,
   );
@@ -151,7 +237,17 @@ function NodeSelectorMenu({ anchor, selection, onClose, owner }: { anchor: RefOb
  * browsed. The topbar is hidden below the mobile breakpoint on the chat page (see index.css), so
  * `hideOnMobile` drops that copy there and `mobileOnly` renders the same control inside the chat
  * sidebar's own header. */
-export function NodeSelector({ mobileOnly = false, hideOnMobile = false, selection: override, owner }: { mobileOnly?: boolean; hideOnMobile?: boolean; selection?: NodeSelection; owner?: string }) {
+export function NodeSelector({
+  mobileOnly = false,
+  hideOnMobile = false,
+  selection: override,
+  owner,
+}: {
+  mobileOnly?: boolean;
+  hideOnMobile?: boolean;
+  selection?: NodeSelection;
+  owner?: string;
+}) {
   const isMobile = useIsMobile();
   const pageSelection = useSelection();
   const selection = override ?? pageSelection;
@@ -162,14 +258,28 @@ export function NodeSelector({ mobileOnly = false, hideOnMobile = false, selecti
   const names = selection.chosen.map(sourceName);
   const count = names.length;
   const shared = {
-    ref: anchor, "data-slot": "node-selector", "aria-label": selection.label, title: `${selection.heading} ${names.join(", ")}`,
-    "aria-haspopup": "menu" as const, "aria-expanded": open, onClick: () => setOpen((current) => !current),
+    ref: anchor,
+    "data-slot": "node-selector",
+    "aria-label": selection.label,
+    title: `${selection.heading} ${names.join(", ")}`,
+    "aria-haspopup": "menu" as const,
+    "aria-expanded": open,
+    onClick: () => setOpen((current) => !current),
   };
 
   return (
     <>
       {mobileOnly ? (
-        <Button {...shared} variant="ghost" size="icon" className={cn("size-7 shrink-0", count > 1 && "w-auto min-w-7 gap-1 px-1.5", count > 1 || !selection.isChosen() ? "text-foreground" : "text-muted-foreground")}>
+        <Button
+          {...shared}
+          variant="ghost"
+          size="icon"
+          className={cn(
+            "size-7 shrink-0",
+            count > 1 && "w-auto min-w-7 gap-1 px-1.5",
+            count > 1 || !selection.isChosen() ? "text-foreground" : "text-muted-foreground",
+          )}
+        >
           <Network aria-hidden="true" className="size-3.5" />
           {count > 1 && <span className="text-[10px]">{count}</span>}
         </Button>
@@ -179,10 +289,17 @@ export function NodeSelector({ mobileOnly = false, hideOnMobile = false, selecti
           <span className="max-w-32 truncate">{count === 1 ? names[0] : `${count} machines`}</span>
         </Button>
       )}
-      {open && <NodeSelectorMenu anchor={anchor} selection={selection} owner={owner} onClose={(restoreFocus = true) => {
-        if (restoreFocus) anchor.current?.focus();
-        setOpen(false);
-      }}/>}
+      {open && (
+        <NodeSelectorMenu
+          anchor={anchor}
+          selection={selection}
+          owner={owner}
+          onClose={(restoreFocus = true) => {
+            if (restoreFocus) anchor.current?.focus();
+            setOpen(false);
+          }}
+        />
+      )}
     </>
   );
 }

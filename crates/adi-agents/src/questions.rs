@@ -64,12 +64,20 @@ pub fn tick(agents: &Agents) -> Vec<Settled> {
         // through `resolve_question_with_outbox` rather than `agents.with_event` — see
         // `SessionStore::ask_with_outbox`'s doc comment for why.
         let claimed = store
-            .resolve_question_with_outbox(&ask.agent, &ask.conv, Some(&ask.id), &default, |settled| {
-                settled
-                    .map(|_| Agents::answered_event(&ask, AnsweredBy::Default).to_record())
-                    .transpose()
-                    .map_err(|e| crate::Error::Session(format!("couldn't build an event record: {e}")))
-            })
+            .resolve_question_with_outbox(
+                &ask.agent,
+                &ask.conv,
+                Some(&ask.id),
+                &default,
+                |settled| {
+                    settled
+                        .map(|_| Agents::answered_event(&ask, AnsweredBy::Default).to_record())
+                        .transpose()
+                        .map_err(|e| {
+                            crate::Error::Session(format!("couldn't build an event record: {e}"))
+                        })
+                },
+            )
             .map(|settled| settled.is_some())
             .unwrap_or(false);
         let _ = agents.sessions().relay_pending_events(agents.config());

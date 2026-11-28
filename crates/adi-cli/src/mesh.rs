@@ -401,7 +401,10 @@ fn invite_spec(
         label_map.insert(key.trim().to_string(), value.trim().to_string());
     }
     let role = role
-        .map(|r| r.parse::<adi_mesh::fleet::Role>().map_err(|e| e.to_string()))
+        .map(|r| {
+            r.parse::<adi_mesh::fleet::Role>()
+                .map_err(|e| e.to_string())
+        })
         .transpose()?;
     Ok(join::InviteSpec {
         petname,
@@ -456,7 +459,9 @@ fn print_joined(joined: &Joined, grant_back: bool) {
     println!("  viewer key: {}", joined.viewer_key);
     println!("  it may reach: {}", grants_line(&joined.grants));
     if grant_back {
-        println!("  and the viewer may reach this machine's `http:app` back (the default, mutual pairing).");
+        println!(
+            "  and the viewer may reach this machine's `http:app` back (the default, mutual pairing)."
+        );
     } else {
         println!(
             "  one-way join: the viewer is filed here, but may reach nothing on this machine."
@@ -785,7 +790,10 @@ fn share(
     json: bool,
 ) -> Result<(), String> {
     let lease_length = match &lease {
-        Some(raw) => Some(raw.parse::<adi_mesh::connections::LeaseLength>().map_err(|e| e.to_string())?),
+        Some(raw) => Some(
+            raw.parse::<adi_mesh::connections::LeaseLength>()
+                .map_err(|e| e.to_string())?,
+        ),
         None => None,
     };
     let mut connections = adi_mesh::connections::Connections::load().map_err(|e| e.to_string())?;
@@ -805,7 +813,11 @@ fn share(
     });
     connections.save().map_err(|e| e.to_string())?;
 
-    let settings = connections.get(server).expect("just edited").secrets.clone();
+    let settings = connections
+        .get(server)
+        .expect("just edited")
+        .secrets
+        .clone();
     if json {
         print_json(&serde_json::json!({
             "server": server,
@@ -829,10 +841,13 @@ fn share(
 /// concept ADI-MONO-178's memory asked P2.5 for, short of a real server-issued token: a user
 /// still authenticates with their credential, but only once per CLI invocation rather than once
 /// per HTTP call.
-fn open_session(server: &str) -> Result<(adi_mesh::node_api::GatewayClient, String, String), String> {
+fn open_session(
+    server: &str,
+) -> Result<(adi_mesh::node_api::GatewayClient, String, String), String> {
     let username = secrets::node_username(server)?;
     let password = secrets::read_password(server)?;
-    let client = adi_mesh::node_api::gateway_client(secrets::NODE_TIMEOUT).map_err(|e| e.to_string())?;
+    let client =
+        adi_mesh::node_api::gateway_client(secrets::NODE_TIMEOUT).map_err(|e| e.to_string())?;
     Ok((client, username, password))
 }
 
@@ -864,8 +879,12 @@ fn unlock(server: &str, json: bool) -> Result<(), String> {
 
     let session = open_session(server)?;
     let info = in_session(&session, server, "GET", "/api/leases/session", None)?;
-    let user = info["user"].as_str().ok_or_else(|| format!("{server}: no user scope to unlock"))?;
-    let epoch = info["epoch"].as_str().ok_or_else(|| format!("{server}: malformed session answer"))?;
+    let user = info["user"]
+        .as_str()
+        .ok_or_else(|| format!("{server}: no user scope to unlock"))?;
+    let epoch = info["epoch"]
+        .as_str()
+        .ok_or_else(|| format!("{server}: malformed session answer"))?;
     let session_public = decode_b64_32(info["public_key"].as_str().unwrap_or_default())
         .map_err(|()| format!("{server}: malformed session public key"))?;
 
@@ -877,7 +896,9 @@ fn unlock(server: &str, json: bool) -> Result<(), String> {
 
     let mut sealed = Vec::new();
     for entry in mine["names"].as_array().cloned().unwrap_or_default() {
-        let Some(name) = entry["name"].as_str() else { continue };
+        let Some(name) = entry["name"].as_str() else {
+            continue;
+        };
         if !shared.iter().any(|n| n == name) {
             continue;
         }
@@ -931,9 +952,17 @@ fn unlock(server: &str, json: bool) -> Result<(), String> {
     } else {
         let names = answer["names"]
             .as_array()
-            .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(", "))
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
             .unwrap_or_default();
-        println!("{server}: unlocked [{names}], lease {}", answer["lease"].as_str().unwrap_or("?"));
+        println!(
+            "{server}: unlocked [{names}], lease {}",
+            answer["lease"].as_str().unwrap_or("?")
+        );
     }
     Ok(())
 }
@@ -1148,7 +1177,10 @@ mod tests {
             spec.grants,
             vec!["http:app".parse().unwrap(), "http:hub".parse().unwrap()]
         );
-        assert_eq!(spec.labels.get("principal").map(String::as_str), Some("p42"));
+        assert_eq!(
+            spec.labels.get("principal").map(String::as_str),
+            Some("p42")
+        );
 
         assert!(invite_spec(None, None, vec!["ftp:*".to_string()], vec![], None).is_err());
         assert!(invite_spec(None, None, vec![], vec!["no-equals-sign".to_string()], None).is_err());
@@ -1290,7 +1322,10 @@ mod tests {
                 assert_eq!(server, "box-b");
                 assert_eq!(
                     names,
-                    vec!["CLAUDE_CODE_OAUTH_TOKEN".to_string(), "ANTHROPIC_API_KEY".to_string()]
+                    vec![
+                        "CLAUDE_CODE_OAUTH_TOKEN".to_string(),
+                        "ANTHROPIC_API_KEY".to_string()
+                    ]
                 );
                 assert_eq!(lease, Some("24h".to_string()));
                 assert!(auto_unlock && !no_auto_unlock && !json);

@@ -67,12 +67,14 @@ export function table(headers: string[], rows: string[][]): string {
  * was for.
  */
 export function blocks(...parts: (string | null | undefined)[]): string {
-  return parts
-    .filter((p): p is string => Boolean(p?.trim()))
-    // Leading blank lines go, leading *spaces* stay: a block nested inside a list item carries its
-    // indentation on its first line, and trimming it would unnest the block.
-    .map((p) => p.replace(/^\n+/, "").replace(/\s+$/, ""))
-    .join("\n\n");
+  return (
+    parts
+      .filter((p): p is string => Boolean(p?.trim()))
+      // Leading blank lines go, leading *spaces* stay: a block nested inside a list item carries its
+      // indentation on its first line, and trimming it would unnest the block.
+      .map((p) => p.replace(/^\n+/, "").replace(/\s+$/, ""))
+      .join("\n\n")
+  );
 }
 
 /** The header that tells a reader — and GitHub — that editing this file by hand is pointless. */

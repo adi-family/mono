@@ -72,7 +72,10 @@ impl Arrangement {
             .into_iter()
             .enumerate()
             .map(|(natural, item)| {
-                let pos = at.get(item.0.as_str()).copied().unwrap_or(self.order.len() + natural);
+                let pos = at
+                    .get(item.0.as_str())
+                    .copied()
+                    .unwrap_or(self.order.len() + natural);
                 (pos, item)
             })
             .collect();

@@ -201,7 +201,10 @@ fn fire(peek: &AgentPeek) {
             "Paused until a wake fires.".to_string(),
         )
     } else {
-        (format!("{who} stopped"), "The run has finished.".to_string())
+        (
+            format!("{who} stopped"),
+            "The run has finished.".to_string(),
+        )
     };
     chime();
     notify(&title, &body);

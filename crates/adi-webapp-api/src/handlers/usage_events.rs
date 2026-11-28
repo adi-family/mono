@@ -53,7 +53,11 @@ pub(super) fn marketplace_installed(cfg: &Config, marketplace: &str, slug: &str,
     publish(
         cfg,
         "adi.marketplace.installed",
-        &MarketplaceInstalled { marketplace, slug, kind },
+        &MarketplaceInstalled {
+            marketplace,
+            slug,
+            kind,
+        },
     );
 }
 

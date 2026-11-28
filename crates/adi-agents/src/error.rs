@@ -36,7 +36,10 @@ pub enum Error {
     /// only when `spawn_policy = "enforce"` (see [`RunLimits::spawn_policy`](crate::RunLimits)).
     /// Maps to HTTP 403. Unlike [`TooManyRunning`](Self::TooManyRunning), `force` never bypasses
     /// this: it overrides a load throttle, not who a caller is allowed to be.
-    SpawnNotAllowed { caller: String, target: String },
+    SpawnNotAllowed {
+        caller: String,
+        target: String,
+    },
 }
 
 impl fmt::Display for Error {

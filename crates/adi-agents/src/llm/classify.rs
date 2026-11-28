@@ -157,9 +157,7 @@ fn evidence_line(text: &str, at: usize) -> String {
     const MAX: usize = 240;
     let at = at.min(text.len());
     let start = text[..at].rfind('\n').map_or(0, |index| index + 1);
-    let end = text[at..]
-        .find('\n')
-        .map_or(text.len(), |index| at + index);
+    let end = text[at..].find('\n').map_or(text.len(), |index| at + index);
     let line = text[start..end].trim();
     let line = if line.is_empty() { text.trim() } else { line };
     if line.chars().count() > MAX {
@@ -307,7 +305,13 @@ mod tests {
             ..rule("(?i)rate limit", LimitClass::Rate)
         };
         assert_eq!(
-            classify("rate limit, try again in 9 hours", &[header_rule], Some(30), 0).hold_for,
+            classify(
+                "rate limit, try again in 9 hours",
+                &[header_rule],
+                Some(30),
+                0
+            )
+            .hold_for,
             30
         );
 
@@ -317,7 +321,13 @@ mod tests {
             ..rule("(?i)rate limit", LimitClass::Rate)
         };
         assert_eq!(
-            classify("rate limit, try again in 9 hours", &[fixed_rule], Some(30), 0).hold_for,
+            classify(
+                "rate limit, try again in 9 hours",
+                &[fixed_rule],
+                Some(30),
+                0
+            )
+            .hold_for,
             1_800
         );
     }
@@ -336,14 +346,21 @@ mod tests {
     fn the_evidence_is_the_line_the_match_fell_on() {
         let text = "starting up\nClaude usage limit reached, resets at 14:00\ngiving up";
         let found = classify(text, &anthropic_rules(), None, 0);
-        assert_eq!(found.evidence, "Claude usage limit reached, resets at 14:00");
+        assert_eq!(
+            found.evidence,
+            "Claude usage limit reached, resets at 14:00"
+        );
     }
 
     #[test]
     fn a_very_long_evidence_line_is_cut() {
         let text = format!("usage limit reached {}", "x".repeat(1_000));
         let found = classify(&text, &anthropic_rules(), None, 0);
-        assert!(found.evidence.chars().count() <= 241, "{}", found.evidence.len());
+        assert!(
+            found.evidence.chars().count() <= 241,
+            "{}",
+            found.evidence.len()
+        );
         assert!(found.evidence.ends_with('…'));
     }
 }

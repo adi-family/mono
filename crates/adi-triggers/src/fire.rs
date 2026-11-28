@@ -161,7 +161,9 @@ pub(crate) fn launch(
 fn extra_env(extra: &BTreeMap<String, String>) -> Vec<(String, String)> {
     extra
         .iter()
-        .filter(|(k, _)| k.as_str() != crate::HOOK_SECRET_EXTRA && k.as_str() != crate::HOOK_SECRET_REF_EXTRA)
+        .filter(|(k, _)| {
+            k.as_str() != crate::HOOK_SECRET_EXTRA && k.as_str() != crate::HOOK_SECRET_REF_EXTRA
+        })
         .filter(|(k, _)| {
             !k.is_empty()
                 && !k.starts_with(|c: char| c.is_ascii_digit())

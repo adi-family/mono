@@ -66,7 +66,12 @@ fn run(cwd: Option<&Path>, args: &[&str]) -> std::result::Result<String, String>
         // A submodule is a second repository from a URL the manifest never named; the pin says
         // nothing about it, so it is never fetched.
         .args(["-c", "submodule.recurse=false"])
-        .args(["-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=30"])
+        .args([
+            "-c",
+            "http.lowSpeedLimit=1000",
+            "-c",
+            "http.lowSpeedTime=30",
+        ])
         .args(["-c", "advice.detachedHead=false"])
         .args(args);
     let out = command
@@ -120,7 +125,10 @@ pub fn clone_pinned(
         return Err(format!("{repo} is not a repository url"));
     }
     let dest_str = dest.display().to_string();
-    run(None, &["clone", "--quiet", "--no-checkout", "--", repo, &dest_str])?;
+    run(
+        None,
+        &["clone", "--quiet", "--no-checkout", "--", repo, &dest_str],
+    )?;
     pin_to(dest, commit, branch, false)
 }
 
@@ -229,7 +237,16 @@ fn current_pin(dir: &Path, wanted: &str) -> std::result::Result<Pin, String> {
 
 /// Whether `commit` is an object this clone already carries.
 fn have_commit(dir: &Path, commit: &str) -> bool {
-    run(Some(dir), &["rev-parse", "--verify", "--quiet", &format!("{commit}^{{commit}}")]).is_ok()
+    run(
+        Some(dir),
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("{commit}^{{commit}}"),
+        ],
+    )
+    .is_ok()
 }
 
 /// Ask the remote for one commit by sha — the case where a pin is not on any branch (a rewritten
@@ -353,7 +370,10 @@ pub fn ignore_generated(dir: &Path) {
 pub fn unignore_generated(dir: &Path) {
     for path in GENERATED {
         if tracks(dir, path) {
-            let _ = run(Some(dir), &["update-index", "--no-skip-worktree", "--", path]);
+            let _ = run(
+                Some(dir),
+                &["update-index", "--no-skip-worktree", "--", path],
+            );
             let _ = run(Some(dir), &["checkout", "--", path]);
         }
     }
@@ -444,7 +464,10 @@ mod tests {
             "// v2\n"
         );
         // Idempotent: an update to the pin it is already on is not a failure.
-        assert_eq!(move_to(&dest, &second, None, false).expect("again").commit, second);
+        assert_eq!(
+            move_to(&dest, &second, None, false).expect("again").commit,
+            second
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -496,7 +519,13 @@ mod tests {
 
         // And an argument that would read as a flag is not a repository url.
         assert!(
-            clone_pinned("--upload-pack=touch /tmp/pwned", "abc", None, &root.join("x")).is_err()
+            clone_pinned(
+                "--upload-pack=touch /tmp/pwned",
+                "abc",
+                None,
+                &root.join("x")
+            )
+            .is_err()
         );
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -510,9 +539,13 @@ mod tests {
 
         // The app ships the entry point every dashboard has; the panel restamps it in place the
         // first time it sees a dashboard from an older generation.
-        assert!(tracks(&dest, "frontend/index.html"), "the app ships its shell");
+        assert!(
+            tracks(&dest, "frontend/index.html"),
+            "the app ships its shell"
+        );
         ignore_generated(&dest);
-        std::fs::write(dest.join("frontend").join("index.html"), "<!-- gen 3 -->\n").expect("panel");
+        std::fs::write(dest.join("frontend").join("index.html"), "<!-- gen 3 -->\n")
+            .expect("panel");
         assert!(
             !dirty(&dest),
             "a generated file the panel rewrote must not stop an update"

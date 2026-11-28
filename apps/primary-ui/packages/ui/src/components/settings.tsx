@@ -17,13 +17,29 @@ type SettingsLayoutProps = Omit<React.ComponentProps<"div">, "title"> & {
  * A settings page: a title row, a list of sections, and the open section. The section list is a
  * column beside the content on wide screens and a scrolling strip above it on phones.
  */
-function SettingsLayout({ title, description, actions, navigation, navigationLabel = "Settings sections", className, children, ...props }: SettingsLayoutProps) {
+function SettingsLayout({
+  title,
+  description,
+  actions,
+  navigation,
+  navigationLabel = "Settings sections",
+  className,
+  children,
+  ...props
+}: SettingsLayoutProps) {
   return (
     <div data-slot="settings" className={cn("mx-auto w-full max-w-6xl", className)} {...props}>
-      <header data-slot="settings-header" className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
+      <header
+        data-slot="settings-header"
+        className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3"
+      >
         <div className="min-w-0">
           <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">{title}</h2>
-          {description && <p className="text-muted-foreground mt-2 max-w-xl text-sm leading-relaxed">{description}</p>}
+          {description && (
+            <p className="text-muted-foreground mt-2 max-w-xl text-sm leading-relaxed">
+              {description}
+            </p>
+          )}
         </div>
         {actions && (
           <div data-slot="settings-actions" className="flex shrink-0 flex-wrap items-center gap-2">
@@ -78,16 +94,32 @@ type SettingsSectionProps = Omit<React.ComponentProps<"section">, "title"> & {
 };
 
 /** One section's heading row and content. */
-function SettingsSection({ title, description, actions, className, children, ...props }: SettingsSectionProps) {
+function SettingsSection({
+  title,
+  description,
+  actions,
+  className,
+  children,
+  ...props
+}: SettingsSectionProps) {
   const titleId = React.useId();
   return (
-    <section data-slot="settings-section" aria-labelledby={titleId} className={cn("min-w-0", className)} {...props}>
+    <section
+      data-slot="settings-section"
+      aria-labelledby={titleId}
+      className={cn("min-w-0", className)}
+      {...props}
+    >
       <header className="mb-5 flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
         <div className="min-w-0">
           <h3 id={titleId} className="text-lg font-semibold tracking-tight">
             {title}
           </h3>
-          {description && <p className="text-muted-foreground mt-1 max-w-2xl text-sm leading-relaxed">{description}</p>}
+          {description && (
+            <p className="text-muted-foreground mt-1 max-w-2xl text-sm leading-relaxed">
+              {description}
+            </p>
+          )}
         </div>
         {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
       </header>
@@ -96,4 +128,11 @@ function SettingsSection({ title, description, actions, className, children, ...
   );
 }
 
-export { SettingsLayout, SettingsNavItem, SettingsSection, type SettingsLayoutProps, type SettingsNavItemProps, type SettingsSectionProps };
+export {
+  SettingsLayout,
+  SettingsNavItem,
+  SettingsSection,
+  type SettingsLayoutProps,
+  type SettingsNavItemProps,
+  type SettingsSectionProps,
+};

@@ -91,7 +91,8 @@ class AdiMic extends AdiElement {
   }
 
   override setup(): void {
-    if (!window.isSecureContext) this.#block("Dictation needs a secure page — open the panel over https://app.adi");
+    if (!window.isSecureContext)
+      this.#block("Dictation needs a secure page — open the panel over https://app.adi");
     this.must<HTMLButtonElement>(".mic").addEventListener("click", () => this.#press());
     this.must<HTMLButtonElement>(".pick").addEventListener("click", (ev) => {
       ev.stopPropagation();
@@ -106,7 +107,10 @@ class AdiMic extends AdiElement {
     if (!mic) return;
     const engine = this.#engines.find((candidate) => candidate.id === this.#engine);
     const hint = engine ? `${engine.label} · ${engine.detail}` : this.#engine;
-    const verbs: Partial<Record<MicState, string>> = { listening: "Stop dictating", working: "Working out what you said" };
+    const verbs: Partial<Record<MicState, string>> = {
+      listening: "Stop dictating",
+      working: "Working out what you said",
+    };
     const verb = verbs[this.#state] ?? "Dictate a message";
     mic.title = this.#state === "blocked" ? this.#why : `${verb} · ${hint}`;
     mic.className = `mic ${this.#state}`;
@@ -139,7 +143,9 @@ class AdiMic extends AdiElement {
       if (!response.ok) return;
       const voice: VoiceResponse = await response.json();
       this.#engines = voice.engines ?? [];
-      const selectedEngineReady = this.#engines.some((engine) => engine.id === this.#engine && engine.ready);
+      const selectedEngineReady = this.#engines.some(
+        (engine) => engine.id === this.#engine && engine.ready,
+      );
       if (!selectedEngineReady) {
         this.#engine = voice.default_engine || BROWSER;
         localStorage.setItem(ENGINE_KEY, this.#engine);
@@ -204,7 +210,10 @@ class AdiMic extends AdiElement {
   #startBrowser(): DictationSession {
     const browser: RecognitionWindow = window;
     const Recognition = browser.SpeechRecognition || browser.webkitSpeechRecognition;
-    if (!Recognition) throw new Error("This browser has no speech recogniser — pick another engine, or use Chrome or Safari");
+    if (!Recognition)
+      throw new Error(
+        "This browser has no speech recogniser — pick another engine, or use Chrome or Safari",
+      );
     const recognition = new Recognition();
     recognition.continuous = true;
     recognition.interimResults = true;
@@ -224,7 +233,8 @@ class AdiMic extends AdiElement {
       if (target) target.value = appendTranscript(base, `${committed}${interim}`.trim());
     };
     recognition.onerror = (event) => {
-      if (event.error === "not-allowed" || event.error === "service-not-allowed") this.#block(BLOCKED);
+      if (event.error === "not-allowed" || event.error === "service-not-allowed")
+        this.#block(BLOCKED);
       else if (event.error === "no-speech" || event.error === "aborted") this.#set("idle");
       else this.#block(`the recogniser stopped: ${event.error}`);
     };
@@ -242,8 +252,11 @@ class AdiMic extends AdiElement {
   }
 
   #startRecording(): DictationSession {
-    if (!navigator.mediaDevices?.getUserMedia) throw new Error("this browser exposes no microphone");
-    const mimeType = CONTAINERS.find((container) => window.MediaRecorder?.isTypeSupported(container));
+    if (!navigator.mediaDevices?.getUserMedia)
+      throw new Error("this browser exposes no microphone");
+    const mimeType = CONTAINERS.find((container) =>
+      window.MediaRecorder?.isTypeSupported(container),
+    );
     if (!mimeType) throw new Error("this browser records no audio format the server accepts");
     const target = this.#target;
     const base = target?.value ?? "";
@@ -268,7 +281,9 @@ class AdiMic extends AdiElement {
             if (target) target.value = appendTranscript(base, transcript.trim());
             this.#set("idle");
           } catch (err) {
-            this.#block(`transcription failed: ${err instanceof Error ? err.message : String(err)}`);
+            this.#block(
+              `transcription failed: ${err instanceof Error ? err.message : String(err)}`,
+            );
           }
         };
         recorder.start();

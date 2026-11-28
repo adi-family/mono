@@ -60,14 +60,22 @@ function AppLayout({
   style,
   ...props
 }: AppLayoutProps) {
-  const hasSecondaryNavigation = secondaryNavigation !== undefined && secondaryNavigation !== null && secondaryNavigation !== false;
+  const hasSecondaryNavigation =
+    secondaryNavigation !== undefined &&
+    secondaryNavigation !== null &&
+    secondaryNavigation !== false;
   const showSecondaryNavigation = hasSecondaryNavigation && !hideSecondaryNavigation;
   const joined = surface === "joined";
 
-  const [sidebarWidth, setSidebarWidth] = useLocalStorageState(sidebarWidthStorageKey, undefined, sidebarWidthCodec);
+  const [sidebarWidth, setSidebarWidth] = useLocalStorageState(
+    sidebarWidthStorageKey,
+    undefined,
+    sidebarWidthCodec,
+  );
   const drag = React.useRef<{ pointerId: number; x: number; width: number } | null>(null);
   const width = sidebarWidth ?? defaultSidebarWidth;
-  const resize = (value?: number) => setSidebarWidth(value === undefined ? undefined : clampSidebarWidth(value));
+  const resize = (value?: number) =>
+    setSidebarWidth(value === undefined ? undefined : clampSidebarWidth(value));
 
   return (
     <AppShell
@@ -76,24 +84,35 @@ function AppLayout({
         "relative [--app-layout-height:100svh] grid-cols-[3rem_minmax(0,1fr)]",
         joined
           ? cn(
-            "h-[var(--app-layout-height)] min-h-0 grid-rows-[auto_minmax(0,1fr)]",
-            showSecondaryNavigation && "md:grid-cols-[3rem_var(--app-sidebar-width)_minmax(0,1fr)]",
-          )
+              "h-[var(--app-layout-height)] min-h-0 grid-rows-[auto_minmax(0,1fr)]",
+              showSecondaryNavigation &&
+                "md:grid-cols-[3rem_var(--app-sidebar-width)_minmax(0,1fr)]",
+            )
           : cn(
-            "min-h-[var(--app-layout-height)]",
-            showSecondaryNavigation
-              ? "grid-rows-[auto_auto_1fr] md:grid-cols-[3rem_var(--app-sidebar-width)_minmax(0,1fr)] md:grid-rows-[auto_1fr]"
-              : "grid-rows-[auto_1fr]",
-          ),
-        focusMode && "h-[var(--app-layout-height)] min-h-0 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)] md:grid-cols-[minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)]",
-        focusMode && !joined && showSecondaryNavigation && "grid-rows-[auto_minmax(0,1fr)] md:grid-cols-[var(--app-sidebar-width)_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)]",
+              "min-h-[var(--app-layout-height)]",
+              showSecondaryNavigation
+                ? "grid-rows-[auto_auto_1fr] md:grid-cols-[3rem_var(--app-sidebar-width)_minmax(0,1fr)] md:grid-rows-[auto_1fr]"
+                : "grid-rows-[auto_1fr]",
+            ),
+        focusMode &&
+          "h-[var(--app-layout-height)] min-h-0 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)] md:grid-cols-[minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)]",
+        focusMode &&
+          !joined &&
+          showSecondaryNavigation &&
+          "grid-rows-[auto_minmax(0,1fr)] md:grid-cols-[var(--app-sidebar-width)_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)]",
         className,
       )}
       {...props}
       style={{ ...style, "--app-sidebar-width": `${width}px` } as React.CSSProperties}
     >
       {workspaceControls && (
-        <div data-slot="app-workspace-controls" className={cn("pointer-events-none absolute top-11 left-12 z-50", focusMode && "top-0 left-0")}>
+        <div
+          data-slot="app-workspace-controls"
+          className={cn(
+            "pointer-events-none absolute top-11 left-12 z-50",
+            focusMode && "top-0 left-0",
+          )}
+        >
           {workspaceControls}
         </div>
       )}
@@ -125,14 +144,16 @@ function AppLayout({
         className={cn(
           joined
             ? cn(
-              "col-start-2 row-start-2 mr-3 mb-3 grid min-h-0 min-w-0 self-stretch overflow-hidden rounded-xl bg-background text-foreground md:mr-4 md:mb-4",
-              showSecondaryNavigation
-                ? "grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)] md:col-span-2 md:grid-cols-[var(--app-sidebar-width)_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)]"
-                : "grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)]",
-            )
+                "col-start-2 row-start-2 mr-3 mb-3 grid min-h-0 min-w-0 self-stretch overflow-hidden rounded-xl bg-background text-foreground md:mr-4 md:mb-4",
+                showSecondaryNavigation
+                  ? "grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)] md:col-span-2 md:grid-cols-[var(--app-sidebar-width)_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)]"
+                  : "grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)]",
+              )
             : "contents",
           surfaceProps?.className,
-          focusMode && joined && "col-span-1 col-start-1 row-start-1 m-0 rounded-none md:col-span-1 md:m-0",
+          focusMode &&
+            joined &&
+            "col-span-1 col-start-1 row-start-1 m-0 rounded-none md:col-span-1 md:m-0",
         )}
       >
         {hasSecondaryNavigation && (
@@ -147,7 +168,9 @@ function AppLayout({
               joined && "relative",
               secondaryNavigationProps?.className,
               !showSecondaryNavigation && "hidden",
-              focusMode && !joined && "col-start-1 row-start-1 md:top-0 md:col-start-1 md:row-start-1 md:row-span-1",
+              focusMode &&
+                !joined &&
+                "col-start-1 row-start-1 md:top-0 md:col-start-1 md:row-start-1 md:row-span-1",
             )}
           >
             {secondaryNavigation}
@@ -170,7 +193,8 @@ function AppLayout({
               }}
               onPointerMove={(event) => {
                 const start = drag.current;
-                if (start?.pointerId === event.pointerId) resize(start.width + event.clientX - start.x);
+                if (start?.pointerId === event.pointerId)
+                  resize(start.width + event.clientX - start.x);
               }}
               onPointerUp={(event) => {
                 if (event.currentTarget.hasPointerCapture(event.pointerId)) {
@@ -178,14 +202,24 @@ function AppLayout({
                 }
                 drag.current = null;
               }}
-              onPointerCancel={() => { drag.current = null; }}
-              onLostPointerCapture={() => { drag.current = null; }}
+              onPointerCancel={() => {
+                drag.current = null;
+              }}
+              onLostPointerCapture={() => {
+                drag.current = null;
+              }}
               onDoubleClick={() => resize()}
               onKeyDown={(event) => {
-                const next = event.key === "ArrowLeft" ? width - 16
-                  : event.key === "ArrowRight" ? width + 16
-                  : event.key === "Home" ? 160
-                  : event.key === "End" ? 480 : null;
+                const next =
+                  event.key === "ArrowLeft"
+                    ? width - 16
+                    : event.key === "ArrowRight"
+                      ? width + 16
+                      : event.key === "Home"
+                        ? 160
+                        : event.key === "End"
+                          ? 480
+                          : null;
                 if (next === null) return;
                 event.preventDefault();
                 resize(next);
@@ -198,16 +232,25 @@ function AppLayout({
           className={cn(
             joined
               ? cn(
-                "col-start-1 min-h-0 self-stretch overflow-auto rounded-none border-0 bg-transparent outline-none",
-                showSecondaryNavigation ? "row-start-2 md:col-start-2 md:row-start-1" : "row-start-1",
-              )
+                  "col-start-1 min-h-0 self-stretch overflow-auto rounded-none border-0 bg-transparent outline-none",
+                  showSecondaryNavigation
+                    ? "row-start-2 md:col-start-2 md:row-start-1"
+                    : "row-start-1",
+                )
               : cn(
-                "col-start-2 mr-3 mb-3 self-stretch scroll-mt-36 outline-none md:mr-4 md:mb-4 md:scroll-mt-8",
-                showSecondaryNavigation ? "row-start-3 md:col-start-3 md:row-start-2" : "row-start-2",
-              ),
+                  "col-start-2 mr-3 mb-3 self-stretch scroll-mt-36 outline-none md:mr-4 md:mb-4 md:scroll-mt-8",
+                  showSecondaryNavigation
+                    ? "row-start-3 md:col-start-3 md:row-start-2"
+                    : "row-start-2",
+                ),
             contentProps?.className,
-            focusMode && !joined && "col-start-1 row-start-1 m-0 min-h-0 overflow-auto rounded-none md:col-start-1 md:row-start-1 md:m-0",
-            focusMode && !joined && showSecondaryNavigation && "row-start-2 md:col-start-2 md:row-start-1",
+            focusMode &&
+              !joined &&
+              "col-start-1 row-start-1 m-0 min-h-0 overflow-auto rounded-none md:col-start-1 md:row-start-1 md:m-0",
+            focusMode &&
+              !joined &&
+              showSecondaryNavigation &&
+              "row-start-2 md:col-start-2 md:row-start-1",
           )}
         >
           {children}

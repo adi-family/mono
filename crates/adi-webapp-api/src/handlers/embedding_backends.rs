@@ -19,8 +19,8 @@
 
 use adi_agents::Agents;
 use adi_embeddings::{
-    CONSUMER_FACTS, CONSUMER_INDEXER, CONSUMER_KNOWLEDGE, EmbeddingBackend, EmbeddingBackendManifest,
-    EmbeddingBackends, EmbeddingSettings, Runtime,
+    CONSUMER_FACTS, CONSUMER_INDEXER, CONSUMER_KNOWLEDGE, EmbeddingBackend,
+    EmbeddingBackendManifest, EmbeddingBackends, EmbeddingSettings, Runtime,
 };
 
 use crate::types::{
@@ -173,7 +173,10 @@ pub fn test_embedding_backend(store: &Agents, body: &[u8]) -> Response {
             Err(e) => return Response::from(&e),
         }
     };
-    ok_json(&test_result_dto(&adi_embeddings::test_manifest(store.config(), &manifest)))
+    ok_json(&test_result_dto(&adi_embeddings::test_manifest(
+        store.config(),
+        &manifest,
+    )))
 }
 
 // ------------------------------------------------------------------ mapping
@@ -221,14 +224,18 @@ fn test_result_dto(result: &adi_embeddings::TestResult) -> TestResultDto {
 
 /// Every backend as its wire shape, plus one row per consumer saying what it is presently assigned
 /// to and whether that assignment would actually resolve.
-fn backends_dto(backends: &[EmbeddingBackend], settings: &EmbeddingSettings) -> EmbeddingBackendsDto {
+fn backends_dto(
+    backends: &[EmbeddingBackend],
+    settings: &EmbeddingSettings,
+) -> EmbeddingBackendsDto {
     let out = backends
         .iter()
         .map(|backend| {
             let used_by = CONSUMERS
                 .into_iter()
                 .filter(|consumer| {
-                    settings.assignments.get(*consumer).map(String::as_str) == Some(backend.id.as_str())
+                    settings.assignments.get(*consumer).map(String::as_str)
+                        == Some(backend.id.as_str())
                 })
                 .map(str::to_string)
                 .collect();
@@ -238,7 +245,11 @@ fn backends_dto(backends: &[EmbeddingBackend], settings: &EmbeddingSettings) -> 
     let assignments = CONSUMERS
         .into_iter()
         .map(|consumer| {
-            let backend_id = settings.assignments.get(consumer).cloned().unwrap_or_default();
+            let backend_id = settings
+                .assignments
+                .get(consumer)
+                .cloned()
+                .unwrap_or_default();
             let resolvable = backends
                 .iter()
                 .find(|b| b.id == backend_id)
@@ -326,7 +337,10 @@ impl FromBody for TestEmbeddingBackend {
 
     fn is_complete(&self) -> bool {
         !self.id.trim().is_empty()
-            || self.draft.as_ref().is_some_and(|d| !d.runtime.trim().is_empty())
+            || self
+                .draft
+                .as_ref()
+                .is_some_and(|d| !d.runtime.trim().is_empty())
     }
 }
 
@@ -397,7 +411,9 @@ mod tests {
         save(&store, "ollama", "ollama", "nomic-embed-text", 768);
         let Response { status, body } = save_embedding_settings(
             &store,
-            json!({"assignments": {"facts": "ollama"}}).to_string().as_bytes(),
+            json!({"assignments": {"facts": "ollama"}})
+                .to_string()
+                .as_bytes(),
         );
         assert_eq!(status, 200, "{body}");
         let v: Value = serde_json::from_str(&body).unwrap();
@@ -417,7 +433,9 @@ mod tests {
         let store = scratch();
         let Response { status, body } = save_embedding_settings(
             &store,
-            json!({"assignments": {"facts": "ghost"}}).to_string().as_bytes(),
+            json!({"assignments": {"facts": "ghost"}})
+                .to_string()
+                .as_bytes(),
         );
         assert_eq!(status, 400, "{body}");
         assert!(body.contains("ghost"), "{body}");
@@ -429,7 +447,9 @@ mod tests {
         save(&store, "ollama", "ollama", "nomic-embed-text", 768);
         let _ = save_embedding_settings(
             &store,
-            json!({"assignments": {"facts": "ollama"}}).to_string().as_bytes(),
+            json!({"assignments": {"facts": "ollama"}})
+                .to_string()
+                .as_bytes(),
         );
 
         let Response { status, body } = delete_embedding_backend(&store, br#"{"id":"ollama"}"#);
@@ -441,8 +461,14 @@ mod tests {
             &store,
             json!({"assignments": {"facts": ""}}).to_string().as_bytes(),
         );
-        assert_eq!(delete_embedding_backend(&store, br#"{"id":"ollama"}"#).status, 200);
-        assert_eq!(delete_embedding_backend(&store, br#"{"id":"ollama"}"#).status, 404);
+        assert_eq!(
+            delete_embedding_backend(&store, br#"{"id":"ollama"}"#).status,
+            200
+        );
+        assert_eq!(
+            delete_embedding_backend(&store, br#"{"id":"ollama"}"#).status,
+            404
+        );
     }
 
     #[test]
@@ -450,7 +476,10 @@ mod tests {
         let store = scratch();
         assert_eq!(save_embedding_backend(&store, br#"{"id":"x"}"#).status, 400);
         assert_eq!(save_embedding_backend(&store, b"{}").status, 400);
-        assert_eq!(delete_embedding_backend(&store, br#"{"id":""}"#).status, 400);
+        assert_eq!(
+            delete_embedding_backend(&store, br#"{"id":""}"#).status,
+            400
+        );
     }
 
     /// `hash` never touches a network, which is what makes it a safe fixture for a unit test that
@@ -469,7 +498,10 @@ mod tests {
     #[test]
     fn test_by_id_of_an_unknown_backend_is_404() {
         let store = scratch();
-        assert_eq!(test_embedding_backend(&store, br#"{"id":"ghost"}"#).status, 404);
+        assert_eq!(
+            test_embedding_backend(&store, br#"{"id":"ghost"}"#).status,
+            404
+        );
     }
 
     /// A draft is tested exactly as sent, whether or not it has ever been saved — and nothing about
@@ -485,7 +517,12 @@ mod tests {
         let v: Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["verdict"], "ok", "{body}");
         assert_eq!(v["dimensions"], 256);
-        assert!(EmbeddingBackends::with_config(store.config().clone()).list().unwrap().is_empty());
+        assert!(
+            EmbeddingBackends::with_config(store.config().clone())
+                .list()
+                .unwrap()
+                .is_empty()
+        );
     }
 
     /// `hash`/`candle` never take a model or width from configuration — `manifest_from` overrides

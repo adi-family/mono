@@ -184,7 +184,10 @@ impl Element {
         }
         let name = self.name.trim();
         if name.is_empty() || name != self.name || !adi_config::valid_name(name) {
-            return Err(Error::BadElementName(bundle_slug.to_string(), self.name.clone()));
+            return Err(Error::BadElementName(
+                bundle_slug.to_string(),
+                self.name.clone(),
+            ));
         }
         Ok(())
     }
@@ -513,11 +516,18 @@ mod tests {
             None,
             "the card falls back to the description"
         );
-        assert_eq!(parsed.bundles[0].icon(), None, "and no mark to draw beside it");
+        assert_eq!(
+            parsed.bundles[0].icon(),
+            None,
+            "and no mark to draw beside it"
+        );
         assert!(parsed.bundles[0].keywords().is_empty());
         assert_eq!(parsed.bundles[0].branch(), None, "the default branch, then");
         assert_eq!(parsed.bundles[0].pin(), SHA);
-        assert!(parsed.bundles[0].elements().is_empty(), "no preview published");
+        assert!(
+            parsed.bundles[0].elements().is_empty(),
+            "no preview published"
+        );
         assert_eq!(parsed.bundle("crm").map(|a| a.name.as_str()), Some("CRM"));
         assert_eq!(parsed.bundle("nope"), None);
     }
@@ -539,7 +549,11 @@ mod tests {
             .as_bytes(),
         )
         .expect("an old manifest keeps parsing");
-        assert_eq!(parsed.bundles.len(), 1, "v1's own key aliases the new field");
+        assert_eq!(
+            parsed.bundles.len(),
+            1,
+            "v1's own key aliases the new field"
+        );
         assert_eq!(parsed.bundle("crm").map(|b| b.name.as_str()), Some("CRM"));
 
         // The new key works exactly the same, side by side — nothing published for v1 has to move.

@@ -93,7 +93,10 @@ pub(crate) fn attaching(
 pub(crate) fn url_of(node: Option<&str>, id: &str) -> String {
     let path = format!("/api/agents/attachment/{id}");
     match node {
-        Some(node) => format!("http://{}{path}", adi_webapp_api::types::node_app_host(node)),
+        Some(node) => format!(
+            "http://{}{path}",
+            adi_webapp_api::types::node_app_host(node)
+        ),
         None => path,
     }
 }

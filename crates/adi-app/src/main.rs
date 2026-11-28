@@ -178,7 +178,8 @@ where
 }
 
 /// Embedded Trunk output; [`serve_asset`] uses a placeholder if `index.html` is absent.
-static PRIMARY_UI: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../apps/primary-ui/frontend/dist-primary");
+static PRIMARY_UI: Dir<'_> =
+    include_dir!("$CARGO_MANIFEST_DIR/../../apps/primary-ui/frontend/dist-primary");
 
 static WEBAPP: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../adi-webapp/dist");
 
@@ -318,7 +319,10 @@ async fn main() -> anyhow::Result<()> {
     // The webhook relay poller (ADI-MONO-223) — always loopback, for
     // the same reason `agents.with_lease_url` above is: the replay this exercises is honoured
     // only from this process's own listener, never the address a peer would dial this node at.
-    relay::start(triggers.clone(), format!("http://127.0.0.1:{}", local.port()));
+    relay::start(
+        triggers.clone(),
+        format!("http://127.0.0.1:{}", local.port()),
+    );
     let dist = webapp_dist_override();
     if let Some(dir) = dist.as_ref() {
         info!(dist = %dir.display(), "serving webapp from disk (dev mode)");
@@ -700,7 +704,10 @@ fn fleet_sender(req: &http::Request) -> Option<handlers::FleetSender<'_>> {
 /// existed; [`adi_mesh::fleet::Role::Member`] — the safe default, not an open one — when the
 /// registry cannot be read or no longer carries this petname, since both are reasons to trust a
 /// peer with *less*, never more; otherwise whatever role the registry has on file for it.
-fn peer_role(projects: &Projects, sender: Option<handlers::FleetSender<'_>>) -> adi_mesh::fleet::Role {
+fn peer_role(
+    projects: &Projects,
+    sender: Option<handlers::FleetSender<'_>>,
+) -> adi_mesh::fleet::Role {
     let Some(sender) = sender else {
         return adi_mesh::fleet::Role::Admin;
     };
@@ -723,7 +730,10 @@ fn user_scope(projects: &Projects, sender: Option<handlers::FleetSender<'_>>) ->
     let sender = sender?;
     let registry = adi_mesh::fleet::FleetRegistry::load_from(projects.config()).ok()?;
     let record = registry.get(sender.petname)?;
-    record.user.clone().filter(|_| record.auth.user == sender.user)
+    record
+        .user
+        .clone()
+        .filter(|_| record.auth.user == sender.user)
 }
 
 /// A presented `X-Adi-Lease` capability, but only when `sender` is `None`
@@ -735,14 +745,20 @@ fn lease_capability_header<'a>(
     req: &'a http::Request,
     sender: Option<handlers::FleetSender<'_>>,
 ) -> Option<&'a str> {
-    sender.is_none().then(|| req.header("x-adi-lease")).flatten()
+    sender
+        .is_none()
+        .then(|| req.header("x-adi-lease"))
+        .flatten()
 }
 
 /// The caller's own `EndpointId`, from this machine's own pairing record of them — part of a
 /// BYO-credentials unlock's AAD (`adi_mesh::lease_seal`), never
 /// taken from anything the request itself claims. `None` under exactly the same conditions
 /// [`user_scope`] answers `None` for.
-fn sender_device_key(projects: &Projects, sender: Option<handlers::FleetSender<'_>>) -> Option<String> {
+fn sender_device_key(
+    projects: &Projects,
+    sender: Option<handlers::FleetSender<'_>>,
+) -> Option<String> {
     let sender = sender?;
     let registry = adi_mesh::fleet::FleetRegistry::load_from(projects.config()).ok()?;
     Some(registry.get(sender.petname)?.key.clone())
@@ -757,7 +773,12 @@ fn member_refusal(projects: &Projects, req: &http::Request) -> Option<Response> 
     if peer_role(projects, Some(sender)) != adi_mesh::fleet::Role::Member {
         return None;
     }
-    member_blocked(req.method.as_str(), req.route_path(), &req.body, sender.petname)
+    member_blocked(
+        req.method.as_str(),
+        req.route_path(),
+        &req.body,
+        sender.petname,
+    )
 }
 
 /// The routes a member may never reach — `/api/system/*`, `/api/update/*`, `/api/licence*`,
@@ -921,13 +942,11 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
             handlers::fleet_invite_cancel(projects.config(), &req.body)
         }
         ("POST", "/api/fleet/rename") => handlers::fleet_rename(projects.config(), &req.body),
-        ("POST", "/api/fleet/unpair") => handlers::fleet_unpair_revoking(
-            projects.config(),
-            &req.body,
-            |user| {
+        ("POST", "/api/fleet/unpair") => {
+            handlers::fleet_unpair_revoking(projects.config(), &req.body, |user| {
                 leases::revoke_user(leases, agents, events, user);
-            },
-        ),
+            })
+        }
         // Unpair only after both directions have been dropped.
         ("POST", "/api/fleet/sources/drop") => {
             viewer::drop_source(projects, secrets, agents, leases, events, &req.body)
@@ -1032,9 +1051,10 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ),
         ("GET", "/api/secrets/policy") => handlers::secrets_policy(secrets),
         ("POST", "/api/secrets/policy") => handlers::set_secrets_policy(secrets, &req.body),
-        ("GET", "/api/leases/session") => {
-            leases::session(lease_session, user_scope(projects, fleet_sender(req)).as_deref())
-        }
+        ("GET", "/api/leases/session") => leases::session(
+            lease_session,
+            user_scope(projects, fleet_sender(req)).as_deref(),
+        ),
         ("POST", "/api/leases/unlock") => leases::unlock(
             leases,
             lease_session,
@@ -1072,14 +1092,10 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ),
         // Mints a fresh ephemeral key every call, so it is deliberately absent from SHARED_POSTS:
         // coalescing two of these would hand two browsers the same one-call key.
-        ("POST", "/api/voice/realtime/session") => {
-            handlers::realtime_session(secrets, &req.body)
-        }
+        ("POST", "/api/voice/realtime/session") => handlers::realtime_session(secrets, &req.body),
         ("GET", "/api/meta") => handlers::meta(agents, tools),
         ("GET", "/api/agents") => handlers::agents(agents),
-        ("POST", "/api/agents/save") => {
-            handlers::save_agent(agents, &req.body, fleet_sender(req))
-        }
+        ("POST", "/api/agents/save") => handlers::save_agent(agents, &req.body, fleet_sender(req)),
         ("POST", "/api/agents/delete") => {
             handlers::delete_agent(agents, &req.body, fleet_sender(req))
         }
@@ -1087,7 +1103,9 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
             let sender = fleet_sender(req);
             match lease_capability_header(req, sender) {
                 Some(capability) => handlers::run_agent_leased(agents, &req.body, capability),
-                None => handlers::run_agent(agents, &req.body, sender, user_scope(projects, sender)),
+                None => {
+                    handlers::run_agent(agents, &req.body, sender, user_scope(projects, sender))
+                }
             }
         }
         ("POST", "/api/agents/limit") => handlers::set_run_limit(agents, &req.body),
@@ -1169,9 +1187,7 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/workflows/enable") => handlers::enable_workflow(workflows, &req.body),
         ("POST", "/api/workflows/disable") => handlers::disable_workflow(workflows, &req.body),
         ("POST", "/api/workflows/run") => handlers::run_workflow(workflows, &req.body),
-        ("POST", "/api/workflows/runs") => {
-            handlers::list_runs(workflows, tasks, agents, &req.body)
-        }
+        ("POST", "/api/workflows/runs") => handlers::list_runs(workflows, tasks, agents, &req.body),
         ("POST", "/api/workflows/run/detail") => {
             handlers::run_detail(workflows, tasks, agents, &req.body)
         }
@@ -1812,7 +1828,10 @@ mod tests {
             nickname: "p42-device",
             user: "p42",
         };
-        assert_eq!(peer_role(&projects, Some(admin)), adi_mesh::fleet::Role::Admin);
+        assert_eq!(
+            peer_role(&projects, Some(admin)),
+            adi_mesh::fleet::Role::Admin
+        );
         assert_eq!(
             peer_role(&projects, Some(member)),
             adi_mesh::fleet::Role::Member
@@ -1903,7 +1922,12 @@ mod tests {
         // A pinned username (ADI-MONO-179: the partner sandbox's `p<uid>`) is not the id —
         // `user_scope` must answer `NodeRecord.user`, never `auth.user`.
         let projects = scratch("user-scope-pinned");
-        pair_with_user(&projects, "p42-device", "p42", Some("u-shared0000000000000000"));
+        pair_with_user(
+            &projects,
+            "p42-device",
+            "p42",
+            Some("u-shared0000000000000000"),
+        );
 
         let sender = handlers::FleetSender {
             petname: "p42-device",

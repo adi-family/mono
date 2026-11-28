@@ -31,7 +31,11 @@ describe("provider registry", () => {
   it("honours a scope override, split on spaces or commas", () => {
     const p = resolveProvider(
       "github",
-      env({ GITHUB_CLIENT_ID: "id", GITHUB_CLIENT_SECRET: "secret", GITHUB_SCOPES: "repo, gist user" }),
+      env({
+        GITHUB_CLIENT_ID: "id",
+        GITHUB_CLIENT_SECRET: "secret",
+        GITHUB_SCOPES: "repo, gist user",
+      }),
     );
     expect(p!.scopes).toEqual(["repo", "gist", "user"]);
   });

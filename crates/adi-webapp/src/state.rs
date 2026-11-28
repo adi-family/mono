@@ -8,17 +8,14 @@ use adi_ui::{Block, Flag, ToolDecl};
 use adi_webapp_api::types::{
     AgentBackendRowDto, AgentGoal, AgentPeek, AgentRef, AgentRunInfo, AgentRuns, AgentSimState,
     AgentStep, AgentTokens, AgentsState, AllAgentRuns, ChannelAllowlistDto, ChannelConnected,
-    ChannelConnectionDto, ChannelTargetDto, ChannelsState,
-    DashboardTemplatesState, DashboardsState, DbExecResult, DbQueryResult, DbState, DbTablesState,
-    DirListing,
+    ChannelConnectionDto, ChannelTargetDto, ChannelsState, DashboardTemplatesState,
+    DashboardsState, DbExecResult, DbQueryResult, DbState, DbTablesState, DirListing,
     EmbeddingBackendDto, EmbeddingBackendsDto, FileEntry, FleetDashboards, FleetNodes, FleetState,
-    Health, HiveState, KnowledgeBaseDto, KnowledgeNoteDto, KnowledgeNotes,
-    KnowledgeResults, KnowledgeState, LimitRuleDto, LlmBackendDto, LlmBackendsDto,
-    MarketplaceState, MeshState, MetaState, PortsState, ProjectDetail, ProjectHookLog,
-    ProjectHookRef, ProjectsState, RunDetailDto, RunRef, RunsState, SecretsState,
-    SharedAssetsState, TasksState,
-    TestResultDto, ToolsState, TranscriptView, TriggerLog, TriggerRef, TriggersState,
-    UsageEventsState, UsedPorts,
+    Health, HiveState, KnowledgeBaseDto, KnowledgeNoteDto, KnowledgeNotes, KnowledgeResults,
+    KnowledgeState, LimitRuleDto, LlmBackendDto, LlmBackendsDto, MarketplaceState, MeshState,
+    MetaState, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef, ProjectsState,
+    RunDetailDto, RunRef, RunsState, SecretsState, SharedAssetsState, TasksState, TestResultDto,
+    ToolsState, TranscriptView, TriggerLog, TriggerRef, TriggersState, UsageEventsState, UsedPorts,
     WorkflowsState, WorkspaceTerm, WorkspaceTermRef, WorkspacesRef, WorkspacesState,
 };
 use leptos::prelude::*;
@@ -2157,7 +2154,11 @@ impl LlmBackendsForm {
         self.editing.set(backend.id.clone());
         self.id.set(backend.id.clone());
         self.label.set(backend.label.clone());
-        self.kind.set(if backend.kind.is_empty() { "single".to_string() } else { backend.kind.clone() });
+        self.kind.set(if backend.kind.is_empty() {
+            "single".to_string()
+        } else {
+            backend.kind.clone()
+        });
         self.members.set(backend.members.clone());
         self.runtime.set(backend.runtime.clone());
         self.model.set(backend.model.clone());

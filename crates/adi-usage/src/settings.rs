@@ -126,7 +126,9 @@ mod tests {
     // SAFETY: `ENV_TEST_LOCK` serializes every test (in this module and in `dispatch`) that
     // reads or writes either env var, and this closure clears both before returning.
     fn with_env(pairs: &[(&str, Option<&str>)], f: impl FnOnce()) {
-        let _guard = ENV_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         for (name, value) in pairs {
             match value {
                 Some(v) => unsafe { std::env::set_var(name, v) },
@@ -191,7 +193,10 @@ mod tests {
         let module = scratch("blank");
         set_enabled(&module, true).expect("save");
         with_env(&[(ENV_VAR, Some("  ")), (DO_NOT_TRACK_ENV, None)], || {
-            assert!(effective(&module), "a blank value leaves the stored setting alone");
+            assert!(
+                effective(&module),
+                "a blank value leaves the stored setting alone"
+            );
         });
     }
 }

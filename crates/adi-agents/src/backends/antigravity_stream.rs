@@ -238,7 +238,6 @@ fn absorb_step_update(
     }
 }
 
-
 fn tool_step(update: &Value, state: &str) -> Step {
     let tool_info = update.get("tool_info");
     let name = update

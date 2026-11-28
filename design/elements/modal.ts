@@ -34,7 +34,8 @@ class AdiModal extends AdiElement {
   override update() {
     this.must("h2").textContent = this.attr("label");
     // :has() cannot inspect assigned slot content; check assigned nodes instead.
-    this.must(".foot").hidden = this.must<HTMLSlotElement>('slot[name="foot"]').assignedNodes().length === 0;
+    this.must(".foot").hidden =
+      this.must<HTMLSlotElement>('slot[name="foot"]').assignedNodes().length === 0;
     const dialog = this.must<HTMLDialogElement>("dialog");
     const open = this.hasAttribute("open");
     if (open && !dialog.open) {

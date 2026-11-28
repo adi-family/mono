@@ -1595,7 +1595,10 @@ grants = ["ftp:*"]
         pair_ok(&mut registry, &some_key(), "laptop-b");
         let (username, id) = registry.resolve_user(Some("p42"));
         registry.get_mut("laptop-b").expect("record").user = Some(id.clone());
-        registry.get_mut("laptop-b").expect("record").set_password(&username, "pw");
+        registry
+            .get_mut("laptop-b")
+            .expect("record")
+            .set_password(&username, "pw");
 
         registry.rename("laptop-b", "desk").expect("rename");
 
@@ -1768,7 +1771,10 @@ grants = ["ftp:*"]
         let reloaded: FleetRegistry = toml::from_str(&written).expect("reload");
         let record = reloaded.get("laptop-b").expect("laptop-b");
         assert_eq!(record.role, Role::Member);
-        assert_eq!(record.labels.get("principal").map(String::as_str), Some("p42"));
+        assert_eq!(
+            record.labels.get("principal").map(String::as_str),
+            Some("p42")
+        );
     }
 
     // -- B8 ------------------------------------------------------------------------------
@@ -1779,10 +1785,7 @@ grants = ["ftp:*"]
         let b = random_user_id();
         assert!(a.starts_with("u-"), "{a}");
         assert_eq!(a.len(), 2 + 26, "{a}");
-        assert!(
-            a[2..].bytes().all(|b| USER_ID_ALPHABET.contains(&b)),
-            "{a}"
-        );
+        assert!(a[2..].bytes().all(|b| USER_ID_ALPHABET.contains(&b)), "{a}");
         assert_ne!(a, b);
     }
 
@@ -1806,7 +1809,10 @@ grants = ["ftp:*"]
         let (username_b, id_b) = registry.resolve_user(Some("p42"));
         assert_eq!(username_a, "p42");
         assert_eq!(username_a, username_b);
-        assert_eq!(id_a, id_b, "the second device pinned to p42 is the same user");
+        assert_eq!(
+            id_a, id_b,
+            "the second device pinned to p42 is the same user"
+        );
 
         let (_, id_other) = registry.resolve_user(Some("p43"));
         assert_ne!(id_a, id_other, "a different pin is a different user");
@@ -1824,10 +1830,7 @@ grants = ["ftp:*"]
         assert!(!registry.has_user("u-bbb"));
 
         registry.unpair("laptop-b");
-        assert!(
-            registry.has_user("u-aaa"),
-            "laptop-c still carries the id"
-        );
+        assert!(registry.has_user("u-aaa"), "laptop-c still carries the id");
         registry.unpair("laptop-c");
         assert!(!registry.has_user("u-aaa"), "the last peer is gone");
     }

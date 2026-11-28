@@ -480,7 +480,9 @@ fn encode_arguments<Args: Serialize>(arguments: &Args) -> Result<RawAgentArgumen
     Ok(arguments.into_iter().collect())
 }
 
-pub(crate) fn decode_arguments<Args: DeserializeOwned>(arguments: RawAgentArguments) -> Result<Args> {
+pub(crate) fn decode_arguments<Args: DeserializeOwned>(
+    arguments: RawAgentArguments,
+) -> Result<Args> {
     let arguments = serde_json::Map::from_iter(arguments);
     serde_json::from_value(serde_json::Value::Object(arguments))
         .map_err(|e| Error::Arguments(e.to_string()))

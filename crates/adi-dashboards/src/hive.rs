@@ -534,7 +534,10 @@ mod tests {
         assert!(!yaml.contains("rollout:"), "{yaml}");
         assert!(yaml.contains("run: bun run frontend/index.ts"), "{yaml}");
         assert!(yaml.contains("working_dir: .\n"), "{yaml}");
-        assert!(!yaml.contains(&dir.display().to_string()), "no absolute path: {yaml}");
+        assert!(
+            !yaml.contains(&dir.display().to_string()),
+            "no absolute path: {yaml}"
+        );
     }
 
     #[test]
@@ -542,8 +545,11 @@ mod tests {
         let root = scratch("widget");
         let dir = root.join("board");
         std::fs::create_dir_all(dir.join(".adi")).expect("hive dir");
-        std::fs::write(dir.join(".adi").join(HIVE_LIVE), hive_yaml(&dir, "board.adi"))
-            .expect("write");
+        std::fs::write(
+            dir.join(".adi").join(HIVE_LIVE),
+            hive_yaml(&dir, "board.adi"),
+        )
+        .expect("write");
         assert!(!hive_of(&dir).services.contains_key("widget"));
         assert!(is_current(&dir, &hive_of(&dir)));
 
@@ -551,8 +557,11 @@ mod tests {
         std::fs::create_dir_all(dir.join(WIDGET_DIR)).expect("widget dir");
         assert!(!is_current(&dir, &hive_of(&dir)));
 
-        std::fs::write(dir.join(".adi").join(HIVE_LIVE), hive_yaml(&dir, "board.adi"))
-            .expect("rewrite");
+        std::fs::write(
+            dir.join(".adi").join(HIVE_LIVE),
+            hive_yaml(&dir, "board.adi"),
+        )
+        .expect("rewrite");
         let hive = hive_of(&dir);
         let widget = hive.services["widget"].proxy.as_ref().expect("widget");
         assert_eq!(widget.host, "board.adi");

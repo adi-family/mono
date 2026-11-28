@@ -85,7 +85,11 @@ pub(crate) fn parse_ws_url(url: &str) -> Result<(String, u16)> {
         let port = match scheme {
             "https" | "wss" => 443,
             "http" | "ws" => 80,
-            _ => return Err(Error::Protocol(format!("{url} has no port and no scheme to default one from"))),
+            _ => {
+                return Err(Error::Protocol(format!(
+                    "{url} has no port and no scheme to default one from"
+                )));
+            }
         };
         return Ok((host_port.to_string(), port));
     };
@@ -263,7 +267,9 @@ impl RouterClient {
                 .await;
                 match result {
                     Ok(Ok(())) => {}
-                    Ok(Err(e)) => warn!(%provider, error = %e, "dispatching a channel message failed"),
+                    Ok(Err(e)) => {
+                        warn!(%provider, error = %e, "dispatching a channel message failed")
+                    }
                     Err(e) => warn!(%provider, error = %e, "dispatch task panicked"),
                 }
             }
@@ -356,7 +362,9 @@ mod tests {
     /// Returns the URL and the still-running server task **unawaited** — its first step is
     /// `accept().await`, which only resolves once some client actually dials in, so awaiting it
     /// here (before that client exists) would deadlock the whole test.
-    async fn spawn_fake_router(message: ChannelMessage) -> (String, tokio::task::JoinHandle<Vec<u8>>) {
+    async fn spawn_fake_router(
+        message: ChannelMessage,
+    ) -> (String, tokio::task::JoinHandle<Vec<u8>>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
@@ -366,7 +374,11 @@ mod tests {
             let head = String::from_utf8_lossy(&buf[..n]).to_string();
             let key = head
                 .lines()
-                .find_map(|l| l.to_ascii_lowercase().starts_with("sec-websocket-key:").then(|| l.split_once(':').unwrap().1.trim().to_string()))
+                .find_map(|l| {
+                    l.to_ascii_lowercase()
+                        .starts_with("sec-websocket-key:")
+                        .then(|| l.split_once(':').unwrap().1.trim().to_string())
+                })
                 .expect("client sent a key");
             let response = format!(
                 "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {}\r\n\r\n",
@@ -476,7 +488,9 @@ mod tests {
             "and false again once the client has shut down"
         );
 
-        let caught_up = events.catch_up("test", 10).expect("published channel message");
+        let caught_up = events
+            .catch_up("test", 10)
+            .expect("published channel message");
         assert_eq!(caught_up.len(), 1);
         assert_eq!(caught_up[0].record.name, ChannelMessage::NAME);
         assert_eq!(
@@ -489,22 +503,24 @@ mod tests {
         // byte-presence guess.
         let mut reader = ws::Reader::new(Vec::new());
         let mut remaining = raw.as_slice();
-        let first: NodeFrame =
-            serde_json::from_str(match reader.next(&mut remaining).await.unwrap().unwrap() {
+        let first: NodeFrame = serde_json::from_str(
+            match reader.next(&mut remaining).await.unwrap().unwrap() {
                 ws::Frame::Text(t) => t,
                 other => panic!("expected a text frame, got {other:?}"),
             }
-            .as_str())
-            .unwrap();
+            .as_str(),
+        )
+        .unwrap();
         assert_eq!(first, NodeFrame::Ack { id: "evt_1".into() });
 
-        let second: NodeFrame =
-            serde_json::from_str(match reader.next(&mut remaining).await.unwrap().unwrap() {
+        let second: NodeFrame = serde_json::from_str(
+            match reader.next(&mut remaining).await.unwrap().unwrap() {
                 ws::Frame::Text(t) => t,
                 other => panic!("expected a text frame, got {other:?}"),
             }
-            .as_str())
-            .unwrap();
+            .as_str(),
+        )
+        .unwrap();
         assert_eq!(second, NodeFrame::Pong);
     }
 }

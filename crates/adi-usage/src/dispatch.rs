@@ -265,7 +265,11 @@ impl Usage {
             return;
         };
         state.onboarding_sent = true;
-        self.enqueue(module, "onboarding_completed", json!({ "backend": backend }));
+        self.enqueue(
+            module,
+            "onboarding_completed",
+            json!({ "backend": backend }),
+        );
     }
 
     fn on_run_started(&self, module: &Module, state: &mut State, payload: &Value) {
@@ -349,7 +353,14 @@ impl Usage {
     /// for an agent that no longer exists or names no backend, which is reason enough to send
     /// nothing rather than an empty token.
     fn backend_of(&self, agent: &str) -> Option<String> {
-        let backend = self.agents.get(agent).ok().flatten()?.manifest.runtime().to_string();
+        let backend = self
+            .agents
+            .get(agent)
+            .ok()
+            .flatten()?
+            .manifest
+            .runtime()
+            .to_string();
         (!backend.is_empty()).then_some(backend)
     }
 
@@ -367,7 +378,10 @@ impl Usage {
         let runs = self.agents.runs(&stored);
         match run_id {
             Some(run_id) => runs.into_iter().find(|r| r.run_id == run_id),
-            None => runs.into_iter().filter(|r| r.running).max_by_key(|r| r.started_at),
+            None => runs
+                .into_iter()
+                .filter(|r| r.running)
+                .max_by_key(|r| r.started_at),
         }
         .map(|r| r.launched_by)
     }
@@ -483,7 +497,10 @@ mod tests {
         // Explicit: DEFAULT_ENABLED is now `true`, so this exercises "switched off" rather than
         // "never touched the setting".
         disable(&h);
-        h.usage.events.emit("adi.fleet.invite.created", "{}").expect("emit");
+        h.usage
+            .events
+            .emit("adi.fleet.invite.created", "{}")
+            .expect("emit");
         h.usage.tick_blocking();
         assert!(queued(&h).is_empty(), "off means nothing is queued");
         assert_eq!(
@@ -497,7 +514,10 @@ mod tests {
     fn the_first_tick_with_it_on_mints_an_install_id_and_sends_app_first_launch() {
         let h = harness("first-launch");
         enable(&h);
-        h.usage.events.emit("adi.fleet.invite.created", "{}").expect("emit");
+        h.usage
+            .events
+            .emit("adi.fleet.invite.created", "{}")
+            .expect("emit");
         h.usage.tick_blocking();
 
         let state = State::load(&h.usage.module());
@@ -505,8 +525,14 @@ mod tests {
         assert!(state.first_launch_at > 0);
 
         let items = queued(&h);
-        let launch = items.iter().find(|i| i.event == "app_first_launch").expect("queued");
-        assert_eq!(launch.properties["fresh"], true, "a store with no agents or projects");
+        let launch = items
+            .iter()
+            .find(|i| i.event == "app_first_launch")
+            .expect("queued");
+        assert_eq!(
+            launch.properties["fresh"], true,
+            "a store with no agents or projects"
+        );
         assert_eq!(launch.properties["os"], std::env::consts::OS);
         assert_eq!(launch.properties["version"], "1.30.0-test");
 
@@ -568,9 +594,15 @@ mod tests {
         h.usage.tick_blocking();
 
         let items = queued(&h);
-        let onboarding: Vec<&QueuedEvent> =
-            items.iter().filter(|i| i.event == "onboarding_completed").collect();
-        assert_eq!(onboarding.len(), 1, "exactly one, however many times it is saved");
+        let onboarding: Vec<&QueuedEvent> = items
+            .iter()
+            .filter(|i| i.event == "onboarding_completed")
+            .collect();
+        assert_eq!(
+            onboarding.len(),
+            1,
+            "exactly one, however many times it is saved"
+        );
         assert_eq!(onboarding[0].properties["backend"], "harness:claude-sdk");
         assert!(State::load(&h.usage.module()).onboarding_sent);
     }
@@ -637,15 +669,27 @@ mod tests {
         h.usage.tick_blocking();
 
         let items = queued(&h);
-        let started = items.iter().find(|i| i.event == "agent_run_started").expect("queued");
+        let started = items
+            .iter()
+            .find(|i| i.event == "agent_run_started")
+            .expect("queued");
         assert_eq!(started.properties["backend"], "harness:claude-sdk");
         assert_eq!(started.properties["launched_by"], "human");
-        assert!(started.properties.get("message").is_none(), "the task text never crosses");
+        assert!(
+            started.properties.get("message").is_none(),
+            "the task text never crosses"
+        );
 
-        let finished = items.iter().find(|i| i.event == "agent_run_finished").expect("queued");
+        let finished = items
+            .iter()
+            .find(|i| i.event == "agent_run_finished")
+            .expect("queued");
         assert_eq!(finished.properties["is_error"], false);
         assert_eq!(finished.properties["terminal_reason"], "completed");
-        assert!(finished.properties.get("result_head").is_none(), "never forwarded");
+        assert!(
+            finished.properties.get("result_head").is_none(),
+            "never forwarded"
+        );
         assert!(finished.properties.get("cost_micro_usd").is_none());
     }
 
@@ -663,11 +707,17 @@ mod tests {
             state.runs_agent = 1;
             state.save(&module).expect("seed state");
         }
-        h.usage.events.emit("adi.fleet.invite.created", "{}").expect("emit");
+        h.usage
+            .events
+            .emit("adi.fleet.invite.created", "{}")
+            .expect("emit");
         h.usage.tick_blocking();
 
         let items = queued(&h);
-        let daily = items.iter().find(|i| i.event == "app_daily_active").expect("queued");
+        let daily = items
+            .iter()
+            .find(|i| i.event == "app_daily_active")
+            .expect("queued");
         assert_eq!(daily.properties["runs_human"], 3);
         assert_eq!(daily.properties["runs_agent"], 1);
         assert_eq!(daily.properties["runs_automation"], 0);
@@ -681,12 +731,20 @@ mod tests {
     fn dashboard_created_forwards_only_a_known_from() {
         let h = harness("dashboard");
         enable(&h);
-        h.usage.events.emit("adi.dashboards.created", r#"{"from":"import"}"#).expect("emit");
-        h.usage.events.emit("adi.dashboards.created", r#"{"from":"nonsense"}"#).expect("emit");
+        h.usage
+            .events
+            .emit("adi.dashboards.created", r#"{"from":"import"}"#)
+            .expect("emit");
+        h.usage
+            .events
+            .emit("adi.dashboards.created", r#"{"from":"nonsense"}"#)
+            .expect("emit");
         h.usage.tick_blocking();
         let items = queued(&h);
-        let dashboards: Vec<&QueuedEvent> =
-            items.iter().filter(|i| i.event == "dashboard_created").collect();
+        let dashboards: Vec<&QueuedEvent> = items
+            .iter()
+            .filter(|i| i.event == "dashboard_created")
+            .collect();
         assert_eq!(dashboards.len(), 1);
         assert_eq!(dashboards[0].properties["from"], "import");
     }
@@ -720,14 +778,22 @@ mod tests {
         h.usage.tick_blocking();
 
         let items = queued(&h);
-        let installs: Vec<&QueuedEvent> =
-            items.iter().filter(|i| i.event == "store_item_installed").collect();
+        let installs: Vec<&QueuedEvent> = items
+            .iter()
+            .filter(|i| i.event == "store_item_installed")
+            .collect();
         assert_eq!(installs.len(), 2, "the llm install is dropped");
 
-        let public = installs.iter().find(|i| i.properties["kind"] == "dashboard").unwrap();
+        let public = installs
+            .iter()
+            .find(|i| i.properties["kind"] == "dashboard")
+            .unwrap();
         assert_eq!(public.properties["slug"], "crm-suite");
 
-        let private = installs.iter().find(|i| i.properties["kind"] == "tool").unwrap();
+        let private = installs
+            .iter()
+            .find(|i| i.properties["kind"] == "tool")
+            .unwrap();
         assert!(
             private.properties.get("slug").is_none(),
             "a non-store marketplace's slug is never forwarded"
@@ -738,10 +804,16 @@ mod tests {
     fn fleet_invite_created_carries_no_properties_beyond_the_defaults() {
         let h = harness("fleet");
         enable(&h);
-        h.usage.events.emit("adi.fleet.invite.created", "{}").expect("emit");
+        h.usage
+            .events
+            .emit("adi.fleet.invite.created", "{}")
+            .expect("emit");
         h.usage.tick_blocking();
         let items = queued(&h);
-        let invite = items.iter().find(|i| i.event == "fleet_invite_created").expect("queued");
+        let invite = items
+            .iter()
+            .find(|i| i.event == "fleet_invite_created")
+            .expect("queued");
         let mut keys: Vec<&String> = invite.properties.as_object().unwrap().keys().collect();
         keys.sort();
         assert_eq!(keys, vec!["arch", "os", "version"]);
@@ -752,8 +824,10 @@ mod tests {
         assert_eq!(launched_by_kind(Some(adi_agents::launcher::HUMAN)), "human");
         assert_eq!(launched_by_kind(Some("")), "human");
         assert_eq!(launched_by_kind(None), "human");
-        assert_eq!(launched_by_kind(Some(adi_agents::launcher::AUTOMATION)), "automation");
+        assert_eq!(
+            launched_by_kind(Some(adi_agents::launcher::AUTOMATION)),
+            "automation"
+        );
         assert_eq!(launched_by_kind(Some("agent:research-worker")), "agent");
     }
-
 }

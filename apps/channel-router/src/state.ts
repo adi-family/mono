@@ -67,10 +67,13 @@ function b64urlToBytes(s: string): Uint8Array<ArrayBuffer> {
 }
 
 async function hmacKey(secret: string): Promise<CryptoKey> {
-  return crypto.subtle.importKey("raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, [
-    "sign",
-    "verify",
-  ]);
+  return crypto.subtle.importKey(
+    "raw",
+    enc.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign", "verify"],
+  );
 }
 
 /** A key for {@link encryptCredential}/{@link decryptCredential}, derived from `ROUTER_SECRET`
@@ -166,7 +169,11 @@ export async function verifyNodeToken(
 export async function encryptCredential(credential: unknown, secret: string): Promise<string> {
   const key = await credentialKey(secret);
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, enc.encode(JSON.stringify(credential)));
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    key,
+    enc.encode(JSON.stringify(credential)),
+  );
   return `${bytesToB64url(iv)}.${bytesToB64url(new Uint8Array(ciphertext))}`;
 }
 

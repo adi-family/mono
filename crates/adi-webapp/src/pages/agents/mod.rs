@@ -831,13 +831,21 @@ fn agent_can_spawn_chips(state: State, form: AgentsForm) -> AnyView {
         .into_any();
     }
     let counts: BTreeMap<String, u32> = current_agent_dto(state, form)
-        .map(|a| a.can_spawn.into_iter().map(|r| (r.rule, r.matches)).collect())
+        .map(|a| {
+            a.can_spawn
+                .into_iter()
+                .map(|r| (r.rule, r.matches))
+                .collect()
+        })
         .unwrap_or_default();
     let chips = rules
         .into_iter()
         .map(|rule| {
             let label = match counts.get(&rule) {
-                Some(n) => format!("{rule} \u{2014} {n} agent{}", if *n == 1 { "" } else { "s" }),
+                Some(n) => format!(
+                    "{rule} \u{2014} {n} agent{}",
+                    if *n == 1 { "" } else { "s" }
+                ),
                 None => rule.clone(),
             };
             let remove = rule.clone();
@@ -1185,7 +1193,11 @@ fn spawn_refusals_view(state: State) -> AnyView {
         .map(|r| {
             let (caller, target) = (r.caller.clone(), r.target.clone());
             let (caller_allow, target_allow) = (caller.clone(), target.clone());
-            let times = if r.count == 1 { "once".to_string() } else { format!("{} times", r.count) };
+            let times = if r.count == 1 {
+                "once".to_string()
+            } else {
+                format!("{} times", r.count)
+            };
             let when = actions::run_age(r.last_at);
             view! {
                 <li class="adi-agents__refusal">
@@ -1384,11 +1396,7 @@ fn agent_rows(
                 );
             }));
             items.push(menu_item(state, "Delete", true, move || {
-                apply_agents(
-                    state,
-                    None,
-                    fetch::delete_agent(del_name.clone()),
-                );
+                apply_agents(state, None, fetch::delete_agent(del_name.clone()));
             }));
             let live = a
                 .running
@@ -1470,10 +1478,7 @@ fn creator_marker(a: &AgentDto) -> Option<AnyView> {
     if agent_is_mine(a) {
         return None;
     }
-    let who = a
-        .created_by
-        .strip_prefix("agent:")
-        .unwrap_or(&a.created_by);
+    let who = a.created_by.strip_prefix("agent:").unwrap_or(&a.created_by);
     Some(
         view! {
             <span class="adi-chip" title="who created this definition">{format!("by {who}")}</span>

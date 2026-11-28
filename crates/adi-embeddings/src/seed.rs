@@ -153,7 +153,10 @@ mod tests {
         seed_if_needed(&overridden).expect("seed with overrides set");
         let ollama = overridden.get(OLLAMA_ID).expect("get").expect("present");
         assert_eq!(ollama.manifest.model, "mxbai-embed-large");
-        assert_eq!(ollama.manifest.base_url.as_deref(), Some("http://box:11434"));
+        assert_eq!(
+            ollama.manifest.base_url.as_deref(),
+            Some("http://box:11434")
+        );
     }
 
     #[test]

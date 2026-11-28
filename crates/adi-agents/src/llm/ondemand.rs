@@ -131,7 +131,12 @@ pub fn test_backend(config: &Config, id: &str, asker: Option<Asker<'_>>) -> Resu
     let backend = LlmBackends::with_config(config.clone())
         .get(id)?
         .ok_or_else(|| Error::NotFound(id.to_string()))?;
-    Ok(test_manifest_named(config, &backend.manifest, asker, Some(id)))
+    Ok(test_manifest_named(
+        config,
+        &backend.manifest,
+        asker,
+        Some(id),
+    ))
 }
 
 /// Test a backend that may not be saved at all — a draft an operator is still typing into the panel.
@@ -150,7 +155,12 @@ pub fn test_manifest(
     test_manifest_named(config, manifest, asker, None)
 }
 
-pub fn test_manifest_named(config: &Config, manifest: &LlmBackendManifest, asker: Option<Asker<'_>>, backend_id: Option<&str>) -> TestResult {
+pub fn test_manifest_named(
+    config: &Config,
+    manifest: &LlmBackendManifest,
+    asker: Option<Asker<'_>>,
+    backend_id: Option<&str>,
+) -> TestResult {
     // A group has no runtime of its own to ask anything through — it is a list of other backends,
     // each testable on its own. Said plainly here rather than left to the generic "no runtime set"
     // a group's always-empty `runtime` field would otherwise fall through to, which would read as
@@ -999,12 +1009,9 @@ mod tests {
         Secrets::with_config(with_secret.clone())
             .set(None, "GEMINI_API_KEY", "AIza-test", None)
             .expect("set");
-        let resolved = resolve_credential(
-            &with_secret,
-            &manifest(Backend::ProcessAntigravity),
-            None,
-        )
-        .expect("global secret resolves");
+        let resolved =
+            resolve_credential(&with_secret, &manifest(Backend::ProcessAntigravity), None)
+                .expect("global secret resolves");
         assert_eq!(resolved.description, "global secret GEMINI_API_KEY");
         assert_eq!(
             resolved.env,

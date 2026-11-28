@@ -13,7 +13,9 @@ describe("allowedRedirect", () => {
   });
 
   it("accepts a candidate on APP_URL's origin", () => {
-    expect(allowedRedirect("https://app.example/welcome", env())).toBe("https://app.example/welcome");
+    expect(allowedRedirect("https://app.example/welcome", env())).toBe(
+      "https://app.example/welcome",
+    );
   });
 
   it("rejects a candidate on a foreign origin", () => {

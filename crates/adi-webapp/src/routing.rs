@@ -341,7 +341,9 @@ impl Route {
             Route::Marketplace => "Install an app someone else published",
             Route::LiveGraph => "Who started what: agents, chats and the flow between them",
             Route::Elements => "Buttons, tables, fields — every component, live, with its markup",
-            Route::Settings => "Hive, ports, mesh, fleet, backends, shared assets, usage events and system",
+            Route::Settings => {
+                "Hive, ports, mesh, fleet, backends, shared assets, usage events and system"
+            }
             Route::Hive => "Services, and the .adi names in front of them",
             Route::PortsManager => "Reserved ports and what holds them",
             Route::Mesh => "Peers, allowed ports and forwards",
@@ -761,8 +763,6 @@ mod tests {
             );
         }
     }
-
-
 
     /// A global workflow's id (no slash) round-trips through [`workflow_detail_path`] /
     /// [`workflow_id_from_path`], and the path it builds resolves to [`Route::WorkflowDetail`].

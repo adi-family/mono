@@ -49,7 +49,9 @@ function Select({
         data-slot="select"
         className={cn(selectVariants({ size, className }))}
         value={value}
-        defaultValue={value === undefined ? (defaultValue ?? (placeholder ? "" : undefined)) : undefined}
+        defaultValue={
+          value === undefined ? (defaultValue ?? (placeholder ? "" : undefined)) : undefined
+        }
         onChange={(event) => onValueChange?.(event.currentTarget.value)}
       >
         {placeholder !== undefined && (
@@ -58,7 +60,12 @@ function Select({
           </option>
         )}
         {options.map((option) => (
-          <option key={option.value} value={option.value} disabled={option.disabled} className="cursor-pointer disabled:cursor-not-allowed">
+          <option
+            key={option.value}
+            value={option.value}
+            disabled={option.disabled}
+            className="cursor-pointer disabled:cursor-not-allowed"
+          >
             {option.label}
           </option>
         ))}

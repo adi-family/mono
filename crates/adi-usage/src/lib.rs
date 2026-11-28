@@ -26,7 +26,9 @@ mod state;
 
 pub use client::{DEFAULT_RELAY_URL, FlushOutcome, RELAY_URL_ENV};
 pub use dispatch::Usage;
-pub use settings::{DEFAULT_ENABLED, DO_NOT_TRACK_ENV, ENV_VAR, Settings, effective, env_override, set_enabled};
+pub use settings::{
+    DEFAULT_ENABLED, DO_NOT_TRACK_ENV, ENV_VAR, Settings, effective, env_override, set_enabled,
+};
 pub use state::{State, forget};
 
 /// This crate's module directory within the standard store: `~/.adi/mono/analytics`.

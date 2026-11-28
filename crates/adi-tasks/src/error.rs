@@ -57,7 +57,10 @@ impl fmt::Display for Error {
                 write!(f, "this task's output_schema requires a --result")
             }
             Error::ResultInvalid { path, message } => {
-                write!(f, "result does not satisfy output_schema at {path}: {message}")
+                write!(
+                    f,
+                    "result does not satisfy output_schema at {path}: {message}"
+                )
             }
             Error::DuplicateStepId(step_id) => {
                 write!(f, "step {step_id:?} already exists for this run")

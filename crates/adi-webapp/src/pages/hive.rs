@@ -61,22 +61,22 @@ const HIVE_PAGE_SUMMARY: &str = "Every service declared across your projects, da
 /// `http://` either way.
 fn front_door_hint(front_door: FrontDoorStatus) -> String {
     let status = match (front_door.routed, front_door.answering) {
-        (true, true) => {
-            "This machine's front door is running and `.adi` is routed here \u{2014} \
-             http://app.adi works.".to_string()
-        }
-        (true, false) => {
-            "`.adi` is routed here, but nothing is answering behind it \u{2014} \
-             `adi-mono dns grant-network` repairs it.".to_string()
-        }
+        (true, true) => "This machine's front door is running and `.adi` is routed here \u{2014} \
+             http://app.adi works."
+            .to_string(),
+        (true, false) => "`.adi` is routed here, but nothing is answering behind it \u{2014} \
+             `adi-mono dns grant-network` repairs it."
+            .to_string(),
         (false, true) => {
             "This machine's front door is running, but `.adi` is not routed here yet \u{2014} \
-             `adi-mono dns install-route` finishes it.".to_string()
+             `adi-mono dns install-route` finishes it."
+                .to_string()
         }
         (false, false) => {
             "This machine's front door is off, which is the normal state until you ask for it: \
              the panel already works over plain http; `.adi` needs \
-             `adi-mono dns install-route`.".to_string()
+             `adi-mono dns install-route`."
+                .to_string()
         }
     };
     format!("{HIVE_PAGE_SUMMARY} {status}")
@@ -356,9 +356,13 @@ fn row_action(s: &HiveService, state: State) -> AnyView {
 fn act(state: State, project: Option<String>, service: String, start: bool) {
     spawn_local(async move {
         let done = if start {
-            fetch::start_service(project, service.clone()).await.map(|_| ())
+            fetch::start_service(project, service.clone())
+                .await
+                .map(|_| ())
         } else {
-            fetch::stop_service(project, service.clone()).await.map(|_| ())
+            fetch::stop_service(project, service.clone())
+                .await
+                .map(|_| ())
         };
         match done {
             Ok(()) => {
@@ -859,12 +863,18 @@ mod tests {
             routed: false,
             answering: true,
         });
-        assert!(installed_not_routed.contains("install-route"), "{installed_not_routed}");
+        assert!(
+            installed_not_routed.contains("install-route"),
+            "{installed_not_routed}"
+        );
 
         let routed_not_answering = front_door_hint(FrontDoorStatus {
             routed: true,
             answering: false,
         });
-        assert!(routed_not_answering.contains("grant-network"), "{routed_not_answering}");
+        assert!(
+            routed_not_answering.contains("grant-network"),
+            "{routed_not_answering}"
+        );
     }
 }

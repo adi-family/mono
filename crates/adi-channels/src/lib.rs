@@ -24,10 +24,10 @@ pub mod protocol;
 pub mod reply;
 pub mod router_api;
 pub mod service;
+mod tls;
 pub mod token;
 pub mod tool;
 pub mod turn;
-mod tls;
 mod ws;
 
 pub use client::RouterClient;

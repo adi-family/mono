@@ -719,7 +719,10 @@ pub(crate) fn execute(
     let absent = || {
         format!(
             "no tool named {name} — the tools you have are: {}",
-            offered(ctx.code).map(|t| t.name).collect::<Vec<_>>().join(", ")
+            offered(ctx.code)
+                .map(|t| t.name)
+                .collect::<Vec<_>>()
+                .join(", ")
         )
     };
     if !ctx.code.offers(name) {
@@ -801,12 +804,14 @@ pub(crate) fn execute_inner(
     });
     // A call that got an argument wrong is told the whole of how the function is called, not
     // only the first thing missing — or the next attempt is spent finding the second.
-    answered.map_err(|said| {
-        match crate::backends::code_only::usage(name, ctx.code.language()) {
-            Some(usage) if said.starts_with(MISSING_ARGUMENT) => format!("{said} — it is called as `{usage}`"),
+    answered.map_err(
+        |said| match crate::backends::code_only::usage(name, ctx.code.language()) {
+            Some(usage) if said.starts_with(MISSING_ARGUMENT) => {
+                format!("{said} — it is called as `{usage}`")
+            }
             _ => said,
-        }
-    })
+        },
+    )
 }
 
 /// Run a tool that is not a code tool, or `None` when `name` is not one of them.
@@ -1041,7 +1046,11 @@ fn cell(language: Language, input: &Value, ctx: &Ctx<'_>) -> std::result::Result
         };
         let command = interpreter.job_command(code, &absent)?;
         let shown: String = code.chars().take(WAKE_CODE_CHARS).collect();
-        let more = if shown.len() < code.len() { "\n[…]" } else { "" };
+        let more = if shown.len() < code.len() {
+            "\n[…]"
+        } else {
+            ""
+        };
         let note = format!(
             "You started this {} in the background:\n\n{shown}{more}",
             language.name()
@@ -1053,7 +1062,9 @@ fn cell(language: Language, input: &Value, ctx: &Ctx<'_>) -> std::result::Result
     let start = ctx.shell.start_dir(ctx.cwd);
     let restart = flag(input, "restart");
     let run = |offered: Option<&Value>| {
-        interpreter.run(&ctx.shell, ctx.cwd, code, timeout, MAX_OUTPUT, restart, offered)
+        interpreter.run(
+            &ctx.shell, ctx.cwd, code, timeout, MAX_OUTPUT, restart, offered,
+        )
     };
     let ran = if ctx.code.only {
         // The cell's functions are this agent's other tools, answered from here for as long as
@@ -1971,23 +1982,50 @@ mod tests {
     #[test]
     fn a_code_tool_exists_only_for_an_agent_that_switched_it_on() {
         let names = |code: CodeTools| -> Vec<String> {
-            declarations(code).into_iter().map(|tool| tool.name).collect()
+            declarations(code)
+                .into_iter()
+                .map(|tool| tool.name)
+                .collect()
         };
         let neither = names(CodeTools::default());
         assert!(neither.contains(&"Bash".to_string()), "{neither:?}");
-        assert!(!neither.iter().any(|name| name == "PyCode" || name == "TsCode"), "{neither:?}");
-        let python = names(CodeTools { python: true, ..CodeTools::default() });
-        assert!(python.contains(&"PyCode".to_string()) && !python.contains(&"TsCode".to_string()), "{python:?}");
+        assert!(
+            !neither
+                .iter()
+                .any(|name| name == "PyCode" || name == "TsCode"),
+            "{neither:?}"
+        );
+        let python = names(CodeTools {
+            python: true,
+            ..CodeTools::default()
+        });
+        assert!(
+            python.contains(&"PyCode".to_string()) && !python.contains(&"TsCode".to_string()),
+            "{python:?}"
+        );
         let both = names(CodeTools::BOTH);
-        assert!(both.contains(&"PyCode".to_string()) && both.contains(&"TsCode".to_string()), "{both:?}");
+        assert!(
+            both.contains(&"PyCode".to_string()) && both.contains(&"TsCode".to_string()),
+            "{both:?}"
+        );
 
         let dir = scratch("code-off");
         let mut ctx = ctx_in(&dir, "code-off");
-        ctx.code = CodeTools { typescript: true, ..CodeTools::default() };
-        let refused = execute("PyCode", &json!({ "code": "1" }), &ctx).expect_err("it has no PyCode");
+        ctx.code = CodeTools {
+            typescript: true,
+            ..CodeTools::default()
+        };
+        let refused =
+            execute("PyCode", &json!({ "code": "1" }), &ctx).expect_err("it has no PyCode");
         assert!(refused.starts_with("no tool named PyCode"), "{refused}");
-        assert!(refused.contains("TsCode"), "what it does have is named: {refused}");
-        assert!(!refused.contains("PyCode,"), "and what it does not is not: {refused}");
+        assert!(
+            refused.contains("TsCode"),
+            "what it does have is named: {refused}"
+        );
+        assert!(
+            !refused.contains("PyCode,"),
+            "and what it does not is not: {refused}"
+        );
         assert!(
             !dir.join("conv-1.py-kernel").exists(),
             "nothing was started for a tool the agent does not have"
@@ -1995,7 +2033,12 @@ mod tests {
 
         let allowed = execute("TsCode", &json!({ "code": "1 + 1;" }), &ctx).expect("it has TsCode");
         assert_eq!(allowed, "2");
-        crate::backends::interpreter::Interpreter::new(Language::TypeScript, ctx.agent_dir, ctx.conv).stop();
+        crate::backends::interpreter::Interpreter::new(
+            Language::TypeScript,
+            ctx.agent_dir,
+            ctx.conv,
+        )
+        .stop();
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2008,30 +2051,66 @@ mod tests {
         let dir = scratch("tscode");
         std::fs::create_dir_all(dir.join("workspaces")).expect("mkdir");
         let ctx = ctx_in(&dir, "tscode");
-        let typescript = crate::backends::interpreter::Interpreter::new(Language::TypeScript, ctx.agent_dir, ctx.conv);
+        let typescript = crate::backends::interpreter::Interpreter::new(
+            Language::TypeScript,
+            ctx.agent_dir,
+            ctx.conv,
+        );
 
-        let quiet = execute("TsCode", &json!({ "code": "const rows: number[] = [1, 2, 3];" }), &ctx).expect("run");
+        let quiet = execute(
+            "TsCode",
+            &json!({ "code": "const rows: number[] = [1, 2, 3];" }),
+            &ctx,
+        )
+        .expect("run");
         assert_eq!(quiet, "(no output)");
-        let shown = execute("TsCode", &json!({ "code": "rows.reduce((a, b) => a + b, 0);" }), &ctx).expect("run");
+        let shown = execute(
+            "TsCode",
+            &json!({ "code": "rows.reduce((a, b) => a + b, 0);" }),
+            &ctx,
+        )
+        .expect("run");
         assert_eq!(shown, "6");
 
-        let thrown = execute("TsCode", &json!({ "code": "console.log('so far');\n(rows as any).nope.x;" }), &ctx)
-            .expect_err("an exception fails the call");
+        let thrown = execute(
+            "TsCode",
+            &json!({ "code": "console.log('so far');\n(rows as any).nope.x;" }),
+            &ctx,
+        )
+        .expect_err("an exception fails the call");
         assert!(thrown.starts_with("so far\n"), "{thrown}");
         assert!(thrown.contains("TypeError"), "{thrown}");
         assert!(thrown.contains("at <cell 3>: rows.nope.x;"), "{thrown}");
 
-        let moved = execute("TsCode", &json!({ "code": "process.chdir('workspaces');" }), &ctx).expect("run");
+        let moved = execute(
+            "TsCode",
+            &json!({ "code": "process.chdir('workspaces');" }),
+            &ctx,
+        )
+        .expect("run");
         assert!(moved.contains("the shell is now in"), "{moved}");
         let after = bash(&json!({ "command": "basename \"$(pwd -P)\"" }), &ctx).expect("run");
-        assert!(after.starts_with("workspaces"), "Bash stands where TypeScript moved: {after}");
+        assert!(
+            after.starts_with("workspaces"),
+            "Bash stands where TypeScript moved: {after}"
+        );
 
-        let late = execute("TsCode", &json!({ "code": "await sh('sleep 60');", "timeout_ms": 300 }), &ctx)
-            .expect_err("a timeout fails the call");
+        let late = execute(
+            "TsCode",
+            &json!({ "code": "await sh('sleep 60');", "timeout_ms": 300 }),
+            &ctx,
+        )
+        .expect_err("a timeout fails the call");
         assert!(late.contains("still running after 300ms"), "{late}");
-        assert!(late.contains("the command it was waiting on was stopped"), "{late}");
+        assert!(
+            late.contains("the command it was waiting on was stopped"),
+            "{late}"
+        );
         assert!(late.contains("variables are intact"), "{late}");
-        assert_eq!(execute("TsCode", &json!({ "code": "rows.length;" }), &ctx).expect("run"), "3");
+        assert_eq!(
+            execute("TsCode", &json!({ "code": "rows.length;" }), &ctx).expect("run"),
+            "3"
+        );
 
         typescript.stop();
         let _ = std::fs::remove_dir_all(&dir);
@@ -2054,8 +2133,18 @@ mod tests {
 
         let pending = ctx.awaits.for_conversation("watcher", "conv-1");
         assert_eq!(pending.len(), 1, "exactly one wake: {pending:?}");
-        assert!(pending[0].note.contains("this TypeScript in the background"), "{:?}", pending[0]);
-        assert!(pending[0].note.contains("console.log('from the job');"), "{:?}", pending[0]);
+        assert!(
+            pending[0]
+                .note
+                .contains("this TypeScript in the background"),
+            "{:?}",
+            pending[0]
+        );
+        assert!(
+            pending[0].note.contains("console.log('from the job');"),
+            "{:?}",
+            pending[0]
+        );
 
         let log = said
             .lines()
@@ -2067,7 +2156,10 @@ mod tests {
         {
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
-        assert_eq!(std::fs::read_to_string(log).expect("log").trim(), "from the job");
+        assert_eq!(
+            std::fs::read_to_string(log).expect("log").trim(),
+            "from the job"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2079,16 +2171,27 @@ mod tests {
     fn pycode_keeps_its_variables_and_fails_the_call_that_raises() {
         let dir = scratch("pycode");
         let ctx = ctx_in(&dir, "pycode");
-        let python = crate::backends::interpreter::Interpreter::new(Language::Python, ctx.agent_dir, ctx.conv);
+        let python = crate::backends::interpreter::Interpreter::new(
+            Language::Python,
+            ctx.agent_dir,
+            ctx.conv,
+        );
 
         let quiet = execute("PyCode", &json!({ "code": "rows = [1, 2, 3]" }), &ctx).expect("run");
         assert_eq!(quiet, "(no output)");
 
         let shown = execute("PyCode", &json!({ "code": "sum(rows)" }), &ctx).expect("run");
-        assert_eq!(shown, "6", "the variable survived, and the expression is echoed");
+        assert_eq!(
+            shown, "6",
+            "the variable survived, and the expression is echoed"
+        );
 
-        let raised = execute("PyCode", &json!({ "code": "print('so far')\nrows[9]" }), &ctx)
-            .expect_err("an exception fails the call");
+        let raised = execute(
+            "PyCode",
+            &json!({ "code": "print('so far')\nrows[9]" }),
+            &ctx,
+        )
+        .expect_err("an exception fails the call");
         assert!(raised.starts_with("so far\n"), "{raised}");
         assert!(raised.contains("IndexError"), "{raised}");
 
@@ -2109,12 +2212,17 @@ mod tests {
         let inner = std::fs::canonicalize(dir.join("workspaces")).expect("canonicalize");
         let inner = inner.to_str().expect("utf8");
         let ctx = ctx_in(&dir, "pycode-cd");
-        let python = crate::backends::interpreter::Interpreter::new(Language::Python, ctx.agent_dir, ctx.conv);
+        let python = crate::backends::interpreter::Interpreter::new(
+            Language::Python,
+            ctx.agent_dir,
+            ctx.conv,
+        );
 
         let stayed = execute("PyCode", &json!({ "code": "1" }), &ctx).expect("run");
         assert!(!stayed.contains("the shell is now in"), "{stayed}");
 
-        let moved = execute("PyCode", &json!({ "code": "os.chdir('workspaces')" }), &ctx).expect("run");
+        let moved =
+            execute("PyCode", &json!({ "code": "os.chdir('workspaces')" }), &ctx).expect("run");
         assert!(moved.contains("the shell is now in"), "{moved}");
         assert!(moved.contains(inner), "{moved}");
 
@@ -2131,7 +2239,11 @@ mod tests {
     fn pycode_past_its_deadline_says_the_variables_are_intact() {
         let dir = scratch("pycode-deadline");
         let ctx = ctx_in(&dir, "pycode-deadline");
-        let python = crate::backends::interpreter::Interpreter::new(Language::Python, ctx.agent_dir, ctx.conv);
+        let python = crate::backends::interpreter::Interpreter::new(
+            Language::Python,
+            ctx.agent_dir,
+            ctx.conv,
+        );
 
         let said = execute(
             "PyCode",
@@ -2141,7 +2253,10 @@ mod tests {
         .expect_err("a timeout fails the call");
         assert!(said.contains("still running after 300ms"), "{said}");
         assert!(said.contains("variables are intact"), "{said}");
-        assert!(said.contains("background"), "and what to do instead: {said}");
+        assert!(
+            said.contains("background"),
+            "and what to do instead: {said}"
+        );
 
         python.stop();
         let _ = std::fs::remove_dir_all(&dir);
@@ -2385,7 +2500,8 @@ mod tests {
 
         // A live job is a different matter: it has not reported anything yet, so there is nothing
         // redundant about asking after it.
-        let running = jobs::start(ctx.agent_dir, ctx.conv, &ctx.shell, &dir, "sleep 30").expect("start");
+        let running =
+            jobs::start(ctx.agent_dir, ctx.conv, &ctx.shell, &dir, "sleep 30").expect("start");
         await_wake(
             &json!({
                 "note": "watching it myself",
@@ -2571,11 +2687,7 @@ mod tests {
         let ctx = chat.ctx();
         let log = adi_events::Events::with_config(ctx.awaits.config().clone());
 
-        ask(
-            &json!({ "questions": [question("one more time?")] }),
-            &ctx,
-        )
-        .expect("asked");
+        ask(&json!({ "questions": [question("one more time?")] }), &ctx).expect("asked");
         // `ask` already relays best-effort on success; this call finds nothing left pending.
         assert_eq!(
             ctx.sessions
@@ -2585,7 +2697,11 @@ mod tests {
             "the one event was already relayed by `ask` itself"
         );
         let caught_up = log.catch_up("sub", 10).expect("catch up");
-        assert_eq!(caught_up.len(), 1, "the fact appears exactly once, not twice");
+        assert_eq!(
+            caught_up.len(),
+            1,
+            "the fact appears exactly once, not twice"
+        );
     }
 
     /// A deadline is a statement about what happens when nobody answers — so it is only a deadline
@@ -2674,8 +2790,8 @@ mod tests {
         let chat = Conversation::open("report");
         let ctx = chat.ctx();
 
-        let reply = report(&json!({ "text": "phase 1 done, starting phase 2" }), &ctx)
-            .expect("reported");
+        let reply =
+            report(&json!({ "text": "phase 1 done, starting phase 2" }), &ctx).expect("reported");
         assert!(reply.contains("reported"), "{reply}");
 
         let events = adi_events::Events::with_config(ctx.awaits.config().clone())
@@ -2692,7 +2808,11 @@ mod tests {
         assert_eq!(payload["report"], "phase 1 done, starting phase 2");
 
         // A report is a side channel: it settles no await, queues nothing, and asks nobody anything.
-        assert!(ctx.awaits.for_conversation("watcher", &chat.conv).is_empty());
+        assert!(
+            ctx.awaits
+                .for_conversation("watcher", &chat.conv)
+                .is_empty()
+        );
         assert!(
             ctx.sessions
                 .pending_question("watcher", &chat.conv)
@@ -2719,21 +2839,34 @@ mod tests {
     fn a_code_only_agent_has_one_tool_and_calls_the_others_from_inside_it() {
         let dir = scratch("only-ts");
         let ctx = only_in(&dir, "only-ts", CodeTools::ONLY_TYPESCRIPT, Hub::default());
-        let typescript = crate::backends::interpreter::Interpreter::new(Language::TypeScript, ctx.agent_dir, ctx.conv);
+        let typescript = crate::backends::interpreter::Interpreter::new(
+            Language::TypeScript,
+            ctx.agent_dir,
+            ctx.conv,
+        );
 
         let declared = declarations(ctx.code);
         let names: Vec<&str> = declared.iter().map(|tool| tool.name.as_str()).collect();
         assert_eq!(names, ["TsCode"], "one tool, and it is the interpreter");
         assert!(
-            declared[0].description.starts_with("**This is your only tool.** Your other tools — `Read`, `Write`, `Edit`, `Bash`,"),
+            declared[0].description.starts_with(
+                "**This is your only tool.** Your other tools — `Read`, `Write`, `Edit`, `Bash`,"
+            ),
             "which says first what the rest became: {}",
             declared[0].description
         );
 
         for gone in ["Read", "Bash", "Await", "PyCode"] {
-            let refused = execute(gone, &json!({ "path": "x", "command": "true", "code": "1" }), &ctx)
-                .expect_err("it is not a tool this agent has");
-            assert_eq!(refused, format!("no tool named {gone} — the tools you have are: TsCode"));
+            let refused = execute(
+                gone,
+                &json!({ "path": "x", "command": "true", "code": "1" }),
+                &ctx,
+            )
+            .expect_err("it is not a tool this agent has");
+            assert_eq!(
+                refused,
+                format!("no tool named {gone} — the tools you have are: TsCode")
+            );
         }
 
         let ran = execute(
@@ -2750,7 +2883,10 @@ mod tests {
             &ctx,
         )
         .expect("the cell runs");
-        assert_eq!(ran, "one\nthree\ntrue true true", "assigned, so nothing was shown but what was printed");
+        assert_eq!(
+            ran, "one\nthree\ntrue true true",
+            "assigned, so nothing was shown but what was printed"
+        );
 
         // A call on a line of its own shows what the tool answered, wherever in the cell it
         // stands and as the tool said it — a file's text is not shown quoted and escaped.
@@ -2762,7 +2898,10 @@ mod tests {
         .expect("a cell of bare calls");
         let lines: Vec<&str> = shown.lines().collect();
         assert_eq!(lines.len(), 3, "{shown}");
-        assert!(lines[0].starts_with("wrote ") && lines[0].ends_with("notes/b.txt (1 bytes)"), "{shown}");
+        assert!(
+            lines[0].starts_with("wrote ") && lines[0].ends_with("notes/b.txt (1 bytes)"),
+            "{shown}"
+        );
         assert_eq!(&lines[1..], ["one", "three"], "{shown}");
 
         // What an earlier cell kept is still there, and so are the tools: the door is opened for
@@ -2782,7 +2921,10 @@ mod tests {
             &ctx,
         )
         .expect("caught, so the cell succeeds");
-        assert!(caught.starts_with("ToolError | Read | couldn't read "), "{caught}");
+        assert!(
+            caught.starts_with("ToolError | Read | couldn't read "),
+            "{caught}"
+        );
         // …and one it does not catch fails the call, with the tool's own words and the cell's line.
         let thrown = execute(
             "TsCode",
@@ -2790,7 +2932,10 @@ mod tests {
             &ctx,
         )
         .expect_err("uncaught, so the call fails");
-        assert!(thrown.contains("ToolError: old_string is not in "), "{thrown}");
+        assert!(
+            thrown.contains("ToolError: old_string is not in "),
+            "{thrown}"
+        );
         assert!(thrown.contains("at <cell 5>: await Edit("), "{thrown}");
 
         // Several at once are several connections, each answered.
@@ -2801,7 +2946,10 @@ mod tests {
         )
         .expect("six writes");
         assert_eq!(together, "6");
-        assert_eq!(std::fs::read_to_string(dir.join("p6.txt")).expect("written"), "6");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("p6.txt")).expect("written"),
+            "6"
+        );
 
         typescript.stop();
         let _ = std::fs::remove_dir_all(&dir);
@@ -2814,14 +2962,28 @@ mod tests {
     fn a_code_only_agent_in_python_calls_the_same_tools_as_functions() {
         let dir = scratch("only-py");
         let ctx = only_in(&dir, "only-py", CodeTools::ONLY_PYTHON, Hub::default());
-        let python = crate::backends::interpreter::Interpreter::new(Language::Python, ctx.agent_dir, ctx.conv);
+        let python = crate::backends::interpreter::Interpreter::new(
+            Language::Python,
+            ctx.agent_dir,
+            ctx.conv,
+        );
 
         let declared = declarations(ctx.code);
         assert_eq!(declared.len(), 1);
         assert_eq!(declared[0].name, "PyCode");
-        assert!(declared[0].description.contains("are functions to call in this code"), "{}", declared[0].description);
-        let refused = execute("TsCode", &json!({ "code": "1" }), &ctx).expect_err("the other language is not its tool");
-        assert_eq!(refused, "no tool named TsCode — the tools you have are: PyCode");
+        assert!(
+            declared[0]
+                .description
+                .contains("are functions to call in this code"),
+            "{}",
+            declared[0].description
+        );
+        let refused = execute("TsCode", &json!({ "code": "1" }), &ctx)
+            .expect_err("the other language is not its tool");
+        assert_eq!(
+            refused,
+            "no tool named TsCode — the tools you have are: PyCode"
+        );
 
         let ran = execute(
             "PyCode",
@@ -2850,7 +3012,10 @@ print(failed, '|', open('notes/a.txt').read() == 'one\\nthree\\n', '|', 'a.txt:2
         .expect("a cell of bare calls");
         let lines: Vec<&str> = shown.lines().collect();
         assert_eq!(lines.len(), 3, "{shown}");
-        assert!(lines[0].starts_with("wrote ") && lines[0].ends_with("notes/b.txt (1 bytes)"), "{shown}");
+        assert!(
+            lines[0].starts_with("wrote ") && lines[0].ends_with("notes/b.txt (1 bytes)"),
+            "{shown}"
+        );
         assert_eq!(&lines[1..], ["one", "three"], "{shown}");
 
         let raised = execute(
@@ -2859,7 +3024,10 @@ print(failed, '|', open('notes/a.txt').read() == 'one\\nthree\\n', '|', 'a.txt:2
             &ctx,
         )
         .expect_err("uncaught, so the call fails");
-        assert!(raised.contains("ToolError: old_string is not in "), "{raised}");
+        assert!(
+            raised.contains("ToolError: old_string is not in "),
+            "{raised}"
+        );
         assert!(raised.contains("<cell 3>"), "{raised}");
 
         python.stop();
@@ -2912,8 +3080,17 @@ print(failed, '|', open('notes/a.txt').read() == 'one\\nthree\\n', '|', 'a.txt:2
     #[test]
     fn a_wake_asked_for_from_code_is_this_conversations() {
         let dir = scratch("only-await");
-        let ctx = only_in(&dir, "only-await", CodeTools::ONLY_TYPESCRIPT, Hub::default());
-        let typescript = crate::backends::interpreter::Interpreter::new(Language::TypeScript, ctx.agent_dir, ctx.conv);
+        let ctx = only_in(
+            &dir,
+            "only-await",
+            CodeTools::ONLY_TYPESCRIPT,
+            Hub::default(),
+        );
+        let typescript = crate::backends::interpreter::Interpreter::new(
+            Language::TypeScript,
+            ctx.agent_dir,
+            ctx.conv,
+        );
 
         let said = execute(
             "TsCode",
@@ -2924,7 +3101,10 @@ print(failed, '|', open('notes/a.txt').read() == 'one\\nthree\\n', '|', 'a.txt:2
         let pending = ctx.awaits.for_conversation("watcher", "conv-1");
         assert_eq!(pending.len(), 1, "{said}");
         assert_eq!(pending[0].note, "look at the build again");
-        assert!(said.contains(&pending[0].id), "the cell ended with the call, so its answer is shown: {said}");
+        assert!(
+            said.contains(&pending[0].id),
+            "the cell ended with the call, so its answer is shown: {said}"
+        );
 
         typescript.stop();
         let _ = std::fs::remove_dir_all(&dir);
@@ -2939,8 +3119,11 @@ print(failed, '|', open('notes/a.txt').read() == 'one\\nthree\\n', '|', 'a.txt:2
         let dir = scratch("only-mcp");
         let hub = crate::backends::mcp_hub::fake::stdio_hub(&dir);
         let ctx = only_in(&dir, "only-mcp", CodeTools::ONLY_TYPESCRIPT, hub.clone());
-        let typescript = crate::backends::interpreter::Interpreter::new(Language::TypeScript, ctx.agent_dir, ctx.conv);
-
+        let typescript = crate::backends::interpreter::Interpreter::new(
+            Language::TypeScript,
+            ctx.agent_dir,
+            ctx.conv,
+        );
 
         let ran = execute(
             "TsCode",
@@ -2955,7 +3138,10 @@ print(failed, '|', open('notes/a.txt').read() == 'one\\nthree\\n', '|', 'a.txt:2
             &ctx,
         )
         .expect("the cell runs");
-        assert_eq!(ran, "echo,count | you said hi | 2 | ToolError: no such workflow | fake");
+        assert_eq!(
+            ran,
+            "echo,count | you said hi | 2 | ToolError: no such workflow | fake"
+        );
 
         // The same server, from Python, in the same turn: it is the process's connection, not
         // the interpreter's — the count goes on from where TypeScript left it.
@@ -2963,7 +3149,11 @@ print(failed, '|', open('notes/a.txt').read() == 'one\\nthree\\n', '|', 'a.txt:2
             code: CodeTools::ONLY_PYTHON,
             ..ctx
         };
-        let python = crate::backends::interpreter::Interpreter::new(Language::Python, ctx.agent_dir, ctx.conv);
+        let python = crate::backends::interpreter::Interpreter::new(
+            Language::Python,
+            ctx.agent_dir,
+            ctx.conv,
+        );
         let ran = execute(
             "PyCode",
             &json!({ "code": "
@@ -2979,7 +3169,10 @@ print(','.join(offered), '|', said.split('\\n')[0], '|', counted['calls'], '|', 
             &ctx,
         )
         .expect("the cell runs");
-        assert_eq!(ran, "echo,count | you said hi | 5 | ToolError: no such workflow | fake");
+        assert_eq!(
+            ran,
+            "echo,count | you said hi | 5 | ToolError: no such workflow | fake"
+        );
 
         typescript.stop();
         python.stop();
@@ -2993,23 +3186,47 @@ print(','.join(offered), '|', said.split('\\n')[0], '|', counted['calls'], '|', 
     #[test]
     fn a_tool_called_from_code_ends_with_the_cells_deadline() {
         for (code, name, tag, kept, slow, look) in [
-            (CodeTools::ONLY_TYPESCRIPT, "TsCode", "only-deadline-ts", "const kept = 7;", "await Bash({ command: 'sleep 30' });", "kept;"),
-            (CodeTools::ONLY_PYTHON, "PyCode", "only-deadline-py", "kept = 7", "Bash(command='sleep 30')", "kept"),
+            (
+                CodeTools::ONLY_TYPESCRIPT,
+                "TsCode",
+                "only-deadline-ts",
+                "const kept = 7;",
+                "await Bash({ command: 'sleep 30' });",
+                "kept;",
+            ),
+            (
+                CodeTools::ONLY_PYTHON,
+                "PyCode",
+                "only-deadline-py",
+                "kept = 7",
+                "Bash(command='sleep 30')",
+                "kept",
+            ),
         ] {
             let dir = scratch(tag);
             let ctx = only_in(&dir, tag, code, Hub::default());
-            let language = if name == "TsCode" { Language::TypeScript } else { Language::Python };
-            let interpreter = crate::backends::interpreter::Interpreter::new(language, ctx.agent_dir, ctx.conv);
+            let language = if name == "TsCode" {
+                Language::TypeScript
+            } else {
+                Language::Python
+            };
+            let interpreter =
+                crate::backends::interpreter::Interpreter::new(language, ctx.agent_dir, ctx.conv);
             execute(name, &json!({ "code": kept }), &ctx).expect("a first cell");
 
             let began = std::time::Instant::now();
             let said = execute(name, &json!({ "code": slow, "timeout_ms": 700 }), &ctx)
                 .expect_err("a timeout fails the call");
-            assert!(began.elapsed() < std::time::Duration::from_secs(12), "{name}: took {:?}", began.elapsed());
+            assert!(
+                began.elapsed() < std::time::Duration::from_secs(12),
+                "{name}: took {:?}",
+                began.elapsed()
+            );
             assert!(said.contains("still running after 700ms"), "{name}: {said}");
             assert!(said.contains("variables are intact"), "{name}: {said}");
 
-            let after = execute(name, &json!({ "code": look }), &ctx).expect("the interpreter survived");
+            let after =
+                execute(name, &json!({ "code": look }), &ctx).expect("the interpreter survived");
             assert_eq!(after, "7", "{name}");
 
             interpreter.stop();
@@ -3024,11 +3241,23 @@ print(','.join(offered), '|', said.split('\\n')[0], '|', counted['calls'], '|', 
     #[test]
     fn a_code_only_agents_dollar_starts_a_job_through_bash() {
         let dir = scratch("only-dollar");
-        let ctx = only_in(&dir, "only-dollar", CodeTools::ONLY_TYPESCRIPT, Hub::default());
-        let typescript = crate::backends::interpreter::Interpreter::new(Language::TypeScript, ctx.agent_dir, ctx.conv);
+        let ctx = only_in(
+            &dir,
+            "only-dollar",
+            CodeTools::ONLY_TYPESCRIPT,
+            Hub::default(),
+        );
+        let typescript = crate::backends::interpreter::Interpreter::new(
+            Language::TypeScript,
+            ctx.agent_dir,
+            ctx.conv,
+        );
 
         let described = &declarations(ctx.code)[0].description;
-        assert!(described.contains("is your shell — the one Bash is, written as a template"), "{described}");
+        assert!(
+            described.contains("is your shell — the one Bash is, written as a template"),
+            "{described}"
+        );
 
         let said = execute(
             "TsCode",
@@ -3082,8 +3311,17 @@ print(','.join(offered), '|', said.split('\\n')[0], '|', counted['calls'], '|', 
     #[test]
     fn a_tool_function_says_how_it_is_called() {
         let dir = scratch("only-docs");
-        let ctx = only_in(&dir, "only-docs", CodeTools::ONLY_TYPESCRIPT, Hub::default());
-        let typescript = crate::backends::interpreter::Interpreter::new(Language::TypeScript, ctx.agent_dir, ctx.conv);
+        let ctx = only_in(
+            &dir,
+            "only-docs",
+            CodeTools::ONLY_TYPESCRIPT,
+            Hub::default(),
+        );
+        let typescript = crate::backends::interpreter::Interpreter::new(
+            Language::TypeScript,
+            ctx.agent_dir,
+            ctx.conv,
+        );
 
         let asked = execute(
             "TsCode",
@@ -3121,14 +3359,21 @@ print(','.join(offered), '|', said.split('\\n')[0], '|', counted['calls'], '|', 
             code: CodeTools::ONLY_PYTHON,
             ..ctx
         };
-        let python = crate::backends::interpreter::Interpreter::new(Language::Python, ctx.agent_dir, ctx.conv);
+        let python = crate::backends::interpreter::Interpreter::new(
+            Language::Python,
+            ctx.agent_dir,
+            ctx.conv,
+        );
         let asked = execute(
             "PyCode",
             &json!({ "code": "print(Edit.__doc__.split('\\n')[0], '|', '`Report(text=…)`' in tools())" }),
             &ctx,
         )
         .expect("the cell runs");
-        assert_eq!(asked, "`Edit(new_string=…, old_string=…, path=…, replace_all=None)` | True");
+        assert_eq!(
+            asked,
+            "`Edit(new_string=…, old_string=…, path=…, replace_all=None)` | True"
+        );
         python.stop();
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -3139,10 +3384,16 @@ print(','.join(offered), '|', said.split('\\n')[0], '|', counted['calls'], '|', 
     #[test]
     fn from_code_the_code_tools_are_not_functions_and_an_unknown_name_lists_the_ones_that_are() {
         let dir = scratch("only-inner");
-        let ctx = only_in(&dir, "only-inner", CodeTools::ONLY_TYPESCRIPT, Hub::default());
+        let ctx = only_in(
+            &dir,
+            "only-inner",
+            CodeTools::ONLY_TYPESCRIPT,
+            Hub::default(),
+        );
         let soon = std::time::Instant::now() + std::time::Duration::from_secs(5);
 
-        let own = execute_inner("TsCode", &json!({ "code": "1" }), &ctx, soon).expect_err("refused");
+        let own =
+            execute_inner("TsCode", &json!({ "code": "1" }), &ctx, soon).expect_err("refused");
         assert!(own.contains("already running in"), "{own}");
         let unknown = execute_inner("Fetch", &json!({}), &ctx, soon).expect_err("no such tool");
         assert_eq!(
@@ -3163,17 +3414,31 @@ print(','.join(offered), '|', said.split('\\n')[0], '|', counted['calls'], '|', 
     #[test]
     fn a_background_script_of_a_code_only_agent_is_told_its_tools_are_not_there() {
         for (language, script) in [
-            (Language::TypeScript, "try { await Read({ path: 'x' }); } catch (error) { console.log(error.name, '-', error.message); }"),
-            (Language::Python, "try:\n    Read(path='x')\nexcept ToolError as error:\n    print('ToolError', '-', error)"),
+            (
+                Language::TypeScript,
+                "try { await Read({ path: 'x' }); } catch (error) { console.log(error.name, '-', error.message); }",
+            ),
+            (
+                Language::Python,
+                "try:\n    Read(path='x')\nexcept ToolError as error:\n    print('ToolError', '-', error)",
+            ),
         ] {
             let dir = scratch(&format!("only-job-{}", language.name()));
-            let interpreter = crate::backends::interpreter::Interpreter::new(language, &dir, "conv-1");
+            let interpreter =
+                crate::backends::interpreter::Interpreter::new(language, &dir, "conv-1");
             let names: Vec<&str> = inner().map(|spec| spec.name).collect();
             let command = interpreter.job_command(script, &names).expect("command");
-            let out = Command::new("sh").arg("-c").arg(command).current_dir(&dir).output().expect("sh");
+            let out = Command::new("sh")
+                .arg("-c")
+                .arg(command)
+                .current_dir(&dir)
+                .output()
+                .expect("sh");
             let said = String::from_utf8_lossy(&out.stdout);
             assert!(
-                said.starts_with("ToolError - Read can only be called while a cell of yours is running"),
+                said.starts_with(
+                    "ToolError - Read can only be called while a cell of yours is running"
+                ),
                 "{}: {said}{}",
                 language.name(),
                 String::from_utf8_lossy(&out.stderr)

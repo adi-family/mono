@@ -193,7 +193,9 @@ impl Hub {
 /// A poisoned lock is still the data: a call that panicked mid-request left a connection that is
 /// at worst out of step, which the next request finds out and reports.
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// The text of a `tools/call` result: its text items in order, and a word standing in for each
@@ -211,12 +213,10 @@ fn content_text(result: &Value) -> String {
                     .unwrap_or_default()
                     .to_string(),
             ),
-            Some("resource") => {
-                match item.pointer("/resource/text").and_then(Value::as_str) {
-                    Some(text) => parts.push(text.to_string()),
-                    None => parts.push("[a resource that is not text]".to_string()),
-                }
-            }
+            Some("resource") => match item.pointer("/resource/text").and_then(Value::as_str) {
+                Some(text) => parts.push(text.to_string()),
+                None => parts.push("[a resource that is not text]".to_string()),
+            },
             Some(other) => parts.push(format!("[{other} content]")),
             None => {}
         }
@@ -241,7 +241,12 @@ impl Client {
     ///
     /// A connection that broke under the request is dropped, so the next request starts a new one
     /// instead of failing the same way for the rest of the turn.
-    fn request(&mut self, method: &str, params: &Value, deadline: Instant) -> Result<Value, String> {
+    fn request(
+        &mut self,
+        method: &str,
+        params: &Value,
+        deadline: Instant,
+    ) -> Result<Value, String> {
         let id = self.server.id.clone();
         if self.link.is_none() {
             self.link = Some(
@@ -254,10 +259,14 @@ impl Client {
         };
         match link.exchange(method, params, deadline) {
             Ok(result) => Ok(result),
-            Err(Failed::Refused(message)) => Err(format!("the MCP server {id} refused {method}: {message}")),
+            Err(Failed::Refused(message)) => {
+                Err(format!("the MCP server {id} refused {method}: {message}"))
+            }
             Err(Failed::Broken(message)) => {
                 self.link = None;
-                Err(format!("the MCP server {id} did not answer {method}: {message}"))
+                Err(format!(
+                    "the MCP server {id} did not answer {method}: {message}"
+                ))
             }
         }
     }
@@ -313,7 +322,12 @@ impl Failed {
 }
 
 impl Link {
-    fn exchange(&mut self, method: &str, params: &Value, deadline: Instant) -> Result<Value, Failed> {
+    fn exchange(
+        &mut self,
+        method: &str,
+        params: &Value,
+        deadline: Instant,
+    ) -> Result<Value, Failed> {
         match self {
             Self::Stdio(link) => link.exchange(method, params, deadline),
             Self::Http(link) => link.exchange(method, params, deadline),
@@ -351,7 +365,9 @@ fn result_of(response: &Value) -> Result<Value, Failed> {
 fn left(deadline: Instant) -> Result<Duration, Failed> {
     let left = deadline.saturating_duration_since(Instant::now());
     if left.is_zero() {
-        return Err(Failed::Broken("the call's deadline passed first".to_string()));
+        return Err(Failed::Broken(
+            "the call's deadline passed first".to_string(),
+        ));
     }
     Ok(left)
 }
@@ -437,7 +453,12 @@ impl StdioLink {
         self.stdin.flush()
     }
 
-    fn exchange(&mut self, method: &str, params: &Value, deadline: Instant) -> Result<Value, Failed> {
+    fn exchange(
+        &mut self,
+        method: &str,
+        params: &Value,
+        deadline: Instant,
+    ) -> Result<Value, Failed> {
         self.next += 1;
         let id = self.next;
         let request = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
@@ -448,7 +469,9 @@ impl StdioLink {
             let message = match self.incoming.recv_timeout(left(deadline)?) {
                 Ok(message) => message,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    return Err(Failed::Broken("the call's deadline passed first".to_string()));
+                    return Err(Failed::Broken(
+                        "the call's deadline passed first".to_string(),
+                    ));
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     return Err(Failed::Broken(format!("the server exited{}", self.said())));
@@ -535,7 +558,11 @@ impl HttpLink {
     }
 
     /// `POST` one message and hand back the response, unread.
-    fn post(&mut self, message: &Value, deadline: Instant) -> Result<reqwest::blocking::Response, Failed> {
+    fn post(
+        &mut self,
+        message: &Value,
+        deadline: Instant,
+    ) -> Result<reqwest::blocking::Response, Failed> {
         let mut request = self
             .client
             .post(&self.url)
@@ -565,7 +592,12 @@ impl HttpLink {
         Ok(response)
     }
 
-    fn exchange(&mut self, method: &str, params: &Value, deadline: Instant) -> Result<Value, Failed> {
+    fn exchange(
+        &mut self,
+        method: &str,
+        params: &Value,
+        deadline: Instant,
+    ) -> Result<Value, Failed> {
         self.next += 1;
         let id = self.next;
         let request = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
@@ -597,7 +629,11 @@ impl HttpLink {
                 message => Some(message),
             };
             return ours.map_or_else(
-                || Err(Failed::Broken("the answer did not include this request's response".to_string())),
+                || {
+                    Err(Failed::Broken(
+                        "the answer did not include this request's response".to_string(),
+                    ))
+                },
                 result_of,
             );
         }
@@ -626,7 +662,9 @@ impl HttpLink {
                 return result_of(&message);
             }
         }
-        Err(Failed::Broken("the stream ended without this request's response".to_string()))
+        Err(Failed::Broken(
+            "the stream ended without this request's response".to_string(),
+        ))
     }
 }
 
@@ -744,7 +782,9 @@ mod tests {
         assert_eq!(said.value, None);
         assert!(!said.is_error);
 
-        let counted = hub.call("fake", "count", &json!({}), soon()).expect("count");
+        let counted = hub
+            .call("fake", "count", &json!({}), soon())
+            .expect("count");
         assert_eq!(counted.text, "2", "the process that ran echo ran this");
         assert_eq!(counted.value, Some(json!({ "calls": 2 })));
         let _ = std::fs::remove_dir_all(&dir);
@@ -758,14 +798,19 @@ mod tests {
         let dir = scratch("stdio-errors");
         let hub = stdio_hub(&dir);
 
-        let failed = hub.call("fake", "fail", &json!({}), soon()).expect("it ran");
+        let failed = hub
+            .call("fake", "fail", &json!({}), soon())
+            .expect("it ran");
         assert!(failed.is_error);
         assert_eq!(failed.text, "no such workflow");
 
         let refused = hub
             .call("fake", "nope", &json!({}), soon())
             .expect_err("a JSON-RPC error");
-        assert!(refused.contains("refused tools/call: unknown tool nope"), "{refused}");
+        assert!(
+            refused.contains("refused tools/call: unknown tool nope"),
+            "{refused}"
+        );
 
         let asked = hub
             .call("fake", "ask-first", &json!({}), soon())
@@ -787,11 +832,15 @@ mod tests {
         let dir = scratch("stdio-dies");
         let hub = stdio_hub(&dir);
 
-        let died = hub.call("fake", "die", &json!({}), soon()).expect_err("it exited");
+        let died = hub
+            .call("fake", "die", &json!({}), soon())
+            .expect_err("it exited");
         assert!(died.contains("the server exited"), "{died}");
         assert!(died.contains("going down"), "with what it said: {died}");
 
-        let again = hub.call("fake", "count", &json!({}), soon()).expect("a new process");
+        let again = hub
+            .call("fake", "count", &json!({}), soon())
+            .expect("a new process");
         assert_eq!(again.text, "1", "which has seen one call");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -812,7 +861,10 @@ mod tests {
             &dir,
         );
         let err = hub.list("gone", soon()).expect_err("nothing to start");
-        assert!(err.contains("couldn't connect to the MCP server gone"), "{err}");
+        assert!(
+            err.contains("couldn't connect to the MCP server gone"),
+            "{err}"
+        );
         assert!(err.contains("adi-no-such-mcp-server"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -879,12 +931,15 @@ mod tests {
                         )
                     }
                     "notifications/initialized" => {
-                        "HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string()
+                        "HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                            .to_string()
                     }
                     "tools/call" => {
                         let progress = json!({ "jsonrpc": "2.0", "method": "notifications/progress", "params": {} });
                         let result = json!({ "jsonrpc": "2.0", "id": id, "result": { "content": [{ "type": "text", "text": "streamed" }] } });
-                        let body = format!("event: message\ndata: {progress}\n\nevent: message\ndata: {result}\n\n");
+                        let body = format!(
+                            "event: message\ndata: {progress}\n\nevent: message\ndata: {result}\n\n"
+                        );
                         format!(
                             "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                             body.len()
@@ -929,27 +984,45 @@ mod tests {
 
         let tools = hub.list("remote", soon()).expect("list");
         assert_eq!(tools, json!([{ "name": "remote" }]));
-        let called = hub.call("remote", "anything", &json!({}), soon()).expect("call");
-        assert_eq!(called.text, "streamed", "the response, not the progress event ahead of it");
+        let called = hub
+            .call("remote", "anything", &json!({}), soon())
+            .expect("call");
+        assert_eq!(
+            called.text, "streamed",
+            "the response, not the progress event ahead of it"
+        );
 
         let seen = lock(&seen).clone();
         let methods: Vec<&str> = seen.iter().map(|s| s.method.as_str()).collect();
         assert_eq!(
             methods,
-            ["initialize", "notifications/initialized", "tools/list", "tools/call"],
+            [
+                "initialize",
+                "notifications/initialized",
+                "tools/list",
+                "tools/call"
+            ],
             "one handshake for the two requests"
         );
         assert!(
-            seen.iter().all(|s| s.authorization.as_deref() == Some("Bearer tok")),
+            seen.iter()
+                .all(|s| s.authorization.as_deref() == Some("Bearer tok")),
             "{seen:?}"
         );
-        assert_eq!(seen[0].session, None, "there is no session before the handshake");
+        assert_eq!(
+            seen[0].session, None,
+            "there is no session before the handshake"
+        );
         assert!(
-            seen[1..].iter().all(|s| s.session.as_deref() == Some("s-1")),
+            seen[1..]
+                .iter()
+                .all(|s| s.session.as_deref() == Some("s-1")),
             "{seen:?}"
         );
         assert!(
-            seen[1..].iter().all(|s| s.protocol.as_deref() == Some("2025-03-26")),
+            seen[1..]
+                .iter()
+                .all(|s| s.protocol.as_deref() == Some("2025-03-26")),
             "the revision the server chose: {seen:?}"
         );
     }

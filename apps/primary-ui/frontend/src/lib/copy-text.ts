@@ -5,8 +5,13 @@
  */
 export async function copyText(text: string): Promise<boolean> {
   try {
-    if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); return true; }
-  } catch { /* Fall through to the selection-based copy. */ }
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    /* Fall through to the selection-based copy. */
+  }
   const previous = document.activeElement;
   const input = document.createElement("textarea");
   input.value = text;
@@ -15,9 +20,11 @@ export async function copyText(text: string): Promise<boolean> {
   input.setAttribute("aria-hidden", "true");
   document.body.append(input);
   input.select();
-  try { return document.execCommand("copy"); }
-  catch { return false; }
-  finally {
+  try {
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
     input.remove();
     if (previous instanceof HTMLElement) previous.focus({ preventScroll: true });
   }

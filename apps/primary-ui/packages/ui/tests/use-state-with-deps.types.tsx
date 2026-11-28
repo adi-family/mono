@@ -1,6 +1,9 @@
 import { useStateWithDeps } from "../src/components";
 
-export function acceptedStateWithDepsExamples(storageKey: string | undefined, record: { id: string; name: string } | null) {
+export function acceptedStateWithDepsExamples(
+  storageKey: string | undefined,
+  record: { id: string; name: string } | null,
+) {
   const [width, setWidth] = useStateWithDeps<number | undefined>(() => undefined, [storageKey]);
   setWidth(240);
   setWidth(undefined);

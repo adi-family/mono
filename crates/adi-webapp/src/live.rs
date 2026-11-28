@@ -90,7 +90,13 @@ impl Sub {
         Self::new(node, "POST", path.into(), body, apply)
     }
 
-    fn new<T, F>(node: Option<&str>, method: &'static str, path: String, body: String, apply: F) -> Self
+    fn new<T, F>(
+        node: Option<&str>,
+        method: &'static str,
+        path: String,
+        body: String,
+        apply: F,
+    ) -> Self
     where
         T: DeserializeOwned,
         F: Fn(T) + 'static,
@@ -394,7 +400,10 @@ mod tests {
     #[test]
     fn a_failure_reads_as_what_the_backend_said() {
         assert_eq!(
-            why(Some(400), Some(&json!({"ok": false, "error": "no such backend"}))),
+            why(
+                Some(400),
+                Some(&json!({"ok": false, "error": "no such backend"}))
+            ),
             "no such backend"
         );
         assert_eq!(why(Some(500), Some(&json!({}))), "the backend answered 500");

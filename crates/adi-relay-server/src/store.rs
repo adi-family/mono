@@ -142,7 +142,9 @@ impl Store {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Connection> {
-        self.conn.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.conn
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     // ---- endpoints -------------------------------------------------------------------
@@ -189,7 +191,9 @@ impl Store {
     /// Any `rusqlite` error.
     pub fn endpoint_exists(&self, id: &str) -> rusqlite::Result<bool> {
         self.lock()
-            .query_row("SELECT 1 FROM endpoints WHERE id = ?1", params![id], |_| Ok(()))
+            .query_row("SELECT 1 FROM endpoints WHERE id = ?1", params![id], |_| {
+                Ok(())
+            })
             .optional()
             .map(|r| r.is_some())
     }
@@ -223,7 +227,10 @@ impl Store {
     ///
     /// # Errors
     /// Any `rusqlite` error.
-    pub fn list_endpoints(&self, owner_fingerprint: &str) -> rusqlite::Result<Vec<EndpointSummary>> {
+    pub fn list_endpoints(
+        &self,
+        owner_fingerprint: &str,
+    ) -> rusqlite::Result<Vec<EndpointSummary>> {
         let conn = self.lock();
         let mut stmt = conn.prepare(
             "SELECT e.id, e.retention_secs, e.paused, e.created_at,
@@ -248,10 +255,18 @@ impl Store {
     ///
     /// # Errors
     /// Any `rusqlite` error.
-    pub fn delete_endpoint(&self, id: &str, owner_fingerprint: &str) -> rusqlite::Result<DeleteOutcome> {
+    pub fn delete_endpoint(
+        &self,
+        id: &str,
+        owner_fingerprint: &str,
+    ) -> rusqlite::Result<DeleteOutcome> {
         let conn = self.lock();
         let owner: Option<String> = conn
-            .query_row("SELECT owner_fingerprint FROM endpoints WHERE id = ?1", params![id], |row| row.get(0))
+            .query_row(
+                "SELECT owner_fingerprint FROM endpoints WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
             .optional()?;
         match owner {
             None => Ok(DeleteOutcome::NotFound),
@@ -269,7 +284,11 @@ impl Store {
     ///
     /// # Errors
     /// Any `rusqlite` error.
-    pub fn set_endpoints_paused(&self, owner_fingerprint: &str, paused: bool) -> rusqlite::Result<()> {
+    pub fn set_endpoints_paused(
+        &self,
+        owner_fingerprint: &str,
+        paused: bool,
+    ) -> rusqlite::Result<()> {
         self.lock().execute(
             "UPDATE endpoints SET paused = ?1 WHERE owner_fingerprint = ?2",
             params![i64::from(paused), owner_fingerprint],
@@ -336,7 +355,12 @@ impl Store {
         let sealed = adi_relay::seal::seal(sealing_public, endpoint_id, record_id, plaintext);
         conn.execute(
             "UPDATE records SET ephemeral_pubkey = ?1, nonce = ?2, ciphertext = ?3 WHERE id = ?4",
-            params![sealed.ephemeral_pubkey.as_slice(), sealed.nonce.as_slice(), sealed.ciphertext, record_id],
+            params![
+                sealed.ephemeral_pubkey.as_slice(),
+                sealed.nonce.as_slice(),
+                sealed.ciphertext,
+                record_id
+            ],
         )?;
         Ok(())
     }
@@ -348,7 +372,11 @@ impl Store {
     ///
     /// # Errors
     /// Any `rusqlite` error.
-    pub fn pull(&self, owner_fingerprint: &str, batch_max: u32) -> rusqlite::Result<Vec<PulledRecord>> {
+    pub fn pull(
+        &self,
+        owner_fingerprint: &str,
+        batch_max: u32,
+    ) -> rusqlite::Result<Vec<PulledRecord>> {
         let conn = self.lock();
         let mut stmt = conn.prepare(
             "DELETE FROM records WHERE id IN (
@@ -381,13 +409,20 @@ impl Store {
     ///
     /// # Errors
     /// Any `rusqlite` error other than the expected unique-constraint violation on replay.
-    pub fn remember_nonce(&self, owner_fingerprint: &str, nonce: &str, expires_at: i64) -> rusqlite::Result<bool> {
+    pub fn remember_nonce(
+        &self,
+        owner_fingerprint: &str,
+        nonce: &str,
+        expires_at: i64,
+    ) -> rusqlite::Result<bool> {
         match self.lock().execute(
             "INSERT INTO nonces (owner_fingerprint, nonce, expires_at) VALUES (?1, ?2, ?3)",
             params![owner_fingerprint, nonce, expires_at],
         ) {
             Ok(_) => Ok(true),
-            Err(rusqlite::Error::SqliteFailure(e, _)) if e.code == rusqlite::ErrorCode::ConstraintViolation => {
+            Err(rusqlite::Error::SqliteFailure(e, _))
+                if e.code == rusqlite::ErrorCode::ConstraintViolation =>
+            {
                 Ok(false)
             }
             Err(e) => Err(e),
@@ -398,7 +433,10 @@ impl Store {
 
     /// # Errors
     /// Any `rusqlite` error.
-    pub fn get_licence_status(&self, owner_fingerprint: &str) -> rusqlite::Result<Option<(bool, i64)>> {
+    pub fn get_licence_status(
+        &self,
+        owner_fingerprint: &str,
+    ) -> rusqlite::Result<Option<(bool, i64)>> {
         self.lock()
             .query_row(
                 "SELECT valid, checked_at FROM licence_status WHERE owner_fingerprint = ?1",
@@ -436,7 +474,8 @@ impl Store {
     /// Any `rusqlite` error.
     pub fn all_licence_rows(&self) -> rusqlite::Result<Vec<(String, String)>> {
         let conn = self.lock();
-        let mut stmt = conn.prepare("SELECT owner_fingerprint, licence_code FROM licence_status")?;
+        let mut stmt =
+            conn.prepare("SELECT owner_fingerprint, licence_code FROM licence_status")?;
         let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
         rows.collect()
     }
@@ -493,8 +532,10 @@ impl Store {
     /// # Errors
     /// Any `rusqlite` error.
     pub fn purge_old_registrations(&self, before_day: &str) -> rusqlite::Result<usize> {
-        self.lock()
-            .execute("DELETE FROM registrations_by_ip WHERE day < ?1", params![before_day])
+        self.lock().execute(
+            "DELETE FROM registrations_by_ip WHERE day < ?1",
+            params![before_day],
+        )
     }
 }
 
@@ -535,11 +576,24 @@ mod tests {
     #[test]
     fn delete_checks_ownership_before_removing_anything() {
         let s = store();
-        s.insert_endpoint("wh_a", "fp1", "k", "seal", 300, 1000).unwrap();
-        assert_eq!(s.delete_endpoint("wh_a", "fp-other").unwrap(), DeleteOutcome::Forbidden);
-        assert!(s.get_endpoint("wh_a").unwrap().is_some(), "forbidden delete must not remove the row");
-        assert_eq!(s.delete_endpoint("wh_missing", "fp1").unwrap(), DeleteOutcome::NotFound);
-        assert_eq!(s.delete_endpoint("wh_a", "fp1").unwrap(), DeleteOutcome::Deleted);
+        s.insert_endpoint("wh_a", "fp1", "k", "seal", 300, 1000)
+            .unwrap();
+        assert_eq!(
+            s.delete_endpoint("wh_a", "fp-other").unwrap(),
+            DeleteOutcome::Forbidden
+        );
+        assert!(
+            s.get_endpoint("wh_a").unwrap().is_some(),
+            "forbidden delete must not remove the row"
+        );
+        assert_eq!(
+            s.delete_endpoint("wh_missing", "fp1").unwrap(),
+            DeleteOutcome::NotFound
+        );
+        assert_eq!(
+            s.delete_endpoint("wh_a", "fp1").unwrap(),
+            DeleteOutcome::Deleted
+        );
         assert!(s.get_endpoint("wh_a").unwrap().is_none());
     }
 
@@ -547,8 +601,10 @@ mod tests {
     fn delete_removes_queued_records_too() {
         let (sealing_public, _secret) = node();
         let s = store();
-        s.insert_endpoint("wh_a", "fp1", "k", "seal", 300, 1000).unwrap();
-        s.insert_sealed_record("wh_a", &sealing_public, 1000, 2000, 5, b"hi").unwrap();
+        s.insert_endpoint("wh_a", "fp1", "k", "seal", 300, 1000)
+            .unwrap();
+        s.insert_sealed_record("wh_a", &sealing_public, 1000, 2000, 5, b"hi")
+            .unwrap();
         s.delete_endpoint("wh_a", "fp1").unwrap();
         // The record's endpoint is gone; pulling for fp1 must come back empty, not error.
         assert!(s.pull("fp1", 10).unwrap().is_empty());
@@ -559,7 +615,8 @@ mod tests {
         let (sealing_public, sealing_secret) = node();
         let secret = x25519_dalek::StaticSecret::from(sealing_secret);
         let s = store();
-        s.insert_endpoint("wh_a", "fp1", "k", "seal", 300, 1000).unwrap();
+        s.insert_endpoint("wh_a", "fp1", "k", "seal", 300, 1000)
+            .unwrap();
         s.insert_sealed_record("wh_a", &sealing_public, 1_111, 9_999, 11, b"hello webhook")
             .unwrap();
 
@@ -568,7 +625,8 @@ mod tests {
         assert_eq!(pulled[0].endpoint_id, "wh_a");
         assert_eq!(pulled[0].received_at, 1_111);
 
-        let opened = adi_relay::seal::open(&secret, "wh_a", pulled[0].id, &pulled[0].sealed).expect("open");
+        let opened =
+            adi_relay::seal::open(&secret, "wh_a", pulled[0].id, &pulled[0].sealed).expect("open");
         assert_eq!(&*opened, b"hello webhook");
     }
 
@@ -580,17 +638,22 @@ mod tests {
         let (sealing_public, sealing_secret) = node();
         let secret = x25519_dalek::StaticSecret::from(sealing_secret);
         let s = store();
-        s.insert_endpoint("wh_a", "fp1", "k", "seal", 300, 1000).unwrap();
-        s.insert_sealed_record("wh_a", &sealing_public, 1, 9_999, 5, b"first").unwrap();
-        s.insert_sealed_record("wh_a", &sealing_public, 2, 9_999, 6, b"second").unwrap();
+        s.insert_endpoint("wh_a", "fp1", "k", "seal", 300, 1000)
+            .unwrap();
+        s.insert_sealed_record("wh_a", &sealing_public, 1, 9_999, 5, b"first")
+            .unwrap();
+        s.insert_sealed_record("wh_a", &sealing_public, 2, 9_999, 6, b"second")
+            .unwrap();
 
         let pulled = s.pull("fp1", 10).expect("pull");
         assert_eq!(pulled.len(), 2);
         assert_ne!(pulled[0].id, pulled[1].id);
 
-        let first = adi_relay::seal::open(&secret, "wh_a", pulled[0].id, &pulled[0].sealed).expect("open first");
+        let first = adi_relay::seal::open(&secret, "wh_a", pulled[0].id, &pulled[0].sealed)
+            .expect("open first");
         assert_eq!(&*first, b"first");
-        let second = adi_relay::seal::open(&secret, "wh_a", pulled[1].id, &pulled[1].sealed).expect("open second");
+        let second = adi_relay::seal::open(&secret, "wh_a", pulled[1].id, &pulled[1].sealed)
+            .expect("open second");
         assert_eq!(&*second, b"second");
         // The AAD is bound per-record: the wrong id for either never opens.
         assert!(adi_relay::seal::open(&secret, "wh_a", pulled[1].id, &pulled[0].sealed).is_err());
@@ -600,8 +663,10 @@ mod tests {
     fn pull_deletes_at_handout_and_a_second_pull_sees_nothing() {
         let (sealing_public, _secret) = node();
         let s = store();
-        s.insert_endpoint("wh_a", "fp1", "k", "seal", 300, 1000).unwrap();
-        s.insert_sealed_record("wh_a", &sealing_public, 1, 2, 1, b"a").unwrap();
+        s.insert_endpoint("wh_a", "fp1", "k", "seal", 300, 1000)
+            .unwrap();
+        s.insert_sealed_record("wh_a", &sealing_public, 1, 2, 1, b"a")
+            .unwrap();
         assert_eq!(s.pull("fp1", 10).unwrap().len(), 1);
         assert!(s.pull("fp1", 10).unwrap().is_empty());
     }
@@ -610,12 +675,18 @@ mod tests {
     fn pull_is_scoped_to_the_keys_endpoints_across_all_of_them() {
         let (sealing_public, _secret) = node();
         let s = store();
-        s.insert_endpoint("wh_a", "fp1", "k", "seal", 300, 1000).unwrap();
-        s.insert_endpoint("wh_b", "fp1", "k", "seal", 300, 1000).unwrap();
-        s.insert_endpoint("wh_c", "fp2", "k", "seal", 300, 1000).unwrap();
-        s.insert_sealed_record("wh_a", &sealing_public, 1, 2, 1, b"a").unwrap();
-        s.insert_sealed_record("wh_b", &sealing_public, 1, 2, 1, b"b").unwrap();
-        s.insert_sealed_record("wh_c", &sealing_public, 1, 2, 1, b"c").unwrap();
+        s.insert_endpoint("wh_a", "fp1", "k", "seal", 300, 1000)
+            .unwrap();
+        s.insert_endpoint("wh_b", "fp1", "k", "seal", 300, 1000)
+            .unwrap();
+        s.insert_endpoint("wh_c", "fp2", "k", "seal", 300, 1000)
+            .unwrap();
+        s.insert_sealed_record("wh_a", &sealing_public, 1, 2, 1, b"a")
+            .unwrap();
+        s.insert_sealed_record("wh_b", &sealing_public, 1, 2, 1, b"b")
+            .unwrap();
+        s.insert_sealed_record("wh_c", &sealing_public, 1, 2, 1, b"c")
+            .unwrap();
 
         let fp1 = s.pull("fp1", 10).unwrap();
         assert_eq!(fp1.len(), 2, "both of fp1's endpoints, in one call");
@@ -627,10 +698,15 @@ mod tests {
     fn a_paused_endpoints_records_never_come_back_from_pull() {
         let (sealing_public, _secret) = node();
         let s = store();
-        s.insert_endpoint("wh_a", "fp1", "k", "seal", 300, 1000).unwrap();
-        s.insert_sealed_record("wh_a", &sealing_public, 1, 2, 1, b"a").unwrap();
+        s.insert_endpoint("wh_a", "fp1", "k", "seal", 300, 1000)
+            .unwrap();
+        s.insert_sealed_record("wh_a", &sealing_public, 1, 2, 1, b"a")
+            .unwrap();
         s.set_endpoints_paused("fp1", true).unwrap();
-        assert!(s.pull("fp1", 10).unwrap().is_empty(), "paused endpoints are withheld from pull");
+        assert!(
+            s.pull("fp1", 10).unwrap().is_empty(),
+            "paused endpoints are withheld from pull"
+        );
 
         // Ingress still queues, though — the record is still there once unpaused.
         s.set_endpoints_paused("fp1", false).unwrap();
@@ -641,22 +717,31 @@ mod tests {
     fn pull_batch_is_capped_and_oldest_first() {
         let (sealing_public, _secret) = node();
         let s = store();
-        s.insert_endpoint("wh_a", "fp1", "k", "seal", 300, 1000).unwrap();
+        s.insert_endpoint("wh_a", "fp1", "k", "seal", 300, 1000)
+            .unwrap();
         for i in 0..5 {
-            s.insert_sealed_record("wh_a", &sealing_public, i, i + 100, 1, b"x").unwrap();
+            s.insert_sealed_record("wh_a", &sealing_public, i, i + 100, 1, b"x")
+                .unwrap();
         }
         let first = s.pull("fp1", 2).expect("pull");
         assert_eq!(first.len(), 2);
         assert_eq!(first[0].received_at, 0);
         assert_eq!(first[1].received_at, 1);
-        assert_eq!(s.pull("fp1", 10).unwrap().len(), 3, "the rest is still queued");
+        assert_eq!(
+            s.pull("fp1", 10).unwrap().len(),
+            3,
+            "the rest is still queued"
+        );
     }
 
     #[test]
     fn nonce_replay_is_refused_once_remembered() {
         let s = store();
         assert!(s.remember_nonce("fp1", "n1", 1_000).unwrap());
-        assert!(!s.remember_nonce("fp1", "n1", 1_000).unwrap(), "same key, same nonce");
+        assert!(
+            !s.remember_nonce("fp1", "n1", 1_000).unwrap(),
+            "same key, same nonce"
+        );
         // A different key may reuse the same nonce string — it's scoped per key.
         assert!(s.remember_nonce("fp2", "n1", 1_000).unwrap());
     }
@@ -665,9 +750,11 @@ mod tests {
     fn licence_status_round_trips_and_updates() {
         let s = store();
         assert_eq!(s.get_licence_status("fp1").unwrap(), None);
-        s.set_licence_status("fp1", "ADI-ENT-X", true, 1_000).unwrap();
+        s.set_licence_status("fp1", "ADI-ENT-X", true, 1_000)
+            .unwrap();
         assert_eq!(s.get_licence_status("fp1").unwrap(), Some((true, 1_000)));
-        s.set_licence_status("fp1", "ADI-ENT-X", false, 2_000).unwrap();
+        s.set_licence_status("fp1", "ADI-ENT-X", false, 2_000)
+            .unwrap();
         assert_eq!(s.get_licence_status("fp1").unwrap(), Some((false, 2_000)));
         assert_eq!(
             s.all_licence_rows().unwrap(),
@@ -689,11 +776,18 @@ mod tests {
     fn purge_removes_only_whats_actually_expired() {
         let (sealing_public, _secret) = node();
         let s = store();
-        s.insert_endpoint("wh_a", "fp1", "k", "seal", 300, 1000).unwrap();
-        s.insert_sealed_record("wh_a", &sealing_public, 1, 50, 1, b"old").unwrap();
-        s.insert_sealed_record("wh_a", &sealing_public, 1, 500, 1, b"new").unwrap();
+        s.insert_endpoint("wh_a", "fp1", "k", "seal", 300, 1000)
+            .unwrap();
+        s.insert_sealed_record("wh_a", &sealing_public, 1, 50, 1, b"old")
+            .unwrap();
+        s.insert_sealed_record("wh_a", &sealing_public, 1, 500, 1, b"new")
+            .unwrap();
         assert_eq!(s.purge_expired_records(100).unwrap(), 1);
-        assert_eq!(s.pull("fp1", 10).unwrap().len(), 1, "only the unexpired one is left");
+        assert_eq!(
+            s.pull("fp1", 10).unwrap().len(),
+            1,
+            "only the unexpired one is left"
+        );
 
         s.remember_nonce("fp1", "a", 50).unwrap();
         s.remember_nonce("fp1", "b", 500).unwrap();
@@ -708,9 +802,11 @@ mod tests {
     fn pending_count_reflects_queued_records() {
         let (sealing_public, _secret) = node();
         let s = store();
-        s.insert_endpoint("wh_a", "fp1", "k", "seal", 300, 1000).unwrap();
+        s.insert_endpoint("wh_a", "fp1", "k", "seal", 300, 1000)
+            .unwrap();
         assert_eq!(s.pending_count("wh_a").unwrap(), 0);
-        s.insert_sealed_record("wh_a", &sealing_public, 1, 2, 1, b"x").unwrap();
+        s.insert_sealed_record("wh_a", &sealing_public, 1, 2, 1, b"x")
+            .unwrap();
         assert_eq!(s.pending_count("wh_a").unwrap(), 1);
     }
 
@@ -718,7 +814,8 @@ mod tests {
     fn endpoint_exists_tells_apart_present_and_absent_ids() {
         let s = store();
         assert!(!s.endpoint_exists("wh_a").unwrap());
-        s.insert_endpoint("wh_a", "fp1", "k", "seal", 300, 1000).unwrap();
+        s.insert_endpoint("wh_a", "fp1", "k", "seal", 300, 1000)
+            .unwrap();
         assert!(s.endpoint_exists("wh_a").unwrap());
     }
 }

@@ -236,7 +236,12 @@ pub(crate) fn run_workflows(adi: Adi, command: WorkflowsCommand) -> Result<(), S
 
 /// Print a list of runs, each with its status derived fresh (never cached) via
 /// [`adi_core::workflow_run_status`] — the compact human form, or one JSON array.
-fn print_runs(adi: Adi, engine: &adi_core::WorkflowEngine, runs: &[adi_core::WorkflowRun], json: bool) {
+fn print_runs(
+    adi: Adi,
+    engine: &adi_core::WorkflowEngine,
+    runs: &[adi_core::WorkflowRun],
+    json: bool,
+) {
     let tasks = adi.tasks();
     let agents = adi.agents();
     if json {
@@ -262,14 +267,23 @@ fn print_runs(adi: Adi, engine: &adi_core::WorkflowEngine, runs: &[adi_core::Wor
     }
     for run in runs {
         let status = adi_core::workflow_run_status(engine, &tasks, &agents, run);
-        println!("{} [{}] workflow={}", run.run_key, status.label(), run.workflow);
+        println!(
+            "{} [{}] workflow={}",
+            run.run_key,
+            status.label(),
+            run.workflow
+        );
     }
 }
 
 /// Print one workflow's listing in the compact human CLI format. `detailed` (used by `show`,
 /// never `list`) also prints the input/output JSON Schema when the file declares one.
 fn print_listing(listing: &WorkflowListing, detailed: bool) {
-    let state = if listing.enabled { "enabled" } else { "disabled" };
+    let state = if listing.enabled {
+        "enabled"
+    } else {
+        "disabled"
+    };
     print!("{} [{state}]", listing.id);
     if let Some(project) = &listing.project {
         print!(" (project {project})");
@@ -308,7 +322,10 @@ fn trigger_line(trigger: &TriggerDef) -> String {
             }
             line
         }
-        TriggerDef::Event { pattern, where_clause } => {
+        TriggerDef::Event {
+            pattern,
+            where_clause,
+        } => {
             use std::fmt::Write as _;
             let mut line = format!("event: {pattern}");
             if let Some(clause) = where_clause {
@@ -324,7 +341,10 @@ fn print_schema(label: &str, schema: Option<&serde_json::Value>) {
     match schema {
         Some(schema) => {
             println!("  {label}:");
-            for line in serde_json::to_string_pretty(schema).unwrap_or_default().lines() {
+            for line in serde_json::to_string_pretty(schema)
+                .unwrap_or_default()
+                .lines()
+            {
                 println!("    {line}");
             }
         }
@@ -359,9 +379,20 @@ mod tests {
             })
         ));
         for needle in [
-            "ctx.step", "ctx.task", "ctx.ask", "ctx.run", "ctx.waitFor", "ctx.sleep",
-            "5-FIELD", "Date.now", "8 hops", "30 days", "tasks complete", "--dispatch",
-            "RETRIED, NOT FAILED", "3rd consecutive crash",
+            "ctx.step",
+            "ctx.task",
+            "ctx.ask",
+            "ctx.run",
+            "ctx.waitFor",
+            "ctx.sleep",
+            "5-FIELD",
+            "Date.now",
+            "8 hops",
+            "30 days",
+            "tasks complete",
+            "--dispatch",
+            "RETRIED, NOT FAILED",
+            "3rd consecutive crash",
         ] {
             assert!(LLM_HELP.contains(needle), "missing {needle:?} in LLM_HELP");
         }

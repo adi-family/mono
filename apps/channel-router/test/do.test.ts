@@ -49,13 +49,21 @@ async function webhook(body: unknown, now = NOW): Promise<Response> {
 }
 
 async function startUpdate(chatId: number, code: string, updateId = 1): Promise<Response> {
-  return webhook({ update_id: updateId, message: { message_id: updateId, chat: { id: chatId }, text: `/start ${code}` } });
+  return webhook({
+    update_id: updateId,
+    message: { message_id: updateId, chat: { id: chatId }, text: `/start ${code}` },
+  });
 }
 
 async function messageUpdate(chatId: number, text: string, updateId: number): Promise<Response> {
   return webhook({
     update_id: updateId,
-    message: { message_id: updateId, chat: { id: chatId }, from: { id: 1, username: "alice" }, text },
+    message: {
+      message_id: updateId,
+      chat: { id: chatId },
+      from: { id: 1, username: "alice" },
+      text,
+    },
   });
 }
 
@@ -118,7 +126,9 @@ describe("link-code flow", () => {
       expect.anything(),
     );
 
-    const row = await env.ROUTING_KEYS.prepare("SELECT node_id FROM routing_keys WHERE provider = ? AND routing_key = ?")
+    const row = await env.ROUTING_KEYS.prepare(
+      "SELECT node_id FROM routing_keys WHERE provider = ? AND routing_key = ?",
+    )
       .bind("telegram", "4242")
       .first<{ node_id: string }>();
     expect(row?.node_id).toBe(node);
@@ -127,7 +137,8 @@ describe("link-code flow", () => {
 
   it("spends the link code on use -- its D1 row is gone afterwards", async () => {
     const { link_code } = await register(`node-spent-${Math.random()}`);
-    const pending = () => env.ROUTING_KEYS.prepare("SELECT 1 FROM link_codes WHERE handle = ?").bind(link_code).first();
+    const pending = () =>
+      env.ROUTING_KEYS.prepare("SELECT 1 FROM link_codes WHERE handle = ?").bind(link_code).first();
     expect(await pending()).not.toBeNull();
     await startUpdate(4244, link_code, 1);
     expect(await pending()).toBeNull();
@@ -139,8 +150,12 @@ describe("link-code flow", () => {
     expect(res.status).toBe(200);
     // ...and the chat is told why, rather than met with silence.
     const sent = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/sendMessage"));
-    expect(JSON.parse(String((sent?.[1] as RequestInit).body)).text).toMatch(/expired or was already used/);
-    const row = await env.ROUTING_KEYS.prepare("SELECT node_id FROM routing_keys WHERE provider = ? AND routing_key = ?")
+    expect(JSON.parse(String((sent?.[1] as RequestInit).body)).text).toMatch(
+      /expired or was already used/,
+    );
+    const row = await env.ROUTING_KEYS.prepare(
+      "SELECT node_id FROM routing_keys WHERE provider = ? AND routing_key = ?",
+    )
       .bind("telegram", "4243")
       .first();
     expect(row).toBeNull();
@@ -154,7 +169,9 @@ describe("link-code flow", () => {
 
     // Replaying the same code against a *different* chat must not move the binding.
     await startUpdate(6000, link_code, 2);
-    const row = await env.ROUTING_KEYS.prepare("SELECT node_id FROM routing_keys WHERE provider = ? AND routing_key = ?")
+    const row = await env.ROUTING_KEYS.prepare(
+      "SELECT node_id FROM routing_keys WHERE provider = ? AND routing_key = ?",
+    )
       .bind("telegram", "6000")
       .first();
     expect(row).toBeNull();
@@ -177,7 +194,9 @@ describe("first install wins (ADI-MONO-125)", () => {
     expect(JSON.parse(String((sent?.[1] as RequestInit).body)).text).toMatch(
       /already connected to another ADI/,
     );
-    const row = await env.ROUTING_KEYS.prepare("SELECT node_id FROM routing_keys WHERE provider = ? AND routing_key = ?")
+    const row = await env.ROUTING_KEYS.prepare(
+      "SELECT node_id FROM routing_keys WHERE provider = ? AND routing_key = ?",
+    )
       .bind("telegram", "20000")
       .first<{ node_id: string }>();
     expect(row?.node_id).toBe(firstNode);
@@ -194,7 +213,9 @@ describe("first install wins (ADI-MONO-125)", () => {
     const res = await startUpdate(21_000, second.link_code, 2);
     expect(res.status).toBe(200);
 
-    const row = await env.ROUTING_KEYS.prepare("SELECT node_id FROM routing_keys WHERE provider = ? AND routing_key = ?")
+    const row = await env.ROUTING_KEYS.prepare(
+      "SELECT node_id FROM routing_keys WHERE provider = ? AND routing_key = ?",
+    )
       .bind("telegram", "21000")
       .first<{ node_id: string }>();
     expect(row?.node_id).toBe(node);
@@ -234,7 +255,9 @@ describe("first install wins (ADI-MONO-125)", () => {
     const res = await startUpdate(22_000, second.link_code, 2);
     expect(res.status).toBe(200);
 
-    const row = await env.ROUTING_KEYS.prepare("SELECT node_id FROM routing_keys WHERE provider = ? AND routing_key = ?")
+    const row = await env.ROUTING_KEYS.prepare(
+      "SELECT node_id FROM routing_keys WHERE provider = ? AND routing_key = ?",
+    )
       .bind("telegram", "22000")
       .first<{ node_id: string }>();
     expect(row?.node_id).toBe(secondNode);
@@ -252,7 +275,9 @@ describe("Telegram 'Add to a group' (ADI-MONO-125)", () => {
     });
     expect(res.status).toBe(200);
 
-    const row = await env.ROUTING_KEYS.prepare("SELECT node_id FROM routing_keys WHERE provider = ? AND routing_key = ?")
+    const row = await env.ROUTING_KEYS.prepare(
+      "SELECT node_id FROM routing_keys WHERE provider = ? AND routing_key = ?",
+    )
       .bind("telegram", "23000")
       .first<{ node_id: string }>();
     expect(row?.node_id).toBe(node);
@@ -268,7 +293,11 @@ describe("routing", () => {
     const ws = await subscribe(token);
     const pending = nextFrame(ws); // the "linked" frame, queued at link time
     const linkedFrame = await pending;
-    expect(linkedFrame).toMatchObject({ type: "linked", provider: "telegram", routing_key: "7000" });
+    expect(linkedFrame).toMatchObject({
+      type: "linked",
+      provider: "telegram",
+      routing_key: "7000",
+    });
 
     const next = nextFrame(ws);
     const res = await messageUpdate(7000, "hello agent", 2);
@@ -314,13 +343,19 @@ describe("Slack sender name resolution", () => {
     const node = `node-slack-sender-${Math.random()}`;
     const { token, link_code } = await register(node, { kind: "agent", agent: "a" }, NOW, "slack");
 
-    fetchMock.mockImplementation(async () =>
-      new Response(JSON.stringify({ ok: true, access_token: "xoxb-sender-test", team: { id: "T-SENDER" } }), {
-        status: 200,
-      }),
+    fetchMock.mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({ ok: true, access_token: "xoxb-sender-test", team: { id: "T-SENDER" } }),
+          {
+            status: 200,
+          },
+        ),
     );
     const linkRes = await handle(
-      new Request(`https://router.example/link/slack?code=oauth-code&state=${encodeURIComponent(link_code)}`),
+      new Request(
+        `https://router.example/link/slack?code=oauth-code&state=${encodeURIComponent(link_code)}`,
+      ),
       env,
       NOW,
     );
@@ -331,9 +366,12 @@ describe("Slack sender name resolution", () => {
 
     fetchMock.mockImplementation(async (url: string) =>
       String(url).startsWith("https://slack.com/api/users.info")
-        ? new Response(JSON.stringify({ ok: true, user: { profile: { display_name: "Resolved Name" } } }), {
-            status: 200,
-          })
+        ? new Response(
+            JSON.stringify({ ok: true, user: { profile: { display_name: "Resolved Name" } } }),
+            {
+              status: 200,
+            },
+          )
         : new Response("{}", { status: 200 }),
     );
 
@@ -357,13 +395,23 @@ describe("Slack sender name resolution", () => {
     const node = `node-slack-sender-fail-${Math.random()}`;
     const { token, link_code } = await register(node, { kind: "agent", agent: "a" }, NOW, "slack");
 
-    fetchMock.mockImplementation(async () =>
-      new Response(JSON.stringify({ ok: true, access_token: "xoxb-sender-fail", team: { id: "T-SENDER-FAIL" } }), {
-        status: 200,
-      }),
+    fetchMock.mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            ok: true,
+            access_token: "xoxb-sender-fail",
+            team: { id: "T-SENDER-FAIL" },
+          }),
+          {
+            status: 200,
+          },
+        ),
     );
     await handle(
-      new Request(`https://router.example/link/slack?code=oauth-code&state=${encodeURIComponent(link_code)}`),
+      new Request(
+        `https://router.example/link/slack?code=oauth-code&state=${encodeURIComponent(link_code)}`,
+      ),
       env,
       NOW,
     );
@@ -430,7 +478,9 @@ describe("POST /disconnect", () => {
     const { token, connection, link_code } = await register(node);
     await startUpdate(10_000, link_code, 1);
 
-    const row = await env.ROUTING_KEYS.prepare("SELECT node_id FROM routing_keys WHERE provider = ? AND routing_key = ?")
+    const row = await env.ROUTING_KEYS.prepare(
+      "SELECT node_id FROM routing_keys WHERE provider = ? AND routing_key = ?",
+    )
       .bind("telegram", "10000")
       .first();
     expect(row).not.toBeNull();
@@ -447,7 +497,9 @@ describe("POST /disconnect", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, revoked: true });
 
-    const rowAfter = await env.ROUTING_KEYS.prepare("SELECT node_id FROM routing_keys WHERE provider = ? AND routing_key = ?")
+    const rowAfter = await env.ROUTING_KEYS.prepare(
+      "SELECT node_id FROM routing_keys WHERE provider = ? AND routing_key = ?",
+    )
       .bind("telegram", "10000")
       .first();
     expect(rowAfter).toBeNull();
@@ -576,21 +628,28 @@ describe("POST /send", () => {
     // vitest.config.ts), so a hardcoded one shared with another test file's own Slack link would
     // collide on the D1 routing_keys row (and, since ADI-MONO-125, get refused as a steal).
     const teamId = `T-SEND-${Math.random()}`;
-    fetchMock.mockImplementation(async (_url: string, _init?: RequestInit) =>
-      new Response(JSON.stringify({ ok: true, access_token: "xoxb-workspace-1", team: { id: teamId } }), {
-        status: 200,
-      }),
+    fetchMock.mockImplementation(
+      async (_url: string, _init?: RequestInit) =>
+        new Response(
+          JSON.stringify({ ok: true, access_token: "xoxb-workspace-1", team: { id: teamId } }),
+          {
+            status: 200,
+          },
+        ),
     );
     const linkRes = await handle(
-      new Request(`https://router.example/link/slack?code=oauth-code&state=${encodeURIComponent(link_code)}`),
+      new Request(
+        `https://router.example/link/slack?code=oauth-code&state=${encodeURIComponent(link_code)}`,
+      ),
       env,
       NOW,
     );
     expect(linkRes.status).toBe(200);
 
     fetchMock.mockClear();
-    fetchMock.mockImplementation(async (_url: string, _init?: RequestInit) =>
-      new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    fetchMock.mockImplementation(
+      async (_url: string, _init?: RequestInit) =>
+        new Response(JSON.stringify({ ok: true }), { status: 200 }),
     );
     const sendRes = await handle(
       new Request("https://router.example/send", {

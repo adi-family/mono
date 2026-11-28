@@ -351,7 +351,10 @@ mod tests {
             assert_eq!(groups.len(), 1, "got {groups:?}");
             assert_eq!(groups[0].members.len(), 2);
             // The surviving finding is the outer, larger one.
-            assert!(groups[0].members.iter().all(|&m| fragments[m].node_count == 100));
+            assert!(groups[0]
+                .members
+                .iter()
+                .all(|&m| fragments[m].node_count == 100));
         });
     }
 
@@ -418,7 +421,10 @@ mod tests {
 
             let groups = group(&fragments, 0.85, 20);
             assert_eq!(groups.len(), 2);
-            assert!(groups[0].members.iter().all(|&m| fragments[m].node_count == 200));
+            assert!(groups[0]
+                .members
+                .iter()
+                .all(|&m| fragments[m].node_count == 200));
         });
     }
 }

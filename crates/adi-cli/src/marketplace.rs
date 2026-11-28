@@ -155,7 +155,13 @@ pub(crate) fn run_marketplace(command: MarketplaceCommand) -> Result<(), String>
             new_project,
         } => {
             let scope = destination(&market, project.as_deref(), new_project.as_deref())?;
-            install(&market, &spec, name.as_deref().unwrap_or(""), !no_start, &scope)
+            install(
+                &market,
+                &spec,
+                name.as_deref().unwrap_or(""),
+                !no_start,
+                &scope,
+            )
         }
         MarketplaceCommand::Uninstall { spec, project } => {
             uninstall(&market, &spec, &scope_of(project.as_deref())?)

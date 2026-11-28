@@ -90,7 +90,9 @@ mod tests {
                 },
             )
             .unwrap();
-        connections.bind_thread(&created.id, "chat-1", "run-1").unwrap();
+        connections
+            .bind_thread(&created.id, "chat-1", "run-1")
+            .unwrap();
         connections.set_paused(&created.id, true).unwrap();
 
         handle(
@@ -117,7 +119,9 @@ mod tests {
                 },
             )
             .unwrap();
-        connections.bind_thread(&created.id, "chat-1", "run-1").unwrap();
+        connections
+            .bind_thread(&created.id, "chat-1", "run-1")
+            .unwrap();
 
         let err = handle(
             &connections,

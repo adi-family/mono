@@ -71,9 +71,7 @@ export type Target =
   | { kind: "app_route"; app: string; route: string };
 
 export type Allowlist =
-  | { kind: "owner_only" }
-  | { kind: "list"; sender_ids: string[] }
-  | { kind: "open" };
+  { kind: "owner_only" } | { kind: "list"; sender_ids: string[] } | { kind: "open" };
 
 /** One `(provider, routing key)` bound to one target and one allowlist.
  * Lives inside the owning Durable Object; the router never enforces the allowlist itself (§5,
@@ -161,6 +159,10 @@ export interface ChannelAdapter {
  * not the node id alone. This build takes the pair as authoritative (it's also exactly the
  * granularity §8 scopes a node token to) and the spec note above is corrected accordingly.
  */
-export function doId(namespace: DurableObjectNamespace, node: string, provider: string): DurableObjectId {
+export function doId(
+  namespace: DurableObjectNamespace,
+  node: string,
+  provider: string,
+): DurableObjectId {
   return namespace.idFromName(`${provider}:${node}`);
 }

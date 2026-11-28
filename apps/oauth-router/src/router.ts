@@ -40,7 +40,11 @@ interface TokenResponse {
  * Route a request. `now` (epoch ms) is injected so tests can pin the clock; production
  * passes the default.
  */
-export async function handle(request: Request, env: Env, now: number = Date.now()): Promise<Response> {
+export async function handle(
+  request: Request,
+  env: Env,
+  now: number = Date.now(),
+): Promise<Response> {
   const url = new URL(request.url);
   const segments = url.pathname.split("/").filter(Boolean);
 
@@ -193,7 +197,11 @@ async function handleCallback(
   const result = await exchangeCode(provider, code, callbackUri(url, providerId, env));
   if (!result.ok) {
     return redirectTo(
-      deliveryUrl(target, { provider: providerId, error: "token_exchange_failed", error_description: result.error }),
+      deliveryUrl(target, {
+        provider: providerId,
+        error: "token_exchange_failed",
+        error_description: result.error,
+      }),
       clearCookie,
     );
   }
@@ -319,7 +327,13 @@ function nonceCookie(providerId: string, nonce: string, secure: boolean): string
 
 /** The same cookie, expired — sent on every callback outcome so the nonce never lingers. */
 function clearNonceCookie(providerId: string, secure: boolean): string {
-  const attrs = [`${nonceCookieName(providerId)}=`, "HttpOnly", "SameSite=Lax", "Path=/", "Max-Age=0"];
+  const attrs = [
+    `${nonceCookieName(providerId)}=`,
+    "HttpOnly",
+    "SameSite=Lax",
+    "Path=/",
+    "Max-Age=0",
+  ];
   if (secure) attrs.push("Secure");
   return attrs.join("; ");
 }

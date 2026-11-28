@@ -32,9 +32,15 @@ pub(crate) fn enabled() -> bool {
 /// Not `routing::replace_state(current_path())`, which drops the whole query: `main` reads this
 /// before `new_ui::enabled`, and `?new-ui=1&chat-elements=1` has to reach that one too.
 fn strip() {
-    let Some(window) = web_sys::window() else { return };
-    let Ok(href) = window.location().href() else { return };
-    let Ok(url) = web_sys::Url::new(&href) else { return };
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let Ok(href) = window.location().href() else {
+        return;
+    };
+    let Ok(url) = web_sys::Url::new(&href) else {
+        return;
+    };
     url.search_params().delete(PARAM);
     let path = format!("{}{}{}", url.pathname(), url.search(), url.hash());
     if let Ok(history) = window.history() {
@@ -55,9 +61,17 @@ fn store(on: bool) {
 /// The ⌘K row. Reloads, because the chat centre reads the switch when it is built.
 pub(crate) fn action() -> Action {
     let (label, hint, on) = if enabled() {
-        ("Use the Leptos chat", "Draw conversations the way they were", false)
+        (
+            "Use the Leptos chat",
+            "Draw conversations the way they were",
+            false,
+        )
     } else {
-        ("Use the HTML chat", "Draw conversations with <adi-chat>", true)
+        (
+            "Use the HTML chat",
+            "Draw conversations with <adi-chat>",
+            true,
+        )
     };
     Action::new(label, hint, icons::Icon::Elements, move || {
         store(on);

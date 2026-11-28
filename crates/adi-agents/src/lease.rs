@@ -183,9 +183,15 @@ pub(crate) fn qualifier_for(
 pub(crate) enum Readiness {
     Ready,
     /// Park the turn: `missing = "wait"`, and `names` have no live value right now.
-    Wait { user: String, names: Vec<String> },
+    Wait {
+        user: String,
+        names: Vec<String>,
+    },
     /// Refuse the turn and say why: `missing = "fail"`, and `names` have no live value right now.
-    Fail { user: String, names: Vec<String> },
+    Fail {
+        user: String,
+        names: Vec<String>,
+    },
 }
 
 pub(crate) fn readiness(
@@ -221,8 +227,14 @@ pub(crate) fn readiness(
     let user_settings = adi_secrets::UserSettings::load(config, &lease.user);
     match adi_secrets::effective_missing(policy.missing, user_settings.missing) {
         adi_secrets::Missing::Server => Readiness::Ready,
-        adi_secrets::Missing::Wait => Readiness::Wait { user: lease.user.clone(), names: missing },
-        adi_secrets::Missing::Fail => Readiness::Fail { user: lease.user.clone(), names: missing },
+        adi_secrets::Missing::Wait => Readiness::Wait {
+            user: lease.user.clone(),
+            names: missing,
+        },
+        adi_secrets::Missing::Fail => Readiness::Fail {
+            user: lease.user.clone(),
+            names: missing,
+        },
     }
 }
 
@@ -304,7 +316,10 @@ mod tests {
         };
         let attachments = vec![attachment("CLAUDE_CODE_OAUTH_TOKEN")];
         let live = FakeLease::default().with("u-aaa", "CLAUDE_CODE_OAUTH_TOKEN", "sk-mine");
-        let mut env = vec![("CLAUDE_CODE_OAUTH_TOKEN".to_string(), "sk-server".to_string())];
+        let mut env = vec![(
+            "CLAUDE_CODE_OAUTH_TOKEN".to_string(),
+            "sk-server".to_string(),
+        )];
 
         apply(&mut env, Some(&lease), &config, &attachments, Some(&live));
 
@@ -372,13 +387,19 @@ mod tests {
         // Not on the server's overridable list.
         let config = scratch("apply-narrow-overridable");
         enable(&config, &[]);
-        let mut env = vec![("CLAUDE_CODE_OAUTH_TOKEN".to_string(), "sk-server".to_string())];
+        let mut env = vec![(
+            "CLAUDE_CODE_OAUTH_TOKEN".to_string(),
+            "sk-server".to_string(),
+        )];
         apply(&mut env, Some(&lease), &config, &attachments, Some(&live));
         assert_eq!(env[0].1, "sk-server");
 
         // The feature is off.
         let config = scratch("apply-narrow-disabled");
-        let mut env = vec![("CLAUDE_CODE_OAUTH_TOKEN".to_string(), "sk-server".to_string())];
+        let mut env = vec![(
+            "CLAUDE_CODE_OAUTH_TOKEN".to_string(),
+            "sk-server".to_string(),
+        )];
         apply(&mut env, Some(&lease), &config, &attachments, Some(&live));
         assert_eq!(env[0].1, "sk-server");
 
@@ -386,19 +407,34 @@ mod tests {
         let config = scratch("apply-narrow-no-live-value");
         enable(&config, &["CLAUDE_CODE_OAUTH_TOKEN"]);
         let empty_live = FakeLease::default();
-        let mut env = vec![("CLAUDE_CODE_OAUTH_TOKEN".to_string(), "sk-server".to_string())];
-        apply(&mut env, Some(&lease), &config, &attachments, Some(&empty_live));
+        let mut env = vec![(
+            "CLAUDE_CODE_OAUTH_TOKEN".to_string(),
+            "sk-server".to_string(),
+        )];
+        apply(
+            &mut env,
+            Some(&lease),
+            &config,
+            &attachments,
+            Some(&empty_live),
+        );
         assert_eq!(env[0].1, "sk-server");
 
         // No live source at all — every `Agents` nothing has called `with_lease_values` on.
         let config = scratch("apply-narrow-no-source");
         enable(&config, &["CLAUDE_CODE_OAUTH_TOKEN"]);
-        let mut env = vec![("CLAUDE_CODE_OAUTH_TOKEN".to_string(), "sk-server".to_string())];
+        let mut env = vec![(
+            "CLAUDE_CODE_OAUTH_TOKEN".to_string(),
+            "sk-server".to_string(),
+        )];
         apply(&mut env, Some(&lease), &config, &attachments, None);
         assert_eq!(env[0].1, "sk-server");
 
         // No lease at all — the ordinary case for every run today.
-        let mut env = vec![("CLAUDE_CODE_OAUTH_TOKEN".to_string(), "sk-server".to_string())];
+        let mut env = vec![(
+            "CLAUDE_CODE_OAUTH_TOKEN".to_string(),
+            "sk-server".to_string(),
+        )];
         apply(&mut env, None, &config, &attachments, Some(&live));
         assert_eq!(env[0].1, "sk-server");
     }
@@ -417,13 +453,31 @@ mod tests {
         };
         let live = FakeLease::default().with("u-aaa", "CLAUDE_CODE_OAUTH_TOKEN", "sk-mine");
 
-        let mut env = vec![("CLAUDE_CODE_OAUTH_TOKEN".to_string(), "sk-server".to_string())];
-        apply(&mut env, Some(&lease), &config, &[attachment("CLAUDE_CODE_OAUTH_TOKEN")], Some(&live));
-        assert_eq!(env[0].1, "sk-mine", "applies while the agent still attaches it");
+        let mut env = vec![(
+            "CLAUDE_CODE_OAUTH_TOKEN".to_string(),
+            "sk-server".to_string(),
+        )];
+        apply(
+            &mut env,
+            Some(&lease),
+            &config,
+            &[attachment("CLAUDE_CODE_OAUTH_TOKEN")],
+            Some(&live),
+        );
+        assert_eq!(
+            env[0].1, "sk-mine",
+            "applies while the agent still attaches it"
+        );
 
-        let mut env = vec![("CLAUDE_CODE_OAUTH_TOKEN".to_string(), "sk-server".to_string())];
+        let mut env = vec![(
+            "CLAUDE_CODE_OAUTH_TOKEN".to_string(),
+            "sk-server".to_string(),
+        )];
         apply(&mut env, Some(&lease), &config, &[], Some(&live));
-        assert_eq!(env[0].1, "sk-server", "stops the moment the attachment is gone");
+        assert_eq!(
+            env[0].1, "sk-server",
+            "stops the moment the attachment is gone"
+        );
     }
 
     #[test]
@@ -448,7 +502,13 @@ mod tests {
             Some("u-aaa".to_string())
         );
         assert_eq!(
-            qualifier_for("CLAUDE_CODE_OAUTH_TOKEN", None, &config, &attachments, Some(&live)),
+            qualifier_for(
+                "CLAUDE_CODE_OAUTH_TOKEN",
+                None,
+                &config,
+                &attachments,
+                Some(&live)
+            ),
             None,
             "no lease, no qualifier — the server's own login"
         );
@@ -473,9 +533,15 @@ mod tests {
         enable(&config, &["K"]);
         let attachments = vec![attachment("K")];
         let live = FakeLease::default().with("u-aaa", "K", "v");
-        assert_eq!(readiness(None, &config, &attachments, Some(&live)), Readiness::Ready);
+        assert_eq!(
+            readiness(None, &config, &attachments, Some(&live)),
+            Readiness::Ready
+        );
 
-        let lease = LeaseRef { user: "u-aaa".into(), names: vec!["K".into()] };
+        let lease = LeaseRef {
+            user: "u-aaa".into(),
+            names: vec!["K".into()],
+        };
         assert_eq!(
             readiness(Some(&lease), &config, &attachments, Some(&live)),
             Readiness::Ready,
@@ -487,7 +553,10 @@ mod tests {
     fn readiness_is_ready_under_missing_server_however_little_is_live() {
         let config = scratch("readiness-server");
         enable(&config, &["K"]); // `missing` defaults to `server`
-        let lease = LeaseRef { user: "u-aaa".into(), names: vec!["K".into()] };
+        let lease = LeaseRef {
+            user: "u-aaa".into(),
+            names: vec!["K".into()],
+        };
         let empty_live = FakeLease::default();
         assert_eq!(
             readiness(Some(&lease), &config, &[attachment("K")], Some(&empty_live)),
@@ -507,19 +576,30 @@ mod tests {
         }
         .save(&config)
         .expect("save policy");
-        let lease = LeaseRef { user: "u-aaa".into(), names: vec!["K".into()] };
+        let lease = LeaseRef {
+            user: "u-aaa".into(),
+            names: vec!["K".into()],
+        };
         let empty_live = FakeLease::default();
         assert_eq!(
             readiness(Some(&lease), &config, &[attachment("K")], Some(&empty_live)),
-            Readiness::Wait { user: "u-aaa".to_string(), names: vec!["K".to_string()] }
+            Readiness::Wait {
+                user: "u-aaa".to_string(),
+                names: vec!["K".to_string()]
+            }
         );
 
-        adi_secrets::UserSettings { missing: Some(adi_secrets::Missing::Fail) }
-            .save(&config, "u-aaa")
-            .expect("save user settings");
+        adi_secrets::UserSettings {
+            missing: Some(adi_secrets::Missing::Fail),
+        }
+        .save(&config, "u-aaa")
+        .expect("save user settings");
         assert_eq!(
             readiness(Some(&lease), &config, &[attachment("K")], Some(&empty_live)),
-            Readiness::Fail { user: "u-aaa".to_string(), names: vec!["K".to_string()] },
+            Readiness::Fail {
+                user: "u-aaa".to_string(),
+                names: vec!["K".to_string()]
+            },
             "a user's own setting may tighten the server's wait into a fail"
         );
     }
@@ -535,7 +615,10 @@ mod tests {
         }
         .save(&config)
         .expect("save policy");
-        let lease = LeaseRef { user: "u-aaa".into(), names: vec!["K".into()] };
+        let lease = LeaseRef {
+            user: "u-aaa".into(),
+            names: vec!["K".into()],
+        };
         let empty_live = FakeLease::default();
         // The agent no longer attaches K — `apply` would leave the server's value alone, so there
         // is nothing for this turn to wait or fail on either.

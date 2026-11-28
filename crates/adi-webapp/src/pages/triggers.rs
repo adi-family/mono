@@ -14,7 +14,9 @@ use std::collections::BTreeMap;
 
 use adi_ui::Lang;
 use adi_ui::{Row as TableRow, Table};
-use adi_webapp_api::types::{HookSecretStatus, SaveTrigger, TriggerDto, TriggerPreset, TriggersState};
+use adi_webapp_api::types::{
+    HookSecretStatus, SaveTrigger, TriggerDto, TriggerPreset, TriggersState,
+};
 use leptos::html::Input;
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
@@ -569,7 +571,13 @@ fn set_extra(extra: RwSignal<BTreeMap<String, String>>, key: &str, value: String
 fn hook_secret_field(form: TriggersForm) -> AnyView {
     let extra = form.extra;
     let status = form.hook_secret_status;
-    let secret_ref = move || extra.get().get(HOOK_SECRET_REF_KEY).cloned().unwrap_or_default();
+    let secret_ref = move || {
+        extra
+            .get()
+            .get(HOOK_SECRET_REF_KEY)
+            .cloned()
+            .unwrap_or_default()
+    };
 
     view! {
         <div class="adi-field">
@@ -623,11 +631,30 @@ fn relay_fields(form: TriggersForm) -> AnyView {
         let v = relay_value();
         v == "custom" || v.starts_with("custom:")
     };
-    let select_value = move || if is_custom() { "custom".to_string() } else { relay_value() };
-    let custom_url = move || relay_value().strip_prefix("custom:").unwrap_or_default().to_string();
-    let endpoint = move || extra.get().get("relay_endpoint").cloned().filter(|s| !s.is_empty());
-    let public_url =
-        move || endpoint().and_then(|id| resolve_relay_url(&relay_value()).map(|base| format!("{base}/h/{id}")));
+    let select_value = move || {
+        if is_custom() {
+            "custom".to_string()
+        } else {
+            relay_value()
+        }
+    };
+    let custom_url = move || {
+        relay_value()
+            .strip_prefix("custom:")
+            .unwrap_or_default()
+            .to_string()
+    };
+    let endpoint = move || {
+        extra
+            .get()
+            .get("relay_endpoint")
+            .cloned()
+            .filter(|s| !s.is_empty())
+    };
+    let public_url = move || {
+        endpoint()
+            .and_then(|id| resolve_relay_url(&relay_value()).map(|base| format!("{base}/h/{id}")))
+    };
 
     let url_field: NodeRef<Input> = NodeRef::new();
     let key_field: NodeRef<Input> = NodeRef::new();
@@ -741,11 +768,7 @@ fn trigger_rows(state: State, form: TriggersForm, log: TriggersLogView) -> AnyVi
                 load_trigger_into_form(form, &t_edit)
             });
             let delete = menu_item(state, "Delete", true, move || {
-                apply_triggers(
-                    state,
-                    None,
-                    fetch::delete_trigger(del_name.clone()),
-                );
+                apply_triggers(state, None, fetch::delete_trigger(del_name.clone()));
             });
             let mut items = trigger_menu_items(state, log, &t);
             items.extend([trigger_toggle_item(state, &t), edit, delete]);
@@ -942,11 +965,7 @@ fn toggle_trigger(state: State, t: &TriggerDto) {
         // (just a name) and the server carries an untouched inline value forward on its own.
         clear_hook_secret: false,
     };
-    apply_triggers(
-        state,
-        None,
-        fetch::save_trigger(body),
-    );
+    apply_triggers(state, None, fetch::save_trigger(body));
 }
 
 /// Open the log view on a trigger (the Log action): show the panel, fetch the first snapshot
@@ -984,7 +1003,8 @@ pub(crate) fn poll_trigger_log(log: TriggersLogView) {
 /// long as it's open.
 pub(crate) fn log_view(log: TriggersLogView) -> Option<AnyView> {
     let name = log.name.get()?;
-    let phase = Memo::new(move |_| LogPhase::from_ran(log.log.with(|s| s.as_ref().map(|s| s.fired))));
+    let phase =
+        Memo::new(move |_| LogPhase::from_ran(log.log.with(|s| s.as_ref().map(|s| s.fired))));
     Some(
         view! {
             <section class="adi-panel">

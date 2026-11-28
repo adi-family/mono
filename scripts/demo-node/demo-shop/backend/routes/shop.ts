@@ -35,7 +35,7 @@ export default function shop(_req: Request, _ctx: { dashboard: string }) {
   const now = new Date();
   // The day advances: a shop that has been open eight hours has done more than one at opening.
   const minutes = now.getUTCHours() * 60 + now.getUTCMinutes();
-  const openFor = Math.max(minutes - 8 * 60, 0);          // trading starts at 08:00 UTC
+  const openFor = Math.max(minutes - 8 * 60, 0); // trading starts at 08:00 UTC
   const orders = Math.floor(openFor / 7) + 3;
 
   let revenue = 0;

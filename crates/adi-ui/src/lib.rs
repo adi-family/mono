@@ -97,7 +97,6 @@ pub use input::{Input, InputWidth, Select, Textarea};
 pub use kbd::Kbd;
 pub use mark::{Mark, MarkVariant, SPIN_ORIGIN, lobe_path};
 pub use markdown::Markdown;
-pub use recall::{PastPrompt, Recall};
 pub use menu::{Menu, MenuAt, MenuHead, MenuItem, MenuLink, MenuNote, MenuTick};
 pub use modal::Modal;
 pub use pair::{
@@ -106,6 +105,7 @@ pub use pair::{
 pub use panel::Panel;
 pub use path::{DirEntry, PathPicker, PathRoot, dir_of, leaf_of, trim_dir};
 pub use rail::{Rail, RailCard, RailGroup};
+pub use recall::{PastPrompt, Recall};
 pub use session::{SessionItem, SessionState};
 pub use simulator::{Simulator, ToolDecl};
 pub use staging::{Block, Stop, StopLine, TurnBlocks};

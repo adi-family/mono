@@ -212,7 +212,10 @@ fn code_note(spec: &RunSpec) -> Option<String> {
     #[cfg(unix)]
     if spec.code.only {
         let servers: Vec<String> = spec.mcp_servers.iter().map(|s| s.id.clone()).collect();
-        return Some(crate::backends::code_only::note(spec.code.language(), &servers));
+        return Some(crate::backends::code_only::note(
+            spec.code.language(),
+            &servers,
+        ));
     }
     let _ = spec;
     None
@@ -368,7 +371,9 @@ mod tests {
         spec.workspace_note = Some("# Where you are\n\n/tmp".into());
         spec.tool_help = Some("# Your tools\n\nadi-knowledge".into());
         assert!(
-            !compose(&spec, None).expect("a prompt").contains("What your code can call"),
+            !compose(&spec, None)
+                .expect("a prompt")
+                .contains("What your code can call"),
             "nothing for an agent with its ordinary tools"
         );
 
@@ -385,17 +390,31 @@ mod tests {
         let cut = sections(&prompt);
         assert_eq!(
             cut.iter().map(|s| s.label).collect::<Vec<_>>(),
-            ["instructions", "where you are", "what your code can call", "your tools"],
+            [
+                "instructions",
+                "where you are",
+                "what your code can call",
+                "your tools"
+            ],
         );
         assert_eq!(cut.iter().map(|s| s.text).collect::<String>(), prompt);
         let code = cut[2].text;
-        assert!(code.starts_with("# What your code can call\n\n`TsCode` is the only tool you have."), "{code}");
-        assert!(code.contains("## `await Edit({ new_string, old_string, path, replace_all? })`"), "{code}");
+        assert!(
+            code.starts_with("# What your code can call\n\n`TsCode` is the only tool you have."),
+            "{code}"
+        );
+        assert!(
+            code.contains("## `await Edit({ new_string, old_string, path, replace_all? })`"),
+            "{code}"
+        );
         assert!(code.contains("`mcp.n8n`"), "its servers are named: {code}");
 
         spec.code = crate::CodeTools::ONLY_PYTHON;
         let python = compose(&spec, None).expect("a prompt");
-        assert!(python.contains("## `Edit(new_string=…, old_string=…, path=…, replace_all=None)`"), "{python}");
+        assert!(
+            python.contains("## `Edit(new_string=…, old_string=…, path=…, replace_all=None)`"),
+            "{python}"
+        );
     }
 
     /// A section that was never appended is not reported as an empty one, and a prompt with none of

@@ -25,7 +25,11 @@ use crate::state::{Flash, State, WorkflowsConsole};
 use crate::ui::{apply_mutation, confirm, flash_view};
 
 /// The Workflows page.
-pub(crate) fn workflows_view(state: State, route: RwSignal<Route>, console: WorkflowsConsole) -> AnyView {
+pub(crate) fn workflows_view(
+    state: State,
+    route: RwSignal<Route>,
+    console: WorkflowsConsole,
+) -> AnyView {
     // Load once when the page opens.
     Effect::new(move |loaded: Option<()>| {
         if loaded.is_none() {
@@ -59,11 +63,14 @@ pub(crate) fn workflows_view(state: State, route: RwSignal<Route>, console: Work
 }
 
 fn summary(console: WorkflowsConsole) -> String {
-    console.workflows.get().map_or_else(String::new, |s| match s.workflows.len() {
-        0 => "No workflows".to_string(),
-        1 => "1 workflow".to_string(),
-        n => format!("{n} workflows"),
-    })
+    console
+        .workflows
+        .get()
+        .map_or_else(String::new, |s| match s.workflows.len() {
+            0 => "No workflows".to_string(),
+            1 => "1 workflow".to_string(),
+            n => format!("{n} workflows"),
+        })
 }
 
 fn error_view(console: WorkflowsConsole) -> AnyView {
@@ -129,7 +136,12 @@ pub(crate) fn project_rows_view(
 /// One workflow's row — its id, project, enabled state, and the enable/disable toggle. Clicking
 /// anywhere on the row but the toggle navigates to its own page ([`Route::WorkflowDetail`],
 /// [`crate::pages::workflow_detail_view`]) rather than expanding in place.
-fn workflow_block(state: State, route: RwSignal<Route>, console: WorkflowsConsole, w: WorkflowDto) -> AnyView {
+fn workflow_block(
+    state: State,
+    route: RwSignal<Route>,
+    console: WorkflowsConsole,
+    w: WorkflowDto,
+) -> AnyView {
     let id = w.id.clone();
     let open_id = id.clone();
     let enable_id = id.clone();
@@ -163,7 +175,12 @@ fn workflow_block(state: State, route: RwSignal<Route>, console: WorkflowsConsol
 /// Navigate to `id`'s own page — a row click on the global list or a project's panel. A real
 /// `<a href>` (see [`crate::routing::spa_nav`]), so a modified click (new tab, etc.) still falls
 /// through to the browser rather than being swallowed.
-fn open_workflow(ev: &web_sys::MouseEvent, route: RwSignal<Route>, console: WorkflowsConsole, id: &str) {
+fn open_workflow(
+    ev: &web_sys::MouseEvent,
+    route: RwSignal<Route>,
+    console: WorkflowsConsole,
+    id: &str,
+) {
     if !spa_nav(ev) {
         return;
     }
@@ -177,7 +194,12 @@ fn open_workflow(ev: &web_sys::MouseEvent, route: RwSignal<Route>, console: Work
 /// [`WorkflowDto::describe_error`] is set: that is exactly when reading the file by eye matters
 /// most. The content comes from the store browser's own `/api/fs/read` (what
 /// [`crate::pages::store_file`] itself reads through).
-pub(crate) fn source_view(state: State, route: RwSignal<Route>, console: WorkflowsConsole, path: String) -> AnyView {
+pub(crate) fn source_view(
+    state: State,
+    route: RwSignal<Route>,
+    console: WorkflowsConsole,
+    path: String,
+) -> AnyView {
     if path.is_empty() {
         return ().into_any();
     }
@@ -293,8 +315,17 @@ pub(crate) fn run_timeline_view(state: State, console: WorkflowsConsole, run_key
         .into_any()
 }
 
-fn step_row(state: State, console: WorkflowsConsole, run_key: String, index: usize, step: &StepDto) -> AnyView {
-    let value = step.value.as_ref().map(|v| serde_json::to_string_pretty(v).unwrap_or_default());
+fn step_row(
+    state: State,
+    console: WorkflowsConsole,
+    run_key: String,
+    index: usize,
+    step: &StepDto,
+) -> AnyView {
+    let value = step
+        .value
+        .as_ref()
+        .map(|v| serde_json::to_string_pretty(v).unwrap_or_default());
     view! {
         <div class="adi-field">
             <div class="adi-copyrow">

@@ -116,16 +116,25 @@ export function close(): void {
 
 /** Every row a statement returns. Params are positional, bound to each `?`. */
 export function query<T = Record<string, unknown>>(sql: string, ...params: unknown[]): T[] {
-  return db().query(sql).all(...(params as never[])) as T[];
+  return db()
+    .query(sql)
+    .all(...(params as never[])) as T[];
 }
 
 /** The first row a statement returns, or `null` when it returns none. */
 export function get<T = Record<string, unknown>>(sql: string, ...params: unknown[]): T | null {
-  return (db().query(sql).get(...(params as never[])) as T | undefined) ?? null;
+  return (
+    (db()
+      .query(sql)
+      .get(...(params as never[])) as T | undefined) ?? null
+  );
 }
 
 /** Run a statement for its effect (`INSERT`/`UPDATE`/`DELETE`/DDL). */
-export function run(sql: string, ...params: unknown[]): { changes: number; lastInsertRowid: number | bigint } {
+export function run(
+  sql: string,
+  ...params: unknown[]
+): { changes: number; lastInsertRowid: number | bigint } {
   const result = db().run(sql, ...(params as never[]));
   return { changes: result.changes, lastInsertRowid: result.lastInsertRowid };
 }

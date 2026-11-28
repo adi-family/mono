@@ -3,7 +3,9 @@ import * as React from "react";
 type Snapshot<T> = { deps: React.DependencyList; value: T };
 
 function sameDeps(previous: React.DependencyList, next: React.DependencyList) {
-  return previous.length === next.length && previous.every((item, index) => Object.is(item, next[index]));
+  return (
+    previous.length === next.length && previous.every((item, index) => Object.is(item, next[index]))
+  );
 }
 
 /**

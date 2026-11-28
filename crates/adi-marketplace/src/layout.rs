@@ -133,7 +133,9 @@ fn legacy_elements(root: &Path, slug: &str) -> Vec<LayoutElement> {
 /// This kind directory's entries, sorted by file name — the filesystem's own order is not stable
 /// between reads, and a layout has to be.
 fn sorted_entries(dir: &Path) -> Result<Vec<fs::DirEntry>> {
-    let mut entries: Vec<fs::DirEntry> = fs::read_dir(dir)?.filter_map(std::result::Result::ok).collect();
+    let mut entries: Vec<fs::DirEntry> = fs::read_dir(dir)?
+        .filter_map(std::result::Result::ok)
+        .collect();
     entries.sort_by_key(fs::DirEntry::file_name);
     Ok(entries)
 }
@@ -234,7 +236,11 @@ fn scan_dir(dir: &Path, root: &Path, label: &str) -> Result<()> {
             scan_dir(&path, root, label)?;
             continue;
         }
-        let rel = path.strip_prefix(root).unwrap_or(&path).display().to_string();
+        let rel = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .display()
+            .to_string();
         if path.file_name().and_then(|n| n.to_str()) == Some("Cargo.toml") {
             return Err(carries_rust(label, "a Cargo.toml", rel));
         }
@@ -320,8 +326,14 @@ mod tests {
         std::fs::create_dir_all(root.join("agents")).expect("agents");
 
         let layout = read_layout(&root, "crm").expect("reads");
-        assert!(!layout.legacy, "a kind directory means this is the general shape, not v1's");
-        assert!(layout.elements.is_empty(), "an empty agents/ carries nothing");
+        assert!(
+            !layout.legacy,
+            "a kind directory means this is the general shape, not v1's"
+        );
+        assert!(
+            layout.elements.is_empty(),
+            "an empty agents/ carries nothing"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -367,11 +379,19 @@ mod tests {
         assert_eq!(named(Kind::Trigger), vec!["nightly"]);
         assert_eq!(named(Kind::Mcp), vec!["n8n"]);
         assert_eq!(
-            layout.elements.iter().find(|e| e.kind == Kind::Project).map(|e| &e.name),
+            layout
+                .elements
+                .iter()
+                .find(|e| e.kind == Kind::Project)
+                .map(|e| &e.name),
             Some(&None),
             "the singleton carries no name"
         );
-        assert_eq!(layout.elements.len(), 9, "the readme did not become a tenth");
+        assert_eq!(
+            layout.elements.len(),
+            9,
+            "the readme did not become a tenth"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -381,7 +401,10 @@ mod tests {
         std::fs::create_dir_all(root.join("dashboards").join("broken").join("frontend"))
             .expect("d");
         std::fs::write(
-            root.join("dashboards").join("broken").join("frontend").join("index.ts"),
+            root.join("dashboards")
+                .join("broken")
+                .join("frontend")
+                .join("index.ts"),
             "",
         )
         .expect("f");
@@ -405,8 +428,11 @@ mod tests {
     fn the_no_rust_scan_refuses_a_cargo_toml_under_a_kind_directory() {
         let root = scratch("cargo-toml");
         std::fs::create_dir_all(root.join("tools").join("evil")).expect("d");
-        std::fs::write(root.join("tools").join("evil").join("Cargo.toml"), "[package]\n")
-            .expect("f");
+        std::fs::write(
+            root.join("tools").join("evil").join("Cargo.toml"),
+            "[package]\n",
+        )
+        .expect("f");
 
         let err = scan_for_rust(&root, "crm-suite").expect_err("refused");
         assert!(matches!(err, Error::CarriesRust(_, _, _)));
@@ -419,10 +445,12 @@ mod tests {
     #[test]
     fn the_no_rust_scan_refuses_a_rs_file_nested_under_a_dashboard() {
         let root = scratch("rs-file");
-        std::fs::create_dir_all(root.join("dashboards").join("crm").join("backend"))
-            .expect("d");
+        std::fs::create_dir_all(root.join("dashboards").join("crm").join("backend")).expect("d");
         std::fs::write(
-            root.join("dashboards").join("crm").join("backend").join("main.rs"),
+            root.join("dashboards")
+                .join("crm")
+                .join("backend")
+                .join("main.rs"),
             "fn main() {}\n",
         )
         .expect("f");
@@ -458,8 +486,11 @@ mod tests {
         std::fs::create_dir_all(root.join("agents")).expect("d");
         std::fs::write(root.join("agents").join("sales-bot.toml"), "name = \"x\"\n").expect("f");
         std::fs::create_dir_all(root.join("tools")).expect("d");
-        std::fs::write(root.join("tools").join("csv-import.sh"), "#!/bin/sh\necho hi\n")
-            .expect("f");
+        std::fs::write(
+            root.join("tools").join("csv-import.sh"),
+            "#!/bin/sh\necho hi\n",
+        )
+        .expect("f");
 
         scan_for_rust(&root, "crm-suite").expect("nothing to refuse");
         let _ = std::fs::remove_dir_all(&root);

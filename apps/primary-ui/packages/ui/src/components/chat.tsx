@@ -80,7 +80,8 @@ function ChatThread({
         // Newest messages are prepended in this direction. Keep the visible message at
         // its previous offset, including when a newer response grows while streaming.
         const viewportTop = viewport.getBoundingClientRect().top + viewport.clientTop;
-        const offsetChange = anchor.element.getBoundingClientRect().top - viewportTop - anchor.offset;
+        const offsetChange =
+          anchor.element.getBoundingClientRect().top - viewportTop - anchor.offset;
         if (Math.abs(offsetChange) > 0.5) {
           viewport.scrollTo({ top: viewport.scrollTop + offsetChange, behavior: "instant" });
         }
@@ -108,7 +109,9 @@ function ChatThread({
   }, [updatePosition]);
 
   // Also handles direct child updates in environments without ResizeObserver.
-  React.useLayoutEffect(() => { updatePosition(); }, [children, updatePosition]);
+  React.useLayoutEffect(() => {
+    updatePosition();
+  }, [children, updatePosition]);
 
   function handleScroll() {
     const viewport = viewportRef.current;
@@ -168,13 +171,23 @@ function ChatThread({
           newestAtTop && "[overflow-anchor:none]",
         )}
       >
-        <div ref={contentRef} data-slot="chat-thread-content" className={cn("flex min-w-0 flex-col gap-6 p-3 sm:p-4", contentClassName)}>
+        <div
+          ref={contentRef}
+          data-slot="chat-thread-content"
+          className={cn("flex min-w-0 flex-col gap-6 p-3 sm:p-4", contentClassName)}
+        >
           {orderedChildren}
         </div>
       </div>
       {awayFromLatest && (
         // Laid out like the message column, so the control stays at that column's edge.
-        <div className={cn("pointer-events-none absolute inset-x-0 flex justify-end px-4", newestAtTop ? "top-3" : "bottom-3", contentClassName)}>
+        <div
+          className={cn(
+            "pointer-events-none absolute inset-x-0 flex justify-end px-4",
+            newestAtTop ? "top-3" : "bottom-3",
+            contentClassName,
+          )}
+        >
           <Button
             type="button"
             variant="outline"
@@ -183,9 +196,11 @@ function ChatThread({
             className="pointer-events-auto shadow-sm"
             onClick={jumpToLatest}
           >
-            {newestAtTop
-              ? <ArrowUp className="size-3.5" aria-hidden="true" />
-              : <ArrowDown className="size-3.5" aria-hidden="true" />}
+            {newestAtTop ? (
+              <ArrowUp className="size-3.5" aria-hidden="true" />
+            ) : (
+              <ArrowDown className="size-3.5" aria-hidden="true" />
+            )}
             {scrollToLatestLabel}
           </Button>
         </div>
@@ -249,7 +264,10 @@ function ChatMessageMeta({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="chat-message-meta"
-      className={cn("text-muted-foreground mb-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs group-data-[from=user]/chat-message:justify-end", className)}
+      className={cn(
+        "text-muted-foreground mb-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs group-data-[from=user]/chat-message:justify-end",
+        className,
+      )}
       {...props}
     />
   );
@@ -259,7 +277,10 @@ function ChatMessageActions({ className, ...props }: React.ComponentProps<"div">
   return (
     <div
       data-slot="chat-message-actions"
-      className={cn("mt-1.5 flex flex-wrap items-center gap-1 group-data-[from=user]/chat-message:justify-end", className)}
+      className={cn(
+        "mt-1.5 flex flex-wrap items-center gap-1 group-data-[from=user]/chat-message:justify-end",
+        className,
+      )}
       {...props}
     />
   );
@@ -267,7 +288,11 @@ function ChatMessageActions({ className, ...props }: React.ComponentProps<"div">
 
 type ChatTypingIndicatorProps = React.ComponentProps<"div"> & { label?: string };
 
-function ChatTypingIndicator({ label = "Assistant is typing", className, ...props }: ChatTypingIndicatorProps) {
+function ChatTypingIndicator({
+  label = "Assistant is typing",
+  className,
+  ...props
+}: ChatTypingIndicatorProps) {
   return (
     <div
       data-slot="chat-typing-indicator"
@@ -276,9 +301,18 @@ function ChatTypingIndicator({ label = "Assistant is typing", className, ...prop
       {...props}
     >
       <span className="sr-only">{label}</span>
-      <span aria-hidden="true" className="bg-current size-1.5 rounded-full motion-safe:animate-pulse" />
-      <span aria-hidden="true" className="bg-current size-1.5 rounded-full motion-safe:animate-pulse [animation-delay:150ms]" />
-      <span aria-hidden="true" className="bg-current size-1.5 rounded-full motion-safe:animate-pulse [animation-delay:300ms]" />
+      <span
+        aria-hidden="true"
+        className="bg-current size-1.5 rounded-full motion-safe:animate-pulse"
+      />
+      <span
+        aria-hidden="true"
+        className="bg-current size-1.5 rounded-full motion-safe:animate-pulse [animation-delay:150ms]"
+      />
+      <span
+        aria-hidden="true"
+        className="bg-current size-1.5 rounded-full motion-safe:animate-pulse [animation-delay:300ms]"
+      />
     </div>
   );
 }
@@ -299,35 +333,60 @@ type ChatWaitingStatusProps = Omit<React.ComponentProps<"details">, "children"> 
   cancellingIds?: readonly string[];
 };
 
-function ChatWaitingStatus({ items, onCancel, cancellingIds = [], className, ...props }: ChatWaitingStatusProps) {
+function ChatWaitingStatus({
+  items,
+  onCancel,
+  cancellingIds = [],
+  className,
+  ...props
+}: ChatWaitingStatusProps) {
   if (!items.length) return null;
   return (
-    <details data-slot="chat-waiting-status" aria-label="Waiting status" className={cn("group/waiting text-muted-foreground min-w-0 rounded-md bg-foreground/5 text-xs", className)} {...props}>
+    <details
+      data-slot="chat-waiting-status"
+      aria-label="Waiting status"
+      className={cn(
+        "group/waiting text-muted-foreground min-w-0 rounded-md bg-foreground/5 text-xs",
+        className,
+      )}
+      {...props}
+    >
       <summary className="focus-visible:ring-ring flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-md px-3 py-2 outline-none focus-visible:ring-2 [&::-webkit-details-marker]:hidden">
         <Clock3 aria-hidden="true" className="size-3.5 shrink-0" />
-        <span className="shrink-0 font-medium">Waiting on {items.length} {items.length === 1 ? "task" : "tasks"}</span>
+        <span className="shrink-0 font-medium">
+          Waiting on {items.length} {items.length === 1 ? "task" : "tasks"}
+        </span>
         <span className="min-w-0 flex-1 truncate">{items[0].label}</span>
         <ChevronDown aria-hidden="true" className="size-3 shrink-0 group-open/waiting:rotate-180" />
       </summary>
-      <ul className={cn("max-h-32 space-y-1 overflow-y-auto pb-2 pl-8.5 leading-5 wrap-anywhere", onCancel ? "pr-1" : "pr-3")}>
-        {items.map((item) => onCancel ? (
-          <li key={item.id} className="flex min-w-0 items-start gap-2">
-            <span className="min-w-0 flex-1 py-0.5">{item.label}</span>
-            <Button
-              data-slot="chat-waiting-cancel"
-              type="button"
-              size="sm"
-              variant="ghost"
-              className={rowCancelClass}
-              aria-label={`Cancel waiting: ${excerpt(item.label)}`}
-              disabled={cancellingIds.includes(item.id)}
-              disabledReason="This task is being cancelled."
-              onClick={() => onCancel(item.id)}
-            >
-              Cancel
-            </Button>
-          </li>
-        ) : <li key={item.id}>{item.label}</li>)}
+      <ul
+        className={cn(
+          "max-h-32 space-y-1 overflow-y-auto pb-2 pl-8.5 leading-5 wrap-anywhere",
+          onCancel ? "pr-1" : "pr-3",
+        )}
+      >
+        {items.map((item) =>
+          onCancel ? (
+            <li key={item.id} className="flex min-w-0 items-start gap-2">
+              <span className="min-w-0 flex-1 py-0.5">{item.label}</span>
+              <Button
+                data-slot="chat-waiting-cancel"
+                type="button"
+                size="sm"
+                variant="ghost"
+                className={rowCancelClass}
+                aria-label={`Cancel waiting: ${excerpt(item.label)}`}
+                disabled={cancellingIds.includes(item.id)}
+                disabledReason="This task is being cancelled."
+                onClick={() => onCancel(item.id)}
+              >
+                Cancel
+              </Button>
+            </li>
+          ) : (
+            <li key={item.id}>{item.label}</li>
+          ),
+        )}
       </ul>
     </details>
   );
@@ -342,17 +401,34 @@ type ChatQueuedMessageProps = React.ComponentProps<"details"> & {
   cancelling?: boolean;
 };
 
-function ChatQueuedMessage({ text, label = "Queued", onCancel, cancelling = false, children, className, ...props }: ChatQueuedMessageProps) {
+function ChatQueuedMessage({
+  text,
+  label = "Queued",
+  onCancel,
+  cancelling = false,
+  children,
+  className,
+  ...props
+}: ChatQueuedMessageProps) {
   return (
     // The button sits beside the details, never inside its summary: a summary is itself a control.
-    <div data-slot="chat-queued-row" className={cn("text-muted-foreground flex min-w-0 items-start rounded-md bg-foreground/5 text-xs", className)}>
+    <div
+      data-slot="chat-queued-row"
+      className={cn(
+        "text-muted-foreground flex min-w-0 items-start rounded-md bg-foreground/5 text-xs",
+        className,
+      )}
+    >
       <details data-slot="chat-queued-message" className="min-w-0 flex-1" {...props}>
         <summary className="focus-visible:ring-ring flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-md px-3 py-2 outline-none focus-visible:ring-2 [&::-webkit-details-marker]:hidden">
           <Clock3 aria-hidden="true" className="size-3.5 shrink-0" />
           <span className="shrink-0 font-medium">{label}</span>
           <span className="min-w-0 flex-1 truncate">{text || "Image attachment"}</span>
         </summary>
-        <div className="max-h-48 overflow-y-auto px-3 pb-3 whitespace-pre-wrap wrap-anywhere">{text}{children}</div>
+        <div className="max-h-48 overflow-y-auto px-3 pb-3 whitespace-pre-wrap wrap-anywhere">
+          {text}
+          {children}
+        </div>
       </details>
       {onCancel && (
         <Button
@@ -388,9 +464,17 @@ function ChatQueue({ count, caption, children, className, ...props }: ChatQueueP
   if (count <= 0) return null;
   const shown = caption === undefined ? `${count} messages will be sent together` : caption;
   return (
-    <div data-slot="chat-queue" role="group" aria-label="Queued messages" className={cn("space-y-1", className)} {...props}>
+    <div
+      data-slot="chat-queue"
+      role="group"
+      aria-label="Queued messages"
+      className={cn("space-y-1", className)}
+      {...props}
+    >
       {count > 1 && shown !== null && (
-        <p data-slot="chat-queue-caption" className="text-muted-foreground px-1 text-xs">{shown}</p>
+        <p data-slot="chat-queue-caption" className="text-muted-foreground px-1 text-xs">
+          {shown}
+        </p>
       )}
       {children}
     </div>

@@ -59,7 +59,15 @@ use crate::ui::{
 
 /// The nodes table. `Node` carries the two names an operator reads (petname, then what the node
 /// calls itself); `Key` is the identity of record behind them.
-pub(crate) const COLS: &[&str] = &["Node", "Key", "Grants", "Password", "Instructions", "Paired", ""];
+pub(crate) const COLS: &[&str] = &[
+    "Node",
+    "Key",
+    "Grants",
+    "Password",
+    "Instructions",
+    "Paired",
+    "",
+];
 
 /// The Fleet page: pending name changes, the paired nodes with their grants, and how to pair one.
 pub(crate) fn fleet_view(state: State, form: FleetForm) -> AnyView {
@@ -448,19 +456,11 @@ fn row_action(state: State, n: &FleetNode) -> AnyView {
             &format!("Adopt \u{201c}{declared_label}\u{201d}"),
             false,
             move || {
-                apply_fleet(
-                    state,
-                    None,
-                    fetch::fleet_accept_nickname(adopt.clone()),
-                );
+                apply_fleet(state, None, fetch::fleet_accept_nickname(adopt.clone()));
             },
         ));
         items.push(menu_item(state, "Keep this name", false, move || {
-            apply_fleet(
-                state,
-                None,
-                fetch::fleet_dismiss_nickname(keep.clone()),
-            );
+            apply_fleet(state, None, fetch::fleet_dismiss_nickname(keep.clone()));
         }));
     }
     let unpair = petname.clone();
@@ -471,11 +471,7 @@ fn row_action(state: State, n: &FleetNode) -> AnyView {
         )) {
             return;
         }
-        apply_fleet(
-            state,
-            None,
-            fetch::fleet_unpair(unpair.clone()),
-        );
+        apply_fleet(state, None, fetch::fleet_unpair(unpair.clone()));
     }));
 
     row_actions(state, format!("fleet:{petname}"), (), items)
@@ -492,11 +488,7 @@ fn start_rename(state: State, from: &str) {
     if to.is_empty() || to == from {
         return;
     }
-    apply_fleet(
-        state,
-        None,
-        fetch::fleet_rename(from.to_string(), to),
-    );
+    apply_fleet(state, None, fetch::fleet_rename(from.to_string(), to));
 }
 
 /// A node picker: which paired node an under-table form's action lands on. A `<select>` rather

@@ -158,7 +158,8 @@ impl Apps {
                     self.pictures.update(|p| {
                         p.insert(key, url);
                     });
-                    self.pictures.with_untracked(|p| cache::save(PICTURES_KEY, p));
+                    self.pictures
+                        .with_untracked(|p| cache::save(PICTURES_KEY, p));
                 }
             }
         });
@@ -449,7 +450,14 @@ pub(super) fn openable(apps: Apps, sites: &[Site]) -> Vec<AppRef> {
     for (_, tiles) in apps.sections() {
         for t in tiles {
             if let Some(href) = &t.href {
-                out.push(tile_app(&t.id, &t.name, t.machine.clone(), href, t.favicon, t.icon));
+                out.push(tile_app(
+                    &t.id,
+                    &t.name,
+                    t.machine.clone(),
+                    href,
+                    t.favicon,
+                    t.icon,
+                ));
             }
         }
     }
@@ -493,10 +501,22 @@ fn laid(apps: Apps, arr: &Arrangement, sites: &[Site]) -> Laid {
             for (path, name, url, size) in framed(t) {
                 let id = arrange::widget_id(&t.key, &path);
                 let size = arr.size(&id, size);
-                entries.push((id.clone(), Item::Widget { id, name, url, size }));
+                entries.push((
+                    id.clone(),
+                    Item::Widget {
+                        id,
+                        name,
+                        url,
+                        size,
+                    },
+                ));
             }
         }
-        entries.extend(tiles.into_iter().map(|t| (arrange::app_id(&t.key), Item::Tile(t))));
+        entries.extend(
+            tiles
+                .into_iter()
+                .map(|t| (arrange::app_id(&t.key), Item::Tile(t))),
+        );
         listed.push((machine, entries));
     }
     for site in sites {
@@ -518,7 +538,15 @@ fn laid(apps: Apps, arr: &Arrangement, sites: &[Site]) -> Laid {
         .chosen_half()
         .and_then(|h| shown().find(|(id, _)| id == h))
         .or_else(|| {
-            shown().find(|(_, i)| matches!(i, Item::Widget { size: Size::Half, .. }))
+            shown().find(|(_, i)| {
+                matches!(
+                    i,
+                    Item::Widget {
+                        size: Size::Half,
+                        ..
+                    }
+                )
+            })
         })
         .and_then(|(_, i)| match i {
             Item::Widget { id, name, url, .. } => Some(Half {
@@ -573,9 +601,7 @@ pub(super) fn Home(
     sites: Sites,
     #[prop(into)] light: Signal<bool>,
 ) -> impl IntoView {
-    let laid = Memo::new(move |_| {
-        home.now.with(|arr| sites.list.with(|s| laid(apps, arr, s)))
-    });
+    let laid = Memo::new(move |_| home.now.with(|arr| sites.list.with(|s| laid(apps, arr, s))));
     let items = Memo::new(move |_| laid.with(|l| l.items.clone()));
     // A memo, so a read that leaves it as it was does not rebuild the frame.
     let half = Memo::new(move |_| laid.with(|l| l.half.clone()));
@@ -588,7 +614,10 @@ pub(super) fn Home(
             return;
         }
         ev.prevent_default();
-        menu.set(Some((MenuAt::Point(ev.client_x(), ev.client_y()), Menued::Screen)));
+        menu.set(Some((
+            MenuAt::Point(ev.client_x(), ev.client_y()),
+            Menued::Screen,
+        )));
     };
     // A click on the wallpaper itself, not on anything drawn on it, ends editing.
     let off_screen = move |ev: ev::MouseEvent| {
@@ -899,9 +928,18 @@ fn screen_menu(
     };
     // Each row: its words, what it does, and — in the size menu — whether it is the one picked.
     let mut rows: Vec<(&'static str, Callback<()>, Option<bool>)> = Vec::new();
-    let edit = (!home.editing.get_untracked())
-        .then(|| ("Edit home screen", act(Box::new(move || home.edit(true))), None));
-    let add = ("Add website…", act(Box::new(move || sites.adding.set(true))), None);
+    let edit = (!home.editing.get_untracked()).then(|| {
+        (
+            "Edit home screen",
+            act(Box::new(move || home.edit(true))),
+            None,
+        )
+    });
+    let add = (
+        "Add website…",
+        act(Box::new(move || sites.adding.set(true))),
+        None,
+    );
     match on {
         Menued::Screen => {
             rows.extend(edit);
@@ -909,25 +947,41 @@ fn screen_menu(
         }
         Menued::Site(app, key) => {
             let again = app.clone();
-            rows.push(("Open", act(Box::new(move || desk.open_app(app.clone()))), None));
+            rows.push((
+                "Open",
+                act(Box::new(move || desk.open_app(app.clone()))),
+                None,
+            ));
             rows.push((
                 "Open in new window",
                 act(Box::new(move || desk.open_app_new(again.clone()))),
                 None,
             ));
             rows.extend(edit);
-            rows.push(("Remove from home screen", act(Box::new(move || sites.remove(&key))), None));
+            rows.push((
+                "Remove from home screen",
+                act(Box::new(move || sites.remove(&key))),
+                None,
+            ));
         }
         Menued::Tile(app, id) => {
             let again = app.clone();
-            rows.push(("Open", act(Box::new(move || desk.open_app(app.clone()))), None));
+            rows.push((
+                "Open",
+                act(Box::new(move || desk.open_app(app.clone()))),
+                None,
+            ));
             rows.push((
                 "Open in new window",
                 act(Box::new(move || desk.open_app_new(again.clone()))),
                 None,
             ));
             rows.extend(edit);
-            rows.push(("Remove from home screen", act(Box::new(move || home.hide(&id))), None));
+            rows.push((
+                "Remove from home screen",
+                act(Box::new(move || home.hide(&id))),
+                None,
+            ));
         }
         Menued::Size(id, now) => rows.extend(Size::ALL.into_iter().map(|size| {
             let id = id.clone();

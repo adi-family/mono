@@ -633,12 +633,7 @@ pub fn decide(
     let existing = (!fresh)
         .then(|| registry.get(&petname))
         .flatten()
-        .and_then(|record| {
-            record
-                .user
-                .clone()
-                .map(|id| (record.auth.user.clone(), id))
-        });
+        .and_then(|record| record.user.clone().map(|id| (record.auth.user.clone(), id)));
     let (username, user_id) =
         existing.unwrap_or_else(|| registry.resolve_user(spec.username.as_deref()));
 
@@ -832,7 +827,13 @@ pub fn mint_invite_with(ttl: Duration, spec: InviteSpec) -> anyhow::Result<Strin
         "the mesh is not running here, so a node would have nothing to dial — start it \
          (`adi-mesh run`, or the control panel) and try again",
     )?;
-    mint_invite_for_with(&endpoint, ttl, &Config::open(), adi_config::now_unix(), spec)
+    mint_invite_for_with(
+        &endpoint,
+        ttl,
+        &Config::open(),
+        adi_config::now_unix(),
+        spec,
+    )
 }
 
 /// [`mint_invite`] with the endpoint, store and clock passed in — the seam the tests mint
@@ -1386,7 +1387,11 @@ mod tests {
             Err(ClaimError::Spent),
             "a cancelled invite reads as spent, not unknown"
         );
-        assert_eq!(book.cancel(&live, 500), Err(ClaimError::Spent), "idempotent-ish: refused again");
+        assert_eq!(
+            book.cancel(&live, 500),
+            Err(ClaimError::Spent),
+            "idempotent-ish: refused again"
+        );
         assert_eq!(book.cancel("deadbeef", 500), Err(ClaimError::Unknown));
     }
 
@@ -1800,9 +1805,14 @@ mod tests {
             vec!["http:app".parse().unwrap(), "http:hub".parse().unwrap()]
         );
 
-        let record = registry.get("p42-device").expect("filed under the spec's petname");
+        let record = registry
+            .get("p42-device")
+            .expect("filed under the spec's petname");
         assert_eq!(record.role, Role::Member);
-        assert_eq!(record.labels.get("principal").map(String::as_str), Some("p42"));
+        assert_eq!(
+            record.labels.get("principal").map(String::as_str),
+            Some("p42")
+        );
         assert!(record.verify_password("p42", "hunter2"));
         assert!(record.allows(Target::Http("hub")));
         assert_eq!(

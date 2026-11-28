@@ -603,7 +603,10 @@ pub fn update(market: &Marketplace, id: &str, force: bool) -> Result<Updated> {
         return Err(Error::Dirty(id.to_string()));
     }
 
-    let branch = entry.branch().or(record.branch.as_deref()).map(str::to_string);
+    let branch = entry
+        .branch()
+        .or(record.branch.as_deref())
+        .map(str::to_string);
     let pin = git::move_to(&dir, &to, branch.as_deref(), force);
     git::ignore_generated(&dir);
     let pin = pin.map_err(Error::Git)?;
@@ -668,13 +671,19 @@ mod tests {
         ] {
             std::fs::write(dir.join(path), text).expect("seed");
         }
-        std::fs::write(dir.join("frontend").join("modules").join("contacts.ts"), panel)
-            .expect("panel");
+        std::fs::write(
+            dir.join("frontend").join("modules").join("contacts.ts"),
+            panel,
+        )
+        .expect("panel");
         git(&["add", "."]);
         git(&["commit", "--quiet", "-m", "v1"]);
         let first = head_of(&dir);
-        std::fs::write(dir.join("frontend").join("modules").join("contacts.ts"), "v2\n")
-            .expect("panel v2");
+        std::fs::write(
+            dir.join("frontend").join("modules").join("contacts.ts"),
+            "v2\n",
+        )
+        .expect("panel v2");
         git(&["commit", "--quiet", "-am", "v2"]);
         (format!("file://{}", dir.display()), first, head_of(&dir))
     }
@@ -716,9 +725,12 @@ mod tests {
     fn an_install_clones_the_pin_under_the_name_the_operator_chose() {
         let (market, first, _second) = fixture("named");
 
-        let done = install(&market, "adi/crm", "Sales CRM", false)
-            .unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(done.id, "sales-crm", "the id is minted from the name, not the slug");
+        let done =
+            install(&market, "adi/crm", "Sales CRM", false).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            done.id, "sales-crm",
+            "the id is minted from the name, not the slug"
+        );
         assert_eq!(done.name, "Sales CRM");
         assert_eq!(done.host, "sales-crm.adi");
         assert_eq!(done.commit, first);
@@ -734,7 +746,10 @@ mod tests {
         // It is a clone, and one that can still be pulled: the pin sits on a tracking branch.
         assert_eq!(git::head(&dir).as_deref(), Some(first.as_str()));
         assert_eq!(git::branch(&dir).as_deref(), Some("main"));
-        assert!(!git::dirty(&dir), "the store's own files are excluded, not untracked work");
+        assert!(
+            !git::dirty(&dir),
+            "the store's own files are excluded, not untracked work"
+        );
 
         // Inert on arrival, in the state the store already knows how to hold and Restore.
         assert!(!is_started(&dir), "the supervisor's glob must not match");
@@ -745,7 +760,10 @@ mod tests {
 
         // And the record says where it came from and where it stands.
         let record = read_record(&dir).expect("record");
-        assert_eq!((record.marketplace.as_str(), record.slug.as_str()), ("adi", "crm"));
+        assert_eq!(
+            (record.marketplace.as_str(), record.slug.as_str()),
+            ("adi", "crm")
+        );
         assert_eq!(record.commit, first);
         assert_eq!(record.branch.as_deref(), Some("main"));
         assert_eq!(record.started_at, None);
@@ -769,7 +787,10 @@ mod tests {
         let first = install(&market, "adi/crm", "CRM", false).expect("install");
         let second = install(&market, "adi/crm", "CRM", false).expect("install again");
         assert_eq!(first.id, "crm");
-        assert_eq!(second.id, "crm-2", "numbered, never refused and never overwritten");
+        assert_eq!(
+            second.id, "crm-2",
+            "numbered, never refused and never overwritten"
+        );
         assert_eq!(second.host, "crm-2.adi", "and they do not share a hostname");
         assert!(market.dashboards_dir().join("crm").join(".git").is_dir());
         assert!(market.dashboards_dir().join("crm-2").join(".git").is_dir());
@@ -792,7 +813,10 @@ mod tests {
         assert_eq!(apps[0].installs.len(), 1);
         assert_eq!(apps[0].installs[0].id, "crm");
         assert!(!apps[0].installs[0].started);
-        assert!(!apps[0].installs[0].outdated, "installed at the pin it lists");
+        assert!(
+            !apps[0].installs[0].outdated,
+            "installed at the pin it lists"
+        );
         assert_eq!(apps[0].installs[0].host.as_deref(), Some("crm.adi"));
 
         // The publisher moves the pin: the copy here is behind, and says so.
@@ -822,7 +846,10 @@ mod tests {
         synced(&market, &repo, &second);
         let done = update(&market, "crm", false).unwrap_or_else(|e| panic!("{e}"));
         assert!(done.changed);
-        assert_eq!((done.from.as_str(), done.to.as_str()), (first.as_str(), second.as_str()));
+        assert_eq!(
+            (done.from.as_str(), done.to.as_str()),
+            (first.as_str(), second.as_str())
+        );
         assert_eq!(
             std::fs::read_to_string(dir.join("frontend").join("modules").join("contacts.ts"))
                 .expect("panel"),
@@ -927,7 +954,10 @@ mod tests {
 
         let done = install(&market, "adi/crm", "CRM", false).expect("install");
         let landed = market.dashboards_dir().join("crm");
-        assert!(!landed.join("hive.yaml").exists(), "a root hive file never lands");
+        assert!(
+            !landed.join("hive.yaml").exists(),
+            "a root hive file never lands"
+        );
         assert!(
             !is_started(&landed),
             "and nothing the repository shipped is in the supervisor's glob"
@@ -959,8 +989,14 @@ mod tests {
             install(&market, "adi/nope", "CRM", false),
             Err(Error::UnknownApp(_, slug, slugs)) if slug == "nope" && slugs.contains("crm")
         ));
-        assert!(matches!(start(&market, "ghost"), Err(Error::NotInstalled(_))));
-        assert!(matches!(update(&market, "ghost", false), Err(Error::NotInstalled(_))));
+        assert!(matches!(
+            start(&market, "ghost"),
+            Err(Error::NotInstalled(_))
+        ));
+        assert!(matches!(
+            update(&market, "ghost", false),
+            Err(Error::NotInstalled(_))
+        ));
 
         // A source never synced has nothing to install from.
         let bare = crate::tests::scratch("refusals-bare");

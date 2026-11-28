@@ -85,8 +85,13 @@ impl std::fmt::Display for LicenceError {
             Self::BadResponse(e) => write!(f, "licence service response was not understood: {e}"),
             Self::BadSignature => write!(f, "licence service response did not verify"),
             Self::NonceMismatch => write!(f, "licence service verdict echoed the wrong nonce"),
-            Self::DeploymentMismatch => write!(f, "licence service verdict echoed the wrong deployment_id"),
-            Self::CheckedAtOutOfSkew => write!(f, "licence service verdict's checked_at is too far from now"),
+            Self::DeploymentMismatch => {
+                write!(f, "licence service verdict echoed the wrong deployment_id")
+            }
+            Self::CheckedAtOutOfSkew => write!(
+                f,
+                "licence service verdict's checked_at is too far from now"
+            ),
         }
     }
 }
@@ -133,7 +138,9 @@ impl LicenceClient {
         // crypto provider for us and the client panics on its first HTTPS request until somebody
         // does. Every client site in this tree opens with this line; it is idempotent — a second
         // install returns `Err`, which is why the result is dropped.
-        rustls::crypto::ring::default_provider().install_default().ok();
+        rustls::crypto::ring::default_provider()
+            .install_default()
+            .ok();
         Self {
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(10))
@@ -154,7 +161,11 @@ impl LicenceClient {
     ///
     /// # Errors
     /// See [`LicenceError`]'s variants.
-    pub async fn verify(&self, licence_code: &str, owner_fingerprint: &str) -> Result<LicenceOutcome, LicenceError> {
+    pub async fn verify(
+        &self,
+        licence_code: &str,
+        owner_fingerprint: &str,
+    ) -> Result<LicenceOutcome, LicenceError> {
         let deployment_id = Self::synthetic_deployment_id(owner_fingerprint);
         let nonce = adi_relay::sign::generate_nonce();
         let request = BeamRequest {
@@ -173,13 +184,21 @@ impl LicenceClient {
             .await
             .map_err(|e| LicenceError::Transport(e.to_string()))?;
         if !response.status().is_success() {
-            return Err(LicenceError::Transport(format!("HTTP {}", response.status())));
+            return Err(LicenceError::Transport(format!(
+                "HTTP {}",
+                response.status()
+            )));
         }
         let body = response
             .bytes()
             .await
             .map_err(|e| LicenceError::Transport(e.to_string()))?;
-        self.decide(&body, &nonce, &deployment_id, i64::try_from(now_secs()).unwrap_or(i64::MAX))
+        self.decide(
+            &body,
+            &nonce,
+            &deployment_id,
+            i64::try_from(now_secs()).unwrap_or(i64::MAX),
+        )
     }
 
     /// The pure half of [`Self::verify`]: everything after the bytes are already in hand —
@@ -200,18 +219,21 @@ impl LicenceClient {
         // is a `BTreeMap` in this workspace's default build (no `preserve_order` feature), so
         // `to_vec` already emits keys in that order; this is the same canonicalization
         // `crypto.ts::canonicalBytes` performs on the signing side.
-        let canonical = serde_json::to_vec(&parsed.verdict).map_err(|e| LicenceError::BadResponse(e.to_string()))?;
+        let canonical = serde_json::to_vec(&parsed.verdict)
+            .map_err(|e| LicenceError::BadResponse(e.to_string()))?;
         let signature_bytes = base64::engine::general_purpose::STANDARD
             .decode(&parsed.signature)
             .map_err(|_| LicenceError::BadSignature)?;
-        let signature_bytes: [u8; 64] = signature_bytes.try_into().map_err(|_| LicenceError::BadSignature)?;
+        let signature_bytes: [u8; 64] = signature_bytes
+            .try_into()
+            .map_err(|_| LicenceError::BadSignature)?;
         let signature = Signature::from_bytes(&signature_bytes);
         self.public_key
             .verify(&canonical, &signature)
             .map_err(|_| LicenceError::BadSignature)?;
 
-        let fields: VerdictFields =
-            serde_json::from_value(parsed.verdict).map_err(|e| LicenceError::BadResponse(e.to_string()))?;
+        let fields: VerdictFields = serde_json::from_value(parsed.verdict)
+            .map_err(|e| LicenceError::BadResponse(e.to_string()))?;
         if fields.nonce != expected_nonce {
             return Err(LicenceError::NonceMismatch);
         }
@@ -253,7 +275,12 @@ mod tests {
         serde_json::to_vec(&body).unwrap()
     }
 
-    fn verdict(status: &str, nonce: &str, deployment_id: &str, checked_at: i64) -> serde_json::Value {
+    fn verdict(
+        status: &str,
+        nonce: &str,
+        deployment_id: &str,
+        checked_at: i64,
+    ) -> serde_json::Value {
         serde_json::json!({
             "checked_at": checked_at,
             "company": "Acme GmbH",
@@ -269,7 +296,10 @@ mod tests {
     }
 
     fn client(signing: &SigningKey) -> LicenceClient {
-        LicenceClient::with_public_key("https://licence.example".to_string(), signing.verifying_key())
+        LicenceClient::with_public_key(
+            "https://licence.example".to_string(),
+            signing.verifying_key(),
+        )
     }
 
     #[test]
@@ -277,7 +307,9 @@ mod tests {
         let signing = SigningKey::from_bytes(&[1u8; 32]);
         let now = 1_000_000;
         let body = signed_body(&signing, &verdict("paid", "n1", "webhook-relay:fp1", now));
-        let outcome = client(&signing).decide(&body, "n1", "webhook-relay:fp1", now).expect("accepted");
+        let outcome = client(&signing)
+            .decide(&body, "n1", "webhook-relay:fp1", now)
+            .expect("accepted");
         assert!(outcome.valid);
         assert_eq!(outcome.checked_at, now);
     }
@@ -286,11 +318,24 @@ mod tests {
     fn trialing_is_also_valid_but_expired_is_not() {
         let signing = SigningKey::from_bytes(&[2u8; 32]);
         let now = 1_000_000;
-        let trialing = signed_body(&signing, &verdict("trialing", "n", "webhook-relay:fp1", now));
-        assert!(client(&signing).decide(&trialing, "n", "webhook-relay:fp1", now).unwrap().valid);
+        let trialing = signed_body(
+            &signing,
+            &verdict("trialing", "n", "webhook-relay:fp1", now),
+        );
+        assert!(
+            client(&signing)
+                .decide(&trialing, "n", "webhook-relay:fp1", now)
+                .unwrap()
+                .valid
+        );
 
         let expired = signed_body(&signing, &verdict("expired", "n", "webhook-relay:fp1", now));
-        assert!(!client(&signing).decide(&expired, "n", "webhook-relay:fp1", now).unwrap().valid);
+        assert!(
+            !client(&signing)
+                .decide(&expired, "n", "webhook-relay:fp1", now)
+                .unwrap()
+                .valid
+        );
     }
 
     #[test]
@@ -341,7 +386,10 @@ mod tests {
     fn a_checked_at_too_far_from_now_is_refused() {
         let signing = SigningKey::from_bytes(&[7u8; 32]);
         let now = 1_000_000;
-        let body = signed_body(&signing, &verdict("paid", "n", "webhook-relay:fp1", now - 1000));
+        let body = signed_body(
+            &signing,
+            &verdict("paid", "n", "webhook-relay:fp1", now - 1000),
+        );
         assert!(matches!(
             client(&signing).decide(&body, "n", "webhook-relay:fp1", now),
             Err(LicenceError::CheckedAtOutOfSkew)

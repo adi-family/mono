@@ -189,7 +189,13 @@ impl Connections {
 
     /// Edit (creating if absent) one connection's secrets settings.
     pub fn edit_secrets(&mut self, petname: &str, edit: impl FnOnce(&mut SecretsSettings)) {
-        edit(&mut self.connections.entry(petname.to_string()).or_default().secrets);
+        edit(
+            &mut self
+                .connections
+                .entry(petname.to_string())
+                .or_default()
+                .secrets,
+        );
     }
 
     /// Follow a petname rename: move `from`'s entry to `to`, if it has one. The mesh's own
@@ -274,12 +280,18 @@ mod tests {
 
         let reloaded = Connections::load_from(&store).expect("reload");
         let entry = reloaded.get("server-a").expect("server-a");
-        assert_eq!(entry.secrets.share, vec!["CLAUDE_CODE_OAUTH_TOKEN".to_string()]);
+        assert_eq!(
+            entry.secrets.share,
+            vec!["CLAUDE_CODE_OAUTH_TOKEN".to_string()]
+        );
         assert_eq!(entry.secrets.lease, LeaseLength::Hours(24));
         assert!(entry.secrets.auto_unlock);
 
         let rendered = toml::to_string_pretty(&reloaded).expect("render");
-        assert!(rendered.contains("[connections.server-a.secrets]"), "{rendered}");
+        assert!(
+            rendered.contains("[connections.server-a.secrets]"),
+            "{rendered}"
+        );
         assert!(rendered.contains("lease = \"24h\""), "{rendered}");
     }
 
@@ -290,7 +302,13 @@ mod tests {
 
         connections.rename("server-a", "server-b");
         assert!(connections.get("server-a").is_none());
-        assert!(connections.get("server-b").expect("moved").secrets.auto_unlock);
+        assert!(
+            connections
+                .get("server-b")
+                .expect("moved")
+                .secrets
+                .auto_unlock
+        );
 
         // No entry for "ghost" — nothing to move, and not an error.
         connections.rename("ghost", "also-ghost");

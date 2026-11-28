@@ -251,7 +251,10 @@ mod tests {
         let k2 = key(6);
         let bare = encode(&k1);
         let commented = format!("{bare} someone@somewhere");
-        assert_eq!(Fingerprint::of_line(&bare), Fingerprint::of_line(&commented));
+        assert_eq!(
+            Fingerprint::of_line(&bare),
+            Fingerprint::of_line(&commented)
+        );
         assert_eq!(Fingerprint::of_line(&bare), Fingerprint::of_key(&k1));
         assert_ne!(Fingerprint::of_key(&k1), Fingerprint::of_key(&k2));
     }

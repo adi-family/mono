@@ -24,9 +24,16 @@ const CHANNELS_MODULE: &str = "channels";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Target {
-    Agent { agent: String },
-    Trigger { trigger: String },
-    AppRoute { app: String, route: String },
+    Agent {
+        agent: String,
+    },
+    Trigger {
+        trigger: String,
+    },
+    AppRoute {
+        app: String,
+        route: String,
+    },
     /// A variant newer than this build knows, kept rather than refused so the rest of the
     /// connection (its allowlist, its thread map) still reads. Dispatch skips it.
     #[serde(other)]
@@ -40,7 +47,9 @@ pub enum Target {
 pub enum Allowlist {
     #[default]
     OwnerOnly,
-    List { sender_ids: Vec<String> },
+    List {
+        sender_ids: Vec<String>,
+    },
     Open,
 }
 
@@ -230,8 +239,7 @@ impl Connections {
             let Ok(file_name) = entry.file_name().into_string() else {
                 continue;
             };
-            let Some(id) = file_name.strip_suffix(&format!(".{}", adi_config::MANIFEST_EXT))
-            else {
+            let Some(id) = file_name.strip_suffix(&format!(".{}", adi_config::MANIFEST_EXT)) else {
                 continue;
             };
             if validate_id(id).is_err() {
@@ -283,7 +291,12 @@ impl Connections {
     ///
     /// # Errors
     /// As [`require`](Self::require), plus a write failure.
-    pub fn mark_linked(&self, id: &str, routing_key: &str, owner_sender_id: &str) -> Result<Connection> {
+    pub fn mark_linked(
+        &self,
+        id: &str,
+        routing_key: &str,
+        owner_sender_id: &str,
+    ) -> Result<Connection> {
         let mut connection = self.require(id)?;
         connection.manifest.routing_key = routing_key.to_string();
         connection.manifest.owner_sender_id = owner_sender_id.to_string();
@@ -335,10 +348,7 @@ impl Connections {
     /// [`Error::InvalidId`] for an unsafe id, or [`Error::Config`] on a removal failure.
     pub fn remove(&self, id: &str) -> Result<bool> {
         validate_id(id)?;
-        Ok(self
-            .config
-            .module(CHANNELS_MODULE)
-            .remove_manifest(id)?)
+        Ok(self.config.module(CHANNELS_MODULE).remove_manifest(id)?)
     }
 
     /// The ADI run id a provider thread already maps to, if the thread has said anything before.
@@ -374,7 +384,12 @@ impl Connections {
     /// [`Error::Config`] on a listing failure.
     pub fn find_by_run(&self, run_id: &str) -> Result<Option<(Connection, String)>> {
         for connection in self.list()? {
-            if let Some((thread, _)) = connection.manifest.threads.iter().find(|(_, r)| *r == run_id) {
+            if let Some((thread, _)) = connection
+                .manifest
+                .threads
+                .iter()
+                .find(|(_, r)| *r == run_id)
+            {
                 let thread = thread.clone();
                 return Ok(Some((connection, thread)));
             }
@@ -418,12 +433,7 @@ mod tests {
     fn an_unknown_target_kind_deserializes_rather_than_failing() {
         let store = scratch("unknown-target");
         let created = store
-            .create(
-                "telegram",
-                Target::Agent {
-                    agent: "a".into(),
-                },
-            )
+            .create("telegram", Target::Agent { agent: "a".into() })
             .expect("create");
         let path = store.file(&created.id).path().to_path_buf();
         let raw = std::fs::read_to_string(&path).unwrap();
@@ -502,24 +512,12 @@ mod tests {
     fn set_target_allowlist_and_paused_persist() {
         let store = scratch("mutate");
         let created = store
-            .create(
-                "telegram",
-                Target::Agent {
-                    agent: "a".into(),
-                },
-            )
+            .create("telegram", Target::Agent { agent: "a".into() })
             .expect("create");
         store
-            .set_target(
-                &created.id,
-                Target::Agent {
-                    agent: "b".into(),
-                },
-            )
+            .set_target(&created.id, Target::Agent { agent: "b".into() })
             .unwrap();
-        store
-            .set_allowlist(&created.id, Allowlist::Open)
-            .unwrap();
+        store.set_allowlist(&created.id, Allowlist::Open).unwrap();
         store.set_paused(&created.id, true).unwrap();
         let reloaded = store.require(&created.id).unwrap();
         assert_eq!(
@@ -534,12 +532,7 @@ mod tests {
     fn remove_deletes_and_reports_absence() {
         let store = scratch("remove");
         let created = store
-            .create(
-                "telegram",
-                Target::Agent {
-                    agent: "a".into(),
-                },
-            )
+            .create("telegram", Target::Agent { agent: "a".into() })
             .expect("create");
         assert!(store.remove(&created.id).unwrap());
         assert!(!store.remove(&created.id).unwrap());

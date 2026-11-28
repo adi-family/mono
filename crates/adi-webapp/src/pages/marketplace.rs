@@ -317,7 +317,11 @@ fn entry_row(app: &MarketplaceApp, open: OpenApp) -> AnyView {
 /// than "not installed" — the absence *is* the answer, and repeating it down a listing of twenty
 /// items is twenty words that never change.
 fn here_note(app: &MarketplaceApp, elements: &[MarketplaceBundleElement]) -> AnyView {
-    let installs = app.bundle.as_ref().map(|b| b.installs.clone()).unwrap_or_default();
+    let installs = app
+        .bundle
+        .as_ref()
+        .map(|b| b.installs.clone())
+        .unwrap_or_default();
     let landed: usize = installs.iter().map(|i| i.elements.len()).sum();
     let outdated = app
         .bundle
@@ -340,7 +344,11 @@ fn here_note(app: &MarketplaceApp, elements: &[MarketplaceBundleElement]) -> Any
     } else if landed == elements.len() {
         format!("installed {}", where_installed(&installs[0]))
     } else {
-        format!("{landed} of {} installed {}", elements.len(), where_installed(&installs[0]))
+        format!(
+            "{landed} of {} installed {}",
+            elements.len(),
+            where_installed(&installs[0])
+        )
     };
 
     view! {
@@ -650,8 +658,7 @@ fn eyebrow(app: &MarketplaceApp) -> String {
 fn hero_action(form: MarketplaceForm, app: &MarketplaceApp) -> AnyView {
     let busy = form.busy;
     let elements = bundle_elements(app);
-    let installs = app.bundle.as_ref().map(|b| b.installs.len()).unwrap_or(0)
-        + app.installs.len();
+    let installs = app.bundle.as_ref().map(|b| b.installs.len()).unwrap_or(0) + app.installs.len();
     let legacy = is_legacy(app);
     let owned = app.clone();
 
@@ -761,8 +768,16 @@ fn assurances() -> AnyView {
 /// the spelling but not the enum. One order for every bundle is the whole point: the eye learns it
 /// once, and never has to re-learn it item to item.
 const KIND_ORDER: [&str; 10] = [
-    "agents", "tools", "dashboards", "llm", "embeddings", "services", "triggers", "project",
-    "templates", "mcp",
+    "agents",
+    "tools",
+    "dashboards",
+    "llm",
+    "embeddings",
+    "services",
+    "triggers",
+    "project",
+    "templates",
+    "mcp",
 ];
 
 /// What one element of this kind is called, in the singular — the word on its row.
@@ -968,7 +983,10 @@ fn install_block(
     let (missing, outdated) = (install.missing_secrets.clone(), install.outdated);
     let landed = install.elements.len();
     let (m, s) = (marketplace.to_string(), slug.to_string());
-    let update_key = format!("bundle-update:{m}/{s}/{}", project.clone().unwrap_or_default());
+    let update_key = format!(
+        "bundle-update:{m}/{s}/{}",
+        project.clone().unwrap_or_default()
+    );
     let (um, us, up) = (m.clone(), s.clone(), project.clone());
 
     view! {
@@ -1064,8 +1082,12 @@ fn installed_row(
         }
     });
     let state_marker = match (is_service, el.started) {
-        (true, Some(true)) => Some(view! { <span class="adi-market__state">"running"</span> }.into_any()),
-        (true, Some(false)) => Some(view! { <span class="adi-market__state">"not running"</span> }.into_any()),
+        (true, Some(true)) => {
+            Some(view! { <span class="adi-market__state">"running"</span> }.into_any())
+        }
+        (true, Some(false)) => {
+            Some(view! { <span class="adi-market__state">"not running"</span> }.into_any())
+        }
         _ => None,
     };
 
@@ -1074,8 +1096,17 @@ fn installed_row(
             "Uninstall {confirm_spec}{where_}? Its siblings in this install are untouched, and so \
              is any other copy of this bundle."
         )) {
-            run(state, form, uninstall_key.clone(),
-                fetch::uninstall_marketplace_element(um.clone(), us.clone(), uspec.clone(), up.clone()));
+            run(
+                state,
+                form,
+                uninstall_key.clone(),
+                fetch::uninstall_marketplace_element(
+                    um.clone(),
+                    us.clone(),
+                    uspec.clone(),
+                    up.clone(),
+                ),
+            );
         }
     })];
 
@@ -1538,8 +1569,12 @@ fn copy_row(state: State, form: MarketplaceForm, install: &MarketplaceInstall) -
                 "Reset this copy onto the marketplace's commit? Any changes you made to it here \
                  are lost.",
             ) {
-                run(state, form, force_key.clone(),
-                    fetch::update_marketplace_app(force_id.clone(), true));
+                run(
+                    state,
+                    form,
+                    force_key.clone(),
+                    fetch::update_marketplace_app(force_id.clone(), true),
+                );
             }
         })
     });
@@ -1717,8 +1752,15 @@ mod tests {
 
     #[test]
     fn a_commit_is_shown_the_way_git_prints_one() {
-        assert_eq!(short_commit("9f2c1d4e5a6b7c8d9e0f1a2b3c4d5e6f70819a2b"), "9f2c1d4");
-        assert_eq!(short_commit(""), "", "an absent pin shows as nothing, not as a panic");
+        assert_eq!(
+            short_commit("9f2c1d4e5a6b7c8d9e0f1a2b3c4d5e6f70819a2b"),
+            "9f2c1d4"
+        );
+        assert_eq!(
+            short_commit(""),
+            "",
+            "an absent pin shows as nothing, not as a panic"
+        );
     }
 
     #[test]
@@ -1743,7 +1785,11 @@ mod tests {
         // KIND_ORDER, not the order the elements arrived in; a repeated kind counts, a single one
         // is named.
         assert_eq!(contents_note(&elements), "agent · 2 tools · LLM backend");
-        assert_eq!(contents_note(&[]), "", "the legacy shape has nothing to list");
+        assert_eq!(
+            contents_note(&[]),
+            "",
+            "the legacy shape has nothing to list"
+        );
     }
 
     #[test]
@@ -1779,8 +1825,16 @@ mod tests {
     #[test]
     fn the_preview_kind_is_translated_to_the_address_spelling() {
         assert_eq!(preview_kind_dir("agent"), "agents");
-        assert_eq!(preview_kind_dir("llm"), "llm", "the two spellings agree here");
+        assert_eq!(
+            preview_kind_dir("llm"),
+            "llm",
+            "the two spellings agree here"
+        );
         assert_eq!(preview_kind_dir("project"), "project", "and here");
-        assert_eq!(preview_kind_dir("hologram"), "hologram", "unknown, passed through");
+        assert_eq!(
+            preview_kind_dir("hologram"),
+            "hologram",
+            "unknown, passed through"
+        );
     }
 }

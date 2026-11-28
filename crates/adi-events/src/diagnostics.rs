@@ -338,10 +338,8 @@ mod tests {
     #[test]
     fn every_field_of_a_warning_is_kept_not_only_error() {
         use tracing_subscriber::prelude::*;
-        let dir = std::env::temp_dir().join(format!(
-            "adi-diagnostics-fields-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("adi-diagnostics-fields-{}", std::process::id()));
         let store = Events::with_config(adi_config::Config::with_root(&dir));
         let subscriber = tracing_subscriber::registry()
             .with(DiagnosticLayer::new(store.clone(), "test-service"));
@@ -352,7 +350,10 @@ mod tests {
         let context = &rows[0].diagnostic.context;
         assert_eq!(context["service"].as_str(), Some("frontend"));
         assert_eq!(context["attempts"].as_str(), Some("3"));
-        assert!(context.get("error").is_none(), "no error field was logged: {context}");
+        assert!(
+            context.get("error").is_none(),
+            "no error field was logged: {context}"
+        );
         assert!(context["line"].is_number());
         let _ = std::fs::remove_dir_all(dir);
     }

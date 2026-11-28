@@ -7,7 +7,13 @@ import { Button, type ButtonDisabledProps } from "./button";
 type ChatComposerProps = Omit<React.ComponentProps<"form">, "onSubmit" | "onError" | "children"> &
   ButtonDisabledProps & {
     /** Controlled attachments; the host uploads files and supplies their preview URLs. */
-    attachments?: readonly { id: string; name: string; mediaType?: string; url?: string; error?: string }[];
+    attachments?: readonly {
+      id: string;
+      name: string;
+      mediaType?: string;
+      url?: string;
+      error?: string;
+    }[];
     onFilesSelect?: (files: File[]) => void;
     onAttachmentRemove?: (id: string) => void;
     attachmentsBusy?: boolean;
@@ -67,7 +73,9 @@ function ChatComposer({
 
   React.useEffect(() => {
     mounted.current = true;
-    return () => { mounted.current = false; };
+    return () => {
+      mounted.current = false;
+    };
   }, []);
 
   const reason = disabledReason?.trim();
@@ -79,9 +87,19 @@ function ChatComposer({
     event.preventDefault();
     const draft = currentValue.current;
     const message = draft.trim();
-    if (disabled || isGenerating || inFlight.current || attachmentsBusy || attachments.some((image) => image.error) || (!message && !attachments.length)) return;
+    if (
+      disabled ||
+      isGenerating ||
+      inFlight.current ||
+      attachmentsBusy ||
+      attachments.some((image) => image.error) ||
+      (!message && !attachments.length)
+    )
+      return;
 
-    event.currentTarget.querySelector<HTMLTextAreaElement>("[data-slot=chat-composer-input]")?.focus({ preventScroll: true });
+    event.currentTarget
+      .querySelector<HTMLTextAreaElement>("[data-slot=chat-composer-input]")
+      ?.focus({ preventScroll: true });
     inFlight.current = true;
     setSending(true);
     setFailed(false);
@@ -91,7 +109,10 @@ function ChatComposer({
       await onSend(message);
     } catch {
       if (mounted.current) {
-        if (!currentValue.current) { currentValue.current = draft; onValueChange(draft); }
+        if (!currentValue.current) {
+          currentValue.current = draft;
+          onValueChange(draft);
+        }
         setFailed(true);
       }
     } finally {
@@ -109,14 +130,21 @@ function ChatComposer({
   const helperId = `${id}-help`;
   const errorId = `${id}-error`;
   const disabledId = `${id}-disabled`;
-  const cannotSend = disabled || sending || attachmentsBusy || attachments.some((image) => image.error) || (!value.trim() && !attachments.length);
+  const cannotSend =
+    disabled ||
+    sending ||
+    attachmentsBusy ||
+    attachments.some((image) => image.error) ||
+    (!value.trim() && !attachments.length);
   const sendDisabledReason = disabled
     ? reason!
-    : attachmentsBusy ? "Wait for files to finish uploading."
-    : attachments.some((image) => image.error) ? "Remove failed attachments before sending."
-    : sending
-      ? "Wait for this message to finish sending."
-      : "Write a message before sending it.";
+    : attachmentsBusy
+      ? "Wait for files to finish uploading."
+      : attachments.some((image) => image.error)
+        ? "Remove failed attachments before sending."
+        : sending
+          ? "Wait for this message to finish sending."
+          : "Write a message before sending it.";
 
   return (
     <form
@@ -129,11 +157,19 @@ function ChatComposer({
         props.onPaste?.(event);
         if (event.defaultPrevented || disabled || sending || !onFilesSelect) return;
         const files = Array.from(event.clipboardData.files);
-        if (files.length) { event.preventDefault(); onFilesSelect(files); }
+        if (files.length) {
+          event.preventDefault();
+          onFilesSelect(files);
+        }
       }}
       onDragOver={(event) => {
         props.onDragOver?.(event);
-        if (!event.defaultPrevented && onFilesSelect && Array.from(event.dataTransfer.types).includes("Files")) event.preventDefault();
+        if (
+          !event.defaultPrevented &&
+          onFilesSelect &&
+          Array.from(event.dataTransfer.types).includes("Files")
+        )
+          event.preventDefault();
       }}
       onDrop={(event) => {
         props.onDrop?.(event);
@@ -144,20 +180,77 @@ function ChatComposer({
         }
       }}
     >
-      {attachments.length > 0 && <ul aria-label="Attachments" className="flex max-h-40 flex-wrap gap-2 overflow-y-auto">
-        {attachments.map((image) => <li key={image.id} className="relative w-24 rounded-md border p-1.5">
-          {image.url ? <a href={image.url} target="_blank" rel="noreferrer">{!image.mediaType || ["image/png", "image/jpeg", "image/webp", "image/gif"].includes(image.mediaType) ? <img src={image.url} alt={image.name} className="h-16 w-full rounded object-cover" /> : <span className="text-muted-foreground flex h-16 items-center justify-center"><FileText aria-label="Attached file" className="size-6" /></span>}</a>
-            : <div className="text-muted-foreground flex h-16 items-center justify-center text-xs">{image.error ? "Upload failed" : <LoaderCircle aria-label="Uploading file" className="size-4 motion-safe:animate-spin" />}</div>}
-          <p className="text-muted-foreground mt-1 truncate text-[10px]" title={image.name}>{image.name}</p>
-          {image.error && <p role="alert" className="text-destructive text-[10px]">{image.error}</p>}
-          {onAttachmentRemove && <button type="button" aria-label={`Remove ${image.name}`} disabled={sending} className="bg-background focus-visible:ring-ring absolute top-0 right-0 rounded-full border p-0.5 outline-none focus-visible:ring-2" onClick={() => onAttachmentRemove(image.id)}><X aria-hidden="true" className="size-3" /></button>}
-        </li>)}
-      </ul>}
-      {onFilesSelect && <input ref={fileInput} type="file" multiple aria-label="Choose files" className="hidden" disabled={disabled || sending} onChange={(event) => {
-        const files = Array.from(event.target.files ?? []);
-        event.target.value = "";
-        if (files.length) onFilesSelect(files);
-      }} /> }
+      {attachments.length > 0 && (
+        <ul aria-label="Attachments" className="flex max-h-40 flex-wrap gap-2 overflow-y-auto">
+          {attachments.map((image) => (
+            <li key={image.id} className="relative w-24 rounded-md border p-1.5">
+              {image.url ? (
+                <a href={image.url} target="_blank" rel="noreferrer">
+                  {!image.mediaType ||
+                  ["image/png", "image/jpeg", "image/webp", "image/gif"].includes(
+                    image.mediaType,
+                  ) ? (
+                    <img
+                      src={image.url}
+                      alt={image.name}
+                      className="h-16 w-full rounded object-cover"
+                    />
+                  ) : (
+                    <span className="text-muted-foreground flex h-16 items-center justify-center">
+                      <FileText aria-label="Attached file" className="size-6" />
+                    </span>
+                  )}
+                </a>
+              ) : (
+                <div className="text-muted-foreground flex h-16 items-center justify-center text-xs">
+                  {image.error ? (
+                    "Upload failed"
+                  ) : (
+                    <LoaderCircle
+                      aria-label="Uploading file"
+                      className="size-4 motion-safe:animate-spin"
+                    />
+                  )}
+                </div>
+              )}
+              <p className="text-muted-foreground mt-1 truncate text-[10px]" title={image.name}>
+                {image.name}
+              </p>
+              {image.error && (
+                <p role="alert" className="text-destructive text-[10px]">
+                  {image.error}
+                </p>
+              )}
+              {onAttachmentRemove && (
+                <button
+                  type="button"
+                  aria-label={`Remove ${image.name}`}
+                  disabled={sending}
+                  className="bg-background focus-visible:ring-ring absolute top-0 right-0 rounded-full border p-0.5 outline-none focus-visible:ring-2"
+                  onClick={() => onAttachmentRemove(image.id)}
+                >
+                  <X aria-hidden="true" className="size-3" />
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {onFilesSelect && (
+        <input
+          ref={fileInput}
+          type="file"
+          multiple
+          aria-label="Choose files"
+          className="hidden"
+          disabled={disabled || sending}
+          onChange={(event) => {
+            const files = Array.from(event.target.files ?? []);
+            event.target.value = "";
+            if (files.length) onFilesSelect(files);
+          }}
+        />
+      )}
       <textarea
         data-slot="chat-composer-input"
         rows={2}
@@ -166,12 +259,9 @@ function ChatComposer({
         {...inputProps}
         disabled={disabled}
         value={value}
-        aria-describedby={[
-          describedBy,
-          helperId,
-          failed && errorId,
-          disabled && disabledId,
-        ].filter(Boolean).join(" ")}
+        aria-describedby={[describedBy, helperId, failed && errorId, disabled && disabledId]
+          .filter(Boolean)
+          .join(" ")}
         className={cn(
           "text-foreground placeholder:text-muted-foreground focus-visible:ring-ring/50 field-sizing-content max-h-48 min-h-12 w-full resize-none rounded-md px-1 py-1 text-sm leading-6 outline-none focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50",
           inputClassName,
@@ -184,24 +274,63 @@ function ChatComposer({
         onKeyDown={(event) => {
           onKeyDown?.(event);
           if (
-            event.defaultPrevented || !sendOnEnter || event.key !== "Enter" ||
-            event.shiftKey || event.altKey || event.ctrlKey || event.metaKey ||
-            event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229
-          ) return;
+            event.defaultPrevented ||
+            !sendOnEnter ||
+            event.key !== "Enter" ||
+            event.shiftKey ||
+            event.altKey ||
+            event.ctrlKey ||
+            event.metaKey ||
+            event.nativeEvent.isComposing ||
+            event.nativeEvent.keyCode === 229
+          )
+            return;
           event.preventDefault();
           event.currentTarget.form?.requestSubmit();
         }}
       />
       <div className="flex min-w-0 items-end justify-between gap-3">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          {onFilesSelect && <Button type="button" variant="ghost" size="icon" className="size-7 shrink-0" aria-label="Attach files" disabled={disabled || sending} disabledReason={disabled ? reason! : "Wait for this message to finish sending."} onClick={() => fileInput.current?.click()}><Paperclip aria-hidden="true" className="size-4" /></Button>}
+          {onFilesSelect && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-7 shrink-0"
+              aria-label="Attach files"
+              disabled={disabled || sending}
+              disabledReason={disabled ? reason! : "Wait for this message to finish sending."}
+              onClick={() => fileInput.current?.click()}
+            >
+              <Paperclip aria-hidden="true" className="size-4" />
+            </Button>
+          )}
           {children}
-          <p id={helperId} role="status" aria-live="polite" aria-atomic="true" data-slot="chat-composer-status" className={cn("flex items-center gap-1.5 text-xs leading-5", sending ? "text-foreground font-medium" : "text-muted-foreground")}>
-            {sending && <LoaderCircle aria-hidden="true" className="size-3.5 shrink-0 motion-safe:animate-spin" />}
-            {sending ? sendingLabel : sendOnEnter
+          <p
+            id={helperId}
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+            data-slot="chat-composer-status"
+            className={cn(
+              "flex items-center gap-1.5 text-xs leading-5",
+              sending ? "text-foreground font-medium" : "text-muted-foreground",
+            )}
+          >
+            {sending && (
+              <LoaderCircle
+                aria-hidden="true"
+                className="size-3.5 shrink-0 motion-safe:animate-spin"
+              />
+            )}
+            {sending ? (
+              sendingLabel
+            ) : sendOnEnter ? (
               // Phones have no Shift + Enter; the keyboard hint only helps on wider screens.
-              ? <span className="hidden sm:inline">Enter to send · Shift + Enter for a new line</span>
-              : "Use the send button to send your message."}
+              <span className="hidden sm:inline">Enter to send · Shift + Enter for a new line</span>
+            ) : (
+              "Use the send button to send your message."
+            )}
           </p>
         </div>
         {isGenerating ? (
@@ -236,8 +365,16 @@ function ChatComposer({
           </Button>
         )}
       </div>
-      {disabled && <p id={disabledId} className="text-muted-foreground text-xs">{reason}</p>}
-      {failed && <p id={errorId} role="alert" className="text-destructive text-sm">{errorMessage}</p>}
+      {disabled && (
+        <p id={disabledId} className="text-muted-foreground text-xs">
+          {reason}
+        </p>
+      )}
+      {failed && (
+        <p id={errorId} role="alert" className="text-destructive text-sm">
+          {errorMessage}
+        </p>
+      )}
     </form>
   );
 }

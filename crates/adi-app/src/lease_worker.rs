@@ -112,9 +112,17 @@ async fn ensure_unlocked(
 /// `adi-mono mesh unlock` (`adi-cli/src/mesh.rs`) — the same sequence, `auth` supplied by
 /// [`ensure_unlocked`] instead of a password prompt. Returns the epoch unlocked against, for
 /// [`ensure_unlocked`]'s own renew cache.
-async fn unlock(secrets: &Secrets, petname: &str, auth: &str, settings: &SecretsSettings) -> anyhow::Result<String> {
-    let info: serde_json::Value =
-        serde_json::from_str(&node::get(petname, "/api/leases/session", auth, CONTROL_TIMEOUT).await.map_err(|e| anyhow::anyhow!("{}", e.message))?)?;
+async fn unlock(
+    secrets: &Secrets,
+    petname: &str,
+    auth: &str,
+    settings: &SecretsSettings,
+) -> anyhow::Result<String> {
+    let info: serde_json::Value = serde_json::from_str(
+        &node::get(petname, "/api/leases/session", auth, CONTROL_TIMEOUT)
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e.message))?,
+    )?;
     let user = info["user"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("{petname}: no user scope to unlock"))?;
@@ -125,14 +133,19 @@ async fn unlock(secrets: &Secrets, petname: &str, auth: &str, settings: &Secrets
     let session_public = decode_b64_32(info["public_key"].as_str().unwrap_or_default())
         .ok_or_else(|| anyhow::anyhow!("{petname}: malformed session public key"))?;
 
-    let mine: serde_json::Value =
-        serde_json::from_str(&node::get(petname, "/api/secrets/mine", auth, CONTROL_TIMEOUT).await.map_err(|e| anyhow::anyhow!("{}", e.message))?)?;
+    let mine: serde_json::Value = serde_json::from_str(
+        &node::get(petname, "/api/secrets/mine", auth, CONTROL_TIMEOUT)
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e.message))?,
+    )?;
     let wrap_key = adi_mesh::devicekey::load_or_create_in(secrets.config())?;
     let device = adi_mesh::identity::endpoint_id()?.to_string();
 
     let mut sealed = Vec::new();
     for entry in mine["names"].as_array().cloned().unwrap_or_default() {
-        let Some(name) = entry["name"].as_str() else { continue };
+        let Some(name) = entry["name"].as_str() else {
+            continue;
+        };
         if !settings.share.iter().any(|n| n == name) {
             continue;
         }
@@ -238,11 +251,19 @@ mod tests {
     async fn ensure_unlocked_without_a_held_credential_fails_without_touching_the_network() {
         let config = scratch("no-credential");
         let secrets = Secrets::with_config(config);
-        let settings = SecretsSettings { share: vec!["K".to_string()], ..SecretsSettings::default() };
+        let settings = SecretsSettings {
+            share: vec!["K".to_string()],
+            ..SecretsSettings::default()
+        };
         let mut epochs = HashMap::new();
-        let err = ensure_unlocked(&secrets, "adi-mono-181-lease-worker-test-unpaired", &settings, &mut epochs)
-            .await
-            .expect_err("no credential, no network call");
+        let err = ensure_unlocked(
+            &secrets,
+            "adi-mono-181-lease-worker-test-unpaired",
+            &settings,
+            &mut epochs,
+        )
+        .await
+        .expect_err("no credential, no network call");
         assert!(err.to_string().contains("no password held"), "{err}");
     }
 }

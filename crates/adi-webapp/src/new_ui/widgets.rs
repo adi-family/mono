@@ -125,7 +125,10 @@ pub(super) fn declared(config: &str) -> Vec<Declared> {
             let path = w.url?.trim().to_string();
             // `//host/…` is an address, not a path, however it starts.
             (path.starts_with('/') && !path.starts_with("//")).then(|| Declared {
-                name: w.name.map(|n| n.trim().to_string()).filter(|n| !n.is_empty()),
+                name: w
+                    .name
+                    .map(|n| n.trim().to_string())
+                    .filter(|n| !n.is_empty()),
                 path,
                 size: Size::named(w.size.as_deref()),
             })
@@ -148,10 +151,13 @@ pub(super) fn AppWidget(
 ) -> impl IntoView {
     let frame: NodeRef<html::Iframe> = NodeRef::new();
     let heard = window_event_listener(ev::message, move |ev| {
-        let from_here = frame.get_untracked().and_then(|f| f.content_window()).is_some_and(|w| {
-            ev.source()
-                .is_some_and(|s| JsValue::from(s) == JsValue::from(w))
-        });
+        let from_here = frame
+            .get_untracked()
+            .and_then(|f| f.content_window())
+            .is_some_and(|w| {
+                ev.source()
+                    .is_some_and(|s| JsValue::from(s) == JsValue::from(w))
+            });
         if from_here && let Some(chat) = asked_chat(&ev.data()) {
             desk.open_chat(chat);
         }
@@ -179,7 +185,11 @@ pub(super) fn AppWidget(
 
 /// The chat window a widget's message asks for, if it is one (see the module doc).
 fn asked_chat(data: &JsValue) -> Option<ChatRef> {
-    let field = |k: &str| js_sys::Reflect::get(data, &k.into()).ok().and_then(|v| v.as_string());
+    let field = |k: &str| {
+        js_sys::Reflect::get(data, &k.into())
+            .ok()
+            .and_then(|v| v.as_string())
+    };
     (field("type")? == "adi:open-chat").then_some(())?;
     Some(ChatRef {
         node: field("node").filter(|n| !n.is_empty()),

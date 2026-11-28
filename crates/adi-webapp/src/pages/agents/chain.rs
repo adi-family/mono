@@ -13,8 +13,8 @@
 //! type a login, because a different credential is a different backend, and a row that quietly
 //! repointed one would make the shared hold describe a subscription nobody was using.
 
-use adi_webapp_api::types::{AgentBackendRowDto, LlmBackendDto};
 use adi_ui::{Icon, IconSize, Lucide};
+use adi_webapp_api::types::{AgentBackendRowDto, LlmBackendDto};
 use leptos::prelude::*;
 
 use crate::routing::Route;
@@ -450,8 +450,8 @@ fn unreplayable_warnings(rows: &[AgentBackendRowDto], registry: &[LlmBackendDto]
 #[cfg(test)]
 mod tests {
     use super::{
-        AgentBackendRowDto, LlmBackendDto, dials_text, move_row, shrink_warnings, unused,
-        unreplayable_warnings,
+        AgentBackendRowDto, LlmBackendDto, dials_text, move_row, shrink_warnings,
+        unreplayable_warnings, unused,
     };
 
     fn backend(id: &str, context: u64) -> LlmBackendDto {
@@ -512,7 +512,10 @@ mod tests {
     #[test]
     fn a_list_that_steps_down_in_context_is_warned_about() {
         let registry = vec![backend("big", 200_000), backend("small", 32_000)];
-        assert_eq!(shrink_warnings(&rows(&["big", "small"]), &registry).len(), 1);
+        assert_eq!(
+            shrink_warnings(&rows(&["big", "small"]), &registry).len(),
+            1
+        );
         assert!(shrink_warnings(&rows(&["small", "big"]), &registry).is_empty());
     }
 
@@ -532,7 +535,10 @@ mod tests {
         pty.replayable = false;
         let registry = vec![backend("api", 0), pty];
         assert!(unreplayable_warnings(&rows(&["pty", "api"]), &registry).is_empty());
-        assert_eq!(unreplayable_warnings(&rows(&["api", "pty"]), &registry).len(), 1);
+        assert_eq!(
+            unreplayable_warnings(&rows(&["api", "pty"]), &registry).len(),
+            1
+        );
     }
 
     #[test]

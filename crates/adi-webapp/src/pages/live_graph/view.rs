@@ -149,11 +149,19 @@ mod tests {
         for _ in 0..200 {
             v = v.zoomed(w, h, 400.0, 300.0, 0.5);
         }
-        assert!((v.scale - MIN_SCALE).abs() < 1e-9, "scale fell to {}", v.scale);
+        assert!(
+            (v.scale - MIN_SCALE).abs() < 1e-9,
+            "scale fell to {}",
+            v.scale
+        );
         for _ in 0..200 {
             v = v.zoomed(w, h, 400.0, 300.0, 2.0);
         }
-        assert!((v.scale - MAX_SCALE).abs() < 1e-9, "scale rose to {}", v.scale);
+        assert!(
+            (v.scale - MAX_SCALE).abs() < 1e-9,
+            "scale rose to {}",
+            v.scale
+        );
     }
 
     /// Screen and world are inverses of each other. A pan that is read back wrong is a canvas that
@@ -179,7 +187,10 @@ mod tests {
         let v = Viewport::fit(extent, w, h);
         let (x0, y0) = v.screen(w, h, extent.0, extent.1);
         let (x1, y1) = v.screen(w, h, extent.2, extent.3);
-        assert!(x0 >= 0.0 && y0 >= 0.0 && x1 <= w && y1 <= h, "{x0},{y0} {x1},{y1}");
+        assert!(
+            x0 >= 0.0 && y0 >= 0.0 && x1 <= w && y1 <= h,
+            "{x0},{y0} {x1},{y1}"
+        );
         assert!(((x0 + x1) / 2.0 - w / 2.0).abs() < 1e-6);
         assert!(((y0 + y1) / 2.0 - h / 2.0).abs() < 1e-6);
     }
@@ -191,20 +202,32 @@ mod tests {
         let (w, h) = (1160.0, 690.0);
         let floor = 0.34;
         let big = (-2000.0, -1300.0, 2000.0, 1300.0);
-        assert!(Viewport::fit(big, w, h).scale < floor, "fixture is not big enough to matter");
+        assert!(
+            Viewport::fit(big, w, h).scale < floor,
+            "fixture is not big enough to matter"
+        );
 
         let v = Viewport::fit_readable(big, w, h, floor);
         assert!((v.scale - floor).abs() < 1e-9, "opened at {}", v.scale);
         // The left edge of the picture sits just inside the stage — the roots are there.
         let (left, _) = v.screen(w, h, big.0, 0.0);
-        assert!((left - w * FIT_MARGIN).abs() < 1e-6, "left edge lands at {left}");
+        assert!(
+            (left - w * FIT_MARGIN).abs() < 1e-6,
+            "left edge lands at {left}"
+        );
         // …and the middle row is still the middle of the stage, so it opens on the picture.
         let (_, mid) = v.screen(w, h, 0.0, big.1.midpoint(big.3));
-        assert!((mid - h / 2.0).abs() < 1e-6, "vertical middle lands at {mid}");
+        assert!(
+            (mid - h / 2.0).abs() < 1e-6,
+            "vertical middle lands at {mid}"
+        );
 
         // A graph that already fits is not touched at all: this only ever pulls a view back in.
         let small = (-100.0, -50.0, 100.0, 50.0);
-        assert_eq!(Viewport::fit_readable(small, w, h, floor), Viewport::fit(small, w, h));
+        assert_eq!(
+            Viewport::fit_readable(small, w, h, floor),
+            Viewport::fit(small, w, h)
+        );
     }
 
     /// Fit is not magnification: a small graph is shown at its own size, not blown up to fill a
@@ -219,7 +242,10 @@ mod tests {
     /// division by zero.
     #[test]
     fn fitting_nothing_is_the_home_view() {
-        assert_eq!(Viewport::fit((0.0, 0.0, 0.0, 0.0), 800.0, 600.0), Viewport::HOME);
+        assert_eq!(
+            Viewport::fit((0.0, 0.0, 0.0, 0.0), 800.0, 600.0),
+            Viewport::HOME
+        );
         assert_eq!(
             Viewport::fit((-10.0, -10.0, 10.0, 10.0), 0.0, 0.0),
             Viewport::HOME

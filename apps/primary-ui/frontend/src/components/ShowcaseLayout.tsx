@@ -15,21 +15,23 @@ export function ShowcaseLayout() {
   const { pathname, search, hash, key } = useLocation();
   const { theme, setTheme } = useTheme();
   const isHome = pathname === "/";
-  const isMarketplace = (pathname === "/marketplace" || pathname.startsWith("/marketplace/"));
+  const isMarketplace = pathname === "/marketplace" || pathname.startsWith("/marketplace/");
   const isSettings = pathname === "/settings" || pathname.startsWith("/settings/");
   const isInterface = pathname === "/interface";
-  const chatDetail = isInterface && (new URLSearchParams(search).has("agent") || new URLSearchParams(search).has("run"));
+  const chatDetail =
+    isInterface &&
+    (new URLSearchParams(search).has("agent") || new URLSearchParams(search).has("run"));
   const title = isHome
     ? "Home"
     : isMarketplace
       ? "Marketplace"
-    : isSettings
-      ? "Settings"
-    : pathname === "/library/agents/layout-reviewer"
-      ? "Layout reviewer"
-      : pathname === "/library"
-        ? "Components"
-        : "Chats";
+      : isSettings
+        ? "Settings"
+        : pathname === "/library/agents/layout-reviewer"
+          ? "Layout reviewer"
+          : pathname === "/library"
+            ? "Components"
+            : "Chats";
 
   useLayoutEffect(() => {
     if (!hash) window.scrollTo(0, 0);
@@ -37,55 +39,91 @@ export function ShowcaseLayout() {
 
   return (
     <AppLayout
-      data-mobile-screen={isInterface ? chatDetail ? "conversation" : "chats" : "page"}
+      data-mobile-screen={isInterface ? (chatDetail ? "conversation" : "chats") : "page"}
       focusMode={focusMode}
       sidebarWidthStorageKey="adi.sidebar-width.v1"
       lang="en"
       className={isInterface ? "overflow-hidden" : undefined}
       surface={isInterface ? "joined" : "separate"}
       surfaceProps={isInterface ? { className: "dark:bg-black" } : undefined}
-      primaryNavigation={(
+      primaryNavigation={
         <>
-          <a href="#page-content" className="bg-background focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:z-50 focus:rounded-md focus:border focus:p-3 sr-only">Skip to content</a>
+          <a
+            href="#page-content"
+            className="bg-background focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:z-50 focus:rounded-md focus:border focus:p-3 sr-only"
+          >
+            Skip to content
+          </a>
           <ShowcaseNavigation />
         </>
-      )}
-      workspaceControls={(
-          <Button
-            data-slot="workspace-expand"
-            variant="ghost" size="icon"
-            className="group text-muted-foreground/60 hover:text-foreground focus-visible:text-foreground pointer-events-auto absolute top-0 left-0 size-5 items-start justify-start rounded-none border-0 bg-transparent p-0 shadow-none hover:bg-transparent"
-            aria-label={focusMode ? "Restore navigation" : "Expand workspace"}
-            title={focusMode ? "Restore navigation" : "Expand workspace"}
-            aria-pressed={focusMode}
-            onClick={() => setFocusMode((current) => !current)}
+      }
+      workspaceControls={
+        <Button
+          data-slot="workspace-expand"
+          variant="ghost"
+          size="icon"
+          className="group text-muted-foreground/60 hover:text-foreground focus-visible:text-foreground pointer-events-auto absolute top-0 left-0 size-5 items-start justify-start rounded-none border-0 bg-transparent p-0 shadow-none hover:bg-transparent"
+          aria-label={focusMode ? "Restore navigation" : "Expand workspace"}
+          title={focusMode ? "Restore navigation" : "Expand workspace"}
+          aria-pressed={focusMode}
+          onClick={() => setFocusMode((current) => !current)}
+        >
+          <svg
+            aria-hidden="true"
+            viewBox="0 0 20 20"
+            className="size-4 origin-top-left fill-current motion-safe:transition-transform motion-safe:duration-150 motion-safe:ease-out motion-safe:group-hover:scale-125 motion-safe:group-focus-visible:scale-125"
           >
-            <svg aria-hidden="true" viewBox="0 0 20 20" className="size-4 origin-top-left fill-current motion-safe:transition-transform motion-safe:duration-150 motion-safe:ease-out motion-safe:group-hover:scale-125 motion-safe:group-focus-visible:scale-125">
-              <path d={focusMode ? "M18 2v16H2Z" : "M2 18V2h16Z"} />
-            </svg>
-          </Button>
-      )}
+            <path d={focusMode ? "M18 2v16H2Z" : "M2 18V2h16Z"} />
+          </svg>
+        </Button>
+      }
       secondaryNavigation={isInterface ? <AppChatSidebar /> : <ComponentSidebar />}
-      secondaryNavigationProps={isInterface ? { className: "bg-muted/50 dark:bg-background" } : undefined}
+      secondaryNavigationProps={
+        isInterface ? { className: "bg-muted/50 dark:bg-background" } : undefined
+      }
       hideSecondaryNavigation={isHome || isMarketplace || isSettings}
-      topbar={(
+      topbar={
         <>
           <div className="flex min-w-0 items-center gap-2">
-            <span className="text-muted-foreground hidden text-sm sm:inline">{isHome || isInterface || isMarketplace || isSettings ? "ADI" : "Design System"}</span>
-            <ChevronRight aria-hidden="true" className="text-muted-foreground hidden size-3.5 sm:block" />
+            <span className="text-muted-foreground hidden text-sm sm:inline">
+              {isHome || isInterface || isMarketplace || isSettings ? "ADI" : "Design System"}
+            </span>
+            <ChevronRight
+              aria-hidden="true"
+              className="text-muted-foreground hidden size-3.5 sm:block"
+            />
             <h1 className="truncate text-sm font-medium">{title}</h1>
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
             {/* The chat page hides this topbar on phones and shows its own copy in the sidebar. */}
             <NodeSelector hideOnMobile={isInterface} />
-            <ThemeToggle size="sm" className="h-7 gap-1.5 px-2 text-xs" theme={theme} onThemeChange={setTheme} />
+            <ThemeToggle
+              size="sm"
+              className="h-7 gap-1.5 px-2 text-xs"
+              theme={theme}
+              onThemeChange={setTheme}
+            />
           </div>
         </>
-      )}
-      contentProps={{ id: "page-content", tabIndex: -1, className: isInterface ? "flex min-h-0 flex-col overflow-hidden p-0 sm:p-0" : isHome ? "flex" : undefined }}
+      }
+      contentProps={{
+        id: "page-content",
+        tabIndex: -1,
+        className: isInterface
+          ? "flex min-h-0 flex-col overflow-hidden p-0 sm:p-0"
+          : isHome
+            ? "flex"
+            : undefined,
+      }}
     >
       {/* A page chunk that is still loading leaves the navigation and header in place. */}
-      <Suspense fallback={<p role="status" className="text-muted-foreground p-5 text-sm">Loading…</p>}>
+      <Suspense
+        fallback={
+          <p role="status" className="text-muted-foreground p-5 text-sm">
+            Loading…
+          </p>
+        }
+      >
         <Outlet context={{ theme, setTheme }} />
       </Suspense>
     </AppLayout>

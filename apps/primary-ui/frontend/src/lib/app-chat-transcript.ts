@@ -13,7 +13,9 @@ function argumentText(value: unknown, depth = 0): string {
   if (typeof value !== "object") return String(value);
   if (depth > 8) return "…";
   if (Array.isArray(value)) return value.map((item) => argumentText(item, depth + 1)).join("\n");
-  return Object.entries(value).map(([name, item]) => `${name}: ${argumentText(item, depth + 1)}`).join("\n");
+  return Object.entries(value)
+    .map(([name, item]) => `${name}: ${argumentText(item, depth + 1)}`)
+    .join("\n");
 }
 
 /** Arguments remain readable text, including the actual newlines in edits and commands. */
@@ -30,21 +32,35 @@ export function toolArguments(input: string): ToolArgument[] {
   }
 }
 
-export function activityStatus(status: AgentToolStatus): "running" | "completed" | "error" | "cancelled" {
+export function activityStatus(
+  status: AgentToolStatus,
+): "running" | "completed" | "error" | "cancelled" {
   switch (status) {
-    case "running": return "running";
-    case "error": return "error";
-    case "unanswered": return "cancelled";
-    default: return "completed";
+    case "running":
+      return "running";
+    case "error":
+      return "error";
+    case "unanswered":
+      return "cancelled";
+    default:
+      return "completed";
   }
 }
 
 export function toolDisplayName(name: string): string {
-  return name.split(/__|[.:/]/).filter(Boolean).at(-1) || name;
+  return (
+    name
+      .split(/__|[.:/]/)
+      .filter(Boolean)
+      .at(-1) || name
+  );
 }
 
 /** The tools whose `code` argument is a program, and the language each one runs. A Map, so a tool named `constructor` is not one of them. */
-const CODE_TOOLS = new Map<string, CodeLanguage>([["pycode", "py"], ["tscode", "ts"]]);
+const CODE_TOOLS = new Map<string, CodeLanguage>([
+  ["pycode", "py"],
+  ["tscode", "ts"],
+]);
 
 /**
  * The argument of a tool that is a program, and the language to read it as. Such an argument is
@@ -55,11 +71,15 @@ export function toolCode(name: string): { argument: string; language: CodeLangua
   return language ? { argument: "code", language } : null;
 }
 
-export function toolSummary(name: string, input: string): { title: string; kind: "git" | "terminal" | "code" | "edit" | "tool" } {
+export function toolSummary(
+  name: string,
+  input: string,
+): { title: string; kind: "git" | "terminal" | "code" | "edit" | "tool" } {
   const args = toolArguments(input);
   const command = args.find((arg) => ["command", "cmd"].includes(arg.name))?.value;
   const code = Boolean(toolCode(name));
-  const terminal = !code && (/(?:bash|shell|terminal|exec_command|exec)$/i.test(name) || Boolean(command));
+  const terminal =
+    !code && (/(?:bash|shell|terminal|exec_command|exec)$/i.test(name) || Boolean(command));
   const edit = /(?:edit|write|apply_patch|patch)$/i.test(name);
   const git = terminal && /(?:^|[;&|]\s*)git\s/.test(command?.trim() || "");
   return {
@@ -70,7 +90,8 @@ export function toolSummary(name: string, input: string): { title: string; kind:
 
 /** Only the CLI's successful launch receipt identifies a particular child conversation. */
 export function startedAgents(output: string): ConversationRef[] {
-  const receipts = /^Started agent ([^\s]+) (?:as background process \d+\.|through its lease at \S+\.)\r?\n[\t ]+run:[\t ]+([^\s]+)[\t ]*$/gm;
+  const receipts =
+    /^Started agent ([^\s]+) (?:as background process \d+\.|through its lease at \S+\.)\r?\n[\t ]+run:[\t ]+([^\s]+)[\t ]*$/gm;
   const refs: ConversationRef[] = [];
   const seen = new Set<string>();
   for (const match of output.matchAll(receipts)) {
@@ -86,9 +107,14 @@ export function startedAgents(output: string): ConversationRef[] {
 
 /** A receipt inside a file read is still file content, not an agent launch. */
 export function agentLaunches(step: Extract<AgentStep, { kind: "tool" }>): ConversationRef[] {
-  if (step.status === "error" || !/(?:^|[._:-])(?:bash|shell|terminal|exec_command|exec|pycode|tscode)$/i.test(step.name)) return [];
+  if (
+    step.status === "error" ||
+    !/(?:^|[._:-])(?:bash|shell|terminal|exec_command|exec|pycode|tscode)$/i.test(step.name)
+  )
+    return [];
   const args = toolArguments(step.input);
-  const command = args.find((arg) => ["command", "cmd", "code", "Input"].includes(arg.name))?.value ?? "";
+  const command =
+    args.find((arg) => ["command", "cmd", "code", "Input"].includes(arg.name))?.value ?? "";
   // In a code cell the launch is an argument to `sh`: a string, or a list whose words are quoted and comma-separated.
   const launch = toolCode(step.name)
     ? /(?:^|[\s/'"])(?:adi(?:-mono)?["',\s]+agents["',\s]+run|adi-agents["',\s]+run)(?=[\s"',]|$)/
@@ -104,7 +130,9 @@ export function conversationHref({ agent, runId, source }: ConversationRef): str
 export function appConversationHref(ref: ConversationRef): string {
   if (IS_PRIMARY_APP) return conversationHref(ref);
   const { agent, runId, source } = ref;
-  return appHref(`/chat/${source ? `@${encodeURIComponent(source)}/` : ""}${encodeURIComponent(agent)}/${encodeURIComponent(runId)}`);
+  return appHref(
+    `/chat/${source ? `@${encodeURIComponent(source)}/` : ""}${encodeURIComponent(agent)}/${encodeURIComponent(runId)}`,
+  );
 }
 
 type ActivityStep = Exclude<AgentStep, { kind: "message" } | { kind: "unknown" }>;
@@ -118,13 +146,15 @@ export function transcriptParts(turn: AgentTurn): TranscriptPart[] {
   const parts: TranscriptPart[] = [];
   let activity: { step: ActivityStep; index: number }[] = [];
   const finishActivity = () => {
-    if (activity.length) parts.push({ kind: "activity", steps: activity, key: `activity-${activity[0].index}` });
+    if (activity.length)
+      parts.push({ kind: "activity", steps: activity, key: `activity-${activity[0].index}` });
     activity = [];
   };
   turn.steps.forEach((step, index) => {
     if (step.kind === "message") {
       finishActivity();
-      if (step.text.trim()) parts.push({ kind: "message", text: step.text, key: `message-${index}` });
+      if (step.text.trim())
+        parts.push({ kind: "message", text: step.text, key: `message-${index}` });
     } else if (step.kind === "tool" || step.kind === "thinking" || step.kind === "calls") {
       activity.push({ step, index });
     }

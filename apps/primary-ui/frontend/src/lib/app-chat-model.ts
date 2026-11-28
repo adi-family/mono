@@ -1,7 +1,20 @@
-import type { Agent, AgentPeek, Conversation, ConversationIndex, ConversationRef } from "./app-chat";
+import type {
+  Agent,
+  AgentPeek,
+  Conversation,
+  ConversationIndex,
+  ConversationRef,
+} from "./app-chat";
 import { matchesConversationFilter } from "./app-chat-sidebar";
 import {
-  conversationKey, hasSource, sameConversation, selectedSources, type ChatFilter, type ChatGroup, type ChatSources, type LastLaunchedAgent,
+  conversationKey,
+  hasSource,
+  sameConversation,
+  selectedSources,
+  type ChatFilter,
+  type ChatGroup,
+  type ChatSources,
+  type LastLaunchedAgent,
 } from "./app-chat-sources";
 import { chatRoute } from "./app-chat-queries";
 
@@ -13,12 +26,15 @@ const fallbackAgentName = "adi-agent";
 const previewLength = 120;
 const rememberedRowLimit = 1000;
 
-export const isLaunchable = (agent: Agent) => agent.runnable !== false && agent.caps?.answerable !== false;
+export const isLaunchable = (agent: Agent) =>
+  agent.runnable !== false && agent.caps?.answerable !== false;
 
 function byLaunchPreference(a: Agent, b: Agent) {
-  return Number(Boolean(b.starred)) - Number(Boolean(a.starred))
-    || Number(b.name === fallbackAgentName) - Number(a.name === fallbackAgentName)
-    || a.name.localeCompare(b.name);
+  return (
+    Number(Boolean(b.starred)) - Number(Boolean(a.starred)) ||
+    Number(b.name === fallbackAgentName) - Number(a.name === fallbackAgentName) ||
+    a.name.localeCompare(b.name)
+  );
 }
 
 export function preferredAgentName(agents: Agent[]): string | undefined {
@@ -27,11 +43,19 @@ export function preferredAgentName(agents: Agent[]): string | undefined {
 
 /** The desired agent when it can launch, otherwise the best one available. */
 export function chooseAgentName(agents: Agent[], desired?: string): string {
-  return agents.find((agent) => agent.name === desired && isLaunchable(agent))?.name ?? preferredAgentName(agents) ?? "";
+  return (
+    agents.find((agent) => agent.name === desired && isLaunchable(agent))?.name ??
+    preferredAgentName(agents) ??
+    ""
+  );
 }
 
 /** An explicit route wins, then the last launch, then the first selected source. */
-export function resolveActiveSource(params: URLSearchParams, sources: ChatSources, lastLaunched?: LastLaunchedAgent): string | undefined {
+export function resolveActiveSource(
+  params: URLSearchParams,
+  sources: ChatSources,
+  lastLaunched?: LastLaunchedAgent,
+): string | undefined {
   if (params.has("node")) return params.get("node") || undefined;
   if (params.has("agent") || params.has("run")) return undefined;
   if (lastLaunched && hasSource(sources, lastLaunched.source)) return lastLaunched.source;
@@ -48,7 +72,11 @@ export function previewText(text: string | undefined): string | undefined {
 }
 
 /** Identifies a conversation, or the new chat being composed for an agent on a machine. */
-export function selectionKeyOf(active: ConversationRef | null, agent: string, source?: string): string {
+export function selectionKeyOf(
+  active: ConversationRef | null,
+  agent: string,
+  source?: string,
+): string {
   return conversationKey(active ?? { agent, source, runId: "new" });
 }
 
@@ -57,17 +85,27 @@ export function latestTurnSeq(snapshot: AgentPeek | undefined): number | null {
 }
 
 /** Whether a snapshot shows the reply as stored, after the send itself reported failure. */
-export function confirmsReply(snapshot: AgentPeek, afterSeq: number, message: string, attachments: readonly string[]): boolean {
-  return snapshot.turns.some((turn) => turn.role === "user"
-    && turn.seq > afterSeq
-    && turn.text.trim() === message.trim()
-    && turn.images.length === attachments.length
-    && attachments.every((id) => turn.images.some((image) => image.id === id)));
+export function confirmsReply(
+  snapshot: AgentPeek,
+  afterSeq: number,
+  message: string,
+  attachments: readonly string[],
+): boolean {
+  return snapshot.turns.some(
+    (turn) =>
+      turn.role === "user" &&
+      turn.seq > afterSeq &&
+      turn.text.trim() === message.trim() &&
+      turn.images.length === attachments.length &&
+      attachments.every((id) => turn.images.some((image) => image.id === id)),
+  );
 }
 
 /** Adds rows that are new or changed, evicting the oldest. Returns `current` when nothing changed. */
 export function rememberRows(
-  current: ReadonlyMap<string, Conversation>, rows: readonly Conversation[], limit = rememberedRowLimit,
+  current: ReadonlyMap<string, Conversation>,
+  rows: readonly Conversation[],
+  limit = rememberedRowLimit,
 ): ReadonlyMap<string, Conversation> {
   const changed = rows.filter((row) => current.get(conversationKey(row)) !== row);
   if (!changed.length) return current;
@@ -86,14 +124,25 @@ export function rememberRows(
 
 /** Every row an index carries, whether listed flat or inside a project group. */
 export function indexRows(index: ConversationIndex | undefined): Conversation[] {
-  return [...(index?.conversations ?? []), ...(index?.groups ?? []).flatMap((group) => group.conversations)];
+  return [
+    ...(index?.conversations ?? []),
+    ...(index?.groups ?? []).flatMap((group) => group.conversations),
+  ];
 }
 
-function activeRowFrom(active: ConversationRef, prior: Conversation | undefined, snapshot: AgentPeek | undefined, overlay: ChatOverlay | undefined): Conversation {
+function activeRowFrom(
+  active: ConversationRef,
+  prior: Conversation | undefined,
+  snapshot: AgentPeek | undefined,
+  overlay: ChatOverlay | undefined,
+): Conversation {
   return {
     ...prior,
     ...active,
-    title: prior?.title ?? previewText(snapshot?.turns.find((turn) => turn.role === "user")?.text) ?? "Conversation",
+    title:
+      prior?.title ??
+      previewText(snapshot?.turns.find((turn) => turn.role === "user")?.text) ??
+      "Conversation",
     message: prior?.message ?? "",
     lastActivity: prior?.lastActivity ?? 0,
     running: snapshot?.running ?? prior?.running ?? false,
@@ -120,54 +169,111 @@ export interface SourceRowsInput {
 }
 
 /** Turns one source's index into the rows the sidebar shows. */
-export function buildSourceRows({ source, index, agents, overlays, filter, includeHidden = false, group, active, snapshot, remembered }: SourceRowsInput) {
+export function buildSourceRows({
+  source,
+  index,
+  agents,
+  overlays,
+  filter,
+  includeHidden = false,
+  group,
+  active,
+  snapshot,
+  remembered,
+}: SourceRowsInput) {
   const enrich = (row: Conversation): Conversation => {
     const owner = agents.find((agent) => agent.name === row.agent);
     return {
       ...row,
       ...overlays[conversationKey(row)],
-      ...(owner ? { agentStarred: owner.starred, agentDisplayName: owner.displayName, project: row.project ?? owner.project } : {}),
+      ...(owner
+        ? {
+            agentStarred: owner.starred,
+            agentDisplayName: owner.displayName,
+            project: row.project ?? owner.project,
+          }
+        : {}),
     };
   };
-  const putAway = (ref: ConversationRef) => !includeHidden && overlays[conversationKey(ref)]?.hidden === true;
-  const isShown = (row: Conversation) => !putAway(row) && matchesConversationFilter(row, filter, active);
+  const putAway = (ref: ConversationRef) =>
+    !includeHidden && overlays[conversationKey(ref)]?.hidden === true;
+  const isShown = (row: Conversation) =>
+    !putAway(row) && matchesConversationFilter(row, filter, active);
   const visibleRows = (rows: Conversation[]) => rows.map(enrich).filter(isShown);
 
   const conversations = visibleRows(index?.conversations ?? []);
   // A narrowing never makes the conversation being read disappear from its own rail.
-  if (active && active.source === source && !putAway(active) && !conversations.some((row) => sameConversation(row, active))) {
+  if (
+    active &&
+    active.source === source &&
+    !putAway(active) &&
+    !conversations.some((row) => sameConversation(row, active))
+  ) {
     const prior = remembered.get(conversationKey(active));
-    if (prior || snapshot) conversations.push(activeRowFrom(active, prior, snapshot, overlays[conversationKey(active)]));
+    if (prior || snapshot)
+      conversations.push(activeRowFrom(active, prior, snapshot, overlays[conversationKey(active)]));
   }
 
-  const groups = index?.groups?.map((section) => ({
-    ...section, loaded: section.conversations.length, conversations: visibleRows(section.conversations),
-  })) ?? [];
+  const groups =
+    index?.groups?.map((section) => ({
+      ...section,
+      loaded: section.conversations.length,
+      conversations: visibleRows(section.conversations),
+    })) ?? [];
   const activeRow = active ? conversations.find((row) => sameConversation(row, active)) : undefined;
-  if (group === "project" && activeRow && !groups.some((section) => section.conversations.some((row) => sameConversation(row, activeRow)))) {
+  if (
+    group === "project" &&
+    activeRow &&
+    !groups.some((section) => section.conversations.some((row) => sameConversation(row, activeRow)))
+  ) {
     const section = groups.find((candidate) => candidate.project === activeRow.project);
     if (section) section.conversations.push(activeRow);
-    else groups.push({ project: activeRow.project, label: activeRow.projectName || "No project", conversations: [activeRow], total: 0, loaded: 0 });
+    else
+      groups.push({
+        project: activeRow.project,
+        label: activeRow.projectName || "No project",
+        conversations: [activeRow],
+        total: 0,
+        loaded: 0,
+      });
   }
 
-  return { source, conversations, groups, total: index?.total ?? 0, loaded: index?.conversations.length ?? 0 };
+  return {
+    source,
+    conversations,
+    groups,
+    total: index?.total ?? 0,
+    loaded: index?.conversations.length ?? 0,
+  };
 }
 
 /** Applies an accepted edit to a cached index, removing the row when the edit hides it from that list. */
-export function patchIndex(index: ConversationIndex, key: string, overlay: ChatOverlay): ConversationIndex {
-  const patched = (rows: Conversation[]) => rows.flatMap((row) => {
-    if (conversationKey(row) !== key) return [row];
-    return overlay.hidden && !index.includesHidden ? [] : [{ ...row, ...overlay }];
-  });
+export function patchIndex(
+  index: ConversationIndex,
+  key: string,
+  overlay: ChatOverlay,
+): ConversationIndex {
+  const patched = (rows: Conversation[]) =>
+    rows.flatMap((row) => {
+      if (conversationKey(row) !== key) return [row];
+      return overlay.hidden && !index.includesHidden ? [] : [{ ...row, ...overlay }];
+    });
   return {
     ...index,
     conversations: patched(index.conversations),
-    groups: index.groups?.map((section) => ({ ...section, conversations: patched(section.conversations) })),
+    groups: index.groups?.map((section) => ({
+      ...section,
+      conversations: patched(section.conversations),
+    })),
   };
 }
 
 /** Drops one field's overlay, leaving any other edit of that conversation in place. */
-export function clearOverlayField(overlays: ChatOverlays, key: string, field: keyof ChatOverlay): ChatOverlays {
+export function clearOverlayField(
+  overlays: ChatOverlays,
+  key: string,
+  field: keyof ChatOverlay,
+): ChatOverlays {
   const { [field]: _cleared, ...remaining } = overlays[key] ?? {};
   if (Object.keys(remaining).length) return { ...overlays, [key]: remaining };
   const { [key]: _emptied, ...others } = overlays;

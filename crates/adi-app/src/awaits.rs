@@ -134,9 +134,9 @@ fn run(agents: &Agents, workflows: &WorkflowEngine, rx: &Receiver<Posted>) {
     loop {
         let wait = next_tick.saturating_duration_since(Instant::now());
         match rx.recv_timeout(wait) {
-            Ok((name, payload)) => report(
-                &isolated("await-events").run(|| awaits::on_event(agents, &name, &payload)),
-            ),
+            Ok((name, payload)) => {
+                report(&isolated("await-events").run(|| awaits::on_event(agents, &name, &payload)))
+            }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
         }
@@ -320,7 +320,11 @@ mod tests {
         assert!(first.is_empty(), "a panicked tick reports nothing happened");
 
         let second = isolated("ok-tick").run(|| vec![1, 2, 3]);
-        assert_eq!(second, vec![1, 2, 3], "the next tick on this thread still runs");
+        assert_eq!(
+            second,
+            vec![1, 2, 3],
+            "the next tick on this thread still runs"
+        );
 
         let recorded = store
             .diagnostics(&adi_events::diagnostics::Query::default())
@@ -337,9 +341,17 @@ mod tests {
     #[test]
     fn a_stall_is_reported_once_when_it_begins_and_once_when_it_ends() {
         let mut told = false;
-        assert_eq!(stall_change(false, &mut told), None, "ticking, nothing to say");
+        assert_eq!(
+            stall_change(false, &mut told),
+            None,
+            "ticking, nothing to say"
+        );
         assert_eq!(stall_change(true, &mut told), Some(true), "it stopped");
-        assert_eq!(stall_change(true, &mut told), None, "still stopped: said already");
+        assert_eq!(
+            stall_change(true, &mut told),
+            None,
+            "still stopped: said already"
+        );
         assert_eq!(stall_change(false, &mut told), Some(false), "it came back");
         assert_eq!(stall_change(false, &mut told), None);
     }
@@ -384,7 +396,10 @@ mod tests {
         );
         assert!(!store.claim(&on_timer.id));
         assert!(
-            store.scheduler().age(adi_config::now_unix()).is_some_and(|age| age <= 5),
+            store
+                .scheduler()
+                .age(adi_config::now_unix())
+                .is_some_and(|age| age <= 5),
             "and it leaves a heartbeat: {:?}",
             store.scheduler()
         );
@@ -528,7 +543,11 @@ mod tests {
             )
             .unwrap();
             workflows
-                .start_manual(&format!("n{i}"), &serde_json::json!({}), &format!("req-{i}"))
+                .start_manual(
+                    &format!("n{i}"),
+                    &serde_json::json!({}),
+                    &format!("req-{i}"),
+                )
                 .expect("start");
         }
 

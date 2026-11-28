@@ -190,7 +190,15 @@ impl Tree {
         }
 
         let (label, name, terminal) = describe(expr);
-        let id = self.push(label, name, terminal, parent, depth, expr.span, Some(expr.hir_id));
+        let id = self.push(
+            label,
+            name,
+            terminal,
+            parent,
+            depth,
+            expr.span,
+            Some(expr.hir_id),
+        );
         self.attach(parent, id);
 
         let next = depth + 1;
@@ -239,7 +247,15 @@ impl Tree {
             ExprKind::Match(scrutinee, arms, _) => {
                 self.expr(scrutinee, Some(id), next);
                 for arm in arms {
-                    let arm_id = self.push("arm", None, None, Some(id), next, arm.span, Some(arm.hir_id));
+                    let arm_id = self.push(
+                        "arm",
+                        None,
+                        None,
+                        Some(id),
+                        next,
+                        arm.span,
+                        Some(arm.hir_id),
+                    );
                     self.attach(Some(id), arm_id);
                     self.pat(arm.pat, Some(arm_id), next + 1);
                     if let Some(guard) = arm.guard {
@@ -310,7 +326,15 @@ impl Tree {
         if from_macro(block.span) {
             return None;
         }
-        let id = self.push("block", None, None, parent, depth, block.span, Some(block.hir_id));
+        let id = self.push(
+            "block",
+            None,
+            None,
+            parent,
+            depth,
+            block.span,
+            Some(block.hir_id),
+        );
         self.attach(parent, id);
 
         for stmt in block.stmts {
@@ -336,8 +360,21 @@ impl Tree {
         }
     }
 
-    fn let_stmt(&mut self, local: &LetStmt<'_>, parent: Option<NodeId>, depth: u32) -> Option<NodeId> {
-        let id = self.push("let", None, None, parent, depth, local.span, Some(local.hir_id));
+    fn let_stmt(
+        &mut self,
+        local: &LetStmt<'_>,
+        parent: Option<NodeId>,
+        depth: u32,
+    ) -> Option<NodeId> {
+        let id = self.push(
+            "let",
+            None,
+            None,
+            parent,
+            depth,
+            local.span,
+            Some(local.hir_id),
+        );
         self.attach(parent, id);
 
         self.pat(local.pat, Some(id), depth + 1);
@@ -378,7 +415,15 @@ impl Tree {
             _ => ("pat", None),
         };
 
-        let id = self.push(label, None, terminal, parent, depth, pat.span, Some(pat.hir_id));
+        let id = self.push(
+            label,
+            None,
+            terminal,
+            parent,
+            depth,
+            pat.span,
+            Some(pat.hir_id),
+        );
         self.attach(parent, id);
 
         let next = depth + 1;

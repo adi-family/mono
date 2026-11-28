@@ -488,7 +488,9 @@ impl Awaits {
         static OWNED: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
         let module = self.config.module(MODULE);
         let path = module.raw_path(TICK_FILE);
-        let mut owned = OWNED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut owned = OWNED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if owned.as_deref() != Some(path.as_path()) {
             if module
                 .write_raw(TICK_FILE, std::process::id().to_string().as_bytes())
@@ -869,9 +871,11 @@ pub fn register(store: &Awaits, agent: &str, conv: &str, req: &Request) -> Resul
         .filter(|n| *n > 0);
     // No earlier moment to point to than right now: a model's own `Await` call has nothing it
     // already did that the wait could be backdated to, so its baseline is this registration.
-    let baseline_seq = req
-        .baseline_seq
-        .unwrap_or_else(|| Events::with_config(store.config().clone()).head().unwrap_or(0));
+    let baseline_seq = req.baseline_seq.unwrap_or_else(|| {
+        Events::with_config(store.config().clone())
+            .head()
+            .unwrap_or(0)
+    });
 
     let record = Await {
         id: new_id(now),
@@ -1291,7 +1295,11 @@ fn lifetime_reason(a: &Await) -> String {
         duration_words(DEFAULT_LIFETIME_SECS)
     );
     if a.fails > 0 {
-        let _ = write!(reason, "; its check had said \"not yet\" {} times in a row", a.fails);
+        let _ = write!(
+            reason,
+            "; its check had said \"not yet\" {} times in a row",
+            a.fails
+        );
     }
     if let Some(last) = &a.last_check {
         let _ = write!(reason, ", the last time {}", last.verdict());
@@ -1576,10 +1584,15 @@ impl LastCheck {
     /// One line on how the check ended: "exit 1", "exit 127: sh: adi-mono: not found".
     #[must_use]
     pub fn verdict(&self) -> String {
-        let how = self
-            .exit
-            .map_or_else(|| "did not finish".to_string(), |code| format!("exit {code}"));
-        let said = self.output.lines().rev().find(|line| !line.trim().is_empty());
+        let how = self.exit.map_or_else(
+            || "did not finish".to_string(),
+            |code| format!("exit {code}"),
+        );
+        let said = self
+            .output
+            .lines()
+            .rev()
+            .find(|line| !line.trim().is_empty());
         match said {
             Some(line) => format!("{how}: {}", line.trim()),
             None => how,
@@ -2666,7 +2679,12 @@ mod tests {
         assert_eq!(saved.fails, 0, "nothing has failed yet");
 
         for n in 1..=5 {
-            let woken = consider(&agents, &store, &store.get(&saved.id).unwrap(), Cause::Timer);
+            let woken = consider(
+                &agents,
+                &store,
+                &store.get(&saved.id).unwrap(),
+                Cause::Timer,
+            );
             assert!(woken.is_none(), "the check never agrees");
             assert_eq!(
                 store.get(&saved.id).expect("still pending").fails,
@@ -2730,7 +2748,9 @@ mod tests {
         for strike in 1..BROKEN_CHECK_LIMIT {
             let current = store.get(&saved.id).expect("still pending");
             assert!(consider(&agents, &store, &current, Cause::Timer).is_none());
-            let pending = store.get(&saved.id).expect("one bad result does not spend the await");
+            let pending = store
+                .get(&saved.id)
+                .expect("one bad result does not spend the await");
             assert_eq!(pending.broken, strike);
             assert_eq!(pending.last_check.as_ref().and_then(|l| l.exit), Some(127));
         }
@@ -2809,7 +2829,10 @@ mod tests {
             ..saved.clone()
         };
         let outcome = run_check(&gone, "true", Cause::Timer, 5_000);
-        assert!(outcome.broken.is_some(), "a check with no directory never ran");
+        assert!(
+            outcome.broken.is_some(),
+            "a check with no directory never ran"
+        );
 
         let _ = std::fs::remove_dir_all(store.dir());
     }
@@ -2839,7 +2862,12 @@ mod tests {
         let said = beating.describe(later);
         assert!(said.contains("11h 20m ago"), "{said}");
         assert!(said.contains("restarted"), "{said}");
-        assert!(beating.warning(later).expect("a warning").contains("WARNING"));
+        assert!(
+            beating
+                .warning(later)
+                .expect("a warning")
+                .contains("WARNING")
+        );
 
         let _ = std::fs::remove_dir_all(store.dir());
     }
@@ -2861,7 +2889,10 @@ mod tests {
         store.beat();
         assert!(store.scheduler().age(now_unix()).unwrap() <= 2, "refreshed");
         assert_eq!(store.scheduler().pid, Some(std::process::id()));
-        assert!(store.list().is_empty(), "the heartbeat is never read as an await");
+        assert!(
+            store.list().is_empty(),
+            "the heartbeat is never read as an await"
+        );
 
         let _ = std::fs::remove_dir_all(store.dir());
     }

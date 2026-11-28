@@ -409,7 +409,8 @@ impl Secrets {
                 &manifest.nonce,
                 &manifest.ciphertext,
             )?;
-            let (nonce, ciphertext) = crypto::encrypt(&key, &aad(Scope::Project(to), name), &value)?;
+            let (nonce, ciphertext) =
+                crypto::encrypt(&key, &aad(Scope::Project(to), name), &value)?;
             let oauth = match manifest.oauth {
                 Some(meta) => Some(recrypt_refresh(&key, from, to, name, meta)?),
                 None => None,
@@ -729,7 +730,12 @@ fn recrypt_refresh(
     let (Some(nonce), Some(ciphertext)) = (&meta.refresh_nonce, &meta.refresh_ciphertext) else {
         return Ok(meta);
     };
-    let refresh = crypto::decrypt(key, &aad_refresh(Scope::Project(from), name), nonce, ciphertext)?;
+    let refresh = crypto::decrypt(
+        key,
+        &aad_refresh(Scope::Project(from), name),
+        nonce,
+        ciphertext,
+    )?;
     let (refresh_nonce, refresh_ciphertext) =
         crypto::encrypt(key, &aad_refresh(Scope::Project(to), name), &refresh)?;
     Ok(OAuthMeta {
@@ -1233,14 +1239,24 @@ mod tests {
     fn reveal_scoped(store: &Secrets, scope: Scope<'_>, name: &str) -> Result<String> {
         let manifest: Manifest = store.manifest_file(scope, name)?.load()?;
         let key = crypto::load_or_create_key(&store.dir())?;
-        let plaintext = crypto::decrypt(&key, &aad(scope, name), &manifest.nonce, &manifest.ciphertext)?;
+        let plaintext = crypto::decrypt(
+            &key,
+            &aad(scope, name),
+            &manifest.nonce,
+            &manifest.ciphertext,
+        )?;
         decode_value(plaintext)
     }
 
     #[test]
     fn a_user_secret_lives_under_users_u_and_round_trips() {
         let store = scratch("user-roundtrip");
-        set_scoped(&store, Scope::User("u-aaa"), "CLAUDE_CODE_OAUTH_TOKEN", "sk-mine");
+        set_scoped(
+            &store,
+            Scope::User("u-aaa"),
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "sk-mine",
+        );
 
         assert!(
             store
@@ -1319,14 +1335,22 @@ mod tests {
     #[test]
     fn list_mine_sees_only_this_users_own_names_metadata_only() {
         let store = scratch("list-mine-own");
-        set_scoped(&store, Scope::User("u-aaa"), "CLAUDE_CODE_OAUTH_TOKEN", "sk-mine");
+        set_scoped(
+            &store,
+            Scope::User("u-aaa"),
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "sk-mine",
+        );
         set_scoped(&store, Scope::User("u-bbb"), "OTHER_USERS_KEY", "not-mine");
         store.set(None, "GLOBAL", "g", None).expect("global");
 
         let mine = store.list_mine("u-aaa").expect("list");
         assert_eq!(mine.len(), 1);
         assert_eq!(mine[0].name, "CLAUDE_CODE_OAUTH_TOKEN");
-        assert_eq!(mine[0].project, None, "a user id is never shown as a project id");
+        assert_eq!(
+            mine[0].project, None,
+            "a user id is never shown as a project id"
+        );
     }
 
     /// `.settings.toml` (§15 Q1) sits beside a user's own secrets on disk and must never be
@@ -1351,7 +1375,10 @@ mod tests {
         set_scoped(&store, Scope::User("u-bbb"), "K", "also-mine");
 
         assert!(store.remove_mine("u-aaa", "K").expect("remove"));
-        assert!(!store.remove_mine("u-aaa", "K").expect("remove again"), "already gone");
+        assert!(
+            !store.remove_mine("u-aaa", "K").expect("remove again"),
+            "already gone"
+        );
         assert_eq!(
             reveal_scoped(&store, Scope::User("u-bbb"), "K").expect("reveal"),
             "also-mine",
@@ -1446,7 +1473,10 @@ mod tests {
             )
             .expect("set_wrapped");
         assert_eq!(meta.name, "K");
-        assert_eq!(meta.project, None, "a user id is never shown as a project id");
+        assert_eq!(
+            meta.project, None,
+            "a user id is never shown as a project id"
+        );
 
         // Nothing resembling the plaintext landed on disk.
         let raw = std::fs::read_to_string(store.dir().join("users/u-aaa/K.toml")).expect("read");
@@ -1470,8 +1500,14 @@ mod tests {
         .expect("unwrap dek");
         assert_eq!(recovered_dek, dek);
         assert_eq!(
-            wrap::open_value(&recovered_dek, "u-aaa", "K", &manifest.nonce, &manifest.ciphertext)
-                .expect("open value"),
+            wrap::open_value(
+                &recovered_dek,
+                "u-aaa",
+                "K",
+                &manifest.nonce,
+                &manifest.ciphertext
+            )
+            .expect("open value"),
             b"sk-mine"
         );
 

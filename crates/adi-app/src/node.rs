@@ -323,17 +323,29 @@ mod tests {
     #[test]
     fn only_the_gateways_own_page_says_a_node_was_not_there() {
         assert_eq!(classify(200, false, ""), Reach::Reachable);
-        assert_eq!(classify(401, false, ""), Reach::Reachable, "a 401 is the node answering");
+        assert_eq!(
+            classify(401, false, ""),
+            Reach::Reachable,
+            "a 401 is the node answering"
+        );
         assert_eq!(
             classify(502, true, "<h1>That machine refused the request</h1>"),
             Reach::Refused
         );
         assert_eq!(
-            classify(502, true, "<h1>That machine is not reachable from here</h1>"),
+            classify(
+                502,
+                true,
+                "<h1>That machine is not reachable from here</h1>"
+            ),
             Reach::Unreachable
         );
         assert_eq!(
-            classify(502, true, "<h1>That machine has not paired with this one</h1>"),
+            classify(
+                502,
+                true,
+                "<h1>That machine has not paired with this one</h1>"
+            ),
             Reach::Unreachable
         );
     }

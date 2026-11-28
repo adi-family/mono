@@ -758,7 +758,8 @@ mod tests {
     /// accepted alongside it rather than instead of it.
     #[test]
     fn top_is_accepted_as_an_alias_for_limit() {
-        let KnowledgeCommand::Search { limit, .. } = parse(&["search", "how do I deploy", "--top", "5"])
+        let KnowledgeCommand::Search { limit, .. } =
+            parse(&["search", "how do I deploy", "--top", "5"])
         else {
             panic!("expected search");
         };

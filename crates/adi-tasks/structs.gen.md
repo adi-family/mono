@@ -121,7 +121,7 @@ pub struct TaskGaveUp<'a>(pub &'a TaskView);
 One row of `Tasks::workflow_run_signature`: a task's `id`, `status`, `result`, and `give_up_reason`.
 
 ```rust
-pub type TaskSignatureRow = (String, TaskStatus, Option<serde_json::Value>, Option<String>);
+pub type TaskSignatureRow = ( String, TaskStatus, Option<serde_json::Value>, Option<String>, );
 ```
 
 ### struct `Tasks`

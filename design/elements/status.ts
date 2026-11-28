@@ -1,14 +1,12 @@
 import { AdiElement, define } from "./base.ts";
 
 class AdiDot extends AdiElement {
-
   override template() {
     return `<span class="dot" part="dot"></span>`;
   }
 }
 
 class AdiStatus extends AdiElement {
-
   override template() {
     return `<span class="dot" part="dot"></span><slot></slot>`;
   }

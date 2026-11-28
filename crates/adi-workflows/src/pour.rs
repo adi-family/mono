@@ -224,7 +224,10 @@ mod tests {
 
         let tasks = Tasks::with_config(config.clone());
         let task = tasks.get(run.root_task.as_deref().unwrap()).expect("task");
-        assert_eq!(task.task.workflow_run.as_deref(), Some(due.run_key.as_str()));
+        assert_eq!(
+            task.task.workflow_run.as_deref(),
+            Some(due.run_key.as_str())
+        );
         assert_eq!(task.task.step_key.as_deref(), Some(ROOT_STEP_KEY));
 
         let events = Events::with_config(config);

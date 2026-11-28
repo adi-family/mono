@@ -108,7 +108,10 @@ mod tests {
         let state: UsageEventsState = serde_json::from_str(&on.body).expect("state");
         assert!(state.enabled);
         assert!(state.persisted);
-        assert_eq!(state.install_id.as_deref(), Some("11111111-1111-1111-1111-111111111111"));
+        assert_eq!(
+            state.install_id.as_deref(),
+            Some("11111111-1111-1111-1111-111111111111")
+        );
 
         let off = set_usage_events(&cfg, br#"{"enabled":false}"#);
         let state: UsageEventsState = serde_json::from_str(&off.body).expect("state");

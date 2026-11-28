@@ -44,7 +44,11 @@ pub enum WaitingOn {
 ///
 /// # Errors
 /// [`crate::error::Error::Store`] on a read failure.
-pub fn waiting_on(store: &WorkflowStore, tasks: &Tasks, run_key: &str) -> Result<Option<WaitingOn>> {
+pub fn waiting_on(
+    store: &WorkflowStore,
+    tasks: &Tasks,
+    run_key: &str,
+) -> Result<Option<WaitingOn>> {
     for (step_key, state) in store.list_pending(run_key)? {
         if state.get("since_seq").is_some() {
             return Ok(Some(WaitingOn::Event));
@@ -104,7 +108,9 @@ mod tests {
              export const on = manual();\n\
              export default workflow(async () => ({}));\n",
         );
-        let started = engine.start_manual("plain", &json!({}), "req-1").expect("start");
+        let started = engine
+            .start_manual("plain", &json!({}), "req-1")
+            .expect("start");
         let tasks = Tasks::with_config(config.clone());
         let store = crate::store::WorkflowStore::with_config(config);
         assert_eq!(waiting_on(&store, &tasks, &started.run_key).unwrap(), None);
@@ -125,13 +131,22 @@ mod tests {
              \x20 return {};\n\
              });\n",
         );
-        let started = engine.start_manual("gate", &json!({}), "req-1").expect("start");
-        assert_eq!(engine.run_tick().len(), 1, "the one attempt that suspends on the task");
+        let started = engine
+            .start_manual("gate", &json!({}), "req-1")
+            .expect("start");
+        assert_eq!(
+            engine.run_tick().len(),
+            1,
+            "the one attempt that suspends on the task"
+        );
 
         let tasks = Tasks::with_config(config.clone());
         let store = crate::store::WorkflowStore::with_config(config);
         let waiting = waiting_on(&store, &tasks, &started.run_key).unwrap();
-        let Some(WaitingOn::Task { task_id: Some(task_id) }) = waiting else {
+        let Some(WaitingOn::Task {
+            task_id: Some(task_id),
+        }) = waiting
+        else {
             panic!("expected WaitingOn::Task with a real task id, got {waiting:?}");
         };
         let view = tasks.get(&task_id).expect("the task exists");
@@ -153,7 +168,9 @@ mod tests {
              \x20 return {};\n\
              });\n",
         );
-        let started = engine.start_manual("waiter", &json!({}), "req-1").expect("start");
+        let started = engine
+            .start_manual("waiter", &json!({}), "req-1")
+            .expect("start");
         assert_eq!(engine.run_tick().len(), 1);
 
         let tasks = Tasks::with_config(config.clone());
@@ -218,8 +235,14 @@ mod tests {
              \x20 return {};\n\
              });\n",
         );
-        let started = engine.start_manual("parent", &json!({}), "req-1").expect("start");
-        assert_eq!(engine.run_tick().len(), 1, "the parent suspends on its child");
+        let started = engine
+            .start_manual("parent", &json!({}), "req-1")
+            .expect("start");
+        assert_eq!(
+            engine.run_tick().len(),
+            1,
+            "the parent suspends on its child"
+        );
 
         let tasks = Tasks::with_config(config.clone());
         let store = crate::store::WorkflowStore::with_config(config);

@@ -56,7 +56,10 @@ impl Request {
 ///
 /// # Errors
 /// I/O, a timeout, an oversized head, or a connection closed mid-head.
-pub async fn read_request(stream: &mut TcpStream, max_body_bytes: u64) -> anyhow::Result<Option<Request>> {
+pub async fn read_request(
+    stream: &mut TcpStream,
+    max_body_bytes: u64,
+) -> anyhow::Result<Option<Request>> {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 2048];
     let head_end = loop {
@@ -81,7 +84,12 @@ pub async fn read_request(stream: &mut TcpStream, max_body_bytes: u64) -> anyhow
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(0);
     if content_length > max_body_bytes {
-        write_json(stream, 413, r#"{"error":"payload_too_large","message":"request is over this relay's body limit"}"#).await?;
+        write_json(
+            stream,
+            413,
+            r#"{"error":"payload_too_large","message":"request is over this relay's body limit"}"#,
+        )
+        .await?;
         return Ok(None);
     }
     #[allow(clippy::cast_possible_truncation)]
@@ -217,7 +225,10 @@ mod tests {
         let mut response = Vec::new();
         client.read_to_end(&mut response).await.expect("read");
         let text = String::from_utf8_lossy(&response);
-        assert!(text.starts_with("HTTP/1.1 413 Payload Too Large"), "got: {text}");
+        assert!(
+            text.starts_with("HTTP/1.1 413 Payload Too Large"),
+            "got: {text}"
+        );
         assert!(text.contains("payload_too_large"), "got: {text}");
 
         // The server side sees this as "nothing more to do" (it already answered), not an error.

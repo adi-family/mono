@@ -181,7 +181,11 @@ export function safeHref(url: string): string | null {
   return ok ? trimmed : null;
 }
 
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string | null, text?: string): HTMLElementTagNameMap[K];
+function el<K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  cls?: string | null,
+  text?: string,
+): HTMLElementTagNameMap[K];
 function el(tag: string, cls?: string | null, text?: string): HTMLElement;
 function el(tag: string, cls?: string | null, text?: string): HTMLElement {
   const node = document.createElement(tag);
@@ -190,13 +194,20 @@ function el(tag: string, cls?: string | null, text?: string): HTMLElement {
   return node;
 }
 
-function delimited(source: string, index: number, delimiter: string): { text: string; next: number } | null {
+function delimited(
+  source: string,
+  index: number,
+  delimiter: string,
+): { text: string; next: number } | null {
   const start = index + delimiter.length;
   const end = source.indexOf(delimiter, start);
   return end > start ? { text: source.slice(start, end), next: end + delimiter.length } : null;
 }
 
-function inlineLink(source: string, index: number): { node: HTMLAnchorElement; next: number } | null {
+function inlineLink(
+  source: string,
+  index: number,
+): { node: HTMLAnchorElement; next: number } | null {
   const labelEnd = source.indexOf("]", index + 1);
   if (labelEnd <= 0 || source[labelEnd + 1] !== "(") return null;
 
@@ -234,7 +245,10 @@ export function inline<T extends HTMLElement>(source: string, container: T): T {
         node = inline(match.text, el("strong"));
         next = match.next;
       }
-    } else if ((character === "*" || character === "_") && !(character === "_" && /\w/.test(source[index - 1] ?? ""))) {
+    } else if (
+      (character === "*" || character === "_") &&
+      !(character === "_" && /\w/.test(source[index - 1] ?? ""))
+    ) {
       // An underscore inside a word does not open emphasis.
       const match = delimited(source, index, character);
       if (match) {

@@ -508,10 +508,7 @@ mod tests {
         a.write_all(payload).await.unwrap();
         let mut reader = Reader::new(Vec::new());
         let frame = reader.next(&mut b).await.unwrap();
-        assert_eq!(
-            frame,
-            Some(Frame::Text("{\"type\":\"ping\"}".to_string()))
-        );
+        assert_eq!(frame, Some(Frame::Text("{\"type\":\"ping\"}".to_string())));
     }
 
     #[tokio::test]

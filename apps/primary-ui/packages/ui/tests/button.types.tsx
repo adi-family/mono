@@ -39,13 +39,23 @@ export function acceptedButtonExamples(disabled: boolean) {
     <>
       <Button>Continue</Button>
       <Button disabled={false}>Continue</Button>
-      <Button disabled={false} disabledReason={reason}>Continue</Button>
-      <Button disabled disabledReason={reason}>Continue</Button>
-      <Button disabled={disabled} disabledReason={reason}>Continue</Button>
+      <Button disabled={false} disabledReason={reason}>
+        Continue
+      </Button>
+      <Button disabled disabledReason={reason}>
+        Continue
+      </Button>
+      <Button disabled={disabled} disabledReason={reason}>
+        Continue
+      </Button>
       <Button {...props}>Continue</Button>
       <Button {...inferredProps}>Continue</Button>
-      <Button asChild><a href="/">Home</a></Button>
-      <Button asChild disabled={false}><a href="/">Home</a></Button>
+      <Button asChild>
+        <a href="/">Home</a>
+      </Button>
+      <Button asChild disabled={false}>
+        <a href="/">Home</a>
+      </Button>
       <ButtonWrapper disabled={disabled} disabledReason={reason} />
       <ThemeToggle theme="light" onThemeChange={onThemeChange} />
       <ThemeToggle theme="dark" onThemeChange={onThemeChange} disabled={false} />
@@ -62,21 +72,35 @@ export function rejectedButtonExamples(disabled: boolean) {
   // @ts-expect-error A dynamic boolean may disable the button, so it needs a reason.
   <Button disabled={disabled}>Continue</Button>;
   // @ts-expect-error Undefined is not an explanation.
-  <Button disabled disabledReason={undefined}>Continue</Button>;
+  <Button disabled disabledReason={undefined}>
+    Continue
+  </Button>;
   // @ts-expect-error Null is not an explanation.
-  <Button disabled disabledReason={null}>Continue</Button>;
+  <Button disabled disabledReason={null}>
+    Continue
+  </Button>;
   // @ts-expect-error Explanations must be text, not arbitrary React nodes.
-  <Button disabled disabledReason={<span>{reason}</span>}>Continue</Button>;
+  <Button disabled disabledReason={<span>{reason}</span>}>
+    Continue
+  </Button>;
   // @ts-expect-error aria-disabled must not bypass the explanation requirement.
   <Button aria-disabled>Continue</Button>;
   // @ts-expect-error Even with a reason, use disabled instead of aria-disabled.
-  <Button aria-disabled="true" disabledReason={reason}>Continue</Button>;
+  <Button aria-disabled="true" disabledReason={reason}>
+    Continue
+  </Button>;
   // @ts-expect-error asChild cannot guarantee native disabled behavior.
-  <Button asChild disabled disabledReason={reason}><a href="/">Home</a></Button>;
+  <Button asChild disabled disabledReason={reason}>
+    <a href="/">Home</a>
+  </Button>;
   // @ts-expect-error A dynamic disabled value cannot be used with asChild either.
-  <Button asChild disabled={disabled} disabledReason={reason}><a href="/">Home</a></Button>;
+  <Button asChild disabled={disabled} disabledReason={reason}>
+    <a href="/">Home</a>
+  </Button>;
   // @ts-expect-error A possibly slotted element cannot guarantee disabled behavior.
-  <Button asChild={disabled} disabled disabledReason={reason}>Continue</Button>;
+  <Button asChild={disabled} disabled disabledReason={reason}>
+    Continue
+  </Button>;
 
   const propsWithoutReason = { disabled };
   // @ts-expect-error Spreading props must preserve the explanation requirement.
@@ -110,8 +134,16 @@ export function rejectedButtonExamples(disabled: boolean) {
   const invalidThemeProps: ThemeToggleProps = { theme: "light", onThemeChange, disabled };
   // @ts-expect-error React's inferred ThemeToggle props retain the contract.
   const invalidInferredThemeProps: React.ComponentProps<typeof ThemeToggle> = {
-    theme: "light", onThemeChange, disabled: true,
+    theme: "light",
+    onThemeChange,
+    disabled: true,
   };
 
-  return { invalidState, invalidProps, invalidInferredProps, invalidThemeProps, invalidInferredThemeProps };
+  return {
+    invalidState,
+    invalidProps,
+    invalidInferredProps,
+    invalidThemeProps,
+    invalidInferredThemeProps,
+  };
 }

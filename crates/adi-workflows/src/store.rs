@@ -96,7 +96,10 @@ fn migrate(conn: &Connection) -> Result<()> {
     // ADI-MONO-151: a consecutive-transient-bun-crash streak, and the backoff deadline it
     // implies — a fact on the run row so it survives an `adi-app` restart, same reasoning as
     // `caused_by_run`/`finished_at` above.
-    add_column_if_missing(conn, "ALTER TABLE runs ADD COLUMN crash_streak INTEGER NOT NULL DEFAULT 0")?;
+    add_column_if_missing(
+        conn,
+        "ALTER TABLE runs ADD COLUMN crash_streak INTEGER NOT NULL DEFAULT 0",
+    )?;
     add_column_if_missing(conn, "ALTER TABLE runs ADD COLUMN next_attempt_at INTEGER")
 }
 
@@ -189,8 +192,9 @@ impl WorkflowStore {
             .map_err(|e| Error::Store(anyhow::anyhow!("couldn't open workflows.db: {e}")))?;
         conn.execute_batch(PRAGMAS)
             .map_err(|e| Error::Store(anyhow::anyhow!("couldn't configure workflows.db: {e}")))?;
-        conn.execute_batch(SCHEMA)
-            .map_err(|e| Error::Store(anyhow::anyhow!("couldn't create the workflows schema: {e}")))?;
+        conn.execute_batch(SCHEMA).map_err(|e| {
+            Error::Store(anyhow::anyhow!("couldn't create the workflows schema: {e}"))
+        })?;
         migrate(&conn)?;
         Ok(conn)
     }
@@ -248,7 +252,9 @@ impl WorkflowStore {
                 next_attempt_at: None,
             }),
             Err(e) if is_unique_violation(&e) => Err(Error::DuplicateRunKey(run_key.to_string())),
-            Err(e) => Err(Error::Store(anyhow::anyhow!("couldn't claim a run key: {e}"))),
+            Err(e) => Err(Error::Store(anyhow::anyhow!(
+                "couldn't claim a run key: {e}"
+            ))),
         }
     }
 
@@ -336,7 +342,11 @@ impl WorkflowStore {
         conn.execute("DELETE FROM step_journal WHERE run_key = ?1", [run_key])
             .map_err(|e| Error::Store(anyhow::anyhow!("couldn't delete a run's journal: {e}")))?;
         conn.execute("DELETE FROM step_pending WHERE run_key = ?1", [run_key])
-            .map_err(|e| Error::Store(anyhow::anyhow!("couldn't delete a run's pending state: {e}")))?;
+            .map_err(|e| {
+                Error::Store(anyhow::anyhow!(
+                    "couldn't delete a run's pending state: {e}"
+                ))
+            })?;
         Ok(())
     }
 
@@ -394,7 +404,11 @@ impl WorkflowStore {
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|e| Error::Store(anyhow::anyhow!("couldn't read a workflow's enabled flag: {e}")))?;
+            .map_err(|e| {
+                Error::Store(anyhow::anyhow!(
+                    "couldn't read a workflow's enabled flag: {e}"
+                ))
+            })?;
         Ok(enabled == Some(1))
     }
 
@@ -450,7 +464,11 @@ impl WorkflowStore {
                 [run_key],
                 |row| row.get(0),
             )
-            .map_err(|e| Error::Store(anyhow::anyhow!("couldn't check for an unfinished child run: {e}")))?;
+            .map_err(|e| {
+                Error::Store(anyhow::anyhow!(
+                    "couldn't check for an unfinished child run: {e}"
+                ))
+            })?;
         Ok(count > 0)
     }
 
@@ -562,11 +580,10 @@ impl WorkflowStore {
             params![run_key, i64::try_from(keep).unwrap_or(i64::MAX)],
         )
         .map_err(|e| Error::Store(anyhow::anyhow!("couldn't truncate a run's steps: {e}")))?;
-        conn.execute(
-            "DELETE FROM step_pending WHERE run_key = ?1",
-            [run_key],
-        )
-        .map_err(|e| Error::Store(anyhow::anyhow!("couldn't clear a run's pending state: {e}")))?;
+        conn.execute("DELETE FROM step_pending WHERE run_key = ?1", [run_key])
+            .map_err(|e| {
+                Error::Store(anyhow::anyhow!("couldn't clear a run's pending state: {e}"))
+            })?;
         Ok(discarded)
     }
 
@@ -584,7 +601,11 @@ impl WorkflowStore {
             [run_key],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
-        .map_err(|e| Error::Store(anyhow::anyhow!("couldn't read a run's children signature: {e}")))
+        .map_err(|e| {
+            Error::Store(anyhow::anyhow!(
+                "couldn't read a run's children signature: {e}"
+            ))
+        })
     }
 
     // ---- pending state (checkpoints not yet resolved) --------------------------------------
@@ -611,7 +632,12 @@ impl WorkflowStore {
             .map_err(|e| Error::Store(anyhow::anyhow!("couldn't read a pending row: {e}")))
             .map(|rows| {
                 rows.into_iter()
-                    .map(|(k, s)| (k, serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)))
+                    .map(|(k, s)| {
+                        (
+                            k,
+                            serde_json::from_str(&s).unwrap_or(serde_json::Value::Null),
+                        )
+                    })
                     .collect()
             })
     }
@@ -692,7 +718,9 @@ impl WorkflowStore {
                 [run_key],
                 |row| row.get(0),
             )
-            .map_err(|e| Error::Store(anyhow::anyhow!("couldn't read a run's crash streak: {e}")))?;
+            .map_err(|e| {
+                Error::Store(anyhow::anyhow!("couldn't read a run's crash streak: {e}"))
+            })?;
         Ok(u32::try_from(streak).unwrap_or(u32::MAX))
     }
 
@@ -723,7 +751,11 @@ impl WorkflowStore {
             "UPDATE runs SET next_attempt_at = ?1 WHERE run_key = ?2",
             params![seq_i64(at_ms), run_key],
         )
-        .map_err(|e| Error::Store(anyhow::anyhow!("couldn't set a run's next attempt time: {e}")))?;
+        .map_err(|e| {
+            Error::Store(anyhow::anyhow!(
+                "couldn't set a run's next attempt time: {e}"
+            ))
+        })?;
         Ok(())
     }
 }
@@ -953,9 +985,25 @@ mod tests {
     fn the_same_run_key_can_never_be_claimed_twice() {
         let store = scratch("claim-once");
         store
-            .create_run("wf@slot", "wf", "/f.ts", "hash", &json!({}), &json!({}), None)
+            .create_run(
+                "wf@slot",
+                "wf",
+                "/f.ts",
+                "hash",
+                &json!({}),
+                &json!({}),
+                None,
+            )
             .expect("first");
-        let second = store.create_run("wf@slot", "wf", "/f.ts", "hash", &json!({}), &json!({}), None);
+        let second = store.create_run(
+            "wf@slot",
+            "wf",
+            "/f.ts",
+            "hash",
+            &json!({}),
+            &json!({}),
+            None,
+        );
         assert!(matches!(second, Err(Error::DuplicateRunKey(ref k)) if k == "wf@slot"));
     }
 
@@ -963,7 +1011,15 @@ mod tests {
     fn set_root_task_is_a_separate_write_that_shows_up_on_a_later_read() {
         let store = scratch("root-task");
         store
-            .create_run("wf@slot", "wf", "/f.ts", "hash", &json!({}), &json!({}), None)
+            .create_run(
+                "wf@slot",
+                "wf",
+                "/f.ts",
+                "hash",
+                &json!({}),
+                &json!({}),
+                None,
+            )
             .expect("create");
         store.set_root_task("wf@slot", "t1").expect("set root");
         let found = store.get_run("wf@slot").unwrap().unwrap();
@@ -1014,14 +1070,33 @@ mod tests {
     #[test]
     fn list_runs_is_newest_first_and_respects_the_limit() {
         let store = scratch("list-runs");
-        store.create_run("a@1", "a", "/a.ts", "h", &json!({}), &json!({}), None).unwrap();
-        store.create_run("b@1", "b", "/b.ts", "h", &json!({}), &json!({}), None).unwrap();
-        store.create_run("a@2", "a", "/a.ts", "h", &json!({}), &json!({}), None).unwrap();
+        store
+            .create_run("a@1", "a", "/a.ts", "h", &json!({}), &json!({}), None)
+            .unwrap();
+        store
+            .create_run("b@1", "b", "/b.ts", "h", &json!({}), &json!({}), None)
+            .unwrap();
+        store
+            .create_run("a@2", "a", "/a.ts", "h", &json!({}), &json!({}), None)
+            .unwrap();
 
-        let all: Vec<String> = store.list_runs(10).unwrap().into_iter().map(|r| r.run_key).collect();
-        assert_eq!(all, vec!["a@2".to_string(), "b@1".to_string(), "a@1".to_string()]);
+        let all: Vec<String> = store
+            .list_runs(10)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.run_key)
+            .collect();
+        assert_eq!(
+            all,
+            vec!["a@2".to_string(), "b@1".to_string(), "a@1".to_string()]
+        );
 
-        let capped: Vec<String> = store.list_runs(2).unwrap().into_iter().map(|r| r.run_key).collect();
+        let capped: Vec<String> = store
+            .list_runs(2)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.run_key)
+            .collect();
         assert_eq!(capped, vec!["a@2".to_string(), "b@1".to_string()]);
     }
 
@@ -1029,12 +1104,28 @@ mod tests {
     fn has_unfinished_child_tracks_a_child_runs_own_lifecycle() {
         let store = scratch("unfinished-child");
         store
-            .create_run("parent@1", "parent", "/p.ts", "h", &json!({}), &json!({}), None)
+            .create_run(
+                "parent@1",
+                "parent",
+                "/p.ts",
+                "h",
+                &json!({}),
+                &json!({}),
+                None,
+            )
             .unwrap();
         assert!(!store.has_unfinished_child("parent@1").unwrap());
 
         store
-            .create_run("child@parent@1/step", "child", "/c.ts", "h", &json!({}), &json!({}), Some("parent@1"))
+            .create_run(
+                "child@parent@1/step",
+                "child",
+                "/c.ts",
+                "h",
+                &json!({}),
+                &json!({}),
+                Some("parent@1"),
+            )
             .unwrap();
         assert!(store.has_unfinished_child("parent@1").unwrap());
 
@@ -1051,7 +1142,9 @@ mod tests {
         assert_eq!(store.get_run("r@1").unwrap().unwrap().crash_streak, 0);
 
         assert_eq!(store.bump_crash_streak("r@1").unwrap(), 1);
-        store.set_next_attempt_at("r@1", 123_456_789).expect("set backoff");
+        store
+            .set_next_attempt_at("r@1", 123_456_789)
+            .expect("set backoff");
         let run = store.get_run("r@1").unwrap().unwrap();
         assert_eq!(run.crash_streak, 1);
         assert_eq!(run.next_attempt_at, Some(123_456_789));

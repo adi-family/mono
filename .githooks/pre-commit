@@ -1,29 +1,135 @@
 #!/usr/bin/env bash
 #
-# pre-commit — keep every crate's `structs.gen.md` honest.
+# pre-commit — format staged TypeScript/Rust files and keep `structs.gen.md` honest.
 #
-# The pages are generated from the source, so they are only worth having if they are never stale.
-# This regenerates them and stages the ones that moved, so the shape of a commit's data model
-# lands in the same commit as the code that changed it.
-#
-# It is a no-op unless the commit touches Rust sources (or the generator itself), so a commit that
-# only edits markdown or a shell script costs nothing.
+# 1. Formats staged TypeScript files (`*.ts`, `*.tsx`, `*.mts`, `*.cts`) with Prettier and staged
+#    Rust files (`*.rs`, excluding `vendor/`) with `rustfmt`, then re-stages what moved.
+#    If a staged file also has unstaged working-tree edits (`git add -p`), it is only checked
+#    (never auto-staged) so unstaged hunks are not pulled into the commit.
+# 2. Regenerates `crates/*/structs.gen.md` whenever Rust sources or `Cargo.toml` under `crates/`
+#    change, and stages the pages that moved.
 #
 # Install: `scripts/install-hooks.sh` (points core.hooksPath at .githooks).
 # Skip once: `git commit --no-verify`.
-#
-# Caveat worth knowing: the generator reads the *working tree*, not the index. If you staged only
-# part of a file (`git add -p`), the regenerated page describes the whole file, including what you
-# held back. That is almost always what you want for a generated overview — but it is why the hook
-# tells you which pages it staged.
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
-# Nothing Rust-shaped in this commit → nothing to regenerate.
-if ! git diff --cached --name-only --diff-filter=ACMR \
-    | grep -Eq '^crates/[^/]+/(src/.*\.rs|Cargo\.toml)$'; then
+staged_files=()
+while IFS= read -r path; do
+    [ -n "$path" ] && staged_files+=("$path")
+done < <(git diff --cached --name-only --diff-filter=ACMR)
+
+if [ "${#staged_files[@]}" -eq 0 ]; then
+    exit 0
+fi
+
+# Partition staged TS and Rust files into fully-staged (safe to auto-format + re-stage) and
+# partially-staged (check-only, so we never stage unstaged working-tree hunks).
+ts_auto=()
+ts_check=()
+rs_auto=()
+rs_check=()
+has_crate_rust=0
+
+for path in "${staged_files[@]}"; do
+    if [[ "$path" =~ ^crates/[^/]+/(src/.*\.rs|Cargo\.toml)$ ]]; then
+        has_crate_rust=1
+    fi
+
+    case "$path" in
+        vendor/*)
+            ;;
+        *.ts|*.tsx|*.mts|*.cts)
+            if git diff --quiet -- "$path"; then
+                ts_auto+=("$path")
+            else
+                ts_check+=("$path")
+            fi
+            ;;
+        *.rs)
+            if git diff --quiet -- "$path"; then
+                rs_auto+=("$path")
+            else
+                rs_check+=("$path")
+            fi
+            ;;
+    esac
+done
+
+# 1. Format staged TypeScript files with Prettier.
+if [ "${#ts_auto[@]}" -gt 0 ] || [ "${#ts_check[@]}" -gt 0 ]; then
+    prettier_bin="$repo_root/node_modules/.bin/prettier"
+    if [ ! -x "$prettier_bin" ]; then
+        prettier_bin="$(command -v prettier || true)"
+    fi
+    if [ -z "$prettier_bin" ]; then
+        echo "pre-commit: prettier not found; cannot format staged TypeScript files." >&2
+        echo "            Run 'bun install', or commit with --no-verify." >&2
+        exit 1
+    fi
+
+    if [ "${#ts_auto[@]}" -gt 0 ]; then
+        "$prettier_bin" --write --ignore-unknown -- "${ts_auto[@]}" >/dev/null
+        ts_reformatted=()
+        for path in "${ts_auto[@]}"; do
+            if ! git diff --quiet -- "$path"; then
+                ts_reformatted+=("$path")
+            fi
+        done
+        if [ "${#ts_reformatted[@]}" -gt 0 ]; then
+            git add -- "${ts_reformatted[@]}"
+            echo "pre-commit: formatted and staged TypeScript"
+            printf '  %s\n' "${ts_reformatted[@]}"
+        fi
+    fi
+
+    if [ "${#ts_check[@]}" -gt 0 ]; then
+        if ! "$prettier_bin" --check --ignore-unknown -- "${ts_check[@]}" >/dev/null 2>&1; then
+            echo "pre-commit: partially-staged TypeScript files need formatting:" >&2
+            printf '  %s\n' "${ts_check[@]}" >&2
+            echo "            Run 'bun run format:ts' and re-stage, or commit with --no-verify." >&2
+            exit 1
+        fi
+    fi
+fi
+
+# 2. Format staged Rust files with rustfmt.
+if [ "${#rs_auto[@]}" -gt 0 ] || [ "${#rs_check[@]}" -gt 0 ]; then
+    if ! command -v rustfmt >/dev/null 2>&1; then
+        echo "pre-commit: rustfmt not found; cannot format staged Rust files." >&2
+        echo "            Install rustfmt ('rustup component add rustfmt'), or commit with --no-verify." >&2
+        exit 1
+    fi
+
+    if [ "${#rs_auto[@]}" -gt 0 ]; then
+        rustfmt -- "${rs_auto[@]}"
+        rs_reformatted=()
+        for path in "${rs_auto[@]}"; do
+            if ! git diff --quiet -- "$path"; then
+                rs_reformatted+=("$path")
+            fi
+        done
+        if [ "${#rs_reformatted[@]}" -gt 0 ]; then
+            git add -- "${rs_reformatted[@]}"
+            echo "pre-commit: formatted and staged Rust"
+            printf '  %s\n' "${rs_reformatted[@]}"
+        fi
+    fi
+
+    if [ "${#rs_check[@]}" -gt 0 ]; then
+        if ! rustfmt --check -- "${rs_check[@]}" >/dev/null 2>&1; then
+            echo "pre-commit: partially-staged Rust files need formatting:" >&2
+            printf '  %s\n' "${rs_check[@]}" >&2
+            echo "            Run 'bun run format:rs' and re-stage, or commit with --no-verify." >&2
+            exit 1
+        fi
+    fi
+fi
+
+# 3. Refresh crates/*/structs.gen.md when crate Rust sources or Cargo.toml change.
+if [ "$has_crate_rust" -eq 0 ]; then
     exit 0
 fi
 

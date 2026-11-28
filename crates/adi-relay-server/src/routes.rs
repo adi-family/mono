@@ -56,8 +56,15 @@ fn authenticate(
     body: &[u8],
     remote_ip: &str,
 ) -> Result<VerifyingKey, Response> {
-    let outcome = auth::authenticate(&state.store, headers, method, path_and_query, body, now_secs())
-        .map_err(|e| err(500, "internal_error", e.to_string()))?;
+    let outcome = auth::authenticate(
+        &state.store,
+        headers,
+        method,
+        path_and_query,
+        body,
+        now_secs(),
+    )
+    .map_err(|e| err(500, "internal_error", e.to_string()))?;
     let key = match outcome {
         AuthOutcome::Ok(key) => key,
         other => return Err(err(401, other.error_code(), "signature check failed")),
@@ -68,7 +75,11 @@ fn authenticate(
             .as_ref()
             .is_some_and(|keys| keys.is_authorized(&key));
         if !authorized {
-            return Err(err(403, "unknown_key", "this key is not in authorized_keys"));
+            return Err(err(
+                403,
+                "unknown_key",
+                "this key is not in authorized_keys",
+            ));
         }
         if let Some(refusal) = auth::check_shared_secret(self_host, headers) {
             return Err(refusal);
@@ -112,14 +123,21 @@ pub fn ingress(
     };
 
     let now = i64::try_from(now_secs()).unwrap_or(0);
-    let recent = state.store.records_since(endpoint_id, now - 60).unwrap_or(i64::MAX);
+    let recent = state
+        .store
+        .records_since(endpoint_id, now - 60)
+        .unwrap_or(i64::MAX);
     if recent >= i64::from(state.config.limits.max_requests_per_minute_per_endpoint) {
         return err(429, "rate_limited", "too many requests to this endpoint");
     }
     let pending = state.store.pending_count(endpoint_id).unwrap_or(i64::MAX);
     let cap = i64::try_from(state.config.limits.max_pending_per_endpoint).unwrap_or(i64::MAX);
     if pending >= cap {
-        return err(429, "rate_limited", "too many undelivered records for this endpoint");
+        return err(
+            429,
+            "rate_limited",
+            "too many undelivered records for this endpoint",
+        );
     }
 
     let record = serde_json::json!({
@@ -133,10 +151,18 @@ pub fn ingress(
         Err(e) => return err(500, "internal_error", e.to_string()),
     };
     if plaintext.len() as u64 > state.config.limits.max_body_bytes {
-        return err(413, "payload_too_large", "request is over this relay's body limit");
+        return err(
+            413,
+            "payload_too_large",
+            "request is over this relay's body limit",
+        );
     }
     let Ok(sealing_public) = decode_sealing_key(&endpoint.sealing_key_b64) else {
-        return err(500, "internal_error", "this endpoint's sealing key is corrupt");
+        return err(
+            500,
+            "internal_error",
+            "this endpoint's sealing key is corrupt",
+        );
     };
 
     // A paused endpoint (enterprise licence lapsed) still answers 202 and still queues:
@@ -146,10 +172,14 @@ pub fn ingress(
     let expires_at = now + i64::try_from(endpoint.retention_secs).unwrap_or(i64::MAX);
     #[allow(clippy::cast_possible_wrap)]
     let byte_len = plaintext.len() as i64;
-    match state
-        .store
-        .insert_sealed_record(endpoint_id, &sealing_public, now, expires_at, byte_len, &plaintext)
-    {
+    match state.store.insert_sealed_record(
+        endpoint_id,
+        &sealing_public,
+        now,
+        expires_at,
+        byte_len,
+        &plaintext,
+    ) {
         Ok(()) => {
             state.notify.notify_waiters();
             ok(202, &IngressAck { ok: true })
@@ -210,9 +240,16 @@ pub async fn register(
     match state.config.mode {
         Mode::Public => {
             let day = today(now_secs());
-            let count = state.store.registrations_today(remote_ip, &day).unwrap_or(i64::MAX);
+            let count = state
+                .store
+                .registrations_today(remote_ip, &day)
+                .unwrap_or(i64::MAX);
             if count >= i64::from(state.config.limits.max_registrations_per_ip_per_day) {
-                return err(429, "too_many_endpoints", "too many registrations from this address today");
+                return err(
+                    429,
+                    "too_many_endpoints",
+                    "too many registrations from this address today",
+                );
             }
         }
         Mode::Enterprise => {
@@ -223,9 +260,16 @@ pub async fn register(
         Mode::SelfHost => {}
     }
 
-    let existing = state.store.count_endpoints(fingerprint.as_str()).unwrap_or(i64::MAX);
+    let existing = state
+        .store
+        .count_endpoints(fingerprint.as_str())
+        .unwrap_or(i64::MAX);
     if existing >= i64::from(state.config.limits.max_endpoints_per_key) {
-        return err(429, "too_many_endpoints", "this key already owns the maximum number of endpoints");
+        return err(
+            429,
+            "too_many_endpoints",
+            "this key already owns the maximum number of endpoints",
+        );
     }
 
     let retention = req
@@ -241,13 +285,19 @@ pub async fn register(
             Ok(false) => {}
             Err(e) => return err(500, "internal_error", e.to_string()),
         }
-        return match state
-            .store
-            .insert_endpoint(&id, fingerprint.as_str(), &key_line, &req.sealing_key, retention, now)
-        {
+        return match state.store.insert_endpoint(
+            &id,
+            fingerprint.as_str(),
+            &key_line,
+            &req.sealing_key,
+            retention,
+            now,
+        ) {
             Ok(()) => {
                 if state.config.mode == Mode::Public {
-                    let _ = state.store.record_registration(remote_ip, &today(now_secs()));
+                    let _ = state
+                        .store
+                        .record_registration(remote_ip, &today(now_secs()));
                 }
                 ok(
                     201,
@@ -269,33 +319,64 @@ pub async fn register(
 /// mismatched nonce/`deployment_id`) refuses registration exactly like a decided non-serving
 /// verdict — a deliberate choice to fail closed uniformly under `402 licence_lapsed`, rather
 /// than inventing a separate code for "the licence service could not be reached right now".
-async fn check_licence(state: &AppState, req: &RegisterRequest, fingerprint: &Fingerprint) -> Option<Response> {
+async fn check_licence(
+    state: &AppState,
+    req: &RegisterRequest,
+    fingerprint: &Fingerprint,
+) -> Option<Response> {
     let Some(code) = req.licence_code.as_deref().filter(|c| !c.is_empty()) else {
-        return Some(err(402, "licence_lapsed", "licence_code is required in enterprise mode"));
+        return Some(err(
+            402,
+            "licence_lapsed",
+            "licence_code is required in enterprise mode",
+        ));
     };
     let Some(licence) = state.licence.as_ref() else {
-        return Some(err(500, "internal_error", "enterprise mode has no licence client configured"));
+        return Some(err(
+            500,
+            "internal_error",
+            "enterprise mode has no licence client configured",
+        ));
     };
     match licence.verify(code, fingerprint.as_str()).await {
         Ok(outcome) if outcome.valid => {
-            let _ = state
-                .store
-                .set_licence_status(fingerprint.as_str(), code, true, outcome.checked_at);
+            let _ = state.store.set_licence_status(
+                fingerprint.as_str(),
+                code,
+                true,
+                outcome.checked_at,
+            );
             None
         }
         Ok(outcome) => {
-            let _ = state
-                .store
-                .set_licence_status(fingerprint.as_str(), code, false, outcome.checked_at);
-            Some(err(402, "licence_lapsed", "licence_code did not verify as paid or trialing"))
+            let _ = state.store.set_licence_status(
+                fingerprint.as_str(),
+                code,
+                false,
+                outcome.checked_at,
+            );
+            Some(err(
+                402,
+                "licence_lapsed",
+                "licence_code did not verify as paid or trialing",
+            ))
         }
-        Err(e) => Some(err(402, "licence_lapsed", format!("licence check failed: {e}"))),
+        Err(e) => Some(err(
+            402,
+            "licence_lapsed",
+            format!("licence check failed: {e}"),
+        )),
     }
 }
 
 // ---- 5.3 GET /v1/endpoints — list -----------------------------------------------------------
 
-pub fn list(state: &AppState, headers: &HashMap<String, String>, path_and_query: &str, remote_ip: &str) -> Response {
+pub fn list(
+    state: &AppState,
+    headers: &HashMap<String, String>,
+    path_and_query: &str,
+    remote_ip: &str,
+) -> Response {
     let key = match authenticate(state, headers, "GET", path_and_query, b"", remote_ip) {
         Ok(key) => key,
         Err(resp) => return resp,
@@ -323,7 +404,13 @@ pub fn list(state: &AppState, headers: &HashMap<String, String>, path_and_query:
 
 // ---- 5.4 DELETE /v1/endpoints/<id> — delete -------------------------------------------------
 
-pub fn delete(state: &AppState, headers: &HashMap<String, String>, path_and_query: &str, id: &str, remote_ip: &str) -> Response {
+pub fn delete(
+    state: &AppState,
+    headers: &HashMap<String, String>,
+    path_and_query: &str,
+    id: &str,
+    remote_ip: &str,
+) -> Response {
     let key = match authenticate(state, headers, "DELETE", path_and_query, b"", remote_ip) {
         Ok(key) => key,
         Err(resp) => return resp,
@@ -336,7 +423,9 @@ pub fn delete(state: &AppState, headers: &HashMap<String, String>, path_and_quer
         },
         // Not `404`: telling the legitimate owner "that's not yours" versus "doesn't exist" is
         // worth keeping honest — "forbidden" is this implementation's own choice of code.
-        Ok(DeleteOutcome::Forbidden) => err(403, "forbidden", "this endpoint belongs to a different key"),
+        Ok(DeleteOutcome::Forbidden) => {
+            err(403, "forbidden", "this endpoint belongs to a different key")
+        }
         Ok(DeleteOutcome::NotFound) => err(404, "not_found", format!("no such endpoint: {id}")),
         Err(e) => err(500, "internal_error", e.to_string()),
     }
@@ -383,7 +472,8 @@ pub async fn pull(
         .unwrap_or(state.config.limits.pull_batch_max)
         .clamp(1, state.config.limits.pull_batch_max);
 
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(state.config.limits.pull_long_poll_secs);
+    let deadline = tokio::time::Instant::now()
+        + std::time::Duration::from_secs(state.config.limits.pull_long_poll_secs);
     loop {
         match state.store.pull(fingerprint.as_str(), batch) {
             Ok(records) if !records.is_empty() => return ok(200, &pull_response(records)),
@@ -429,14 +519,30 @@ mod tests {
     }
 
     fn config_authorized_keys(mode: ConfigMode) -> Option<auth::AuthorizedKeys> {
-        matches!(mode, ConfigMode::SelfHost).then(|| auth::AuthorizedKeys::new("/nonexistent".into()))
+        matches!(mode, ConfigMode::SelfHost)
+            .then(|| auth::AuthorizedKeys::new("/nonexistent".into()))
     }
 
-    fn signed_headers(signing: &SigningKey, method: &str, path_and_query: &str, body: &[u8]) -> HashMap<String, String> {
-        let req = adi_relay::sign::sign(signing, method, path_and_query, now_secs(), &adi_relay::sign::generate_nonce(), body);
+    fn signed_headers(
+        signing: &SigningKey,
+        method: &str,
+        path_and_query: &str,
+        body: &[u8],
+    ) -> HashMap<String, String> {
+        let req = adi_relay::sign::sign(
+            signing,
+            method,
+            path_and_query,
+            now_secs(),
+            &adi_relay::sign::generate_nonce(),
+            body,
+        );
         HashMap::from([
             (adi_relay::sign::HEADER_KEY.to_string(), req.key_line),
-            (adi_relay::sign::HEADER_TIMESTAMP.to_string(), req.timestamp.to_string()),
+            (
+                adi_relay::sign::HEADER_TIMESTAMP.to_string(),
+                req.timestamp.to_string(),
+            ),
             (adi_relay::sign::HEADER_NONCE.to_string(), req.nonce),
             (adi_relay::sign::HEADER_SIGNATURE.to_string(), req.signature),
         ])
@@ -482,7 +588,13 @@ mod tests {
         let delete_headers = signed_headers(&signing, "DELETE", &path, b"");
         let deleted = delete(&state, &delete_headers, &path, &id, "203.0.113.1");
         assert_eq!(deleted.status, 204);
-        let again = delete(&state, &signed_headers(&signing, "DELETE", &path, b""), &path, &id, "203.0.113.1");
+        let again = delete(
+            &state,
+            &signed_headers(&signing, "DELETE", &path, b""),
+            &path,
+            &id,
+            "203.0.113.1",
+        );
         assert_eq!(again.status, 404);
     }
 
@@ -509,7 +621,9 @@ mod tests {
 
         let pulled = state.store.pull("fp1", 10).expect("pull");
         assert_eq!(pulled.len(), 1);
-        let opened = adi_relay::seal::open(&sealing_secret, "wh_test", pulled[0].id, &pulled[0].sealed).expect("open");
+        let opened =
+            adi_relay::seal::open(&sealing_secret, "wh_test", pulled[0].id, &pulled[0].sealed)
+                .expect("open");
         let record: serde_json::Value = serde_json::from_slice(&opened).unwrap();
         assert_eq!(record["method"], "POST");
         assert_eq!(record["headers"]["x-hub-signature-256"], "sha256=abc");
@@ -518,7 +632,10 @@ mod tests {
             .unwrap();
         assert_eq!(body, b"{\"a\":1}");
 
-        assert!(state.store.pull("fp1", 10).unwrap().is_empty(), "delete-at-handout");
+        assert!(
+            state.store.pull("fp1", 10).unwrap().is_empty(),
+            "delete-at-handout"
+        );
     }
 
     #[test]
@@ -552,7 +669,11 @@ mod tests {
         let signing = SigningKey::from_bytes(&[8u8; 32]);
         let dir = tempfile::tempdir().unwrap();
         let keys_path = dir.path().join("authorized_keys");
-        std::fs::write(&keys_path, adi_relay::openssh::encode(&signing.verifying_key())).unwrap();
+        std::fs::write(
+            &keys_path,
+            adi_relay::openssh::encode(&signing.verifying_key()),
+        )
+        .unwrap();
 
         // SAFETY: test-only, and this name is unique to this test.
         unsafe { std::env::set_var("ADI_RELAY_ROUTES_TEST_SECRET", "s3cr3t") };
@@ -599,10 +720,19 @@ mod tests {
     async fn a_bad_signature_is_refused_before_anything_else() {
         let state = state(ConfigMode::Public);
         let mut headers = HashMap::new();
-        headers.insert(adi_relay::sign::HEADER_KEY.to_string(), "not a key line".to_string());
-        headers.insert(adi_relay::sign::HEADER_TIMESTAMP.to_string(), now_secs().to_string());
+        headers.insert(
+            adi_relay::sign::HEADER_KEY.to_string(),
+            "not a key line".to_string(),
+        );
+        headers.insert(
+            adi_relay::sign::HEADER_TIMESTAMP.to_string(),
+            now_secs().to_string(),
+        );
         headers.insert(adi_relay::sign::HEADER_NONCE.to_string(), "n".to_string());
-        headers.insert(adi_relay::sign::HEADER_SIGNATURE.to_string(), "bad".to_string());
+        headers.insert(
+            adi_relay::sign::HEADER_SIGNATURE.to_string(),
+            "bad".to_string(),
+        );
         let resp = register(&state, &headers, "/v1/endpoints", b"{}", "1.2.3.4").await;
         assert_eq!(resp.status, 401);
         let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
@@ -634,7 +764,13 @@ mod tests {
         let headers = signed_headers(&signing, "GET", "/v1/pull?batch=10", b"");
         let resp = tokio::time::timeout(
             std::time::Duration::from_secs(1),
-            pull(&state, &headers, "/v1/pull?batch=10", Some("10"), "203.0.113.1"),
+            pull(
+                &state,
+                &headers,
+                "/v1/pull?batch=10",
+                Some("10"),
+                "203.0.113.1",
+            ),
         )
         .await
         .expect("must not block when a record is already queued");
@@ -653,8 +789,8 @@ mod tests {
             std::time::Duration::from_secs(2),
             pull(&state, &headers, "/v1/pull", None, "203.0.113.1"),
         )
-            .await
-            .expect("must not hang");
+        .await
+        .expect("must not hang");
         assert_eq!(resp.status, 200);
         let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
         assert!(v["records"].as_array().unwrap().is_empty());
@@ -680,7 +816,10 @@ mod tests {
 
         let headers = signed_headers(&signing, "GET", "/v1/pull", b"");
         let state2 = std::sync::Arc::clone(&state);
-        let handle = tokio::spawn(async move { pull(&state2, &headers, "/v1/pull", None, "203.0.113.1").await });
+        let handle =
+            tokio::spawn(
+                async move { pull(&state2, &headers, "/v1/pull", None, "203.0.113.1").await },
+            );
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         state

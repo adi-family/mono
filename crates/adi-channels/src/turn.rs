@@ -157,7 +157,12 @@ fn post(watch: &Watch, answer: Option<&str>) {
     let Some(text) = answer.filter(|t| !t.trim().is_empty()) else {
         return;
     };
-    if let Err(e) = router.send(&watch.node_token, &watch.connection, Some(&watch.thread), text) {
+    if let Err(e) = router.send(
+        &watch.node_token,
+        &watch.connection,
+        Some(&watch.thread),
+        text,
+    ) {
         warn!(connection = %watch.connection, error = %e, "couldn't post a channel turn's answer back");
     }
 }
@@ -177,9 +182,15 @@ mod tests {
     #[test]
     fn a_turn_with_no_answer_yet_is_waited_on() {
         let turns = [turn("user", "hi", 10)];
-        assert_eq!(step(Some(RunLifecycle::Running), &turns, 5, "hi"), Step::Wait);
+        assert_eq!(
+            step(Some(RunLifecycle::Running), &turns, 5, "hi"),
+            Step::Wait
+        );
         // Stopped but nothing said yet still waits — the grace period in `run` decides when to quit.
-        assert_eq!(step(Some(RunLifecycle::Finished), &turns, 5, "hi"), Step::Wait);
+        assert_eq!(
+            step(Some(RunLifecycle::Finished), &turns, 5, "hi"),
+            Step::Wait
+        );
     }
 
     /// The bug the first live test of this watcher hit: "afafa" then "afa" a second apart, two
@@ -211,14 +222,26 @@ mod tests {
     /// assistant turn newer than its dispatch (the first message's answer) already exists.
     #[test]
     fn a_queued_message_does_not_take_the_answer_of_the_turn_ahead_of_it() {
-        let turns = [turn("user", "one", 100), turn("assistant", "you said one", 300)];
-        assert_eq!(step(Some(RunLifecycle::Waiting), &turns, 200, "two"), Step::Wait);
+        let turns = [
+            turn("user", "one", 100),
+            turn("assistant", "you said one", 300),
+        ];
+        assert_eq!(
+            step(Some(RunLifecycle::Waiting), &turns, 200, "two"),
+            Step::Wait
+        );
     }
 
     #[test]
     fn an_answer_from_before_dispatch_is_not_this_messages_answer() {
-        let turns = [turn("user", "first", 1), turn("assistant", "first answer", 2)];
-        assert_eq!(step(Some(RunLifecycle::Finished), &turns, 20, "second"), Step::Wait);
+        let turns = [
+            turn("user", "first", 1),
+            turn("assistant", "first answer", 2),
+        ];
+        assert_eq!(
+            step(Some(RunLifecycle::Finished), &turns, 20, "second"),
+            Step::Wait
+        );
     }
 
     #[test]
@@ -226,7 +249,10 @@ mod tests {
         let mut streaming = turn("assistant", "half a sent", 30);
         streaming.pending = true;
         let turns = [turn("user", "hi", 25), streaming];
-        assert_eq!(step(Some(RunLifecycle::Running), &turns, 20, "hi"), Step::Wait);
+        assert_eq!(
+            step(Some(RunLifecycle::Running), &turns, 20, "hi"),
+            Step::Wait
+        );
     }
 
     /// A queue that merged two messages into one turn: neither text matches the merged user turn
@@ -234,7 +260,10 @@ mod tests {
     /// it posts, so the chat gets one reply for one turn rather than two copies.
     #[test]
     fn a_merged_turn_is_answered_once() {
-        let turns = [turn("user", "one\n\ntwo", 500), turn("assistant", "you said both", 600)];
+        let turns = [
+            turn("user", "one\n\ntwo", 500),
+            turn("assistant", "you said both", 600),
+        ];
         let first = step(Some(RunLifecycle::Finished), &turns, 400, "one");
         let second = step(Some(RunLifecycle::Finished), &turns, 450, "two");
         assert_eq!(first, done("you said both", 600));

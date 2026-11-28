@@ -279,7 +279,11 @@ impl Graph {
             // "drawn under it" rather than "under it" whenever the machine's own picture is a
             // sample: this is a count of cards on the canvas, and saying it flat would claim the
             // page had looked at conversations it never drew.
-            let how = if self.sampled { "drawn under it" } else { "under it" };
+            let how = if self.sampled {
+                "drawn under it"
+            } else {
+                "under it"
+            };
             return format!("{} \u{b7} {under} {how}", root.label);
         }
         let agents = plural(self.agents, "agent", "agents");
@@ -352,7 +356,11 @@ pub(crate) fn build(agents: &[AgentDto], chats: &AllAgentRuns, focus: Option<&st
         .iter()
         .map(|e| {
             let mut tally: HashMap<&str, usize> = HashMap::new();
-            for r in e.runs.iter().filter(|r| !r.launched_by.starts_with(AGENT_PREFIX)) {
+            for r in e
+                .runs
+                .iter()
+                .filter(|r| !r.launched_by.starts_with(AGENT_PREFIX))
+            {
                 *tally.entry(r.launched_by.as_str()).or_default() += 1;
             }
             let best = tally
@@ -1082,8 +1090,16 @@ mod tests {
         ] {
             assert_eq!(node(&g, id).layer, layer, "{id} is in the wrong column");
         }
-        assert!(g.nodes.iter().all(|n| n.kind != Kind::Origin || n.agent.is_empty()));
-        assert_eq!(node(&g, "chat:two/r2").agent, "two", "the card does not name its agent");
+        assert!(
+            g.nodes
+                .iter()
+                .all(|n| n.kind != Kind::Origin || n.agent.is_empty())
+        );
+        assert_eq!(
+            node(&g, "chat:two/r2").agent,
+            "two",
+            "the card does not name its agent"
+        );
         assert!(joined(&g, "origin:human", "chat:one/r1"));
         assert!(joined(&g, "chat:one/r1", "chat:two/r2"));
         assert!(joined(&g, "chat:two/r2", "chat:three/r3"));
@@ -1119,7 +1135,10 @@ mod tests {
             "a named launch must not draw a second origin pill"
         );
         node(&g, "origin:human");
-        assert_eq!(node(&g, "chat:one/r1").meta, "Chat of one · global · started by igor · finished");
+        assert_eq!(
+            node(&g, "chat:one/r1").meta,
+            "Chat of one · global · started by igor · finished"
+        );
     }
 
     /// Two branches, which is the shape a chain cannot show: a person opens two conversations, and
@@ -1278,8 +1297,16 @@ mod tests {
         let (agents, all) = chain();
         let g = build(&agents, &all, None);
         let (x0, y0, x1, y1) = g.extent;
-        assert!(x0.midpoint(x1).abs() < 1e-9, "x is centred on {}", x0.midpoint(x1));
-        assert!(y0.midpoint(y1).abs() < 1e-9, "y is centred on {}", y0.midpoint(y1));
+        assert!(
+            x0.midpoint(x1).abs() < 1e-9,
+            "x is centred on {}",
+            x0.midpoint(x1)
+        );
+        assert!(
+            y0.midpoint(y1).abs() < 1e-9,
+            "y is centred on {}",
+            y0.midpoint(y1)
+        );
     }
 
     /// An agent that has never run has no conversation, and a conversation is the only thing this
@@ -1306,7 +1333,10 @@ mod tests {
         let g = build(&[], &all, None);
         let card = node(&g, "chat:gone/r1");
         assert_eq!(card.agent, "gone");
-        assert_eq!(card.meta, "Chat of gone · no longer defined · started by you · finished");
+        assert_eq!(
+            card.meta,
+            "Chat of gone · no longer defined · started by you · finished"
+        );
     }
 
     /// Only the newest few of an agent's conversations are drawn, and the page is told what it is

@@ -109,7 +109,9 @@ impl Readiness {
                     Some(entry) => {
                         let signal = Signal::of(tasks, store, events, run);
                         signal.fingerprint != entry.fingerprint
-                            || signal.deadline_ms.is_some_and(|deadline| now_ms >= deadline)
+                            || signal
+                                .deadline_ms
+                                .is_some_and(|deadline| now_ms >= deadline)
                             || now.duration_since(entry.last_attempt) >= self.safety_interval
                     }
                 }
@@ -147,7 +149,9 @@ impl Readiness {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Entry>> {
-        self.entries.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
@@ -168,8 +172,9 @@ impl Signal {
         // A read failure here (store unreachable, mid-migration, …) must never silently wedge a
         // run — folding in an empty signature just means this sweep compares against "no tasks",
         // which is wrong at most in the direction of "attempt it", never "skip it forever".
-        for (id, status, result, give_up_reason) in
-            tasks.workflow_run_signature(&run.run_key).unwrap_or_default()
+        for (id, status, result, give_up_reason) in tasks
+            .workflow_run_signature(&run.run_key)
+            .unwrap_or_default()
         {
             id.hash(&mut hasher);
             status.as_str().hash(&mut hasher);
@@ -189,9 +194,14 @@ impl Signal {
             if state.get("since_seq").is_some() {
                 waiting_on_events = true;
             }
-            deadline_ms = min_deadline(deadline_ms, state.get("until_ms").and_then(serde_json::Value::as_u64));
+            deadline_ms = min_deadline(
+                deadline_ms,
+                state.get("until_ms").and_then(serde_json::Value::as_u64),
+            );
             let task_deadline = match (
-                state.get("started_at_ms").and_then(serde_json::Value::as_u64),
+                state
+                    .get("started_at_ms")
+                    .and_then(serde_json::Value::as_u64),
                 state.get("timeout_ms").and_then(serde_json::Value::as_u64),
             ) {
                 (Some(started), Some(timeout)) => Some(started.saturating_add(timeout)),
@@ -257,7 +267,9 @@ mod tests {
 
         let readiness = Readiness::new();
         assert!(
-            readiness.due(&tasks, &store, &events, std::slice::from_ref(&run)).is_empty(),
+            readiness
+                .due(&tasks, &store, &events, std::slice::from_ref(&run))
+                .is_empty(),
             "a never-cached run must still respect an unexpired backoff deadline"
         );
 

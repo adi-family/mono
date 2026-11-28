@@ -2,7 +2,14 @@ import { useEffect, useId, useRef, useState } from "react";
 import { ArrowLeft, ExternalLink, LoaderCircle, RefreshCw, Square } from "lucide-react";
 import { Controller, useForm } from "react-hook-form";
 import { Link } from "react-router-dom";
-import { Button, ChatComposer, ChatQueue, ChatQueuedMessage, ChatThread, ChatWaitingStatus } from "@design-system/ui";
+import {
+  Button,
+  ChatComposer,
+  ChatQueue,
+  ChatQueuedMessage,
+  ChatThread,
+  ChatWaitingStatus,
+} from "@design-system/ui";
 
 import { ChatMicrophone } from "../components/ChatMicrophone";
 import { NewChatSetup } from "../components/NewChatSetup";
@@ -21,46 +28,76 @@ type PendingQuestionValues = {
   answers: { selected: string[]; text: string }[];
 };
 
-function PendingQuestion({ ask, onAnswer }: {
+function PendingQuestion({
+  ask,
+  onAnswer,
+}: {
   ask: AgentAsk;
   onAnswer: (id: string, replies: string[]) => Promise<void>;
 }) {
   const id = useId();
   const {
-    control, register, handleSubmit, watch, setError, clearErrors,
+    control,
+    register,
+    handleSubmit,
+    watch,
+    setError,
+    clearErrors,
     formState: { isSubmitting: sending, errors },
   } = useForm<PendingQuestionValues>({
     defaultValues: { answers: ask.questions.map(() => ({ selected: [], text: "" })) },
   });
   const inFlight = useRef(false);
   const answers = watch("answers");
-  const replies = answers.map(({ selected, text }) => [...selected, text.trim()].filter(Boolean).join(", "));
+  const replies = answers.map(({ selected, text }) =>
+    [...selected, text.trim()].filter(Boolean).join(", "),
+  );
   const hasAnswer = replies.some((reply) => reply.length > 0);
   const error = errors.root?.message ?? null;
 
   const submit = handleSubmit(async (values) => {
-    const nextReplies = values.answers.map(({ selected, text }) => [...selected, text.trim()].filter(Boolean).join(", "));
+    const nextReplies = values.answers.map(({ selected, text }) =>
+      [...selected, text.trim()].filter(Boolean).join(", "),
+    );
     if (!nextReplies.some((reply) => reply.length > 0) || inFlight.current) return;
     inFlight.current = true;
     clearErrors("root");
     try {
       await onAnswer(ask.id, nextReplies);
     } catch (cause) {
-      setError("root", { type: "server", message: cause instanceof Error ? cause.message : "Your answer could not be sent. Try again." });
+      setError("root", {
+        type: "server",
+        message:
+          cause instanceof Error ? cause.message : "Your answer could not be sent. Try again.",
+      });
     } finally {
       inFlight.current = false;
     }
   });
 
   return (
-    <form data-slot="app-chat-question" className="min-w-0 space-y-4 rounded-xl border p-4" aria-label={ask.headline || "Agent question"} aria-busy={sending || undefined} onSubmit={submit}>
+    <form
+      data-slot="app-chat-question"
+      className="min-w-0 space-y-4 rounded-xl border p-4"
+      aria-label={ask.headline || "Agent question"}
+      aria-busy={sending || undefined}
+      onSubmit={submit}
+    >
       {ask.headline && <p className="text-sm font-medium">{ask.headline}</p>}
-      {ask.note && <p className="text-muted-foreground text-sm whitespace-pre-wrap wrap-anywhere">{ask.note}</p>}
-      <p className="text-muted-foreground text-xs">Answer any questions you like. Choose an option, write your own answer, or combine both.</p>
+      {ask.note && (
+        <p className="text-muted-foreground text-sm whitespace-pre-wrap wrap-anywhere">
+          {ask.note}
+        </p>
+      )}
+      <p className="text-muted-foreground text-xs">
+        Answer any questions you like. Choose an option, write your own answer, or combine both.
+      </p>
       {ask.questions.map((question, index) => (
         <fieldset key={index} className="min-w-0 space-y-2" disabled={sending}>
           <legend className="mb-2 text-sm font-medium">
-            {question.header && <span className="text-muted-foreground mr-2 text-xs">{question.header}</span>}
+            {question.header && (
+              <span className="text-muted-foreground mr-2 text-xs">{question.header}</span>
+            )}
             {question.question || "Your answer"}
           </legend>
           <Controller
@@ -69,7 +106,10 @@ function PendingQuestion({ ask, onAnswer }: {
             render={({ field }) => (
               <>
                 {question.options.map((option) => (
-                  <label key={option.label} className="flex cursor-pointer items-start gap-2 rounded-md px-1 py-1 text-sm">
+                  <label
+                    key={option.label}
+                    className="flex cursor-pointer items-start gap-2 rounded-md px-1 py-1 text-sm"
+                  >
                     <input
                       className="accent-primary mt-1 shrink-0"
                       type={question.multi_select ? "checkbox" : "radio"}
@@ -80,15 +120,25 @@ function PendingQuestion({ ask, onAnswer }: {
                         }
                       }}
                       checked={field.value.includes(option.label)}
-                      onChange={(event) => field.onChange(
-                        question.multi_select
-                          ? event.target.checked ? [...field.value, option.label] : field.value.filter((label) => label !== option.label)
-                          : event.target.checked ? [option.label] : [],
-                      )}
+                      onChange={(event) =>
+                        field.onChange(
+                          question.multi_select
+                            ? event.target.checked
+                              ? [...field.value, option.label]
+                              : field.value.filter((label) => label !== option.label)
+                            : event.target.checked
+                              ? [option.label]
+                              : [],
+                        )
+                      }
                     />
                     <span className="min-w-0 wrap-anywhere">
                       <span>{option.label}</span>
-                      {option.description && <span className="text-muted-foreground mt-0.5 block text-xs leading-relaxed">{option.description}</span>}
+                      {option.description && (
+                        <span className="text-muted-foreground mt-0.5 block text-xs leading-relaxed">
+                          {option.description}
+                        </span>
+                      )}
                     </span>
                   </label>
                 ))}
@@ -96,7 +146,9 @@ function PendingQuestion({ ask, onAnswer }: {
             )}
           />
           <label className="block space-y-1.5 text-xs" htmlFor={`${id}-${index}-reply`}>
-            <span className="text-muted-foreground">{question.options.length ? "Your answer or additional details" : "Your answer"}</span>
+            <span className="text-muted-foreground">
+              {question.options.length ? "Your answer or additional details" : "Your answer"}
+            </span>
             <textarea
               data-slot="app-chat-answer-input"
               id={`${id}-${index}-reply`}
@@ -107,9 +159,23 @@ function PendingQuestion({ ask, onAnswer }: {
           </label>
         </fieldset>
       ))}
-      {error && <p role="alert" className="text-destructive text-sm">{error}</p>}
-      <Button data-slot="app-chat-answer-submit" type="submit" size="sm" disabled={sending || !hasAnswer} disabledReason={sending ? "Your answer is being sent." : "Answer at least one question before sending."}>
-        {sending && <LoaderCircle className="size-3.5 motion-safe:animate-spin" aria-hidden="true" />}
+      {error && (
+        <p role="alert" className="text-destructive text-sm">
+          {error}
+        </p>
+      )}
+      <Button
+        data-slot="app-chat-answer-submit"
+        type="submit"
+        size="sm"
+        disabled={sending || !hasAnswer}
+        disabledReason={
+          sending ? "Your answer is being sent." : "Answer at least one question before sending."
+        }
+      >
+        {sending && (
+          <LoaderCircle className="size-3.5 motion-safe:animate-spin" aria-hidden="true" />
+        )}
         Send answer
       </Button>
     </form>
@@ -117,13 +183,38 @@ function PendingQuestion({ ask, onAnswer }: {
 }
 
 export function Interface() {
-  const { agents, active, agent, selectionKey, activeSource, openConversation } = useChatSelection();
+  const { agents, active, agent, selectionKey, activeSource, openConversation } =
+    useChatSelection();
   const {
-    snapshot, isLoadingConversation, conversationError, actionError, isStopping, refresh, stopResponse, submitAnswer, loadEarlier, isLoadingEarlier,
-    cancelQueued, isCancellingQueued, cancelWaiting, cancellingWaits, isRewinding,
+    snapshot,
+    isLoadingConversation,
+    conversationError,
+    actionError,
+    isStopping,
+    refresh,
+    stopResponse,
+    submitAnswer,
+    loadEarlier,
+    isLoadingEarlier,
+    cancelQueued,
+    isCancellingQueued,
+    cancelWaiting,
+    cancellingWaits,
+    isRewinding,
   } = useChatThread();
   const { conversations, isLoading, renameChat, starChat } = useChatList();
-  const { draft, setDraft, appendDraft, images, addImages, removeImage, imageError, sendMessage, editMessage, openingRecent } = useChatComposer();
+  const {
+    draft,
+    setDraft,
+    appendDraft,
+    images,
+    addImages,
+    removeImage,
+    imageError,
+    sendMessage,
+    editMessage,
+    openingRecent,
+  } = useChatComposer();
   const composerArea = useRef<HTMLDivElement>(null);
   const [voiceBusy, setVoiceBusy] = useState(false);
   const selected = agents.find((item) => item.name === agent);
@@ -133,17 +224,29 @@ export function Interface() {
   const ask = snapshot?.pending_question;
   const queued = snapshot ? queuedTurns(snapshot) : [];
   const loading = active ? isLoadingConversation && !snapshot : isLoading && !agents.length;
-  const disabledReason = !agent ? "Choose an agent to start a chat."
-    : loading ? "The chat is loading."
-      : active && !snapshot ? "Load this conversation before sending a message."
-        : active && snapshot?.answerable === false ? "This conversation does not accept replies."
-          : !active && selected?.caps?.answerable === false ? "Choose an agent that accepts chat messages."
-          : !active && (!selected || selected.runnable === false) ? "This agent cannot start a new chat."
-            : ask ? "Answer the agent’s question to continue." : "";
+  const disabledReason = !agent
+    ? "Choose an agent to start a chat."
+    : loading
+      ? "The chat is loading."
+      : active && !snapshot
+        ? "Load this conversation before sending a message."
+        : active && snapshot?.answerable === false
+          ? "This conversation does not accept replies."
+          : !active && selected?.caps?.answerable === false
+            ? "Choose an agent that accepts chat messages."
+            : !active && (!selected || selected.runnable === false)
+              ? "This agent cannot start a new chat."
+              : ask
+                ? "Answer the agent’s question to continue."
+                : "";
 
-  useEffect(() => { if (!openingRecent) document.title = `${title} — ADI`; }, [title, openingRecent]);
+  useEffect(() => {
+    if (!openingRecent) document.title = `${title} — ADI`;
+  }, [title, openingRecent]);
 
-  function retry() { void refresh().catch(() => {}); }
+  function retry() {
+    void refresh().catch(() => {});
+  }
 
   async function edit(turn: AgentTurn) {
     if (!(await editMessage(turn))) return;
@@ -153,84 +256,205 @@ export function Interface() {
   }
 
   // The newest conversation is on its way in: an empty pane, not a new-chat screen that would flash.
-  if (openingRecent) return <main data-slot="app-chat" data-opening="true" aria-label="ADI chat" aria-busy="true" className="flex h-full min-h-0 min-w-0 flex-1 flex-col" />;
+  if (openingRecent)
+    return (
+      <main
+        data-slot="app-chat"
+        data-opening="true"
+        aria-label="ADI chat"
+        aria-busy="true"
+        className="flex h-full min-h-0 min-w-0 flex-1 flex-col"
+      />
+    );
 
   return (
-    <main data-slot="app-chat" aria-label="ADI chat" className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
+    <main
+      data-slot="app-chat"
+      aria-label="ADI chat"
+      className="flex h-full min-h-0 min-w-0 flex-1 flex-col"
+    >
       <header className="flex min-w-0 shrink-0 items-center justify-between gap-3 border-b px-3 py-2 sm:px-4">
         <Button asChild variant="ghost" size="icon" className="shrink-0 md:hidden">
-          <Link to="/interface" aria-label="Back to chats"><ArrowLeft aria-hidden="true" className="size-5" /></Link>
+          <Link to="/interface" aria-label="Back to chats">
+            <ArrowLeft aria-hidden="true" className="size-5" />
+          </Link>
         </Button>
         <div className="min-w-0 flex-1">
-          <ChatTitle key={selectionKey} title={title} conversation={active} onRename={renameChat} starred={conversation?.starred === true} onStar={starChat} />
-          {active && <p className="text-muted-foreground mt-0.5 truncate text-xs">{active.agent}{active.source ? ` · ${active.source}` : ""}</p>}
-
+          <ChatTitle
+            key={selectionKey}
+            title={title}
+            conversation={active}
+            onRename={renameChat}
+            starred={conversation?.starred === true}
+            onStar={starChat}
+          />
+          {active && (
+            <p className="text-muted-foreground mt-0.5 truncate text-xs">
+              {active.agent}
+              {active.source ? ` · ${active.source}` : ""}
+            </p>
+          )}
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          {running && <Button type="button" size="icon" variant="ghost" aria-label="Stop response" disabled={isStopping} disabledReason="The response is being stopped." onClick={() => { void stopResponse(); }}>
-            {isStopping ? <LoaderCircle className="size-3.5 motion-safe:animate-spin" aria-hidden="true" /> : <Square className="size-3 fill-current" aria-hidden="true" />}
-          </Button>}
-          <Button type="button" size="icon" variant="ghost" aria-label="Refresh chat" disabled={isLoading} disabledReason="The chat is loading." onClick={retry}>
-            <RefreshCw className={`size-3.5${isLoading ? " motion-safe:animate-spin" : ""}`} aria-hidden="true" />
+          {running && (
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              aria-label="Stop response"
+              disabled={isStopping}
+              disabledReason="The response is being stopped."
+              onClick={() => {
+                void stopResponse();
+              }}
+            >
+              {isStopping ? (
+                <LoaderCircle className="size-3.5 motion-safe:animate-spin" aria-hidden="true" />
+              ) : (
+                <Square className="size-3 fill-current" aria-hidden="true" />
+              )}
+            </Button>
+          )}
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            aria-label="Refresh chat"
+            disabled={isLoading}
+            disabledReason="The chat is loading."
+            onClick={retry}
+          >
+            <RefreshCw
+              className={`size-3.5${isLoading ? " motion-safe:animate-spin" : ""}`}
+              aria-hidden="true"
+            />
           </Button>
-          {active && <Button asChild size="icon" variant="ghost" className="hidden md:inline-flex">
-            <a href={appConversationHref(active)} target="_blank" rel="noreferrer" aria-label="Open in ADI">
-              <ExternalLink className="size-3.5" aria-hidden="true" />
-            </a>
-          </Button>}
+          {active && (
+            <Button asChild size="icon" variant="ghost" className="hidden md:inline-flex">
+              <a
+                href={appConversationHref(active)}
+                target="_blank"
+                rel="noreferrer"
+                aria-label="Open in ADI"
+              >
+                <ExternalLink className="size-3.5" aria-hidden="true" />
+              </a>
+            </Button>
+          )}
         </div>
       </header>
 
       {/* A refresh that fails over a loaded transcript goes to the event log; only a user's own action reports here. */}
-      {actionError && <p role="alert" className="text-destructive shrink-0 px-4 py-2 text-xs sm:px-5">{actionError}</p>}
+      {actionError && (
+        <p role="alert" className="text-destructive shrink-0 px-4 py-2 text-xs sm:px-5">
+          {actionError}
+        </p>
+      )}
 
-      {active && snapshot ? <ChatThread key={selectionKey} label="Chat messages" aria-live="off" contentClassName="mx-auto w-full max-w-4xl">
-        {snapshot.total_turns > snapshot.turns.length && <div key="earlier" className="flex justify-center">
-          <Button type="button" size="sm" variant="ghost" onClick={loadEarlier} disabled={isLoadingEarlier} disabledReason="Earlier messages are loading.">
-            {isLoadingEarlier ? "Loading earlier messages…" : "Load earlier messages"}
-          </Button>
-        </div>}
-        {appChatTranscriptEntries({
-          conversation: active, snapshot, conversations, onOpenConversation: openConversation,
-          onEditMessage: (turn) => { void edit(turn); },
-          editDisabledReason: isRewinding ? "The chat is being reset to an earlier message." : undefined,
-        })}
-        {ask && <PendingQuestion key={`${selectionKey}:${ask.id}`} ask={ask} onAnswer={submitAnswer} />}
-      </ChatThread> : <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 overflow-y-auto px-6 py-8 text-center">
-        {loading ? <p role="status" className="text-muted-foreground text-sm">{active ? "Loading conversation…" : "Loading agents…"}</p>
-          : active ? <>
-            {/* With no transcript to show, the failure is the content. */}
-            <p className="text-muted-foreground text-sm">This conversation could not be loaded.</p>
-            {conversationError && <p role="alert" className="text-destructive max-w-md text-xs wrap-anywhere">{conversationError}</p>}
-            <Button type="button" size="sm" variant="ghost" onClick={retry}>Retry</Button>
-          </>
-            : <NewChatSetup />}
-      </div>}
+      {active && snapshot ? (
+        <ChatThread
+          key={selectionKey}
+          label="Chat messages"
+          aria-live="off"
+          contentClassName="mx-auto w-full max-w-4xl"
+        >
+          {snapshot.total_turns > snapshot.turns.length && (
+            <div key="earlier" className="flex justify-center">
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={loadEarlier}
+                disabled={isLoadingEarlier}
+                disabledReason="Earlier messages are loading."
+              >
+                {isLoadingEarlier ? "Loading earlier messages…" : "Load earlier messages"}
+              </Button>
+            </div>
+          )}
+          {appChatTranscriptEntries({
+            conversation: active,
+            snapshot,
+            conversations,
+            onOpenConversation: openConversation,
+            onEditMessage: (turn) => {
+              void edit(turn);
+            },
+            editDisabledReason: isRewinding
+              ? "The chat is being reset to an earlier message."
+              : undefined,
+          })}
+          {ask && (
+            <PendingQuestion key={`${selectionKey}:${ask.id}`} ask={ask} onAnswer={submitAnswer} />
+          )}
+        </ChatThread>
+      ) : (
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 overflow-y-auto px-6 py-8 text-center">
+          {loading ? (
+            <p role="status" className="text-muted-foreground text-sm">
+              {active ? "Loading conversation…" : "Loading agents…"}
+            </p>
+          ) : active ? (
+            <>
+              {/* With no transcript to show, the failure is the content. */}
+              <p className="text-muted-foreground text-sm">
+                This conversation could not be loaded.
+              </p>
+              {conversationError && (
+                <p role="alert" className="text-destructive max-w-md text-xs wrap-anywhere">
+                  {conversationError}
+                </p>
+              )}
+              <Button type="button" size="sm" variant="ghost" onClick={retry}>
+                Retry
+              </Button>
+            </>
+          ) : (
+            <NewChatSetup />
+          )}
+        </div>
+      )}
 
-      <div ref={composerArea} className="mx-auto w-full max-w-4xl shrink-0 px-3 pb-3 pt-2 sm:px-4 sm:pb-4">
+      <div
+        ref={composerArea}
+        className="mx-auto w-full max-w-4xl shrink-0 px-3 pb-3 pt-2 sm:px-4 sm:pb-4"
+      >
         <ChatWaitingStatus
           className="mb-2"
           items={(snapshot?.awaits ?? []).map((item) => ({
             id: item.id,
-            label: item.note.trim() || item.summary.trim() || "Waiting for a background task to finish.",
+            label:
+              item.note.trim() || item.summary.trim() || "Waiting for a background task to finish.",
           }))}
-          onCancel={(id) => { void cancelWaiting(id); }}
+          onCancel={(id) => {
+            void cancelWaiting(id);
+          }}
           cancellingIds={cancellingWaits}
         />
         {/* Only a server that batches its queue is said to: an older one still asks one message per turn. */}
-        <ChatQueue count={queued.length} caption={snapshot?.caps.batches === true ? undefined : null} className="mb-2 max-h-52 overflow-y-auto">
-          {queued.map((turn, position) => <ChatQueuedMessage
-            key={`${selectionKey}:${turn.seq}`}
-            data-queued="true"
-            text={turn.text}
-            label={turn.mode === "asap" ? "Queued · ASAP" : "Queued"}
-            onCancel={() => cancelQueued(turn, position)}
-            cancelling={isCancellingQueued(turn)}
-          >
-            <AppChatAttachments turn={turn} source={activeSource} />
-          </ChatQueuedMessage>)}
+        <ChatQueue
+          count={queued.length}
+          caption={snapshot?.caps.batches === true ? undefined : null}
+          className="mb-2 max-h-52 overflow-y-auto"
+        >
+          {queued.map((turn, position) => (
+            <ChatQueuedMessage
+              key={`${selectionKey}:${turn.seq}`}
+              data-queued="true"
+              text={turn.text}
+              label={turn.mode === "asap" ? "Queued · ASAP" : "Queued"}
+              onCancel={() => cancelQueued(turn, position)}
+              cancelling={isCancellingQueued(turn)}
+            >
+              <AppChatAttachments turn={turn} source={activeSource} />
+            </ChatQueuedMessage>
+          ))}
         </ChatQueue>
-        {imageError && <p role="alert" className="text-destructive mb-2 text-xs">{imageError}</p>}
+        {imageError && (
+          <p role="alert" className="text-destructive mb-2 text-xs">
+            {imageError}
+          </p>
+        )}
         <ChatComposer
           key={selectionKey}
           value={draft}
@@ -241,11 +465,20 @@ export function Interface() {
           onFilesSelect={addImages}
           onAttachmentRemove={removeImage}
           disabled={Boolean(disabledReason) || voiceBusy}
-          disabledReason={voiceBusy ? "Finish dictation before sending your message." : disabledReason || "The chat is unavailable."}
+          disabledReason={
+            voiceBusy
+              ? "Finish dictation before sending your message."
+              : disabledReason || "The chat is unavailable."
+          }
           placeholder={running ? "Send a follow-up…" : "Write a message…"}
           sendLabel={running ? "Queue message" : "Send message"}
         >
-          <ChatMicrophone key={selectionKey} onText={appendDraft} disabledReason={disabledReason} onBusyChange={setVoiceBusy} />
+          <ChatMicrophone
+            key={selectionKey}
+            onText={appendDraft}
+            disabledReason={disabledReason}
+            onBusyChange={setVoiceBusy}
+          />
         </ChatComposer>
       </div>
     </main>

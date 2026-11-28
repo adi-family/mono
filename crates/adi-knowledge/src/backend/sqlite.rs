@@ -555,7 +555,9 @@ mod tests {
             .set_vectors("far", &state("h"), &[vec![0.2, 1.0]])
             .expect("vectors");
 
-        let hits = backend.search_vectors(&[1.0, 0.0], "m", 10).expect("search");
+        let hits = backend
+            .search_vectors(&[1.0, 0.0], "m", 10)
+            .expect("search");
         assert_eq!(hits.len(), 2, "one row per note, not per chunk");
         assert_eq!(hits[0].id, "near");
         assert_eq!(hits[0].chunk, 1, "reported at its best chunk");

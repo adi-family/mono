@@ -137,7 +137,8 @@ mod tests {
         }
         let assigned_id = settings.assignments[CONSUMER_FACTS].clone();
         let assigned = backends.get(&assigned_id).expect("get").expect("present");
-        let embedder = resolve(&config, CONSUMER_FACTS).expect("ollama builds without a network call");
+        let embedder =
+            resolve(&config, CONSUMER_FACTS).expect("ollama builds without a network call");
         assert_eq!(embedder.model_name(), assigned.manifest.model);
     }
 
@@ -157,6 +158,11 @@ mod tests {
         for consumer in [CONSUMER_INDEXER, CONSUMER_KNOWLEDGE, CONSUMER_FACTS] {
             assert!(settings.assignments.contains_key(consumer));
         }
-        assert!(!EmbeddingBackends::with_config(config).list().expect("list").is_empty());
+        assert!(
+            !EmbeddingBackends::with_config(config)
+                .list()
+                .expect("list")
+                .is_empty()
+        );
     }
 }

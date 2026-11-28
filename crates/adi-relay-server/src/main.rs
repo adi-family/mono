@@ -11,13 +11,21 @@ use tracing::{debug, info, warn};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
-    tracing_subscriber::fmt().with_env_filter(filter).with_target(false).init();
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(false)
+        .init();
     // Only needed in enterprise mode (the licence beam), but installing it unconditionally is
     // harmless and one line simpler than threading the mode through to decide.
-    rustls::crypto::ring::default_provider().install_default().ok();
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .ok();
 
-    let config_path = std::env::args().nth(1).unwrap_or_else(|| "relay.toml".to_string());
+    let config_path = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "relay.toml".to_string());
     let config = Config::load(std::path::Path::new(&config_path))?;
     info!(mode = %config.mode, bind = %config.bind, hostname = %config.hostname, "starting adi-relay-server");
 
@@ -51,7 +59,8 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn handle(mut stream: TcpStream, peer: SocketAddr, state: &AppState) -> anyhow::Result<()> {
-    let Some(req) = http::read_request(&mut stream, state.config.limits.max_body_bytes).await? else {
+    let Some(req) = http::read_request(&mut stream, state.config.limits.max_body_bytes).await?
+    else {
         return Ok(());
     };
     debug!(method = %req.method, path = %req.path, "request");
@@ -75,14 +84,23 @@ async fn dispatch(state: &AppState, req: &http::Request, remote_ip: String) -> R
         }
         ("GET", "/v1/endpoints") => routes::list(state, &req.headers, path_and_query, &remote_ip),
         ("GET", "/v1/pull") => {
-            routes::pull(state, &req.headers, path_and_query, req.query_param("batch"), &remote_ip).await
+            routes::pull(
+                state,
+                &req.headers,
+                path_and_query,
+                req.query_param("batch"),
+                &remote_ip,
+            )
+            .await
         }
         ("DELETE", p) if p.starts_with("/v1/endpoints/") => {
             let id = &p["/v1/endpoints/".len()..];
             routes::delete(state, &req.headers, path_and_query, id, &remote_ip)
         }
         // Any method is captured, including a provider's GET ping.
-        (m, p) if p.starts_with("/h/") && matches!(m, "POST" | "GET" | "PUT" | "PATCH" | "DELETE") => {
+        (m, p)
+            if p.starts_with("/h/") && matches!(m, "POST" | "GET" | "PUT" | "PATCH" | "DELETE") =>
+        {
             let id = &p["/h/".len()..];
             let query = req.path.split_once('?').map_or("", |(_, q)| q);
             routes::ingress(state, id, &req.method, query, &req.headers, &req.body)
@@ -113,7 +131,9 @@ mod tests {
         let addr = listener.local_addr().expect("addr");
         tokio::spawn(async move {
             loop {
-                let Ok((stream, peer)) = listener.accept().await else { return };
+                let Ok((stream, peer)) = listener.accept().await else {
+                    return;
+                };
                 let state = Arc::clone(&state);
                 tokio::spawn(async move {
                     let _ = handle(stream, peer, &state).await;
@@ -127,7 +147,10 @@ mod tests {
 
     async fn raw_request(addr: SocketAddr, head: &str, body: &[u8]) -> (u16, String) {
         let mut stream = TcpStream::connect(addr).await.expect("connect");
-        let full = format!("{head}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+        let full = format!(
+            "{head}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
         stream.write_all(full.as_bytes()).await.unwrap();
         stream.write_all(body).await.unwrap();
         let mut response = Vec::new();
@@ -199,7 +222,9 @@ mod tests {
         let sender_body = br#"{"event":"push"}"#;
         let (status, body) = raw_request(
             addr,
-            &format!("POST /h/{endpoint_id} HTTP/1.1\r\nHost: relay\r\nX-Hub-Signature-256: sha256=abc"),
+            &format!(
+                "POST /h/{endpoint_id} HTTP/1.1\r\nHost: relay\r\nX-Hub-Signature-256: sha256=abc"
+            ),
             sender_body,
         )
         .await;
@@ -208,7 +233,8 @@ mod tests {
         // 3. the node pulls, signed, and opens the sealed record.
         let pull_nonce = adi_relay::sign::generate_nonce();
         let pull_now = adi_relay_server::now_secs();
-        let pull_signed = adi_relay::sign::sign(&signing, "GET", "/v1/pull", pull_now, &pull_nonce, b"");
+        let pull_signed =
+            adi_relay::sign::sign(&signing, "GET", "/v1/pull", pull_now, &pull_nonce, b"");
         let head = format!(
             "GET /v1/pull HTTP/1.1\r\nHost: relay\r\n{}: {}\r\n{}: {}\r\n{}: {}\r\n{}: {}",
             adi_relay::sign::HEADER_KEY,
@@ -233,8 +259,11 @@ mod tests {
             records[0]["sealed"]["ciphertext"].as_str().unwrap(),
         )
         .expect("decodes");
-        let record_id = records[0]["id"].as_i64().expect("id rides the wire so the opener can rebuild the AAD");
-        let opened = adi_relay::seal::open(&sealing_secret, &endpoint_id, record_id, &sealed).expect("opens");
+        let record_id = records[0]["id"]
+            .as_i64()
+            .expect("id rides the wire so the opener can rebuild the AAD");
+        let opened = adi_relay::seal::open(&sealing_secret, &endpoint_id, record_id, &sealed)
+            .expect("opens");
         let record: serde_json::Value = serde_json::from_slice(&opened).unwrap();
         assert_eq!(record["method"], "POST");
         assert_eq!(record["headers"]["x-hub-signature-256"], "sha256=abc");

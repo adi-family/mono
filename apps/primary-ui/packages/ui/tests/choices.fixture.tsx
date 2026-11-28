@@ -48,7 +48,13 @@ function Fixture() {
     <main style={{ maxWidth: 520, padding: 24, display: "grid", gap: 16 }}>
       <h1>Choice control browser fixtures</h1>
       <label htmlFor="test-select">Native select</label>
-      <Select id="test-select" options={options} placeholder="Choose" value={native} onValueChange={setNative} />
+      <Select
+        id="test-select"
+        options={options}
+        placeholder="Choose"
+        value={native}
+        onValueChange={setNative}
+      />
       <output id="native-value">{native}</output>
       <label htmlFor="test-local">Local autocomplete</label>
       <Autocomplete id="test-local" options={options} value={single} onValueChange={setSingle} />
@@ -61,28 +67,91 @@ function Fixture() {
       <label htmlFor="test-async-multi">Remote multiple selection</label>
       <MultiSelect id="test-async-multi" loadOptions={loadOptions} debounceMs={20} />
       <label htmlFor="test-create">Create an option</label>
-      <Autocomplete id="test-create" options={options} creatable onCreate={createOption} value={created} onValueChange={setCreated} />
+      <Autocomplete
+        id="test-create"
+        options={options}
+        creatable
+        onCreate={createOption}
+        value={created}
+        onValueChange={setCreated}
+      />
       <output id="created-value">{JSON.stringify(created)}</output>
       <label htmlFor="test-async-create">Remote and creatable</label>
-      <Autocomplete id="test-async-create" loadOptions={loadOptions} debounceMs={20} creatable onCreate={createOption} />
+      <Autocomplete
+        id="test-async-create"
+        loadOptions={loadOptions}
+        debounceMs={20}
+        creatable
+        onCreate={createOption}
+      />
       <label htmlFor="test-default-create">Create without a handler</label>
       <MultiSelect id="test-default-create" options={options} creatable />
-      <MultiSelect id="test-locked" aria-label="Locked selection" options={options} defaultValue={[options[0], options[1]]} />
-      <MultiSelect id="test-refresh" aria-label="Refreshed options" options={refreshed ? [{ value: "Fresh", label: "Updated", disabled: true }] : []} creatable />
-      <button id="test-refresh-options" type="button" onClick={() => setRefreshed(true)}>Refresh options</button>
+      <MultiSelect
+        id="test-locked"
+        aria-label="Locked selection"
+        options={options}
+        defaultValue={[options[0], options[1]]}
+      />
+      <MultiSelect
+        id="test-refresh"
+        aria-label="Refreshed options"
+        options={refreshed ? [{ value: "Fresh", label: "Updated", disabled: true }] : []}
+        creatable
+      />
+      <button id="test-refresh-options" type="button" onClick={() => setRefreshed(true)}>
+        Refresh options
+      </button>
       <form id="test-required-form">
-        <Autocomplete id="test-required" aria-label="Required choice" required creatable onCreate={createOption} />
+        <Autocomplete
+          id="test-required"
+          aria-label="Required choice"
+          required
+          creatable
+          onCreate={createOption}
+        />
       </form>
       <Select id="test-disabled-select" aria-label="Disabled select" options={options} disabled />
-      <Autocomplete id="test-disabled-local" aria-label="Disabled autocomplete" options={options} disabled />
-      <MultiSelect id="test-disabled-multi" aria-label="Disabled multi select" options={options} disabled />
+      <Autocomplete
+        id="test-disabled-local"
+        aria-label="Disabled autocomplete"
+        options={options}
+        disabled
+      />
+      <MultiSelect
+        id="test-disabled-multi"
+        aria-label="Disabled multi select"
+        options={options}
+        disabled
+      />
       <form id="test-form">
-        <Select id="test-form-select" aria-label="Form select" name="native" options={options} defaultValue="alpha" />
-        <Autocomplete id="test-form-single" aria-label="Form autocomplete" name="single" options={options} defaultValue={options[0]} />
-        <MultiSelect id="test-form-multi" aria-label="Form multi select" name="many" options={options} defaultValue={[options[0]]} />
-        <button type="reset" id="test-reset">Reset</button>
+        <Select
+          id="test-form-select"
+          aria-label="Form select"
+          name="native"
+          options={options}
+          defaultValue="alpha"
+        />
+        <Autocomplete
+          id="test-form-single"
+          aria-label="Form autocomplete"
+          name="single"
+          options={options}
+          defaultValue={options[0]}
+        />
+        <MultiSelect
+          id="test-form-multi"
+          aria-label="Form multi select"
+          name="many"
+          options={options}
+          defaultValue={[options[0]]}
+        />
+        <button type="reset" id="test-reset">
+          Reset
+        </button>
       </form>
-      <button id="test-outside" type="button">Outside the controls</button>
+      <button id="test-outside" type="button">
+        Outside the controls
+      </button>
     </main>
   );
 }

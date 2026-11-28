@@ -41,13 +41,13 @@ export interface CallRun {
 
 export type TranscriptPart =
   | {
-    kind: "said";
-    role: "user" | "agent";
-    body?: string;
-    images?: Picture[];
-    from?: string | null;
-    by?: string | null;
-  }
+      kind: "said";
+      role: "user" | "agent";
+      body?: string;
+      images?: Picture[];
+      from?: string | null;
+      by?: string | null;
+    }
   | { kind: "did"; run: CallRun }
   | { kind: "note"; note: Note };
 
@@ -165,7 +165,6 @@ function createAttachment({ url, name, picture }: Picture): HTMLAnchorElement {
 }
 
 class AdiNote extends AdiElement {
-
   #note: Note | null = null;
 
   get note(): Note | null {
@@ -224,7 +223,6 @@ export function toolsLine(tools: string[]): string {
 }
 
 class AdiToolRun extends AdiElement {
-
   #run: CallRun | null = null;
   #open = false;
   #drawn: string | null = null;
@@ -352,13 +350,16 @@ function updateEntryNode(node: TranscriptNode, entry: TranscriptEntry): void {
   }
 }
 
-function setOptionalAttribute(node: HTMLElement, name: string, value: string | null | undefined): void {
+function setOptionalAttribute(
+  node: HTMLElement,
+  name: string,
+  value: string | null | undefined,
+): void {
   if (value) node.setAttribute(name, value);
   else node.removeAttribute(name);
 }
 
 class AdiTranscript extends AdiElement {
-
   #entries: TranscriptEntry[] = [];
   #kept = new Map<string, KeptEntry>();
 

@@ -134,7 +134,10 @@ impl ResolvedBackend {
     /// [`hold_key`](Self::hold_key) for `None`, which is every turn before phase 2.
     #[must_use]
     pub fn hold_key_for(&self, user: Option<&str>) -> HoldKey {
-        HoldKey::new(qualify_credential(&self.credential, user), self.model.clone())
+        HoldKey::new(
+            qualify_credential(&self.credential, user),
+            self.model.clone(),
+        )
     }
 
     /// The login-scoped counterpart of [`hold_key_for`](Self::hold_key_for), for an `auth` failure
@@ -162,7 +165,10 @@ impl ResolvedBackend {
             patched.manifest.arguments.remove(key);
         }
         for (key, value) in &self.arguments {
-            patched.manifest.arguments.insert(key.clone(), value.clone());
+            patched
+                .manifest
+                .arguments
+                .insert(key.clone(), value.clone());
         }
         patched
     }
@@ -234,33 +240,40 @@ impl ResolvedChain {
             // is what lets `only` name a group: every leaf that row expanded to, in its own order,
             // which is the group's own internal failover with nothing else from the agent's list
             // behind it.
-            let kept: Vec<ResolvedBackend> = if let Some(single) =
-                entries.iter().find(|entry| entry.backend == only)
-            {
-                vec![single.clone()]
-            } else if let Some(row_index) = rows.iter().position(|row| row.backend == only) {
-                entries
-                    .iter()
-                    .filter(|entry| entry.row == row_index + 1)
-                    .cloned()
-                    .collect()
-            } else {
-                return Err(Error::Arguments(format!(
-                    "`only` names `{only}`, which this agent does not list"
-                )));
-            };
-            return Ok(Self { entries: kept, missing });
+            let kept: Vec<ResolvedBackend> =
+                if let Some(single) = entries.iter().find(|entry| entry.backend == only) {
+                    vec![single.clone()]
+                } else if let Some(row_index) = rows.iter().position(|row| row.backend == only) {
+                    entries
+                        .iter()
+                        .filter(|entry| entry.row == row_index + 1)
+                        .cloned()
+                        .collect()
+                } else {
+                    return Err(Error::Arguments(format!(
+                        "`only` names `{only}`, which this agent does not list"
+                    )));
+                };
+            return Ok(Self {
+                entries: kept,
+                missing,
+            });
         }
 
         if let Some(start_at) = start_at {
             let at = match start_at {
-                StartAt::Id(id) => entries.iter().position(|entry| &entry.backend == id).or_else(|| {
-                    // Not a leaf directly — try the row it was *configured* under, which is how
-                    // `start_at` can name a group rather than one of its members by id.
-                    rows.iter()
-                        .position(|row| &row.backend == id)
-                        .and_then(|row_index| entries.iter().position(|entry| entry.row == row_index + 1))
-                }),
+                StartAt::Id(id) => entries
+                    .iter()
+                    .position(|entry| &entry.backend == id)
+                    .or_else(|| {
+                        // Not a leaf directly — try the row it was *configured* under, which is how
+                        // `start_at` can name a group rather than one of its members by id.
+                        rows.iter()
+                            .position(|row| &row.backend == id)
+                            .and_then(|row_index| {
+                                entries.iter().position(|entry| entry.row == row_index + 1)
+                            })
+                    }),
                 StartAt::Row(row) => entries.iter().position(|entry| entry.row == *row),
             }
             .ok_or_else(|| {
@@ -392,7 +405,9 @@ impl PinnedChain {
 
     #[must_use]
     pub fn position(&self, backend: &str) -> Option<usize> {
-        self.entries.iter().position(|entry| entry.backend == backend)
+        self.entries
+            .iter()
+            .position(|entry| entry.backend == backend)
     }
 
     /// The best row this conversation could move to: the earliest one in its own order that is
@@ -409,7 +424,10 @@ impl PinnedChain {
     /// so the caller can collect *why* each row was passed over as it goes — a "nowhere left to go"
     /// message that cannot name what it tried is one nobody can act on.
     #[must_use]
-    pub fn next_available(&self, mut unavailable: impl FnMut(&ResolvedBackend) -> bool) -> Option<usize> {
+    pub fn next_available(
+        &self,
+        mut unavailable: impl FnMut(&ResolvedBackend) -> bool,
+    ) -> Option<usize> {
         self.entries
             .iter()
             .enumerate()
@@ -597,7 +615,10 @@ mod tests {
 
     fn three() -> BTreeMap<String, LlmBackendManifest> {
         catalog_of(&[
-            ("anthropic", backend(Backend::HarnessClaudeSdk, "claude-opus-5", 200_000)),
+            (
+                "anthropic",
+                backend(Backend::HarnessClaudeSdk, "claude-opus-5", 200_000),
+            ),
             (
                 "codex",
                 LlmBackendManifest {
@@ -658,21 +679,17 @@ mod tests {
 
     #[test]
     fn start_at_rotates_and_keeps_everything_behind_it() {
-        let chain = ResolvedChain::resolve(
-            &rows(),
-            &three(),
-            Some(&StartAt::Id("glm".into())),
-            None,
-        )
-        .expect("resolve");
+        let chain =
+            ResolvedChain::resolve(&rows(), &three(), Some(&StartAt::Id("glm".into())), None)
+                .expect("resolve");
         let ids: Vec<&str> = chain.entries.iter().map(|e| e.backend.as_str()).collect();
         assert_eq!(ids, ["glm", "anthropic", "codex"]);
     }
 
     #[test]
     fn start_at_also_takes_a_one_based_row_number() {
-        let chain =
-            ResolvedChain::resolve(&rows(), &three(), Some(&StartAt::Row(2)), None).expect("resolve");
+        let chain = ResolvedChain::resolve(&rows(), &three(), Some(&StartAt::Row(2)), None)
+            .expect("resolve");
         let ids: Vec<&str> = chain.entries.iter().map(|e| e.backend.as_str()).collect();
         assert_eq!(ids, ["codex", "glm", "anthropic"]);
     }
@@ -698,13 +715,9 @@ mod tests {
 
     #[test]
     fn start_at_naming_something_unlisted_is_an_error() {
-        let err = ResolvedChain::resolve(
-            &rows(),
-            &three(),
-            Some(&StartAt::Id("nope".into())),
-            None,
-        )
-        .expect_err("refused");
+        let err =
+            ResolvedChain::resolve(&rows(), &three(), Some(&StartAt::Id("nope".into())), None)
+                .expect_err("refused");
         assert!(err.to_string().contains("does not list"), "{err}");
     }
 
@@ -747,8 +760,8 @@ mod tests {
         assert_eq!(chain.entries[0].credential, chain.entries[1].credential);
         assert_ne!(chain.entries[0].hold_key(), chain.entries[1].hold_key());
         // A bare id resolves to the first row using it; a row number picks the other.
-        let by_row = ResolvedChain::resolve(&rows, &three(), Some(&StartAt::Row(2)), None)
-            .expect("resolve");
+        let by_row =
+            ResolvedChain::resolve(&rows, &three(), Some(&StartAt::Row(2)), None).expect("resolve");
         assert_eq!(by_row.first().model, "claude-sonnet-5");
     }
 
@@ -758,9 +771,12 @@ mod tests {
     fn a_row_may_not_repoint_the_credential() {
         let rows = vec![AgentBackendEntry {
             backend: "anthropic".into(),
-            overrides: [("settings".to_string(), serde_json::json!("~/.claude/other.json"))]
-                .into_iter()
-                .collect(),
+            overrides: [(
+                "settings".to_string(),
+                serde_json::json!("~/.claude/other.json"),
+            )]
+            .into_iter()
+            .collect(),
         }];
         assert!(validate_rows(&rows).is_err());
 
@@ -791,8 +807,14 @@ mod tests {
 
         let run = chain.first().apply(&agent);
         assert_eq!(run.manifest.backend, Some(Backend::HarnessClaudeSdk));
-        assert_eq!(run.manifest.arguments["model"], serde_json::json!("claude-opus-5"));
-        assert_eq!(run.manifest.arguments["thinking"], serde_json::json!("high"));
+        assert_eq!(
+            run.manifest.arguments["model"],
+            serde_json::json!("claude-opus-5")
+        );
+        assert_eq!(
+            run.manifest.arguments["thinking"],
+            serde_json::json!("high")
+        );
         assert_eq!(
             run.manifest.arguments["system_prompt"],
             serde_json::json!("Be useful"),
@@ -812,14 +834,21 @@ mod tests {
                 ..Default::default()
             },
         )]);
-        let chain = ResolvedChain::resolve(&[AgentBackendEntry::new("codex")], &catalog, None, None)
-            .expect("resolve");
+        let chain =
+            ResolvedChain::resolve(&[AgentBackendEntry::new("codex")], &catalog, None, None)
+                .expect("resolve");
         let agent = Agent {
             name: "old".to_string(),
             manifest: AgentManifest {
                 arguments: [
-                    ("settings".to_string(), serde_json::json!("~/.claude/settings.glm.json")),
-                    ("base_url".to_string(), serde_json::json!("https://api.z.ai")),
+                    (
+                        "settings".to_string(),
+                        serde_json::json!("~/.claude/settings.glm.json"),
+                    ),
+                    (
+                        "base_url".to_string(),
+                        serde_json::json!("https://api.z.ai"),
+                    ),
                 ]
                 .into_iter()
                 .collect(),
@@ -829,7 +858,10 @@ mod tests {
         let run = chain.first().apply(&agent);
         assert!(!run.manifest.arguments.contains_key("settings"));
         assert!(!run.manifest.arguments.contains_key("base_url"));
-        assert_eq!(run.manifest.arguments["provider"], serde_json::json!("openai"));
+        assert_eq!(
+            run.manifest.arguments["provider"],
+            serde_json::json!("openai")
+        );
     }
 
     #[test]
@@ -843,7 +875,10 @@ mod tests {
 
     #[test]
     fn a_chain_that_only_grows_warns_about_nothing() {
-        let rows = vec![AgentBackendEntry::new("glm"), AgentBackendEntry::new("codex")];
+        let rows = vec![
+            AgentBackendEntry::new("glm"),
+            AgentBackendEntry::new("codex"),
+        ];
         let chain = ResolvedChain::resolve(&rows, &three(), None, None).expect("resolve");
         assert!(chain.context_shrink_warnings().is_empty());
     }
@@ -855,7 +890,10 @@ mod tests {
             ("big", backend(Backend::HarnessAdi, "m", 400_000)),
             ("unknown", backend(Backend::HarnessAdi, "m", 0)),
         ]);
-        let rows = vec![AgentBackendEntry::new("big"), AgentBackendEntry::new("unknown")];
+        let rows = vec![
+            AgentBackendEntry::new("big"),
+            AgentBackendEntry::new("unknown"),
+        ];
         let chain = ResolvedChain::resolve(&rows, &catalog, None, None).expect("resolve");
         assert!(chain.context_shrink_warnings().is_empty());
     }
@@ -868,7 +906,10 @@ mod tests {
             ("pty", backend(Backend::PtyClaude, "claude-opus-5", 200_000)),
             ("harness", backend(Backend::HarnessAdi, "glm-5.3", 128_000)),
         ]);
-        let rows = vec![AgentBackendEntry::new("pty"), AgentBackendEntry::new("harness")];
+        let rows = vec![
+            AgentBackendEntry::new("pty"),
+            AgentBackendEntry::new("harness"),
+        ];
         let chain = ResolvedChain::resolve(&rows, &catalog, None, None).expect("resolve");
         assert_eq!(chain.unreplayable(), vec!["pty".to_string()]);
     }
@@ -914,14 +955,18 @@ mod tests {
                 ..Default::default()
             },
         )]);
-        let chain = ResolvedChain::resolve(&[AgentBackendEntry::new("codex")], &catalog, None, None)
-            .expect("resolve");
+        let chain =
+            ResolvedChain::resolve(&[AgentBackendEntry::new("codex")], &catalog, None, None)
+                .expect("resolve");
         assert_eq!(chain.first().credential_env_name(), Some("OPENAI_API_KEY"));
     }
 
     #[test]
     fn qualify_credential_appends_the_user_only_when_given_one() {
-        assert_eq!(qualify_credential("runtime:harness:claude-sdk", None), "runtime:harness:claude-sdk");
+        assert_eq!(
+            qualify_credential("runtime:harness:claude-sdk", None),
+            "runtime:harness:claude-sdk"
+        );
         assert_eq!(
             qualify_credential("runtime:harness:claude-sdk", Some("u-aaa")),
             "runtime:harness:claude-sdk#user:u-aaa"
@@ -946,7 +991,10 @@ mod tests {
         assert_eq!(row.hold_key_for(None), row.hold_key());
         let qualified = row.hold_key_for(Some("u-aaa"));
         assert_eq!(qualified.model, row.model);
-        assert_eq!(qualified.credential, format!("{}#user:u-aaa", row.credential));
+        assert_eq!(
+            qualified.credential,
+            format!("{}#user:u-aaa", row.credential)
+        );
 
         assert_eq!(row.login_key_for(None), HoldKey::login(&row.credential));
         assert_eq!(
@@ -965,13 +1013,24 @@ mod tests {
     /// rotation has already happened, so the pin's first entry is what the conversation opens on.
     #[test]
     fn pinning_starts_a_conversation_on_the_row_it_was_launched_at() {
-        let chain = ResolvedChain::resolve(&rows(), &three(), Some(&StartAt::Id("glm".into())), None)
-            .expect("resolve");
+        let chain =
+            ResolvedChain::resolve(&rows(), &three(), Some(&StartAt::Id("glm".into())), None)
+                .expect("resolve");
         let pinned = chain.pin();
         assert_eq!(pinned.at, 0);
-        assert_eq!(pinned.current().map(|row| row.backend.as_str()), Some("glm"));
-        assert_eq!(pinned.entries.len(), 3, "the rest of the list is still behind it");
-        assert_eq!(pinned.entries[0].row, 3, "and each row remembers where it was configured");
+        assert_eq!(
+            pinned.current().map(|row| row.backend.as_str()),
+            Some("glm")
+        );
+        assert_eq!(
+            pinned.entries.len(),
+            3,
+            "the rest of the list is still behind it"
+        );
+        assert_eq!(
+            pinned.entries[0].row, 3,
+            "and each row remembers where it was configured"
+        );
     }
 
     /// The move is *best-first*, not next-down. Nothing calls this until the current row has run
@@ -988,10 +1047,15 @@ mod tests {
             .next_available(|entry| entry.backend == "anthropic")
             .expect("a row is left");
         assert!(pinned.move_to(next));
-        assert_eq!(pinned.current().map(|row| row.backend.as_str()), Some("codex"));
+        assert_eq!(
+            pinned.current().map(|row| row.backend.as_str()),
+            Some("codex")
+        );
 
         // Row 2 runs out too, and row 1 has recovered in the meantime — that is the row to take.
-        let next = pinned.next_available(|entry| entry.backend == "codex").expect("a row is left");
+        let next = pinned
+            .next_available(|entry| entry.backend == "codex")
+            .expect("a row is left");
         assert!(pinned.move_to(next));
         assert_eq!(
             pinned.current().map(|row| row.backend.as_str()),
@@ -1000,8 +1064,14 @@ mod tests {
         );
 
         assert_eq!(pinned.position("glm"), Some(2));
-        assert!(!pinned.move_to(9), "a row that is not there is not moved to");
-        assert_eq!(pinned.current().map(|row| row.backend.as_str()), Some("anthropic"));
+        assert!(
+            !pinned.move_to(9),
+            "a row that is not there is not moved to"
+        );
+        assert_eq!(
+            pinned.current().map(|row| row.backend.as_str()),
+            Some("anthropic")
+        );
     }
 
     /// Every row held is the case that has to stop and ask rather than pick something.
@@ -1026,14 +1096,20 @@ mod tests {
         assert!(json.get("at").is_none(), "{json}");
 
         let back: PinnedChain = serde_json::from_value(json).expect("deserialize");
-        assert_eq!(back.entries, pinned.entries, "the list survives the round trip");
-        assert_eq!(back.at, 0, "and the position comes back from its own column");
+        assert_eq!(
+            back.entries, pinned.entries,
+            "the list survives the round trip"
+        );
+        assert_eq!(
+            back.at, 0,
+            "and the position comes back from its own column"
+        );
     }
 
     #[test]
     fn rows_round_trip_through_toml_on_an_agent() {
-        let text = toml::to_string_pretty(&serde_json::json!({ "backends": rows() }))
-            .expect("toml");
+        let text =
+            toml::to_string_pretty(&serde_json::json!({ "backends": rows() })).expect("toml");
         let back: BTreeMap<String, Vec<AgentBackendEntry>> = toml::from_str(&text).expect("parse");
         assert_eq!(back["backends"], rows());
     }
@@ -1054,7 +1130,10 @@ mod tests {
     fn a_row_naming_a_group_expands_to_its_members_in_order() {
         let mut catalog = three();
         catalog.insert("team".to_string(), group(&["codex", "glm"]));
-        let rows = vec![AgentBackendEntry::new("anthropic"), AgentBackendEntry::new("team")];
+        let rows = vec![
+            AgentBackendEntry::new("anthropic"),
+            AgentBackendEntry::new("team"),
+        ];
         let chain = ResolvedChain::resolve(&rows, &catalog, None, None).expect("resolve");
         let ids: Vec<&str> = chain.entries.iter().map(|e| e.backend.as_str()).collect();
         assert_eq!(ids, ["anthropic", "codex", "glm"]);
@@ -1067,7 +1146,10 @@ mod tests {
     fn expanded_leaves_share_the_groups_configured_row_number() {
         let mut catalog = three();
         catalog.insert("team".to_string(), group(&["codex", "glm"]));
-        let rows = vec![AgentBackendEntry::new("anthropic"), AgentBackendEntry::new("team")];
+        let rows = vec![
+            AgentBackendEntry::new("anthropic"),
+            AgentBackendEntry::new("team"),
+        ];
         let chain = ResolvedChain::resolve(&rows, &catalog, None, None).expect("resolve");
         assert_eq!(chain.entries[0].row, 1);
         assert_eq!(chain.entries[1].row, 2);
@@ -1090,7 +1172,11 @@ mod tests {
         let chain = ResolvedChain::resolve(&rows, &catalog, None, None).expect("resolve");
         assert_eq!(chain.entries.len(), 2);
         for entry in &chain.entries {
-            assert_eq!(entry.arguments["thinking"], serde_json::json!("high"), "{entry:?}");
+            assert_eq!(
+                entry.arguments["thinking"],
+                serde_json::json!("high"),
+                "{entry:?}"
+            );
         }
     }
 
@@ -1138,9 +1224,13 @@ mod tests {
     fn start_at_can_name_a_group_and_rotates_to_its_first_member() {
         let mut catalog = three();
         catalog.insert("team".to_string(), group(&["codex", "glm"]));
-        let rows = vec![AgentBackendEntry::new("anthropic"), AgentBackendEntry::new("team")];
-        let chain = ResolvedChain::resolve(&rows, &catalog, Some(&StartAt::Id("team".into())), None)
-            .expect("resolve");
+        let rows = vec![
+            AgentBackendEntry::new("anthropic"),
+            AgentBackendEntry::new("team"),
+        ];
+        let chain =
+            ResolvedChain::resolve(&rows, &catalog, Some(&StartAt::Id("team".into())), None)
+                .expect("resolve");
         let ids: Vec<&str> = chain.entries.iter().map(|e| e.backend.as_str()).collect();
         assert_eq!(ids, ["codex", "glm", "anthropic"]);
     }
@@ -1151,7 +1241,10 @@ mod tests {
     fn only_naming_a_group_keeps_its_whole_order_with_nothing_else_behind_it() {
         let mut catalog = three();
         catalog.insert("team".to_string(), group(&["codex", "glm"]));
-        let rows = vec![AgentBackendEntry::new("anthropic"), AgentBackendEntry::new("team")];
+        let rows = vec![
+            AgentBackendEntry::new("anthropic"),
+            AgentBackendEntry::new("team"),
+        ];
         let chain = ResolvedChain::resolve(&rows, &catalog, None, Some("team")).expect("resolve");
         let ids: Vec<&str> = chain.entries.iter().map(|e| e.backend.as_str()).collect();
         assert_eq!(ids, ["codex", "glm"]);
@@ -1179,7 +1272,8 @@ mod tests {
         catalog.insert("team".to_string(), group(&["ghost"]));
         assert_eq!(missing_members("team", &catalog), vec!["ghost".to_string()]);
         assert!(
-            ResolvedChain::resolve(&[AgentBackendEntry::new("team")], &catalog, None, None).is_err(),
+            ResolvedChain::resolve(&[AgentBackendEntry::new("team")], &catalog, None, None)
+                .is_err(),
             "the strict resolve has nothing left to try, and says so by failing",
         );
     }

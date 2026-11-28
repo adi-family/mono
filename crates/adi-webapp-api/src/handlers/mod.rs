@@ -537,7 +537,12 @@ mod tests {
         let Response { status, body } = complete_task(&store, good.as_bytes());
         assert_eq!(status, 200, "{body}");
         let v: Value = serde_json::from_str(&body).unwrap();
-        let row = v["tasks"].as_array().unwrap().iter().find(|t| t["id"] == id).unwrap();
+        let row = v["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["id"] == id)
+            .unwrap();
         assert_eq!(row["status"], "done");
         assert_eq!(row["result"]["ok"], true);
 
@@ -557,15 +562,26 @@ mod tests {
         let Response { status, body } = give_up_task(&store, body.as_bytes());
         assert_eq!(status, 200, "{body}");
         let v: Value = serde_json::from_str(&body).unwrap();
-        let row = v["tasks"].as_array().unwrap().iter().find(|t| t["id"] == id).unwrap();
-        assert_eq!(row["status"], "open", "give-up is a fact, not a status change");
+        let row = v["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["id"] == id)
+            .unwrap();
+        assert_eq!(
+            row["status"], "open",
+            "give-up is a fact, not a status change"
+        );
         assert_eq!(row["give_up_reason"], "no API key");
 
         assert_eq!(
             give_up_task(&store, br#"{"id":"ghost","reason":"x"}"#).status,
             404
         );
-        assert_eq!(give_up_task(&store, br#"{"id":"t1","reason":""}"#).status, 400);
+        assert_eq!(
+            give_up_task(&store, br#"{"id":"t1","reason":""}"#).status,
+            400
+        );
     }
 
     #[test]
@@ -706,9 +722,21 @@ mod tests {
     fn agents_report_runnable_for_pty_and_process_backends() {
         let store = temp_agents();
         let _ = save_agent(&store, br#"{"name":"solver","backend":"pty:claude"}"#, None);
-        let _ = save_agent(&store, br#"{"name":"reviewer","backend":"process:codex"}"#, None);
-        let _ = save_agent(&store, br#"{"name":"agy-runner","backend":"process:antigravity"}"#, None);
-        let _ = save_agent(&store, br#"{"name":"looper","backend":"harness:adi"}"#, None);
+        let _ = save_agent(
+            &store,
+            br#"{"name":"reviewer","backend":"process:codex"}"#,
+            None,
+        );
+        let _ = save_agent(
+            &store,
+            br#"{"name":"agy-runner","backend":"process:antigravity"}"#,
+            None,
+        );
+        let _ = save_agent(
+            &store,
+            br#"{"name":"looper","backend":"harness:adi"}"#,
+            None,
+        );
 
         let Response { status, body } = agents(&store);
         assert_eq!(status, 200);
@@ -765,7 +793,10 @@ mod tests {
             .set_lease(
                 "runner",
                 &parent.id,
-                &adi_agents::LeaseRef { user: "u-igor".to_string(), names: vec![] },
+                &adi_agents::LeaseRef {
+                    user: "u-igor".to_string(),
+                    names: vec![],
+                },
             )
             .expect("set lease");
         let capability = sessions
@@ -778,7 +809,10 @@ mod tests {
             br#"{"name":"ghost","launched_by":"human:someone-else"}"#,
             &capability,
         );
-        assert_eq!(status, 404, "the capability resolved; the agent it named did not exist");
+        assert_eq!(
+            status, 404,
+            "the capability resolved; the agent it named did not exist"
+        );
     }
 
     #[test]
@@ -802,7 +836,11 @@ mod tests {
     #[test]
     fn peek_run_carries_waiting_then_finished_as_an_await_resolves() {
         let store = temp_agents();
-        let _ = save_agent(&store, br#"{"name":"solver","backend":"process:claude"}"#, None);
+        let _ = save_agent(
+            &store,
+            br#"{"name":"solver","backend":"process:claude"}"#,
+            None,
+        );
         let sessions = SessionStore::new(store.config().module("sessions").dir());
         let conv = sessions
             .create(
@@ -886,7 +924,11 @@ mod tests {
     #[test]
     fn run_of_a_headless_backend_with_no_task_is_400() {
         let store = temp_agents();
-        let _ = save_agent(&store, br#"{"name":"looper","backend":"harness:adi"}"#, None);
+        let _ = save_agent(
+            &store,
+            br#"{"name":"looper","backend":"harness:adi"}"#,
+            None,
+        );
         let Response { status, body } = run_agent(&store, br#"{"name":"looper"}"#, None, None);
         assert_eq!(status, 400);
         let v: Value = serde_json::from_str(&body).unwrap();
@@ -904,7 +946,11 @@ mod tests {
     #[test]
     fn run_of_an_unrunnable_backend_is_400() {
         let store = temp_agents();
-        let _ = save_agent(&store, br#"{"name":"looper","backend":"harness:adi"}"#, None);
+        let _ = save_agent(
+            &store,
+            br#"{"name":"looper","backend":"harness:adi"}"#,
+            None,
+        );
         let Response { status, body } =
             run_agent(&store, br#"{"name":"looper","message":"go"}"#, None, None);
         assert_eq!(status, 400);
@@ -947,7 +993,11 @@ mod tests {
     #[test]
     fn a_review_with_no_root_agent_says_which_agent_is_missing() {
         let store = temp_agents();
-        let _ = save_agent(&store, br#"{"name":"solver","backend":"harness:adi"}"#, None);
+        let _ = save_agent(
+            &store,
+            br#"{"name":"solver","backend":"harness:adi"}"#,
+            None,
+        );
         let (run_id, dossier) = seed_conversation(&store, "solver");
 
         let body = format!(r#"{{"name":"solver","run_id":"{run_id}"}}"#);
@@ -966,8 +1016,16 @@ mod tests {
     #[test]
     fn a_review_of_a_silent_conversation_is_refused() {
         let store = temp_agents();
-        let _ = save_agent(&store, br#"{"name":"solver","backend":"harness:adi"}"#, None);
-        let _ = save_agent(&store, br#"{"name":"adi-agent","backend":"harness:adi"}"#, None);
+        let _ = save_agent(
+            &store,
+            br#"{"name":"solver","backend":"harness:adi"}"#,
+            None,
+        );
+        let _ = save_agent(
+            &store,
+            br#"{"name":"adi-agent","backend":"harness:adi"}"#,
+            None,
+        );
         let sessions = SessionStore::new(store.config().module("sessions").dir());
         let record = sessions
             .create("solver", Backend::from("harness:adi"), "/tmp", "hello")
@@ -990,8 +1048,16 @@ mod tests {
     #[test]
     fn a_refused_launch_still_leaves_the_dossier_on_disk() {
         let store = temp_agents();
-        let _ = save_agent(&store, br#"{"name":"solver","backend":"harness:adi"}"#, None);
-        let _ = save_agent(&store, br#"{"name":"adi-agent","backend":"harness:adi"}"#, None);
+        let _ = save_agent(
+            &store,
+            br#"{"name":"solver","backend":"harness:adi"}"#,
+            None,
+        );
+        let _ = save_agent(
+            &store,
+            br#"{"name":"adi-agent","backend":"harness:adi"}"#,
+            None,
+        );
         let (run_id, dossier) = seed_conversation(&store, "solver");
 
         let body = format!(r#"{{"name":"solver","run_id":"{run_id}"}}"#);
@@ -1008,7 +1074,11 @@ mod tests {
     #[test]
     fn the_run_limit_is_stated_settable_and_refuses_a_launch_past_it() {
         let store = temp_agents();
-        let _ = save_agent(&store, br#"{"name":"looper","backend":"harness:adi"}"#, None);
+        let _ = save_agent(
+            &store,
+            br#"{"name":"looper","backend":"harness:adi"}"#,
+            None,
+        );
 
         let Response { status, body } = agents(&store);
         assert_eq!(status, 200);
@@ -1379,7 +1449,14 @@ mod tests {
         assert!(t["extra"].get("secret").is_none());
         assert_eq!(t["hook_secret_status"], "inline");
         assert_eq!(
-            store.get("deploy-hook").unwrap().unwrap().manifest.extra.get("secret").map(String::as_str),
+            store
+                .get("deploy-hook")
+                .unwrap()
+                .unwrap()
+                .manifest
+                .extra
+                .get("secret")
+                .map(String::as_str),
             Some("s3cr3t")
         );
         assert!(t["extra"]["bad key"].is_null());
@@ -1505,7 +1582,8 @@ mod tests {
             hook_trigger(&store, "refd", "secret=wrong", &no_headers(), b"").status,
             403
         );
-        let Response { status, .. } = hook_trigger(&store, "refd", "secret=s3", &no_headers(), b"{}");
+        let Response { status, .. } =
+            hook_trigger(&store, "refd", "secret=s3", &no_headers(), b"{}");
         assert_eq!(status, 200);
     }
 
@@ -1564,7 +1642,10 @@ mod tests {
             br#"{"name":"inliner","kind":"webhook","code":"true","extra":{"secret":"s3cr3t"}}"#,
         );
         let Response { body, .. } = triggers(&store);
-        assert!(!body.contains("s3cr3t"), "the inline value must never reach the wire: {body}");
+        assert!(
+            !body.contains("s3cr3t"),
+            "the inline value must never reach the wire: {body}"
+        );
         let v: Value = serde_json::from_str(&body).unwrap();
         let t = &v["triggers"][0];
         assert_eq!(t["hook_secret_status"], "inline");
@@ -1713,12 +1794,24 @@ mod tests {
             403
         );
         assert_eq!(
-            hook_trigger(&store, "scoped", "", &no_headers(), br#"{"project":"beta"}"#).status,
+            hook_trigger(
+                &store,
+                "scoped",
+                "",
+                &no_headers(),
+                br#"{"project":"beta"}"#
+            )
+            .status,
             403
         );
         // The allowed project fires it.
-        let Response { status, body } =
-            hook_trigger(&store, "scoped", "", &no_headers(), br#"{"project":"alpha"}"#);
+        let Response { status, body } = hook_trigger(
+            &store,
+            "scoped",
+            "",
+            &no_headers(),
+            br#"{"project":"alpha"}"#,
+        );
         assert_eq!(status, 200, "{body}");
         let v: Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["ok"], true);

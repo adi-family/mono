@@ -200,7 +200,10 @@ impl Engine {
     /// without sitting through a real 5 minutes.
     #[must_use]
     #[cfg(test)]
-    pub(crate) fn with_config_and_safety_interval(config: Config, safety_interval: std::time::Duration) -> Self {
+    pub(crate) fn with_config_and_safety_interval(
+        config: Config,
+        safety_interval: std::time::Duration,
+    ) -> Self {
         Self {
             runs: WorkflowStore::with_config(config.clone()),
             schedules: ScheduleStore::with_config(config.clone()),
@@ -373,7 +376,9 @@ impl Engine {
                 return Vec::new();
             }
         };
-        let due = self.readiness.due(&self.tasks, &self.runs, &self.events, &unfinished);
+        let due = self
+            .readiness
+            .due(&self.tasks, &self.runs, &self.events, &unfinished);
         if due.is_empty() {
             return Vec::new();
         }
@@ -388,7 +393,10 @@ impl Engine {
             for _ in 0..max_concurrency {
                 scope.spawn(|| {
                     loop {
-                        let next = queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner).next();
+                        let next = queue
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .next();
                         let Some(run) = next else { break };
                         let ran = self.attempt_and_record(&run);
                         results
@@ -399,7 +407,9 @@ impl Engine {
                 });
             }
         });
-        results.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner)
+        results
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// One attempt, with its readiness cache entry refreshed (or cleared, once the run is
@@ -448,10 +458,9 @@ impl Engine {
             &serde_json::json!({"kind": "manual", "request_id": request_id}),
             None,
         );
-        let row = self
-            .runs
-            .get_run(&run_key)?
-            .ok_or_else(|| Error::Store(anyhow::anyhow!("manual pour of {workflow:?} didn't land")))?;
+        let row = self.runs.get_run(&run_key)?.ok_or_else(|| {
+            Error::Store(anyhow::anyhow!("manual pour of {workflow:?} didn't land"))
+        })?;
         Ok(StartedRun {
             run_key: row.run_key,
             workflow: row.workflow,

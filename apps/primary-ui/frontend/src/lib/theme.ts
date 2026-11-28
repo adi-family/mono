@@ -27,7 +27,11 @@ function applyTheme(theme: Theme) {
 applyTheme(readLocalStorage(storageKey, null, themeCodec) ?? getSystemTheme());
 
 export function useTheme() {
-  const [preference, setPreference] = useLocalStorageState<Theme | null>(storageKey, null, themeCodec);
+  const [preference, setPreference] = useLocalStorageState<Theme | null>(
+    storageKey,
+    null,
+    themeCodec,
+  );
   const [systemTheme, setSystemTheme] = useState(getSystemTheme);
   const theme = preference ?? systemTheme;
 

@@ -2,12 +2,34 @@ import { createContext, useContext, useEffect, useRef, useState, type ReactNode 
 import { useQueries, useQueryClient } from "@tanstack/react-query";
 
 import {
-  getConversationIndex, hideConversation, renameConversation, savedConversationIndex, starConversation,
-  type Conversation, type ConversationIndex, type ConversationIndexOptions, type ConversationRef,
+  getConversationIndex,
+  hideConversation,
+  renameConversation,
+  savedConversationIndex,
+  starConversation,
+  type Conversation,
+  type ConversationIndex,
+  type ConversationIndexOptions,
+  type ConversationRef,
 } from "./app-chat";
 import { errorText } from "./app-chat-errors";
-import { buildSourceRows, clearOverlayField, indexRows, patchIndex, previewText, rememberRows, type ChatOverlay, type ChatOverlays } from "./app-chat-model";
-import { chatQueryKeys, indexPageSize, indexPollMs, projectPageSize, queryOutcomes } from "./app-chat-queries";
+import {
+  buildSourceRows,
+  clearOverlayField,
+  indexRows,
+  patchIndex,
+  previewText,
+  rememberRows,
+  type ChatOverlay,
+  type ChatOverlays,
+} from "./app-chat-model";
+import {
+  chatQueryKeys,
+  indexPageSize,
+  indexPollMs,
+  projectPageSize,
+  queryOutcomes,
+} from "./app-chat-queries";
 import { useChatSelection } from "./app-chat-selection";
 import { conversationKey, sourceKey } from "./app-chat-sources";
 import { useChatThread } from "./app-chat-thread";
@@ -22,7 +44,19 @@ interface ChatEdit<F extends keyof ChatOverlay> {
 }
 
 function useListState() {
-  const { enabled, sourceList, filter, includeHidden, group, active, agentsBySource, agentResults, activeAgentsPending, isCurrentSelection, newConversationOn } = useChatSelection();
+  const {
+    enabled,
+    sourceList,
+    filter,
+    includeHidden,
+    group,
+    active,
+    agentsBySource,
+    agentResults,
+    activeAgentsPending,
+    isCurrentSelection,
+    newConversationOn,
+  } = useChatSelection();
   const { snapshot } = useChatThread();
   const client = useQueryClient();
   const [indexLimits, setIndexLimits] = useState<Record<string, number>>({});
@@ -37,14 +71,27 @@ function useListState() {
       const key = sourceKey(source);
       const limit = indexLimits[key] ?? indexPageSize;
       const options: ConversationIndexOptions = {
-        filter, limit,
+        filter,
+        limit,
         ...(includeHidden ? { hidden: "include" as const } : {}),
-        ...(group === "project" ? { group: "project" as const, groupLimit: projectPageSize, groupMore: projectMore[key] } : {}),
+        ...(group === "project"
+          ? { group: "project" as const, groupLimit: projectPageSize, groupMore: projectMore[key] }
+          : {}),
       };
       return {
-        queryKey: chatQueryKeys.index(source, filter, includeHidden, group, limit, projectMore[key] ?? {}),
-        queryFn: ({ signal }: { signal: AbortSignal }) => getConversationIndex(signal, source, options),
-        enabled, refetchInterval: indexPollMs, retry: false,
+        queryKey: chatQueryKeys.index(
+          source,
+          filter,
+          includeHidden,
+          group,
+          limit,
+          projectMore[key] ?? {},
+        ),
+        queryFn: ({ signal }: { signal: AbortSignal }) =>
+          getConversationIndex(signal, source, options),
+        enabled,
+        refetchInterval: indexPollMs,
+        retry: false,
         // The list opens with the rows this browser last saw for this machine and view.
         initialData: () => savedConversationIndex(source, options)?.data,
         initialDataUpdatedAt: () => savedConversationIndex(source, options)?.savedAt,
@@ -62,26 +109,48 @@ function useListState() {
     const result = indexResults[position];
     const error = result.error ?? agentResults[position]?.error;
     return {
-      ...buildSourceRows({ source, index: result.data, agents: agentsBySource[position] ?? [], overlays, filter, includeHidden, group, active, snapshot, remembered }),
+      ...buildSourceRows({
+        source,
+        index: result.data,
+        agents: agentsBySource[position] ?? [],
+        overlays,
+        filter,
+        includeHidden,
+        group,
+        active,
+        snapshot,
+        remembered,
+      }),
       isLoading: result.isPending,
       /** Still the rows saved on an earlier visit; this machine has not answered on this one. */
       saved: result.data?.saved === true,
       error: error ? errorText(error) : null,
     };
   });
-  const conversations = sourceStates.flatMap((state) => state.conversations).sort((a, b) => b.lastActivity - a.lastActivity);
+  const conversations = sourceStates
+    .flatMap((state) => state.conversations)
+    .sort((a, b) => b.lastActivity - a.lastActivity);
 
   // A machine's polls fail in the background, so a failure goes to the event log rather than
   // the page: once when it starts, and a note when the machine answers again. The signature is
   // a string so that steady failure across polls reports nothing new.
-  const errorSignature = JSON.stringify(sourceStates.map((state) => [sourceKey(state.source), state.error]));
+  const errorSignature = JSON.stringify(
+    sourceStates.map((state) => [sourceKey(state.source), state.error]),
+  );
   const previousErrors = useRef<ReadonlyMap<string, string | null>>(new Map());
   useEffect(() => {
     const entries = JSON.parse(errorSignature) as [string, string | null][];
     for (const [key, error] of entries) {
       const before = previousErrors.current.get(key) ?? null;
-      if (error && error !== before) reportEvent({ level: "error", area: "Chats", source: key || undefined, message: error });
-      else if (!error && before) reportEvent({ level: "info", area: "Chats", source: key || undefined, message: "Responding again." });
+      if (error && error !== before)
+        reportEvent({ level: "error", area: "Chats", source: key || undefined, message: error });
+      else if (!error && before)
+        reportEvent({
+          level: "info",
+          area: "Chats",
+          source: key || undefined,
+          message: "Responding again.",
+        });
     }
     previousErrors.current = new Map(entries);
   }, [errorSignature]);
@@ -89,15 +158,27 @@ function useListState() {
   function loadMore(source?: string, project?: string) {
     const key = sourceKey(source);
     if (project === undefined) {
-      setIndexLimits((current) => ({ ...current, [key]: (current[key] ?? indexPageSize) + indexPageSize }));
+      setIndexLimits((current) => ({
+        ...current,
+        [key]: (current[key] ?? indexPageSize) + indexPageSize,
+      }));
       return;
     }
-    setProjectMore((current) => ({ ...current, [key]: { ...current[key], [project]: (current[key]?.[project] ?? 0) + projectPageSize } }));
+    setProjectMore((current) => ({
+      ...current,
+      [key]: { ...current[key], [project]: (current[key]?.[project] ?? 0) + projectPageSize },
+    }));
   }
 
   // Keep each field overlaid through the write and subsequent reads. Polling cannot
   // flash stale values, and rolling back one field preserves other pending edits.
-  async function editChat<F extends keyof ChatOverlay>({ ref, field, value, write, failure }: ChatEdit<F>) {
+  async function editChat<F extends keyof ChatOverlay>({
+    ref,
+    field,
+    value,
+    write,
+    failure,
+  }: ChatEdit<F>) {
     const key = conversationKey(ref);
     const editKey = `${key}:${field}`;
     if (pendingEdits.current.has(editKey)) return;
@@ -108,14 +189,23 @@ function useListState() {
     try {
       await write();
       // A chat hidden while hidden chats are listed keeps its row, so it stays open too.
-      if (overlay.hidden && !includeHidden && isCurrentSelection(key)) newConversationOn(ref.source, ref.agent);
+      if (overlay.hidden && !includeHidden && isCurrentSelection(key))
+        newConversationOn(ref.source, ref.agent);
       // Update inactive filter/group caches too. A failed follow-up read must not
       // roll back a write the server has already accepted.
-      client.setQueriesData<ConversationIndex>({ queryKey: chatQueryKeys.allIndexes }, (index) => index && patchIndex(index, key, overlay));
+      client.setQueriesData<ConversationIndex>(
+        { queryKey: chatQueryKeys.allIndexes },
+        (index) => index && patchIndex(index, key, overlay),
+      );
       await client.invalidateQueries({ queryKey: chatQueryKeys.allIndexes });
     } catch (error) {
       setMutationError(`${failure} ${errorText(error)}`);
-      reportEvent({ level: "error", area: "Chats", source: ref.source, message: `${failure} ${errorText(error)}` });
+      reportEvent({
+        level: "error",
+        area: "Chats",
+        source: ref.source,
+        message: `${failure} ${errorText(error)}`,
+      });
     } finally {
       setOverlays((current) => clearOverlayField(current, key, field));
       pendingEdits.current.delete(editKey);
@@ -123,21 +213,45 @@ function useListState() {
   }
 
   function renameChat(ref: ConversationRef, title: string) {
-    const defaultTitle = previewText(remembered.get(conversationKey(ref))?.message) || "Untitled chat";
-    return editChat({ ref, field: "title", value: title.trim() || defaultTitle, write: () => renameConversation(ref, title), failure: "Could not rename this chat." });
+    const defaultTitle =
+      previewText(remembered.get(conversationKey(ref))?.message) || "Untitled chat";
+    return editChat({
+      ref,
+      field: "title",
+      value: title.trim() || defaultTitle,
+      write: () => renameConversation(ref, title),
+      failure: "Could not rename this chat.",
+    });
   }
 
   /** Hides a chat, or with `hidden` false brings a hidden one back. */
   function hideChat(ref: ConversationRef, hidden = true) {
-    return editChat({ ref, field: "hidden", value: hidden, write: () => hideConversation(ref, hidden), failure: hidden ? "Could not hide this chat." : "Could not unhide this chat." });
+    return editChat({
+      ref,
+      field: "hidden",
+      value: hidden,
+      write: () => hideConversation(ref, hidden),
+      failure: hidden ? "Could not hide this chat." : "Could not unhide this chat.",
+    });
   }
 
   function starChat(ref: ConversationRef, starred: boolean) {
-    return editChat({ ref, field: "starred", value: starred, write: () => starConversation(ref, starred), failure: "Could not update the chat star." });
+    return editChat({
+      ref,
+      field: "starred",
+      value: starred,
+      write: () => starConversation(ref, starred),
+      failure: "Could not update the chat star.",
+    });
   }
 
   return {
-    sourceStates, conversations, loadMore, renameChat, hideChat, starChat,
+    sourceStates,
+    conversations,
+    loadMore,
+    renameChat,
+    hideChat,
+    starChat,
     isLoading: activeAgentsPending || indexResults.some((result) => result.isPending),
     /** Whether any selected machine is failing to answer; the messages themselves are in the event log. */
     indexFailing: sourceStates.some((state) => state.error),

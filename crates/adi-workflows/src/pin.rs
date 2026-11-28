@@ -35,7 +35,9 @@ pub fn ensure_pinned(config: &Config, hash: &str, content: &[u8]) -> Result<Path
     if path.is_file() {
         return Ok(path);
     }
-    let dir = path.parent().expect("pinned path has the versions dir as parent");
+    let dir = path
+        .parent()
+        .expect("pinned path has the versions dir as parent");
     std::fs::create_dir_all(dir)
         .map_err(|e| Error::Store(anyhow::anyhow!("couldn't create {}: {e}", dir.display())))?;
     std::fs::write(&path, content)

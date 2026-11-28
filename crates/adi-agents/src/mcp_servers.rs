@@ -75,7 +75,11 @@ impl ResolvedHeader {
 /// has no definition for (the same tolerance `bin_tools` and `secrets` already give a dangling
 /// reference) and any whose secrets do not all resolve against `secrets` (see the module docs).
 #[must_use]
-pub fn resolve(config: &Config, ids: &[String], secrets: &[SecretAttachment]) -> Vec<ResolvedMcpServer> {
+pub fn resolve(
+    config: &Config,
+    ids: &[String],
+    secrets: &[SecretAttachment],
+) -> Vec<ResolvedMcpServer> {
     if ids.is_empty() {
         return Vec::new();
     }
@@ -83,18 +87,27 @@ pub fn resolve(config: &Config, ids: &[String], secrets: &[SecretAttachment]) ->
     let secrets_store = adi_secrets::Secrets::with_config(config.clone());
     let lookup = |name: &str| -> Option<String> {
         let attachment = secrets.iter().find(|a| a.name == name)?;
-        secrets_store.reveal(attachment.project.as_deref(), name).ok().flatten()
+        secrets_store
+            .reveal(attachment.project.as_deref(), name)
+            .ok()
+            .flatten()
     };
     ids.iter()
         .filter_map(|id| {
             let server = store.get(id).ok().flatten()?;
             let transport = resolve_transport(&server.manifest.transport, &lookup)?;
-            Some(ResolvedMcpServer { id: server.id, transport })
+            Some(ResolvedMcpServer {
+                id: server.id,
+                transport,
+            })
         })
         .collect()
 }
 
-fn resolve_transport(transport: &Transport, lookup: &impl Fn(&str) -> Option<String>) -> Option<ResolvedTransport> {
+fn resolve_transport(
+    transport: &Transport,
+    lookup: &impl Fn(&str) -> Option<String>,
+) -> Option<ResolvedTransport> {
     Some(match transport {
         Transport::Http { url, headers } => ResolvedTransport::Http {
             url: url.clone(),
@@ -118,10 +131,13 @@ fn resolve_headers(
     for (key, value) in map {
         let resolved = match value {
             Value::Literal(text) => ResolvedHeader::Plain(text.clone()),
-            Value::Secret { secret, prefix } if prefix.is_empty() => ResolvedHeader::Plain(lookup(secret)?),
-            Value::Secret { secret, prefix } => {
-                ResolvedHeader::Prefixed { prefix: prefix.clone(), raw: lookup(secret)? }
+            Value::Secret { secret, prefix } if prefix.is_empty() => {
+                ResolvedHeader::Plain(lookup(secret)?)
             }
+            Value::Secret { secret, prefix } => ResolvedHeader::Prefixed {
+                prefix: prefix.clone(),
+                raw: lookup(secret)?,
+            },
         };
         out.insert(key.clone(), resolved);
     }
@@ -162,7 +178,10 @@ mod tests {
     }
 
     fn attachment(name: &str) -> SecretAttachment {
-        SecretAttachment { project: None, name: name.to_string() }
+        SecretAttachment {
+            project: None,
+            name: name.to_string(),
+        }
     }
 
     #[test]
@@ -173,7 +192,11 @@ mod tests {
                 "n8n",
                 adi_mcp::Manifest::new(
                     "n8n",
-                    Transport::Stdio { command: "npx".into(), args: vec!["-y".into(), "n8n-mcp".into()], env: BTreeMap::new() },
+                    Transport::Stdio {
+                        command: "npx".into(),
+                        args: vec!["-y".into(), "n8n-mcp".into()],
+                        env: BTreeMap::new(),
+                    },
                 ),
             )
             .expect("save");
@@ -196,7 +219,10 @@ mod tests {
                     "n8n",
                     Transport::Http {
                         url: "http://n8n.adi/mcp/".into(),
-                        headers: BTreeMap::from([("Authorization".to_string(), Value::secret("N8N_TOKEN"))]),
+                        headers: BTreeMap::from([(
+                            "Authorization".to_string(),
+                            Value::secret("N8N_TOKEN"),
+                        )]),
                     },
                 ),
             )
@@ -212,7 +238,10 @@ mod tests {
         let ResolvedTransport::Http { headers, .. } = &resolved[0].transport else {
             panic!("http");
         };
-        assert_eq!(headers.get("Authorization"), Some(&ResolvedHeader::Plain("sekret".to_string())));
+        assert_eq!(
+            headers.get("Authorization"),
+            Some(&ResolvedHeader::Plain("sekret".to_string()))
+        );
     }
 
     #[test]
@@ -228,7 +257,10 @@ mod tests {
                     "n8n",
                     Transport::Http {
                         url: "http://n8n.adi/mcp/".into(),
-                        headers: BTreeMap::from([("Authorization".to_string(), Value::bearer("N8N_TOKEN"))]),
+                        headers: BTreeMap::from([(
+                            "Authorization".to_string(),
+                            Value::bearer("N8N_TOKEN"),
+                        )]),
                     },
                 ),
             )
@@ -241,9 +273,16 @@ mod tests {
         let header = headers.get("Authorization").expect("header");
         assert_eq!(
             header,
-            &ResolvedHeader::Prefixed { prefix: "Bearer ".to_string(), raw: "tok-123".to_string() }
+            &ResolvedHeader::Prefixed {
+                prefix: "Bearer ".to_string(),
+                raw: "tok-123".to_string()
+            }
         );
-        assert_eq!(header.rendered(), "Bearer tok-123", "a Claude engine sees the rendered header");
+        assert_eq!(
+            header.rendered(),
+            "Bearer tok-123",
+            "a Claude engine sees the rendered header"
+        );
     }
 
     #[test]
@@ -256,7 +295,10 @@ mod tests {
                     "n8n",
                     Transport::Http {
                         url: "http://n8n.adi/mcp/".into(),
-                        headers: BTreeMap::from([("Authorization".to_string(), Value::bearer("N8N_TOKEN"))]),
+                        headers: BTreeMap::from([(
+                            "Authorization".to_string(),
+                            Value::bearer("N8N_TOKEN"),
+                        )]),
                     },
                 ),
             )
@@ -280,7 +322,17 @@ mod tests {
         let store = McpServers::with_config(config.clone());
         for id in ["b", "a"] {
             store
-                .save(id, adi_mcp::Manifest::new(id, Transport::Stdio { command: "x".into(), args: vec![], env: BTreeMap::new() }))
+                .save(
+                    id,
+                    adi_mcp::Manifest::new(
+                        id,
+                        Transport::Stdio {
+                            command: "x".into(),
+                            args: vec![],
+                            env: BTreeMap::new(),
+                        },
+                    ),
+                )
                 .expect("save");
         }
         let resolved = resolve(&config, &["b".to_string(), "a".to_string()], &[]);

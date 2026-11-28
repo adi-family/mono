@@ -16,7 +16,12 @@ const SCOPE: &str = "channels-nodes";
 /// # Errors
 /// Whatever `adi_secrets::Secrets::set` returns — a crypto or write failure.
 pub fn save(secrets: &Secrets, provider: &str, token: &str) -> Result<()> {
-    secrets.set(Some(SCOPE), provider, token, Some("channel-router node token"))?;
+    secrets.set(
+        Some(SCOPE),
+        provider,
+        token,
+        Some("channel-router node token"),
+    )?;
     Ok(())
 }
 

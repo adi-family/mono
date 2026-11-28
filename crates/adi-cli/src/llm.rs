@@ -200,7 +200,11 @@ pub(crate) fn run_llm(adi: Adi, command: LlmCommand) -> Result<(), String> {
             } else {
                 for backend in &backends {
                     if backend.manifest.is_group() {
-                        println!("{} — group: {}", backend.id, backend.manifest.members.join(" -> "));
+                        println!(
+                            "{} — group: {}",
+                            backend.id,
+                            backend.manifest.members.join(" -> ")
+                        );
                         continue;
                     }
                     let held = live_hold(&holds, &backend.manifest)
@@ -346,7 +350,9 @@ pub(crate) fn run_llm(adi: Adi, command: LlmCommand) -> Result<(), String> {
             }
         }
         LlmCommand::Holds { json } => {
-            let held = Holds::with_config(&config).all().map_err(|e| e.to_string())?;
+            let held = Holds::with_config(&config)
+                .all()
+                .map_err(|e| e.to_string())?;
             if json {
                 print_json(&held);
             } else if held.is_empty() {
@@ -394,7 +400,9 @@ pub(crate) fn run_llm(adi: Adi, command: LlmCommand) -> Result<(), String> {
             if let Some(id) = id {
                 let verdict = prober.probe_backend(id.trim()).map_err(|e| e.to_string())?;
                 if json {
-                    print_json(&serde_json::json!({ "backend": id.trim(), "verdict": describe(&verdict) }));
+                    print_json(
+                        &serde_json::json!({ "backend": id.trim(), "verdict": describe(&verdict) }),
+                    );
                 } else {
                     println!("{} — {}", id.trim(), describe(&verdict));
                 }
@@ -490,7 +498,11 @@ fn report_migration(plan: &migrate::Plan, json: bool, changed: Option<usize>) {
             } else {
                 manifest.model.clone()
             };
-            println!("  {id:<20} {} · {model} · {}", manifest.runtime, manifest.credential());
+            println!(
+                "  {id:<20} {} · {model} · {}",
+                manifest.runtime,
+                manifest.credential()
+            );
         }
         println!();
     }
@@ -545,7 +557,10 @@ fn report_sweep(swept: &[adi_core::llm::Checked], json: bool) {
     for checked in swept {
         println!(
             "{} — {}",
-            checked.backend.as_deref().unwrap_or(&checked.key.credential),
+            checked
+                .backend
+                .as_deref()
+                .unwrap_or(&checked.key.credential),
             describe(&checked.verdict),
         );
     }
@@ -652,7 +667,12 @@ fn repoint_rows(adi: Adi, from: &str, to: &str) -> Result<usize, String> {
     let store = adi.agents();
     let mut moved = 0;
     for agent in store.list().map_err(|e| e.to_string())? {
-        if !agent.manifest.backends.iter().any(|row| row.backend == from) {
+        if !agent
+            .manifest
+            .backends
+            .iter()
+            .any(|row| row.backend == from)
+        {
             continue;
         }
         let mut manifest = agent.manifest;
@@ -661,7 +681,9 @@ fn repoint_rows(adi: Adi, from: &str, to: &str) -> Result<usize, String> {
                 row.backend = to.to_string();
             }
         }
-        store.save(&agent.name, manifest).map_err(|e| e.to_string())?;
+        store
+            .save(&agent.name, manifest)
+            .map_err(|e| e.to_string())?;
         moved += 1;
     }
     Ok(moved)
@@ -807,8 +829,12 @@ mod tests {
     /// parses exactly as it always did.
     #[test]
     fn save_defaults_to_kind_single_with_no_members() {
-        let LlmCommand::Save { kind, members, runtime, .. } =
-            parse(&["save", "anthropic", "--runtime", "pty:claude"])
+        let LlmCommand::Save {
+            kind,
+            members,
+            runtime,
+            ..
+        } = parse(&["save", "anthropic", "--runtime", "pty:claude"])
         else {
             panic!("expected save");
         };
@@ -820,9 +846,15 @@ mod tests {
     /// A group save takes no runtime at all and an ordered, repeatable `--member`.
     #[test]
     fn a_group_save_takes_members_and_no_runtime() {
-        let LlmCommand::Save { kind, members, runtime, .. } = parse(&[
+        let LlmCommand::Save {
+            kind,
+            members,
+            runtime,
+            ..
+        } = parse(&[
             "save", "team", "--kind", "group", "--member", "codex", "--member", "glm",
-        ]) else {
+        ])
+        else {
             panic!("expected save");
         };
         assert_eq!(kind, "group");

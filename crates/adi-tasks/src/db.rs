@@ -94,7 +94,8 @@ pub(crate) fn conn(path: &Path) -> Result<Rc<Connection>, Error> {
             return Ok(Rc::clone(existing));
         }
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| sql_err_io("create the directory for", e))?;
+            std::fs::create_dir_all(parent)
+                .map_err(|e| sql_err_io("create the directory for", e))?;
         }
         let mut connection = Connection::open(path).map_err(|e| sql_err("open", e))?;
         connection
@@ -136,11 +137,9 @@ fn sql_err_io(doing: &str, e: std::io::Error) -> Error {
 /// Read every row — both counters and the whole task table — inside `tx`.
 pub(crate) fn load(tx: &Connection) -> Result<TasksDoc, Error> {
     let next_id: u64 = tx
-        .query_row(
-            "SELECT value FROM task_next_id WHERE id = 1",
-            [],
-            |row| row.get(0),
-        )
+        .query_row("SELECT value FROM task_next_id WHERE id = 1", [], |row| {
+            row.get(0)
+        })
         .map_err(|e| sql_err("read the next-id counter in", e))?;
     let mut seq = BTreeMap::new();
     {
@@ -173,7 +172,8 @@ pub(crate) fn load(tx: &Connection) -> Result<TasksDoc, Error> {
             .next()
             .map_err(|e| sql_err("read the task table in", e))?
         {
-            tasks.push(row_to_task(row).map_err(|e| sql_err("read a row of the task table in", e))?);
+            tasks
+                .push(row_to_task(row).map_err(|e| sql_err("read a row of the task table in", e))?);
         }
     }
     Ok(TasksDoc {
@@ -237,10 +237,9 @@ fn insert_task(tx: &Connection, task: &Task) -> Result<(), Error> {
         ],
     )
     .map_err(|e| match e.sqlite_error_code() {
-        Some(rusqlite::ErrorCode::ConstraintViolation) => Error::DuplicateStepId(
-            task.step_id()
-                .unwrap_or_else(|| "<unknown>".to_string()),
-        ),
+        Some(rusqlite::ErrorCode::ConstraintViolation) => {
+            Error::DuplicateStepId(task.step_id().unwrap_or_else(|| "<unknown>".to_string()))
+        }
         _ => sql_err("write a row to", e),
     })?;
     Ok(())

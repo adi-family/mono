@@ -17,5 +17,7 @@ export function legacyChatDestination(pathname: string): string | null {
       run: segments[1] ?? "",
       ...(node ? { node } : {}),
     })}`;
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }

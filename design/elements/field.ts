@@ -83,7 +83,17 @@ class AdiControl<T extends NativeControl = NativeControl> extends AdiElement {
 
   override update() {
     const control = this.must<T>(".control");
-    for (const name of ["placeholder", "name", "autocomplete", "inputmode", "min", "max", "step", "rows", "maxlength"]) {
+    for (const name of [
+      "placeholder",
+      "name",
+      "autocomplete",
+      "inputmode",
+      "min",
+      "max",
+      "step",
+      "rows",
+      "maxlength",
+    ]) {
       if (this.hasAttribute(name)) control.setAttribute(name, this.attr(name));
       else control.removeAttribute(name);
     }
@@ -105,7 +115,15 @@ class AdiControl<T extends NativeControl = NativeControl> extends AdiElement {
 }
 
 class AdiInput extends AdiControl<HTMLInputElement> {
-  static observedAttributes = ["placeholder", "type", "disabled", "readonly", "required", "name", "label"];
+  static observedAttributes = [
+    "placeholder",
+    "type",
+    "disabled",
+    "readonly",
+    "required",
+    "name",
+    "label",
+  ];
 
   override template() {
     return `<input class="control" part="control">`;
@@ -118,7 +136,15 @@ class AdiInput extends AdiControl<HTMLInputElement> {
 }
 
 class AdiTextarea extends AdiControl<HTMLTextAreaElement> {
-  static observedAttributes = ["placeholder", "disabled", "readonly", "required", "name", "rows", "label"];
+  static observedAttributes = [
+    "placeholder",
+    "disabled",
+    "readonly",
+    "required",
+    "name",
+    "rows",
+    "label",
+  ];
 
   override template() {
     return `<textarea class="control" part="control" rows="4"></textarea>`;
@@ -127,7 +153,9 @@ class AdiTextarea extends AdiControl<HTMLTextAreaElement> {
   override setup() {
     super.setup();
     // Match native textarea defaults by dropping the first newline.
-    watchChildren(this, () => this.resetDefault((this.textContent ?? "").replace(/^\n/, "").trimEnd()));
+    watchChildren(this, () =>
+      this.resetDefault((this.textContent ?? "").replace(/^\n/, "").trimEnd()),
+    );
   }
 }
 
@@ -166,7 +194,10 @@ class AdiSelect extends AdiControl<HTMLSelectElement> {
   }
 
   get options(): Required<SelectOption>[] {
-    return [...(this.control?.options ?? [])].map((o) => ({ value: o.value, label: o.textContent ?? "" }));
+    return [...(this.control?.options ?? [])].map((o) => ({
+      value: o.value,
+      label: o.textContent ?? "",
+    }));
   }
 
   override setup() {
@@ -194,7 +225,9 @@ class AdiField extends AdiElement {
 
   override setup() {
     this.must(".label").addEventListener("click", () => {
-      const control = this.querySelector<HTMLElement>("adi-input, adi-select, adi-textarea, input, select, textarea");
+      const control = this.querySelector<HTMLElement>(
+        "adi-input, adi-select, adi-textarea, input, select, textarea",
+      );
       control?.focus();
     });
   }

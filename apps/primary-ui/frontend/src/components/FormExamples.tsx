@@ -2,8 +2,23 @@ import { useState } from "react";
 import { ArrowUpRight, Bell, Zap } from "lucide-react";
 
 import {
-  Badge, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, CodeEditor, Field, Input, SettingsLayout, SettingsNavItem,
-  SettingsSection, Switch, Textarea, cn, type CodeLanguage,
+  Badge,
+  Button,
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  CodeEditor,
+  Field,
+  Input,
+  SettingsLayout,
+  SettingsNavItem,
+  SettingsSection,
+  Switch,
+  Textarea,
+  cn,
+  type CodeLanguage,
 } from "@design-system/ui";
 
 import { CodeExample } from "./CodeExample";
@@ -97,7 +112,12 @@ if not slow:
     print('nothing slower than 1.5s')
 `,
 };
-const editorLanguages = [["sh", "Shell"], ["ts", "TypeScript"], ["json", "JSON"], ["py", "Python"]] as const;
+const editorLanguages = [
+  ["sh", "Shell"],
+  ["ts", "TypeScript"],
+  ["json", "JSON"],
+  ["py", "Python"],
+] as const;
 
 const settingsCode = `<SettingsLayout
   title="Settings"
@@ -120,7 +140,10 @@ const settingsCode = `<SettingsLayout
 </SettingsLayout>`;
 
 const cardClass = "scroll-mt-36 md:scroll-mt-8";
-const exampleSections = [{ id: "triggers", label: "Triggers", icon: Zap }, { id: "notifications", label: "Notifications", icon: Bell }];
+const exampleSections = [
+  { id: "triggers", label: "Triggers", icon: Zap },
+  { id: "notifications", label: "Notifications", icon: Bell },
+];
 
 /** Gallery entries for the form controls and the settings page layout. */
 export function FormExamples() {
@@ -133,14 +156,21 @@ export function FormExamples() {
   return (
     <section aria-labelledby="form-components-title" className="flex min-w-0 flex-col gap-6">
       <div>
-        <h2 id="form-components-title" className="text-xl font-semibold tracking-tight">Forms &amp; settings</h2>
-        <p className="text-muted-foreground mt-2 text-sm leading-6">Text inputs with their label, help and error; an on/off switch; state badges; and the layout of a settings page.</p>
+        <h2 id="form-components-title" className="text-xl font-semibold tracking-tight">
+          Forms &amp; settings
+        </h2>
+        <p className="text-muted-foreground mt-2 text-sm leading-6">
+          Text inputs with their label, help and error; an on/off switch; state badges; and the
+          layout of a settings page.
+        </p>
       </div>
 
       <Card id="badge-example" tabIndex={-1} className={cardClass}>
         <CardHeader>
           <CardTitle>Badge</CardTitle>
-          <CardDescription>A short label for a kind or a state. The word says the state; the dot only repeats it.</CardDescription>
+          <CardDescription>
+            A short label for a kind or a state. The word says the state; the dot only repeats it.
+          </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <div className="flex flex-wrap items-center gap-2">
@@ -161,18 +191,37 @@ export function FormExamples() {
       <Card id="field-example" tabIndex={-1} className={cardClass}>
         <CardHeader>
           <CardTitle>Field, Input &amp; Textarea</CardTitle>
-          <CardDescription>A Field labels its control and wires its help and error text to it. The mono face is for machine strings.</CardDescription>
+          <CardDescription>
+            A Field labels its control and wires its help and error text to it. The mono face is for
+            machine strings.
+          </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <div className="grid gap-5 sm:grid-cols-2">
             <Field label="Name" hint="Letters, digits, '.', '-' or '_'.">
-              {(control) => <Input {...control} mono placeholder="deploy-hook" value={name} onChange={(event) => setName(event.target.value)} />}
+              {(control) => (
+                <Input
+                  {...control}
+                  mono
+                  placeholder="deploy-hook"
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                />
+              )}
             </Field>
             <Field label="Interval" error="Enter a whole number of seconds.">
               {(control) => <Input {...control} mono value="soon" readOnly />}
             </Field>
             <Field label="Code block" hint="Run as sh -c." className="sm:col-span-2">
-              {(control) => <Textarea {...control} mono rows={4} defaultValue={'curl -fsS "$ADI_URL" | sh'} spellCheck={false} />}
+              {(control) => (
+                <Textarea
+                  {...control}
+                  mono
+                  rows={4}
+                  defaultValue={'curl -fsS "$ADI_URL" | sh'}
+                  spellCheck={false}
+                />
+              )}
             </Field>
           </div>
           <CodeExample code={fieldCode} label="Field, Input and Textarea" />
@@ -183,18 +232,36 @@ export function FormExamples() {
         <CardHeader>
           <CardTitle>Code editor</CardTitle>
           <CardDescription>
-            A highlighted view of the text with a real textarea on top, so typing, undo, paste and the input method are the browser’s own.
-            Tab indents, Shift+Tab outdents, Enter keeps the indentation; Escape then Tab leaves the editor.
+            A highlighted view of the text with a real textarea on top, so typing, undo, paste and
+            the input method are the browser’s own. Tab indents, Shift+Tab outdents, Enter keeps the
+            indentation; Escape then Tab leaves the editor.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <div role="group" aria-label="Example language" className="flex flex-wrap gap-1">
             {editorLanguages.map(([id, label]) => (
-              <Button key={id} variant="ghost" size="sm" aria-pressed={language === id} className={cn(language === id && "bg-muted text-foreground")} onClick={() => setLanguage(id)}>{label}</Button>
+              <Button
+                key={id}
+                variant="ghost"
+                size="sm"
+                aria-pressed={language === id}
+                className={cn(language === id && "bg-muted text-foreground")}
+                onClick={() => setLanguage(id)}
+              >
+                {label}
+              </Button>
             ))}
           </div>
           <Field label="Code block" hint="The language can change while the editor stays mounted.">
-            {(control) => <CodeEditor {...control} language={language} rows={12} value={code[language]} onValueChange={(next) => setCode((current) => ({ ...current, [language]: next }))} />}
+            {(control) => (
+              <CodeEditor
+                {...control}
+                language={language}
+                rows={12}
+                value={code[language]}
+                onValueChange={(next) => setCode((current) => ({ ...current, [language]: next }))}
+              />
+            )}
           </Field>
           <CodeExample code={editorCode} label="Code editor" />
         </CardContent>
@@ -203,11 +270,17 @@ export function FormExamples() {
       <Card id="switch-example" tabIndex={-1} className={cardClass}>
         <CardHeader>
           <CardTitle>Switch</CardTitle>
-          <CardDescription>An on/off control that takes effect immediately. The caller owns its state.</CardDescription>
+          <CardDescription>
+            An on/off control that takes effect immediately. The caller owns its state.
+          </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <div className="flex items-center gap-3">
-            <Switch aria-label="Notifications enabled" checked={enabled} onCheckedChange={setEnabled} />
+            <Switch
+              aria-label="Notifications enabled"
+              checked={enabled}
+              onCheckedChange={setEnabled}
+            />
             <span className="text-sm">Notifications are {enabled ? "on" : "off"}</span>
             <Switch aria-label="Unavailable" checked={false} disabled className="ml-6" />
             <span className="text-muted-foreground text-sm">Disabled</span>
@@ -219,31 +292,47 @@ export function FormExamples() {
       <Card id="settings-layout-example" tabIndex={-1} className={cardClass}>
         <CardHeader>
           <CardTitle>Settings layout</CardTitle>
-          <CardDescription>A title row, the list of sections, and the open section. The list becomes a scrolling strip on phones.</CardDescription>
+          <CardDescription>
+            A title row, the list of sections, and the open section. The list becomes a scrolling
+            strip on phones.
+          </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <div className="rounded-lg border p-5">
             <SettingsLayout
               title="Settings"
               description="How the workspace behaves."
-              actions={<Button variant="outline">Old UI settings <ArrowUpRight className="size-3.5" aria-hidden="true" /></Button>}
+              actions={
+                <Button variant="outline">
+                  Old UI settings <ArrowUpRight className="size-3.5" aria-hidden="true" />
+                </Button>
+              }
               navigationLabel="Example settings sections"
-              navigation={(
+              navigation={
                 <>
                   {exampleSections.map(({ id, label, icon: Icon }) => (
                     <SettingsNavItem key={id} asChild active={section === id}>
-                      <button type="button" onClick={() => setSection(id)}><Icon aria-hidden="true" />{label}</button>
+                      <button type="button" onClick={() => setSection(id)}>
+                        <Icon aria-hidden="true" />
+                        {label}
+                      </button>
                     </SettingsNavItem>
                   ))}
                 </>
-              )}
+              }
             >
               <SettingsSection
                 title={section === "triggers" ? "Triggers" : "Notifications"}
-                description={section === "triggers" ? "Code blocks launched on a webhook call or an event." : "Where the workspace reports what happened."}
+                description={
+                  section === "triggers"
+                    ? "Code blocks launched on a webhook call or an event."
+                    : "Where the workspace reports what happened."
+                }
                 actions={section === "triggers" ? <Button>New trigger</Button> : undefined}
               >
-                <div className="text-muted-foreground rounded-lg border border-dashed p-6 text-sm">The open section’s content.</div>
+                <div className="text-muted-foreground rounded-lg border border-dashed p-6 text-sm">
+                  The open section’s content.
+                </div>
               </SettingsSection>
             </SettingsLayout>
           </div>

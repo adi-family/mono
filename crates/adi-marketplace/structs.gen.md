@@ -393,7 +393,7 @@ pub enum Error {
     BadElementName(String, String),
     #[error( "{0:?} does not name one element of a bundle — use <marketplace>/<slug>/<kind>/<name> \ (agents, tools, dashboards, llm, embeddings, services, triggers) or \ <marketplace>/<slug>/project for the scaffold" )]
     BadAddress(String),
-    #[error( "{0} carries {1} at {2} — an item may never carry Rust source or a compiled binary" )]
+    #[error("{0} carries {1} at {2} — an item may never carry Rust source or a compiled binary")]
     CarriesRust(String, String, String),
     #[error("{0:?} names no element the repository actually carries")]
     UnknownElement(String),

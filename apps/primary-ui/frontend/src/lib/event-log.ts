@@ -49,17 +49,34 @@ export const eventCollapseMs = 10 * 60_000;
 export const emptyEventLog: EventLogState = { events: [], seenAt: 0 };
 
 const sameEvent = (event: AppEventInput, other: AppEventInput) =>
-  event.level === other.level && (event.source ?? "") === (other.source ?? "") && event.area === other.area && event.message === other.message;
+  event.level === other.level &&
+  (event.source ?? "") === (other.source ?? "") &&
+  event.area === other.area &&
+  event.message === other.message;
 
 /** Pure: the state after one report. Collapses a recent repeat, otherwise prepends and trims. */
-export function appendEvent(state: EventLogState, input: AppEventInput, now = Date.now(), id = String(now)): EventLogState {
-  const repeat = state.events.find((event) => sameEvent(event, input) && now - event.lastSeen <= eventCollapseMs);
+export function appendEvent(
+  state: EventLogState,
+  input: AppEventInput,
+  now = Date.now(),
+  id = String(now),
+): EventLogState {
+  const repeat = state.events.find(
+    (event) => sameEvent(event, input) && now - event.lastSeen <= eventCollapseMs,
+  );
   if (repeat) {
     const bumped = { ...repeat, lastSeen: now, count: repeat.count + 1 };
     return { ...state, events: [bumped, ...state.events.filter((event) => event !== repeat)] };
   }
   const { source, ...rest } = input;
-  const event: AppEvent = { ...rest, ...(source ? { source } : {}), id, firstSeen: now, lastSeen: now, count: 1 };
+  const event: AppEvent = {
+    ...rest,
+    ...(source ? { source } : {}),
+    id,
+    firstSeen: now,
+    lastSeen: now,
+    count: 1,
+  };
   return { ...state, events: [event, ...state.events].slice(0, eventLogLimit) };
 }
 
@@ -70,32 +87,61 @@ export function unreadEvents(state: EventLogState): AppEvent[] {
 function isEvent(value: unknown): value is AppEvent {
   if (!value || typeof value !== "object") return false;
   const event = value as Record<string, unknown>;
-  return typeof event.id === "string" && (event.level === "error" || event.level === "warning" || event.level === "info") && typeof event.area === "string"
-    && typeof event.message === "string" && typeof event.firstSeen === "number" && typeof event.lastSeen === "number"
-    && typeof event.count === "number" && (event.source === undefined || typeof event.source === "string")
-    && (event.machine === undefined || (typeof event.machine === "string" && validMachine(event.machine)));
+  return (
+    typeof event.id === "string" &&
+    (event.level === "error" || event.level === "warning" || event.level === "info") &&
+    typeof event.area === "string" &&
+    typeof event.message === "string" &&
+    typeof event.firstSeen === "number" &&
+    typeof event.lastSeen === "number" &&
+    typeof event.count === "number" &&
+    (event.source === undefined || typeof event.source === "string") &&
+    (event.machine === undefined ||
+      (typeof event.machine === "string" && validMachine(event.machine)))
+  );
 }
 
 export function parseEventLog(stored: string | null): EventLogState {
   if (!stored) return emptyEventLog;
   try {
     const value: unknown = JSON.parse(stored);
-    if (!value || typeof value !== "object" || !Array.isArray((value as EventLogState).events)) return emptyEventLog;
+    if (!value || typeof value !== "object" || !Array.isArray((value as EventLogState).events))
+      return emptyEventLog;
     const seenAt = (value as EventLogState).seenAt;
     const seen = (value as EventLogState).seenByMachine;
-    const seenByMachine = seen && typeof seen === "object" ? Object.fromEntries(Object.entries(seen).filter(([key, time]) => validMachine(key) && typeof time === "number" && Number.isFinite(time))) : undefined;
-    return { events: (value as EventLogState).events.filter(isEvent).slice(0, eventLogLimit), seenAt: typeof seenAt === "number" ? seenAt : 0, ...(seenByMachine ? { seenByMachine } : {}) };
+    const seenByMachine =
+      seen && typeof seen === "object"
+        ? Object.fromEntries(
+            Object.entries(seen).filter(
+              ([key, time]) =>
+                validMachine(key) && typeof time === "number" && Number.isFinite(time),
+            ),
+          )
+        : undefined;
+    return {
+      events: (value as EventLogState).events.filter(isEvent).slice(0, eventLogLimit),
+      seenAt: typeof seenAt === "number" ? seenAt : 0,
+      ...(seenByMachine ? { seenByMachine } : {}),
+    };
   } catch {
     return emptyEventLog;
   }
 }
 
 function readStored(): EventLogState {
-  try { return parseEventLog(window.sessionStorage.getItem(eventLogStorageKey)); } catch { return emptyEventLog; }
+  try {
+    return parseEventLog(window.sessionStorage.getItem(eventLogStorageKey));
+  } catch {
+    return emptyEventLog;
+  }
 }
 
 function writeStored(state: EventLogState) {
-  try { window.sessionStorage.setItem(eventLogStorageKey, JSON.stringify(state)); } catch { /* The log still lives in memory. */ }
+  try {
+    window.sessionStorage.setItem(eventLogStorageKey, JSON.stringify(state));
+  } catch {
+    /* The log still lives in memory. */
+  }
 }
 
 let state: EventLogState | null = null;
@@ -103,7 +149,7 @@ let sequence = 0;
 const listeners = new Set<() => void>();
 
 function current(): EventLogState {
-  return state ??= typeof window === "undefined" ? emptyEventLog : readStored();
+  return (state ??= typeof window === "undefined" ? emptyEventLog : readStored());
 }
 
 function update(next: EventLogState) {
@@ -120,36 +166,72 @@ export function reportEvent(input: AppEventInput) {
   update(appendEvent(current(), input, now, id));
   // Keep the local fallback even if the server is down. Never report a reporting failure back
   // through this function: that would create an unbounded request/error loop.
-  if (typeof window !== "undefined") void fetch(`${APP_API_BASE}/diagnostics/report`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...input, source: "browser", context: { machine: input.source, details: input.context, browser_event_id: id },
-      event_key: `browser:${globalThis.crypto?.randomUUID?.() ?? id}` }),
-    signal: AbortSignal.timeout(5000),
-  }).catch(() => {});
+  if (typeof window !== "undefined")
+    void fetch(`${APP_API_BASE}/diagnostics/report`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...input,
+        source: "browser",
+        context: { machine: input.source, details: input.context, browser_event_id: id },
+        event_key: `browser:${globalThis.crypto?.randomUUID?.() ?? id}`,
+      }),
+      signal: AbortSignal.timeout(5000),
+    }).catch(() => {});
 }
 
 export interface DiagnosticRecord {
-  id: number; recorded_at: number; level: AppEventLevel; source: string; area: string; message: string; context?: unknown;
+  id: number;
+  recorded_at: number;
+  level: AppEventLevel;
+  source: string;
+  area: string;
+  message: string;
+  context?: unknown;
 }
 
 /** Import by durable id, never incrementing counts because a poll saw the same row again. */
-export function mergeDiagnostics(log: EventLogState, records: DiagnosticRecord[], machine?: string): EventLogState {
+export function mergeDiagnostics(
+  log: EventLogState,
+  records: DiagnosticRecord[],
+  machine?: string,
+): EventLogState {
   const events = new Map(log.events.map((event) => [event.id, event]));
   for (const record of records) {
-    if (!machine && record.source === "browser" && record.context && typeof record.context === "object") {
+    if (
+      !machine &&
+      record.source === "browser" &&
+      record.context &&
+      typeof record.context === "object"
+    ) {
       const localId = (record.context as Record<string, unknown>).browser_event_id;
       if (typeof localId === "string") events.delete(localId);
     }
     const id = machine ? `stored:${machine}:${record.id}` : `stored:${record.id}`;
-    events.set(id, { id, ...(machine ? { machine } : {}), level: record.level, source: record.source, area: record.area, message: record.message,
-      context: record.context, firstSeen: record.recorded_at, lastSeen: record.recorded_at, count: 1 });
+    events.set(id, {
+      id,
+      ...(machine ? { machine } : {}),
+      level: record.level,
+      source: record.source,
+      area: record.area,
+      message: record.message,
+      context: record.context,
+      firstSeen: record.recorded_at,
+      lastSeen: record.recorded_at,
+      count: 1,
+    });
   }
   return { ...log, events: [...events.values()].sort((a, b) => b.lastSeen - a.lastSeen) };
 }
 
-export async function queryDiagnostics(query: { before?: number; source?: string; level?: AppEventLevel; search?: string } = {}, machine?: string): Promise<DiagnosticRecord[]> {
+export async function queryDiagnostics(
+  query: { before?: number; source?: string; level?: AppEventLevel; search?: string } = {},
+  machine?: string,
+): Promise<DiagnosticRecord[]> {
   const response = await fetch(`${appApiBase(machine)}/diagnostics/query`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...query, limit: 100 }),
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...query, limit: 100 }),
     signal: AbortSignal.timeout(8000),
   });
   if (!response.ok) {
@@ -157,18 +239,41 @@ export async function queryDiagnostics(query: { before?: number; source?: string
     // The node proxy can translate a remote 404/connection failure into a 502 with an
     // actionable explanation. Preserve it instead of reducing every case to "Bad Gateway".
     const detail: unknown = await response.json().catch(() => null);
-    if (detail && typeof detail === "object" && "error" in detail && typeof detail.error === "string" && detail.error.trim()) {
+    if (
+      detail &&
+      typeof detail === "object" &&
+      "error" in detail &&
+      typeof detail.error === "string" &&
+      detail.error.trim()
+    ) {
       throw new Error(`${where}: ${detail.error.slice(0, 1500)}`);
     }
-    if (response.status === 404) throw new Error(`${where}: stored logs are unavailable. Update ADI on this machine.`);
-    if (response.status === 403 || response.status === 401) throw new Error(`${where}: unlock this node and use an administrator connection to read its logs.`);
+    if (response.status === 404)
+      throw new Error(`${where}: stored logs are unavailable. Update ADI on this machine.`);
+    if (response.status === 403 || response.status === 401)
+      throw new Error(
+        `${where}: unlock this node and use an administrator connection to read its logs.`,
+      );
     throw new Error(`${where}: could not load stored logs (HTTP ${response.status}).`);
   }
-  const data = await response.json() as { records?: DiagnosticRecord[] };
-  if (!Array.isArray(data.records) || !data.records.every((r) => r && Number.isSafeInteger(r.id)
-    && typeof r.recorded_at === "number" && Number.isFinite(r.recorded_at) && r.recorded_at >= 0 && r.recorded_at < 8.64e15
-    && ["error", "warning", "info"].includes(r.level) && typeof r.source === "string" && typeof r.area === "string"
-    && typeof r.message === "string")) throw new Error("The log service returned an invalid response.");
+  const data = (await response.json()) as { records?: DiagnosticRecord[] };
+  if (
+    !Array.isArray(data.records) ||
+    !data.records.every(
+      (r) =>
+        r &&
+        Number.isSafeInteger(r.id) &&
+        typeof r.recorded_at === "number" &&
+        Number.isFinite(r.recorded_at) &&
+        r.recorded_at >= 0 &&
+        r.recorded_at < 8.64e15 &&
+        ["error", "warning", "info"].includes(r.level) &&
+        typeof r.source === "string" &&
+        typeof r.area === "string" &&
+        typeof r.message === "string",
+    )
+  )
+    throw new Error("The log service returned an invalid response.");
   return data.records;
 }
 
@@ -195,7 +300,9 @@ export function clearEvents() {
 
 const subscribe = (listener: () => void) => {
   listeners.add(listener);
-  return () => { listeners.delete(listener); };
+  return () => {
+    listeners.delete(listener);
+  };
 };
 
 export function useEventLog(): EventLogState {
@@ -214,27 +321,44 @@ export function setEventLogOpen(open: boolean) {
 }
 
 export function useEventLogOpen(): boolean {
-  return useSyncExternalStore((listener) => {
-    panelListeners.add(listener);
-    return () => { panelListeners.delete(listener); };
-  }, () => panelOpen, () => false);
+  return useSyncExternalStore(
+    (listener) => {
+      panelListeners.add(listener);
+      return () => {
+        panelListeners.delete(listener);
+      };
+    },
+    () => panelOpen,
+    () => false,
+  );
 }
 
 const machinePreferenceKey = "adi.event-log.machine.v1";
 const validMachine = (value: string) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(value);
 
 export function readLogMachine(): string {
-  try { const value = window.sessionStorage.getItem(machinePreferenceKey); return value && validMachine(value) ? value : ""; }
-  catch { return ""; }
+  try {
+    const value = window.sessionStorage.getItem(machinePreferenceKey);
+    return value && validMachine(value) ? value : "";
+  } catch {
+    return "";
+  }
 }
 
 export function saveLogMachine(machine: string) {
-  try { window.sessionStorage.setItem(machinePreferenceKey, machine); } catch { /* In-memory selection still works. */ }
+  try {
+    window.sessionStorage.setItem(machinePreferenceKey, machine);
+  } catch {
+    /* In-memory selection still works. */
+  }
 }
 
 /** Only entries owned by this store. Process names and browser reports about another node
  * are never treated as ownership, so a node named "claude" cannot select local Claude errors. */
 export function machineLog(log: EventLogState, machine?: string): EventLogState {
-  return { ...log, events: log.events.filter((event) => (event.machine ?? "") === (machine ?? "")),
-    seenAt: machine ? log.seenByMachine?.[machine] ?? 0 : log.seenAt };
+  return {
+    ...log,
+    events: log.events.filter((event) => (event.machine ?? "") === (machine ?? "")),
+    seenAt: machine ? (log.seenByMachine?.[machine] ?? 0) : log.seenAt,
+  };
 }

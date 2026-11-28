@@ -357,7 +357,12 @@ pub(super) fn mark_nudged(conn: &Connection, agent: &str, conv: &str, at: u64) -
 ///
 /// # Errors
 /// Returns database errors.
-pub(super) fn record_delivery(conn: &Connection, agent: &str, conv: &str, failed: bool) -> Result<u64> {
+pub(super) fn record_delivery(
+    conn: &Connection,
+    agent: &str,
+    conv: &str,
+    failed: bool,
+) -> Result<u64> {
     let sql = if failed {
         "UPDATE goals SET delivery_failures = delivery_failures + 1
          WHERE agent = ?1 AND session = ?2 AND state = 'open'"
@@ -635,20 +640,28 @@ mod tests {
             .expect("create");
 
         assert_eq!(
-            store.record_goal_delivery("chat", &conv, true).expect("record"),
+            store
+                .record_goal_delivery("chat", &conv, true)
+                .expect("record"),
             1
         );
         assert_eq!(
-            store.record_goal_delivery("chat", &conv, true).expect("record"),
+            store
+                .record_goal_delivery("chat", &conv, true)
+                .expect("record"),
             2
         );
         assert_eq!(
-            store.record_goal_delivery("chat", &conv, false).expect("record"),
+            store
+                .record_goal_delivery("chat", &conv, false)
+                .expect("record"),
             0,
             "a landed delivery resets the streak"
         );
         assert_eq!(
-            store.record_goal_delivery("chat", &conv, true).expect("record"),
+            store
+                .record_goal_delivery("chat", &conv, true)
+                .expect("record"),
             1
         );
         assert_eq!(

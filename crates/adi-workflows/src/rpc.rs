@@ -80,7 +80,10 @@ impl Request {
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
-            Request::Result { .. } | Request::Error { .. } | Request::GaveUp { .. } | Request::Suspend {}
+            Request::Result { .. }
+                | Request::Error { .. }
+                | Request::GaveUp { .. }
+                | Request::Suspend {}
         )
     }
 }

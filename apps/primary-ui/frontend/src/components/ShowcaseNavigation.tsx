@@ -16,19 +16,48 @@ const pages = [
 function tabClass(isActive: boolean) {
   return cn(
     "focus-visible:ring-ring flex min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-md pt-1.5 pb-1 text-[11px] leading-none font-medium outline-none transition-colors focus-visible:ring-2 max-md:focus-visible:ring-inset md:size-9 md:flex-none md:gap-0 md:rounded-lg md:p-0",
-    isActive ? "text-foreground md:bg-foreground/10" : "text-muted-foreground hover:text-foreground md:hover:bg-foreground/5",
+    isActive
+      ? "text-foreground md:bg-foreground/10"
+      : "text-muted-foreground hover:text-foreground md:hover:bg-foreground/5",
   );
 }
 
-function TabIcon({ icon: Icon, active, className }: { icon: LucideIcon; active: boolean; className?: string }) {
-  return <Icon aria-hidden="true" className={cn("size-6 md:size-4", active && "fill-current/15 stroke-[2.25] md:fill-none md:stroke-2", className)} />;
+function TabIcon({
+  icon: Icon,
+  active,
+  className,
+}: {
+  icon: LucideIcon;
+  active: boolean;
+  className?: string;
+}) {
+  return (
+    <Icon
+      aria-hidden="true"
+      className={cn(
+        "size-6 md:size-4",
+        active && "fill-current/15 stroke-[2.25] md:fill-none md:stroke-2",
+        className,
+      )}
+    />
+  );
 }
 
 export function ShowcaseNavigation() {
   return (
-    <nav data-slot="global-navigation" aria-label="Main navigation" className="flex h-full w-full items-stretch justify-around px-2 pb-[env(safe-area-inset-bottom)] md:w-12 md:flex-col md:items-center md:justify-start md:px-0 md:pb-4">
+    <nav
+      data-slot="global-navigation"
+      aria-label="Main navigation"
+      className="flex h-full w-full items-stretch justify-around px-2 pb-[env(safe-area-inset-bottom)] md:w-12 md:flex-col md:items-center md:justify-start md:px-0 md:pb-4"
+    >
       <div className="flex flex-1 items-stretch justify-center md:h-11 md:w-full md:flex-none md:items-center">
-        <NavLink to="/" end aria-label="ADI home" title="ADI home" className={({ isActive }) => tabClass(isActive)}>
+        <NavLink
+          to="/"
+          end
+          aria-label="ADI home"
+          title="ADI home"
+          className={({ isActive }) => tabClass(isActive)}
+        >
           {/* The ADI mark is the Home icon on every width; it follows the tab colour. */}
           <AdiLogo className="size-6 md:size-5" />
           <span className="md:sr-only">Home</span>
@@ -36,7 +65,14 @@ export function ShowcaseNavigation() {
       </div>
       <div className="contents md:flex md:flex-col md:items-center md:gap-1">
         {pages.map(({ to, label, icon }) => (
-          <NavLink key={to} to={to} end={to !== "/marketplace"} aria-label={label} title={label} className={({ isActive }) => tabClass(isActive)}>
+          <NavLink
+            key={to}
+            to={to}
+            end={to !== "/marketplace"}
+            aria-label={label}
+            title={label}
+            className={({ isActive }) => tabClass(isActive)}
+          >
             {({ isActive }) => (
               <>
                 <TabIcon icon={icon} active={isActive} />
@@ -50,7 +86,12 @@ export function ShowcaseNavigation() {
       <div className="contents md:mt-auto md:flex md:shrink-0 md:flex-col md:items-center md:gap-1">
         <EventLogButton tabClass={tabClass} />
         {/* The new settings; its own page links on to the old ones for everything not moved yet. */}
-        <NavLink to="/settings" aria-label="Settings" title="Settings" className={({ isActive }) => tabClass(isActive)}>
+        <NavLink
+          to="/settings"
+          aria-label="Settings"
+          title="Settings"
+          className={({ isActive }) => tabClass(isActive)}
+        >
           {({ isActive }) => (
             <>
               <TabIcon icon={Settings} active={isActive} />

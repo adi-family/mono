@@ -117,7 +117,9 @@ mod tests {
              \x20 return {};\n\
              });\n",
         );
-        let started = engine.start_manual("gate", &json!({}), "req-1").expect("start");
+        let started = engine
+            .start_manual("gate", &json!({}), "req-1")
+            .expect("start");
         assert_eq!(engine.run_tick().len(), 1);
 
         let tasks = Tasks::with_config(config.clone());
@@ -126,7 +128,10 @@ mod tests {
         assert_eq!(
             run_status(&engine, &tasks, &agents, &run),
             RunStatus::WaitingOnTask {
-                task_id: tasks.find_step(&started.run_key, "gate").unwrap().map(|v| v.task.id)
+                task_id: tasks
+                    .find_step(&started.run_key, "gate")
+                    .unwrap()
+                    .map(|v| v.task.id)
             }
         );
     }
@@ -149,7 +154,9 @@ mod tests {
              export const on = manual();\n\
              export default workflow(async () => ({}));\n",
         );
-        let started = engine.start_manual("plain", &json!({}), "req-1").expect("start");
+        let started = engine
+            .start_manual("plain", &json!({}), "req-1")
+            .expect("start");
         assert_eq!(engine.run_tick().len(), 1, "completes in one tick");
 
         let tasks = Tasks::with_config(config.clone());

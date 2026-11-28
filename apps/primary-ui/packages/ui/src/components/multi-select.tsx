@@ -12,13 +12,25 @@ export type MultiSelectProps = ChoiceControlProps & {
 const EMPTY: readonly ChoiceOption[] = [];
 
 /** Searchable multiple selection; supports the same async/creation options as Autocomplete. */
-export function MultiSelect({ value, defaultValue = EMPTY, onValueChange, ...props }: MultiSelectProps) {
+export function MultiSelect({
+  value,
+  defaultValue = EMPTY,
+  onValueChange,
+  ...props
+}: MultiSelectProps) {
   const [internalValue, setInternalValue] = React.useState(defaultValue);
-  return <ChoiceControl {...props} multiple selected={value ?? internalValue}
-    onSelectionChange={(options) => {
-      if (value === undefined) setInternalValue(options);
-      onValueChange?.(options);
-    }}
-    onReset={() => { if (value === undefined) setInternalValue(defaultValue); }}
-  />;
+  return (
+    <ChoiceControl
+      {...props}
+      multiple
+      selected={value ?? internalValue}
+      onSelectionChange={(options) => {
+        if (value === undefined) setInternalValue(options);
+        onValueChange?.(options);
+      }}
+      onReset={() => {
+        if (value === undefined) setInternalValue(defaultValue);
+      }}
+    />
+  );
 }

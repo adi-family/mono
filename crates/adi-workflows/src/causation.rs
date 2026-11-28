@@ -115,13 +115,37 @@ mod tests {
             .create_run("a@1", "a", "/a.ts", "h", &json!({}), &json!({}), None)
             .expect("a1");
         store
-            .create_run("b@1", "b", "/b.ts", "h", &json!({}), &json!({}), Some("a@1"))
+            .create_run(
+                "b@1",
+                "b",
+                "/b.ts",
+                "h",
+                &json!({}),
+                &json!({}),
+                Some("a@1"),
+            )
             .expect("b1");
         store
-            .create_run("c@1", "c", "/c.ts", "h", &json!({}), &json!({}), Some("b@1"))
+            .create_run(
+                "c@1",
+                "c",
+                "/c.ts",
+                "h",
+                &json!({}),
+                &json!({}),
+                Some("b@1"),
+            )
             .expect("c1");
         store
-            .create_run("a@2", "a", "/a.ts", "h", &json!({}), &json!({}), Some("c@1"))
+            .create_run(
+                "a@2",
+                "a",
+                "/a.ts",
+                "h",
+                &json!({}),
+                &json!({}),
+                Some("c@1"),
+            )
             .expect("a2");
 
         // Considering starting workflow "a" because of something caused by "a@2" must see the
@@ -143,7 +167,15 @@ mod tests {
         for i in 1..=9 {
             let key = format!("w{i}@1");
             store
-                .create_run(&key, &format!("w{i}"), "/w.ts", "h", &json!({}), &json!({}), Some(&prev))
+                .create_run(
+                    &key,
+                    &format!("w{i}"),
+                    "/w.ts",
+                    "h",
+                    &json!({}),
+                    &json!({}),
+                    Some(&prev),
+                )
                 .expect("chain");
             prev = key;
         }

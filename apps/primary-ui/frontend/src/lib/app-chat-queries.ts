@@ -4,7 +4,8 @@ import type { ConversationRef } from "./app-chat";
 import { sourceKey, type ChatFilter, type ChatGroup } from "./app-chat-sources";
 
 export const chatRoute = "/interface";
-export const invalidSourceMessage = "This chat source is invalid. Choose a source from the sidebar.";
+export const invalidSourceMessage =
+  "This chat source is invalid. Choose a source from the sidebar.";
 
 export const fleetPollMs = 15_000;
 export const agentPollMs = 5_000;
@@ -16,7 +17,8 @@ export const indexPageSize = 100;
 export const projectPageSize = 3;
 
 const chatRoot = ["app-chat"] as const;
-const threadKey = (ref: ConversationRef) => [...chatRoot, "conversation", sourceKey(ref.source), ref.agent, ref.runId] as const;
+const threadKey = (ref: ConversationRef) =>
+  [...chatRoot, "conversation", sourceKey(ref.source), ref.agent, ref.runId] as const;
 
 export const chatQueryKeys = {
   all: chatRoot,
@@ -24,8 +26,24 @@ export const chatQueryKeys = {
   voice: [...chatRoot, "voice"] as const,
   agents: (source?: string) => [...chatRoot, "agents", sourceKey(source)] as const,
   allIndexes: [...chatRoot, "conversations"] as const,
-  index: (source: string | undefined, filter: ChatFilter, includeHidden: boolean, group: ChatGroup, limit: number, projectMore: Record<string, number>) =>
-    [...chatRoot, "conversations", sourceKey(source), filter, includeHidden, group, limit, projectMore] as const,
+  index: (
+    source: string | undefined,
+    filter: ChatFilter,
+    includeHidden: boolean,
+    group: ChatGroup,
+    limit: number,
+    projectMore: Record<string, number>,
+  ) =>
+    [
+      ...chatRoot,
+      "conversations",
+      sourceKey(source),
+      filter,
+      includeHidden,
+      group,
+      limit,
+      projectMore,
+    ] as const,
   thread: threadKey,
   snapshot: (ref: ConversationRef, limit: number) => [...threadKey(ref), limit] as const,
 };

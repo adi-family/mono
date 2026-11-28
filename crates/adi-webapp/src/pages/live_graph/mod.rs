@@ -192,12 +192,10 @@ pub(crate) fn live_graph_view(
     let under = move |x: f64, y: f64| -> Option<usize> {
         let c = canvas.get_untracked()?;
         let r = c.get_bounding_client_rect();
-        let (wx, wy) = gv.view.get_untracked().world(
-            r.width(),
-            r.height(),
-            x - r.left(),
-            y - r.top(),
-        );
+        let (wx, wy) =
+            gv.view
+                .get_untracked()
+                .world(r.width(), r.height(), x - r.left(), y - r.top());
         graph.with_untracked(|gr| gr.at(wx, wy))
     };
 

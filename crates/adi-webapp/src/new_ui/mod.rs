@@ -184,18 +184,31 @@ fn commands(
         let (title, subtitle) = if on {
             ("Hide rerenders", "Stop flashing DOM changes")
         } else {
-            ("Show rerenders", "Debug: highlight every DOM rebuild and patch")
+            (
+                "Show rerenders",
+                "Debug: highlight every DOM rebuild and patch",
+            )
         };
-        items.push(Item::new("Developer", title, subtitle, Lucide::Activity, rerenders::toggle));
+        items.push(Item::new(
+            "Developer",
+            title,
+            subtitle,
+            Lucide::Activity,
+            rerenders::toggle,
+        ));
     }
     // The long lists last, so the short commands above stay in sight with nothing typed. Every
     // app the home screen can open is a few keys away however full the screen — or hidden from it.
     let listed = sites.list.with(|s| apps::openable(apps, s));
     items.extend(listed.into_iter().map(|app| {
         let place = app.machine.clone().unwrap_or_else(|| "This machine".into());
-        Item::new("Apps", app.name.clone(), place, Lucide::AppWindow, move || {
-            desk.open_app(app.clone())
-        })
+        Item::new(
+            "Apps",
+            app.name.clone(),
+            place,
+            Lucide::AppWindow,
+            move || desk.open_app(app.clone()),
+        )
     }));
     // The control panel, which this screen does not replace yet: its front page, pairing, and
     // each of its pages by name — `menu::rows`' list, from [`routing::Route::NAV`], so a page

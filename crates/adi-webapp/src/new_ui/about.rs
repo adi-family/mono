@@ -103,7 +103,11 @@ fn rows(updates: update::UpdateWatch, f: Facts, host: String) -> impl IntoView {
         rows.push(fact_row("Up for", ui::fmt_uptime(s), false));
     }
     if let Some((running, total)) = f.services {
-        rows.push(fact_row("Services", format!("{running} of {total} running"), false));
+        rows.push(fact_row(
+            "Services",
+            format!("{running} of {total} running"),
+            false,
+        ));
     }
     if let Some(n) = f.agents {
         let runs = match n {

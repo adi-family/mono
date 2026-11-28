@@ -263,11 +263,7 @@ fn mesh_peer_rows(state: State) -> AnyView {
             let full = peer.clone();
             let menu_key = format!("mesh-peer:{peer}");
             let revoke = menu_item(state, "Revoke", true, move || {
-                apply_mesh(
-                    state,
-                    None,
-                    fetch::mesh_deny_peer(full.clone()),
-                );
+                apply_mesh(state, None, fetch::mesh_deny_peer(full.clone()));
             });
             view! {
                 <TableRow
@@ -315,11 +311,7 @@ fn mesh_forward_rows(state: State) -> AnyView {
         .map(|f| {
             let listen = f.listen;
             let remove = menu_item(state, "Remove", true, move || {
-                apply_mesh(
-                    state,
-                    None,
-                    fetch::mesh_remove_forward(listen),
-                );
+                apply_mesh(state, None, fetch::mesh_remove_forward(listen));
             });
             view! {
                 <TableRow state=table cell=move |col| forward_cell(col, &f)

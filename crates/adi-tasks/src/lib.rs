@@ -56,9 +56,7 @@ pub use events::{
 };
 pub use task::{EffectiveStatus, NewTask, Task, TaskDeleted, TaskPatch, TaskStatus, TaskView};
 
-use task::{
-    ParentChange, TasksDoc, clean, descendants, max_num_for_key, project_key, would_cycle,
-};
+use task::{ParentChange, TasksDoc, clean, descendants, max_num_for_key, project_key, would_cycle};
 
 /// The config module (`~/.adi/mono/tasks`) the tracker persists under.
 const MODULE: &str = "tasks";
@@ -77,7 +75,12 @@ const DB_FILE: &str = "tasks.db";
 
 /// One row of [`Tasks::workflow_run_signature`]: a task's `id`, `status`, `result`, and
 /// `give_up_reason`.
-pub type TaskSignatureRow = (String, TaskStatus, Option<serde_json::Value>, Option<String>);
+pub type TaskSignatureRow = (
+    String,
+    TaskStatus,
+    Option<serde_json::Value>,
+    Option<String>,
+);
 
 /// The task tree store: reads and writes `tasks.db` under the `tasks` module dir. Cheap to clone;
 /// all state is on disk.
@@ -576,10 +579,8 @@ impl Tasks {
                 return Err(Error::ReopenFirst);
             }
             if let Some(schema) = task.output_schema.clone() {
-                let validator =
-                    jsonschema::validator_for(&schema).map_err(|e| {
-                        Error::InvalidOutputSchema(e.to_string())
-                    })?;
+                let validator = jsonschema::validator_for(&schema)
+                    .map_err(|e| Error::InvalidOutputSchema(e.to_string()))?;
                 let Some(value) = result.as_ref() else {
                     return Err(Error::ResultRequired);
                 };
@@ -837,13 +838,18 @@ mod tests {
         // downtime"), the very same call relays everything that piled up while it wasn't.
         std::fs::remove_file(bus.dir()).expect("unblock the shared log");
         assert_eq!(
-            store.relay_pending_events().expect("relay now that the log is back"),
+            store
+                .relay_pending_events()
+                .expect("relay now that the log is back"),
             2,
             "both the create and the complete were still pending"
         );
         let caught_up = bus.catch_up("sub", 10).expect("catch up");
         assert_eq!(
-            caught_up.iter().map(|e| e.record.name.as_str()).collect::<Vec<_>>(),
+            caught_up
+                .iter()
+                .map(|e| e.record.name.as_str())
+                .collect::<Vec<_>>(),
             vec!["adi.tasks.created", "adi.tasks.completed"],
             "delivered in the order they actually happened, not the order they were relayed"
         );
@@ -1051,7 +1057,13 @@ mod tests {
 
         // A second access, with the source file already gone, must not re-run the import (which
         // would otherwise fail on the now-duplicate id).
-        assert_eq!(store.list(None, None, None, None).expect("list again").len(), 1);
+        assert_eq!(
+            store
+                .list(None, None, None, None)
+                .expect("list again")
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -1093,7 +1105,10 @@ mod tests {
         let store = scratch("archived");
         mk(&store, "task", None);
         store.archive("t1", true).expect("archive");
-        assert!(matches!(store.complete("t1", None), Err(Error::ReopenFirst)));
+        assert!(matches!(
+            store.complete("t1", None),
+            Err(Error::ReopenFirst)
+        ));
         store.reopen("t1").expect("reopen");
         store.complete("t1", None).expect("complete after reopen");
     }

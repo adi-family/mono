@@ -96,10 +96,10 @@ mod tests {
 
     #[test]
     fn an_interval_below_the_poll_still_sweeps_only_once_per_wakeup() {
-        assert_eq!(tick(Duration::ZERO, Some(Duration::from_secs(1))), (
-            true,
-            Duration::ZERO
-        ));
+        assert_eq!(
+            tick(Duration::ZERO, Some(Duration::from_secs(1))),
+            (true, Duration::ZERO)
+        );
     }
 
     #[test]

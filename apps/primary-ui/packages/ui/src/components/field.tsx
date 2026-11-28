@@ -30,7 +30,11 @@ function Field({ label, hint, error, controlId, className, children, ...props }:
   const hintId = hint ? `${id}-hint` : undefined;
   const errorId = error ? `${id}-error` : undefined;
   const describedBy = [hintId, errorId].filter(Boolean).join(" ") || undefined;
-  const control: FieldControlProps = { id, ...(describedBy ? { "aria-describedby": describedBy } : {}), ...(error ? { "aria-invalid": true as const } : {}) };
+  const control: FieldControlProps = {
+    id,
+    ...(describedBy ? { "aria-describedby": describedBy } : {}),
+    ...(error ? { "aria-invalid": true as const } : {}),
+  };
 
   return (
     <div data-slot="field" className={cn("flex min-w-0 flex-col gap-1.5", className)} {...props}>
@@ -39,12 +43,21 @@ function Field({ label, hint, error, controlId, className, children, ...props }:
       </label>
       {typeof children === "function" ? children(control) : children}
       {hint && (
-        <p data-slot="field-hint" id={hintId} className="text-muted-foreground text-xs leading-relaxed">
+        <p
+          data-slot="field-hint"
+          id={hintId}
+          className="text-muted-foreground text-xs leading-relaxed"
+        >
           {hint}
         </p>
       )}
       {error && (
-        <p data-slot="field-error" id={errorId} role="alert" className="text-destructive text-xs leading-relaxed">
+        <p
+          data-slot="field-error"
+          id={errorId}
+          role="alert"
+          className="text-destructive text-xs leading-relaxed"
+        >
           {error}
         </p>
       )}

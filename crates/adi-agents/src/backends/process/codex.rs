@@ -116,7 +116,13 @@ mod tests {
             web_search: true,
             ..Default::default()
         };
-        let args = argv(&config, "--help", Some("/workspace"), &Continuation::First, &[]);
+        let args = argv(
+            &config,
+            "--help",
+            Some("/workspace"),
+            &Continuation::First,
+            &[],
+        );
         let opts: serde_json::Value = serde_json::from_str(&args[4]).unwrap();
         assert_eq!(opts["thread"]["cwd"], "/workspace");
         assert_eq!(opts["thread"]["model"], "example");

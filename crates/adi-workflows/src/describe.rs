@@ -199,7 +199,9 @@ pub fn describe(config: &Config, path: &Path) -> Result<WorkflowShape> {
     let len = meta.len();
 
     {
-        let guard = cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let guard = cache()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(entry) = guard.get(path)
             && entry.mtime == mtime
             && entry.len == len
@@ -209,7 +211,9 @@ pub fn describe(config: &Config, path: &Path) -> Result<WorkflowShape> {
     }
 
     let shape = run_describe(config, path)?;
-    let mut guard = cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut guard = cache()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     guard.insert(
         path.to_path_buf(),
         CacheEntry {
@@ -336,9 +340,7 @@ mod tests {
         );
 
         let shape = describe(&config, &path).expect("describe");
-        let serde_json::Value::Object(expected) =
-            serde_json::json!({ "project": "demo" })
-        else {
+        let serde_json::Value::Object(expected) = serde_json::json!({ "project": "demo" }) else {
             unreachable!()
         };
         assert_eq!(
@@ -398,10 +400,7 @@ mod tests {
         let input = shape.input_schema.expect("input schema");
         assert_eq!(input["type"], "object");
         assert_eq!(input["properties"]["topic"]["type"], "string");
-        assert_eq!(
-            input["required"],
-            serde_json::json!(["topic"]),
-        );
+        assert_eq!(input["required"], serde_json::json!(["topic"]),);
         let output = shape.output_schema.expect("output schema");
         assert_eq!(output["properties"]["ok"]["type"], "boolean");
     }
@@ -427,8 +426,14 @@ mod tests {
             "cached.ts",
             "import { manual } from \"@adi/workflows\";\nexport const on = manual();\n",
         );
-        assert_eq!(describe(&config, &path).unwrap().on, vec![TriggerDef::Manual]);
-        assert_eq!(describe(&config, &path).unwrap().on, vec![TriggerDef::Manual]);
+        assert_eq!(
+            describe(&config, &path).unwrap().on,
+            vec![TriggerDef::Manual]
+        );
+        assert_eq!(
+            describe(&config, &path).unwrap().on,
+            vec![TriggerDef::Manual]
+        );
 
         std::thread::sleep(Duration::from_millis(1100));
         std::fs::write(

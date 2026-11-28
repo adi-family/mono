@@ -83,7 +83,11 @@ impl EmbedderSlot {
             // Never called — `get` returns the injected embedder before touching `build` — but
             // the field needs some value, and one that says why it is unreachable beats faking a
             // `Config` just to satisfy `default_embedder`'s signature.
-            build: Arc::new(|| Err(Error::Embed("unreachable: an injected slot never builds".into()))),
+            build: Arc::new(|| {
+                Err(Error::Embed(
+                    "unreachable: an injected slot never builds".into(),
+                ))
+            }),
             lazy: Arc::default(),
         }
     }

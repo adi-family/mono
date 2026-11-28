@@ -1093,11 +1093,7 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
 ///
 /// The same lines either way, on purpose: what somebody approved is what says it happened, so
 /// there is nothing to compare between two differently-shaped outputs.
-fn report_migration(
-    plan: &migrations::Plan,
-    applied: Option<&migrations::Applied>,
-    json: bool,
-) {
+fn report_migration(plan: &migrations::Plan, applied: Option<&migrations::Applied>, json: bool) {
     if json {
         print_json(&serde_json::json!({
             "writes": MANIFEST_VERSION,
@@ -1118,7 +1114,10 @@ fn report_migration(
         println!("  Upgrade adi before touching these — this binary does not know their shape.");
     }
     if plan.pending.is_empty() {
-        println!("\nNothing to migrate: all {} agent(s) are current.", plan.current);
+        println!(
+            "\nNothing to migrate: all {} agent(s) are current.",
+            plan.current
+        );
         return;
     }
     println!(
@@ -1127,7 +1126,10 @@ fn report_migration(
         plan.current
     );
     for step in plan.steps() {
-        println!("  {} → {}  {} — {}", step.from, step.to, step.name, step.what);
+        println!(
+            "  {} → {}  {} — {}",
+            step.from, step.to, step.name, step.what
+        );
     }
     println!();
     for agent in &plan.pending {
@@ -1493,10 +1495,13 @@ fn print_agent(agent: &StoredAgent) {
     if !agent.manifest.mcp.is_empty() {
         println!("  mcp servers: {}", agent.manifest.mcp.join(", "));
     }
-    let code: Vec<&str> = [(agent.manifest.pycode, "PyCode"), (agent.manifest.tscode, "TsCode")]
-        .into_iter()
-        .filter_map(|(on, tool)| on.then_some(tool))
-        .collect();
+    let code: Vec<&str> = [
+        (agent.manifest.pycode, "PyCode"),
+        (agent.manifest.tscode, "TsCode"),
+    ]
+    .into_iter()
+    .filter_map(|(on, tool)| on.then_some(tool))
+    .collect();
     if let Some(language) = agent.manifest.code_only {
         // Said instead of the switches, not beside them: while this is on they decide nothing.
         println!(
@@ -1746,9 +1751,7 @@ fn run_leased(
     }
     println!("Started agent {name} through its lease at {lease_url}.");
     println!("  run:     {run_id}");
-    if !no_await
-        && let Some(note) = follow_the_run(store, name, run_id, message, baseline_seq)
-    {
+    if !no_await && let Some(note) = follow_the_run(store, name, run_id, message, baseline_seq) {
         println!();
         println!("{note}");
     }
@@ -2036,14 +2039,18 @@ mod tests {
     /// refused rather than silently picking one.
     #[test]
     fn runs_accepts_the_agent_name_positionally_or_as_a_flag() {
-        let AgentsCommand::Runs { agent, agent_flag, .. } = parse(&["runs", "frontend-2"]) else {
+        let AgentsCommand::Runs {
+            agent, agent_flag, ..
+        } = parse(&["runs", "frontend-2"])
+        else {
             panic!("expected runs");
         };
         assert_eq!(agent.as_deref(), Some("frontend-2"));
         assert_eq!(agent_flag, None);
 
-        let AgentsCommand::Runs { agent, agent_flag, .. } =
-            parse(&["runs", "--agent", "frontend-2"])
+        let AgentsCommand::Runs {
+            agent, agent_flag, ..
+        } = parse(&["runs", "--agent", "frontend-2"])
         else {
             panic!("expected runs");
         };
@@ -2069,8 +2076,7 @@ mod tests {
         assert_eq!(task.as_deref(), Some("do it"));
         assert_eq!(message, None);
 
-        let AgentsCommand::Run { task, message, .. } =
-            parse(&["run", "frontend-2", "-m", "do it"])
+        let AgentsCommand::Run { task, message, .. } = parse(&["run", "frontend-2", "-m", "do it"])
         else {
             panic!("expected run");
         };

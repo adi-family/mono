@@ -178,7 +178,11 @@ fn toml_key(key: &str) -> String {
         && key
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-    if bare { key.to_string() } else { toml_string(key) }
+    if bare {
+        key.to_string()
+    } else {
+        toml_string(key)
+    }
 }
 
 #[cfg(test)]
@@ -255,12 +259,17 @@ mod tests {
         assert!(raw.contains("[created_from]\n"), "{raw}");
         assert!(raw.contains("template = \"vite-react\"\n"), "{raw}");
         assert!(
-            raw.contains(r#"command = 'bun create adi-family/dashboard-vite-react "$ADI_DASHBOARD_DIR"'"#),
+            raw.contains(
+                r#"command = 'bun create adi-family/dashboard-vite-react "$ADI_DASHBOARD_DIR"'"#
+            ),
             "the command is a TOML literal string, unescaped: {raw}"
         );
 
         let back = read_manifest(&dir);
-        assert_eq!(back.created_from.as_ref().map(|c| c.template.as_str()), Some("vite-react"));
+        assert_eq!(
+            back.created_from.as_ref().map(|c| c.template.as_str()),
+            Some("vite-react")
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

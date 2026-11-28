@@ -174,7 +174,9 @@ fn connect(
                 }
             }
         }
-        println!("Waiting for the link to complete (Ctrl-C to stop waiting — the connection stays)...");
+        println!(
+            "Waiting for the link to complete (Ctrl-C to stop waiting — the connection stays)..."
+        );
     }
 
     let linked = wait_for_link(api, &id, std::time::Duration::from_secs(timeout_secs));
@@ -226,7 +228,9 @@ fn list(api: &NodeApi, json: bool) -> Result<(), String> {
         return Ok(());
     }
     if connections.is_empty() {
-        println!("No channel connections on this node yet. Run `adi-mono channels connect <svc> --agent <a>`.");
+        println!(
+            "No channel connections on this node yet. Run `adi-mono channels connect <svc> --agent <a>`."
+        );
         return Ok(());
     }
     for c in &connections {
@@ -440,7 +444,11 @@ mod tests {
     fn route_rejects_pause_and_resume_together_but_takes_either_alone() {
         match parse(&["route", "c1", "--agent", "b"]) {
             ChannelsCommand::Route {
-                id, agent, pause, resume, ..
+                id,
+                agent,
+                pause,
+                resume,
+                ..
             } => {
                 assert_eq!(id, "c1");
                 assert_eq!(agent.as_deref(), Some("b"));
@@ -498,7 +506,9 @@ mod tests {
         assert_eq!(allowlist_label(&Allowlist::OwnerOnly), "owner only");
         assert_eq!(allowlist_label(&Allowlist::Open), "open");
         assert_eq!(
-            allowlist_label(&Allowlist::List { sender_ids: vec!["a".into(), "b".into()] }),
+            allowlist_label(&Allowlist::List {
+                sender_ids: vec!["a".into(), "b".into()]
+            }),
             "list: a, b"
         );
     }

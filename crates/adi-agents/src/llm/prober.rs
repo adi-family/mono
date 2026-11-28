@@ -56,9 +56,7 @@ pub enum Verdict {
     /// Nothing here can ask this backend anything: it declares no probe, its definition is gone, or
     /// it answers through a vendor CLI rather than a provider ADI calls. The hold stands and expires
     /// on its own deadline.
-    Unreachable {
-        reason: String,
-    },
+    Unreachable { reason: String },
 }
 
 /// One hold, and what the sweep made of it.
@@ -145,7 +143,6 @@ impl Prober {
         let every = LlmSettings::open(&self.config).probe_every;
         (every > 0).then(|| Duration::from_secs(every))
     }
-
 }
 
 /// One hold: find something that can ask on its behalf, ask, and write down the answer.
@@ -330,7 +327,10 @@ mod tests {
             .expect("hold");
 
         assert!(
-            Prober::with_config(config).sweep().expect("sweep").is_empty(),
+            Prober::with_config(config)
+                .sweep()
+                .expect("sweep")
+                .is_empty(),
             "nothing is due, so nothing is asked",
         );
     }
@@ -411,10 +411,13 @@ mod tests {
     fn a_model_scoped_hold_is_not_answered_by_a_sibling_on_another_model() {
         let config = scratch("model-scope");
         LlmBackends::with_config(config.clone())
-            .save("sonnet", LlmBackendManifest {
-                model: "claude-sonnet-5".into(),
-                ..cli_backend(Some(Probe::default()))
-            })
+            .save(
+                "sonnet",
+                LlmBackendManifest {
+                    model: "claude-sonnet-5".into(),
+                    ..cli_backend(Some(Probe::default()))
+                },
+            )
             .expect("save");
 
         Holds::with_config(&config)

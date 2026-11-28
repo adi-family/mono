@@ -3,6 +3,7 @@
 # Where target/ really lives on macOS, kept out of Spotlight (scripts/target-noindex.sh).
 /target.noindex
 **/*.rs.bk
+/node_modules/
 
 # macOS app build output (assembled .app bundle + packaged .dmg)
 apps/*/build/

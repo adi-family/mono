@@ -3486,8 +3486,10 @@ mod tests {
 
         let key = client_ep.id();
         let node = Arc::new(
-            StubNode::new(routes(&[("video", "video.adi", None, port)]))
-                .with_peer(key, peer_named("viewer", &["http:video"], "igor", "hunter2")),
+            StubNode::new(routes(&[("video", "video.adi", None, port)])).with_peer(
+                key,
+                peer_named("viewer", &["http:video"], "igor", "hunter2"),
+            ),
         );
 
         // `serve_peer`, not a one-shot `accept_bi` + `serve_stream`: the real node side never
@@ -3510,11 +3512,9 @@ mod tests {
         protocol::write_http_request(&mut send, "video")
             .await
             .expect("write the frame");
-        send.write_all(
-            get_head("video.laptop-b.n.adi", "/", &basic("igor", "hunter2")).as_bytes(),
-        )
-        .await
-        .expect("write the head");
+        send.write_all(get_head("video.laptop-b.n.adi", "/", &basic("igor", "hunter2")).as_bytes())
+            .await
+            .expect("write the head");
         // This request carries no body, so the write side is done — and the server's reverse
         // pump (`tunnel::pump`'s `to_local`, copying this stream onto the upstream's write half)
         // blocks on EOF from exactly this stream. A real browser eventually supplies that EOF by

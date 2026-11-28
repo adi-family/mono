@@ -195,7 +195,9 @@ mod tests {
         );
         store(&config).set_enabled("on-task", true).expect("enable");
         let events = Events::with_config(config.clone());
-        events.emit("adi.tasks.created", r#"{"id":"t1"}"#).expect("emit");
+        events
+            .emit("adi.tasks.created", r#"{"id":"t1"}"#)
+            .expect("emit");
 
         let started = tick(&events, &config, &store(&config), &pourer(&config));
         assert_eq!(started.len(), 1);
@@ -240,7 +242,9 @@ mod tests {
             "import { event } from \"@adi/workflows\";\n\
              export const on = event(\"adi.projects.*\");\n",
         );
-        store(&config).set_enabled("on-other", true).expect("enable");
+        store(&config)
+            .set_enabled("on-other", true)
+            .expect("enable");
         let events = Events::with_config(config.clone());
         events.emit("adi.tasks.created", "{}").expect("emit");
 
@@ -323,7 +327,15 @@ mod tests {
         // Simulate a task-created event whose payload already carries `workflow_run` naming a
         // real run of "on-task" — exactly what pouring "on-task" itself would emit.
         store
-            .create_run("on-task@evt:0", "on-task", "/f.ts", "h", &serde_json::json!({}), &serde_json::json!({}), None)
+            .create_run(
+                "on-task@evt:0",
+                "on-task",
+                "/f.ts",
+                "h",
+                &serde_json::json!({}),
+                &serde_json::json!({}),
+                None,
+            )
             .expect("seed the causing run");
         events
             .emit(
@@ -366,7 +378,15 @@ mod tests {
         let pourer = pourer(&config);
 
         store
-            .create_run("on-task@evt:0", "on-task", "/f.ts", "h", &serde_json::json!({}), &serde_json::json!({}), None)
+            .create_run(
+                "on-task@evt:0",
+                "on-task",
+                "/f.ts",
+                "h",
+                &serde_json::json!({}),
+                &serde_json::json!({}),
+                None,
+            )
             .expect("seed");
         events
             .emit("adi.tasks.created", r#"{"workflow_run":"on-task@evt:0"}"#)
@@ -374,6 +394,10 @@ mod tests {
 
         let started = tick(&events, &config, &store, &pourer);
         let workflows: Vec<&str> = started.iter().map(|s| s.workflow.as_str()).collect();
-        assert_eq!(workflows, vec!["watcher"], "only the self-caused one is refused");
+        assert_eq!(
+            workflows,
+            vec!["watcher"],
+            "only the self-caused one is refused"
+        );
     }
 }

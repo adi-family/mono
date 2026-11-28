@@ -62,14 +62,17 @@ async fn pull(relay_url: &str, identity: &RelayIdentity) -> Result<Vec<PulledRec
     for (k, v) in signed_headers(identity, "GET", path, b"") {
         req = req.header(k, v);
     }
-    let resp = req.send().await.map_err(|e| format!("could not reach {relay_url}: {e}"))?;
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("could not reach {relay_url}: {e}"))?;
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
     if !status.is_success() {
         return Err(relay_error_message(status.as_u16(), &text));
     }
-    let v: serde_json::Value =
-        serde_json::from_str(&text).map_err(|_| format!("{relay_url} answered a body that wasn't JSON"))?;
+    let v: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|_| format!("{relay_url} answered a body that wasn't JSON"))?;
     v["records"]
         .as_array()
         .cloned()
@@ -87,7 +90,11 @@ async fn pull(relay_url: &str, identity: &RelayIdentity) -> Result<Vec<PulledRec
                 r["sealed"]["ciphertext"].as_str().unwrap_or_default(),
             )
             .map_err(|e| format!("a pulled record's seal didn't decode: {e}"))?;
-            Ok(PulledRecord { id, endpoint_id, sealed })
+            Ok(PulledRecord {
+                id,
+                endpoint_id,
+                sealed,
+            })
         })
         .collect::<Result<Vec<_>, String>>()
 }
@@ -118,8 +125,19 @@ const HOP_BY_HOP: &[&str] = &["host", "content-length", "connection", "transfer-
 /// the external sender (a sender can't sign with our key, so the sender side stays open in every
 /// mode). Resolved by the caller rather than read from `trigger.manifest.extra` here because a
 /// reference needs this node's own `adi-secrets` store — [`poll_loop`] already has it to hand.
-async fn replay(loopback_base: &str, identity: &RelayIdentity, trigger: &Trigger, hook_secret: Option<&str>, record: &PulledRecord) {
-    let Ok(opened) = adi_relay::seal::open(&identity.sealing, &record.endpoint_id, record.id, &record.sealed) else {
+async fn replay(
+    loopback_base: &str,
+    identity: &RelayIdentity,
+    trigger: &Trigger,
+    hook_secret: Option<&str>,
+    record: &PulledRecord,
+) {
+    let Ok(opened) = adi_relay::seal::open(
+        &identity.sealing,
+        &record.endpoint_id,
+        record.id,
+        &record.sealed,
+    ) else {
         warn!(trigger = %trigger.name, endpoint_id = %record.endpoint_id, "a pulled record did not open with this node's sealing key — dropped");
         return;
     };
@@ -150,7 +168,10 @@ async fn replay(loopback_base: &str, identity: &RelayIdentity, trigger: &Trigger
         query
     );
 
-    let method = sender.method.parse::<reqwest::Method>().unwrap_or(reqwest::Method::POST);
+    let method = sender
+        .method
+        .parse::<reqwest::Method>()
+        .unwrap_or(reqwest::Method::POST);
     let mut req = http_client().request(method, &url);
     for (k, v) in &sender.headers {
         if !HOP_BY_HOP.contains(&k.to_ascii_lowercase().as_str()) {
@@ -161,8 +182,12 @@ async fn replay(loopback_base: &str, identity: &RelayIdentity, trigger: &Trigger
         Ok(resp) if resp.status().is_success() => {
             debug!(trigger = %trigger.name, endpoint_id = %record.endpoint_id, "replayed a relay-delivered webhook");
         }
-        Ok(resp) => warn!(trigger = %trigger.name, status = %resp.status(), "the local replay of a relay-delivered webhook was refused"),
-        Err(error) => warn!(trigger = %trigger.name, %error, "could not reach this node's own loopback listener to replay a webhook"),
+        Ok(resp) => {
+            warn!(trigger = %trigger.name, status = %resp.status(), "the local replay of a relay-delivered webhook was refused")
+        }
+        Err(error) => {
+            warn!(trigger = %trigger.name, %error, "could not reach this node's own loopback listener to replay a webhook")
+        }
     }
 }
 
@@ -195,7 +220,12 @@ async fn supervise(triggers: Triggers, loopback_base: String) {
     loop {
         for url in relays_in_use(&triggers) {
             if running.insert(url.clone()) {
-                tokio::spawn(poll_loop(url, triggers.clone(), loopback_base.clone(), Arc::clone(&identity)));
+                tokio::spawn(poll_loop(
+                    url,
+                    triggers.clone(),
+                    loopback_base.clone(),
+                    Arc::clone(&identity),
+                ));
             }
         }
         tokio::time::sleep(RESCAN).await;
@@ -211,12 +241,27 @@ fn relays_in_use(triggers: &Triggers) -> std::collections::HashSet<String> {
         .unwrap_or_default()
         .into_iter()
         .filter(|t| t.manifest.kind == adi_triggers::KIND_WEBHOOK && t.manifest.enabled)
-        .filter(|t| t.manifest.extra.get("relay_endpoint").is_some_and(|s| !s.is_empty()))
-        .filter_map(|t| t.manifest.extra.get("relay").and_then(|r| adi_relay::register::resolve_url(r)))
+        .filter(|t| {
+            t.manifest
+                .extra
+                .get("relay_endpoint")
+                .is_some_and(|s| !s.is_empty())
+        })
+        .filter_map(|t| {
+            t.manifest
+                .extra
+                .get("relay")
+                .and_then(|r| adi_relay::register::resolve_url(r))
+        })
         .collect()
 }
 
-async fn poll_loop(url: String, triggers: Triggers, loopback_base: String, identity: Arc<RelayIdentity>) {
+async fn poll_loop(
+    url: String,
+    triggers: Triggers,
+    loopback_base: String,
+    identity: Arc<RelayIdentity>,
+) {
     let mut backoff = INITIAL_BACKOFF;
     loop {
         match pull(&url, &identity).await {
@@ -228,7 +273,8 @@ async fn poll_loop(url: String, triggers: Triggers, loopback_base: String, ident
                 let Ok(all) = triggers.list() else { continue };
                 for record in &records {
                     let Some(trigger) = all.iter().find(|t| {
-                        t.manifest.extra.get("relay_endpoint").map(String::as_str) == Some(record.endpoint_id.as_str())
+                        t.manifest.extra.get("relay_endpoint").map(String::as_str)
+                            == Some(record.endpoint_id.as_str())
                     }) else {
                         debug!(endpoint_id = %record.endpoint_id, "pulled a record for an endpoint no local trigger names any more — dropped");
                         continue;
@@ -242,7 +288,9 @@ async fn poll_loop(url: String, triggers: Triggers, loopback_base: String, ident
                             warn!(trigger = %trigger.name, "its hook secret names a reference that doesn't resolve — dropping this relay delivery rather than replaying it unauthenticated");
                             continue;
                         }
-                        adi_triggers::HookSecret::Open => replay(&loopback_base, &identity, trigger, None, record).await,
+                        adi_triggers::HookSecret::Open => {
+                            replay(&loopback_base, &identity, trigger, None, record).await
+                        }
                         adi_triggers::HookSecret::Value(secret) => {
                             replay(&loopback_base, &identity, trigger, Some(&secret), record).await;
                         }
@@ -278,13 +326,18 @@ pub async fn save_trigger(triggers: &Triggers, supervisor: &Supervisor, body: &[
     // save that didn't touch the secret section keeps whatever the trigger already had.
     adi_triggers::reconcile_hook_secret(previous_extra, clear_hook_secret, &mut manifest.extra);
 
-    if let adi_relay::register::Plan::Unchanged = adi_relay::register::plan(previous_extra, &manifest.extra) {
+    if let adi_relay::register::Plan::Unchanged =
+        adi_relay::register::plan(previous_extra, &manifest.extra)
+    {
         adi_relay::register::keep_unchanged_endpoint(previous_extra, &mut manifest.extra);
     } else {
         let id = match identity() {
             Ok(id) => Arc::new(id),
             Err(error) => {
-                return handlers::error(500, &format!("could not load this node's relay keypair: {error}"));
+                return handlers::error(
+                    500,
+                    &format!("could not load this node's relay keypair: {error}"),
+                );
             }
         };
         if let Err(error) = adi_relay::register::register_on_save(
@@ -295,7 +348,10 @@ pub async fn save_trigger(triggers: &Triggers, supervisor: &Supervisor, body: &[
         )
         .await
         {
-            return handlers::error(502, &format!("registering against the relay failed: {error}"));
+            return handlers::error(
+                502,
+                &format!("registering against the relay failed: {error}"),
+            );
         }
     }
     handlers::commit_trigger(triggers, supervisor, &name, manifest)
@@ -311,8 +367,16 @@ pub fn delete_trigger(triggers: &Triggers, supervisor: &Supervisor, body: &[u8])
         Err(resp) => return resp,
     };
     if let Ok(Some(trigger)) = triggers.get(&name) {
-        let relay = trigger.manifest.extra.get("relay").filter(|s| !s.is_empty());
-        let endpoint = trigger.manifest.extra.get("relay_endpoint").filter(|s| !s.is_empty());
+        let relay = trigger
+            .manifest
+            .extra
+            .get("relay")
+            .filter(|s| !s.is_empty());
+        let endpoint = trigger
+            .manifest
+            .extra
+            .get("relay_endpoint")
+            .filter(|s| !s.is_empty());
         if let (Some(relay), Some(endpoint)) = (relay, endpoint)
             && let Some(url) = adi_relay::register::resolve_url(relay)
             && let Ok(id) = identity()
@@ -331,7 +395,10 @@ pub fn relay_key() -> Response {
         Ok(id) => handlers::ok_json(&adi_webapp_api::types::RelayKey {
             public_key: id.public_key_line(),
         }),
-        Err(error) => handlers::error(500, &format!("could not load this node's relay keypair: {error}")),
+        Err(error) => handlers::error(
+            500,
+            &format!("could not load this node's relay keypair: {error}"),
+        ),
     }
 }
 
@@ -342,7 +409,10 @@ mod tests {
     fn manifest_with(extra: &[(&str, &str)]) -> adi_triggers::TriggerManifest {
         adi_triggers::TriggerManifest {
             kind: adi_triggers::KIND_WEBHOOK.to_string(),
-            extra: extra.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            extra: extra
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
             ..adi_triggers::TriggerManifest::default()
         }
     }
@@ -354,7 +424,8 @@ mod tests {
             std::thread::current().id(),
         ));
         let _ = std::fs::remove_dir_all(&root);
-        adi_relay::keys::load_or_create_in(&adi_config::Config::with_root(root)).expect("mint a scratch identity")
+        adi_relay::keys::load_or_create_in(&adi_config::Config::with_root(root))
+            .expect("mint a scratch identity")
     }
 
     /// `replay` end to end against a real loopback socket standing in for `adi-app`'s own
@@ -400,19 +471,38 @@ mod tests {
             String::from_utf8_lossy(&buf[..n]).to_string()
         });
 
-        replay(&format!("http://{addr}"), &identity, &trigger, Some("shh"), &record).await;
+        replay(
+            &format!("http://{addr}"),
+            &identity,
+            &trigger,
+            Some("shh"),
+            &record,
+        )
+        .await;
 
         let request = captured.await.unwrap();
         let request_line = request.lines().next().unwrap();
-        assert_eq!(request_line, "GET /api/hooks/deploy-hook?foo=bar&secret=shh HTTP/1.1");
-        assert!(request.to_ascii_lowercase().contains("x-hub-signature-256: sha256=abc"));
+        assert_eq!(
+            request_line,
+            "GET /api/hooks/deploy-hook?foo=bar&secret=shh HTTP/1.1"
+        );
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("x-hub-signature-256: sha256=abc")
+        );
         // The sender's own captured `host` header must never ride the replay — reqwest
         // still sets its own `Host: 127.0.0.1:<port>` for the request it's actually making, so
         // the assertion is on the *value*, not the header's bare absence.
         assert!(
-            !request.to_ascii_lowercase().contains("eu.webhooks.withadi.dev"),
+            !request
+                .to_ascii_lowercase()
+                .contains("eu.webhooks.withadi.dev"),
             "the sender's captured Host header must not ride the loopback replay: {request}"
         );
-        assert!(request.ends_with("{\"a\":1}"), "the body round-trips intact: {request}");
+        assert!(
+            request.ends_with("{\"a\":1}"),
+            "the body round-trips intact: {request}"
+        );
     }
 }

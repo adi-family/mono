@@ -116,7 +116,10 @@ impl fmt::Display for Kind {
 /// Serialized as [`Kind::dir`] — the spelling an install report and the install ledger
 /// (`crate::bundle`) both use, since both are keyed by the same coordinate an address is.
 impl serde::Serialize for Kind {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
         serializer.serialize_str(self.dir())
     }
 }
@@ -125,9 +128,12 @@ impl serde::Serialize for Kind {
 /// recognises is a corrupt read, not a silent drop, because the ledger is this machine's own
 /// record of what it installed.
 impl<'de> serde::Deserialize<'de> for Kind {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
         let word = String::deserialize(deserializer)?;
-        Kind::from_dir(&word).ok_or_else(|| D::Error::custom(format!("not a bundle element kind: {word:?}")))
+        Kind::from_dir(&word)
+            .ok_or_else(|| D::Error::custom(format!("not a bundle element kind: {word:?}")))
     }
 }
 
@@ -148,7 +154,11 @@ mod tests {
         assert_eq!(Kind::Llm.wire(), Kind::Llm.dir());
         assert_eq!(Kind::Project.wire(), Kind::Project.dir());
         assert_eq!(Kind::Mcp.wire(), Kind::Mcp.dir());
-        assert_ne!(Kind::Agent.wire(), Kind::Agent.dir(), "singular vs. the directory's plural");
+        assert_ne!(
+            Kind::Agent.wire(),
+            Kind::Agent.dir(),
+            "singular vs. the directory's plural"
+        );
     }
 
     #[test]
@@ -164,8 +174,16 @@ mod tests {
     #[test]
     fn an_unrecognised_word_is_not_a_kind() {
         assert_eq!(Kind::from_wire("apps"), None);
-        assert_eq!(Kind::from_wire("agents"), None, "the manifest spells it singular");
-        assert_eq!(Kind::from_dir("agent"), None, "the address spells it plural");
+        assert_eq!(
+            Kind::from_wire("agents"),
+            None,
+            "the manifest spells it singular"
+        );
+        assert_eq!(
+            Kind::from_dir("agent"),
+            None,
+            "the address spells it plural"
+        );
     }
 
     #[test]
@@ -176,6 +194,9 @@ mod tests {
             let back: Kind = serde_json::from_str(&json).expect("deserialize");
             assert_eq!(back, kind);
         }
-        assert!(serde_json::from_str::<Kind>("\"apps\"").is_err(), "not a bundle kind");
+        assert!(
+            serde_json::from_str::<Kind>("\"apps\"").is_err(),
+            "not a bundle kind"
+        );
     }
 }

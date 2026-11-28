@@ -278,9 +278,17 @@ pub(super) fn Island(
         ev.prevent_default();
         // The island sits on a screen edge, and a menu dropped down from an island at the bottom
         // would open off the screen: in the lower half it opens upward, its foot at the pointer.
-        let tall = if matches!(win, Win::App(_) | Win::Chat | Win::Talk(_)) { MENU_TWO } else { MENU_ONE };
+        let tall = if matches!(win, Win::App(_) | Win::Chat | Win::Talk(_)) {
+            MENU_TWO
+        } else {
+            MENU_ONE
+        };
         let low = f64::from(ev.client_y()) > super::windows::viewport_height() / 2.0;
-        let y = if low { ev.client_y() - tall } else { ev.client_y() };
+        let y = if low {
+            ev.client_y() - tall
+        } else {
+            ev.client_y()
+        };
         menu.set(Some((MenuAt::Point(ev.client_x(), y), win)));
     };
     view! {

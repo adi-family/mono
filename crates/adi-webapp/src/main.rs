@@ -56,15 +56,14 @@ use wasm_bindgen_futures::spawn_local;
 use pages::{
     FactsConsole, GraphView, LlmConsole, OnboardingForm, adopt_run_settings, agent_detail_view,
     agents_view, analytics_view, channels_view, chat_home_view, dashboards_view, database_view,
-    elements_view,
-    embedding_backends_view, facts_view, fleet_view, hive_view, knowledge_view, land_last_agent,
-    live_graph_view, live_view, llm_backends_view, llm_view, load_agent_into_form, load_dir,
-    load_store_file, market_view, marketplace_view, mesh_view, meta_view, onboarding_view,
-    open_run_answerable_untracked, poll_hook_log, poll_term, poll_trigger_log, poll_watch,
-    ports_manager_view, project_detail_view, projects_view, reset_chat_home, secrets_view,
-    seed_onboarding, settings_view, shared_assets_view, start_onb_reconfigure,
-    start_onb_reconfigure_agent, store_file_view, system_view, tasks_view, tools_view, triggers_view,
-    usage_events_view, workflow_detail_view, workflows_view,
+    elements_view, embedding_backends_view, facts_view, fleet_view, hive_view, knowledge_view,
+    land_last_agent, live_graph_view, live_view, llm_backends_view, llm_view, load_agent_into_form,
+    load_dir, load_store_file, market_view, marketplace_view, mesh_view, meta_view,
+    onboarding_view, open_run_answerable_untracked, poll_hook_log, poll_term, poll_trigger_log,
+    poll_watch, ports_manager_view, project_detail_view, projects_view, reset_chat_home,
+    secrets_view, seed_onboarding, settings_view, shared_assets_view, start_onb_reconfigure,
+    start_onb_reconfigure_agent, store_file_view, system_view, tasks_view, tools_view,
+    triggers_view, usage_events_view, workflow_detail_view, workflows_view,
 };
 use routing::{
     ProjectSection, Route, WorkflowTab, current_path, open_project_section, project_id_from_path,
@@ -73,10 +72,10 @@ use routing::{
 use state::{
     AgentsForm, AgentsWatch, ChannelsConsole, DashboardsForm, DbConsole, EmbeddingsConsole,
     FilesState, Flash, FleetForm, Form, HookLogView, KnowledgeConsole, LlmBackendsForm,
-    MarketplaceForm, MeshForm,
-    MetaForm, ProjectsForm, ROOT_AGENT, SecretsForm, SessionFilter, Simulate, State, Status,
-    TasksForm, TermWatch, ToolEditor, ToolRunView, ToolsForm, TriggersForm, TriggersLogView,
-    WorkflowsConsole, last_agent_pending, load, refresh_fleet_dashboards,
+    MarketplaceForm, MeshForm, MetaForm, ProjectsForm, ROOT_AGENT, SecretsForm, SessionFilter,
+    Simulate, State, Status, TasksForm, TermWatch, ToolEditor, ToolRunView, ToolsForm,
+    TriggersForm, TriggersLogView, WorkflowsConsole, last_agent_pending, load,
+    refresh_fleet_dashboards,
 };
 use ui::fmt_uptime;
 
@@ -618,7 +617,8 @@ fn Market() -> impl IntoView {
     // they are waiting for is the dialog that asks which project it goes into, so it opens as soon
     // as the listing lands (below) rather than leaving them the same button to find and press
     // again on the page behind it.
-    let wants_install = routing::query_param("install").is_some() && !open.get_untracked().is_empty();
+    let wants_install =
+        routing::query_param("install").is_some() && !open.get_untracked().is_empty();
     // The version row and the install offer the ⌘K menu carries on every screen (see [`menu`]).
     let updates = update::watch();
     let can_install = pwa::installable();

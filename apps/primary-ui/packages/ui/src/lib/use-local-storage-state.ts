@@ -13,7 +13,11 @@ export type LocalStorageCodec<T> = {
 /** JSON in both directions; the default. `undefined` removes the key, as JSON cannot hold it. */
 export const jsonStorageCodec: LocalStorageCodec<unknown> = {
   parse: (stored) => {
-    try { return JSON.parse(stored) as unknown; } catch { return undefined; }
+    try {
+      return JSON.parse(stored) as unknown;
+    } catch {
+      return undefined;
+    }
   },
   serialize: (value) => (value === undefined ? undefined : JSON.stringify(value)),
 };
@@ -33,7 +37,11 @@ function storageArea(): Storage | undefined {
 }
 
 function readStorage(key: string): string | null {
-  try { return storageArea()?.getItem(key) ?? null; } catch { return null; }
+  try {
+    return storageArea()?.getItem(key) ?? null;
+  } catch {
+    return null;
+  }
 }
 
 function writeStorage(key: string, stored: string | undefined) {
@@ -42,7 +50,9 @@ function writeStorage(key: string, stored: string | undefined) {
     if (!storage) return;
     if (stored === undefined) storage.removeItem(key);
     else storage.setItem(key, stored);
-  } catch { /* The value still lives in state when storage is unavailable (private mode, quota, sandboxed frames). */ }
+  } catch {
+    /* The value still lives in state when storage is unavailable (private mode, quota, sandboxed frames). */
+  }
 }
 
 // Mounted hooks in this tab. The browser's `storage` event only reaches other tabs, so a write
@@ -90,7 +100,9 @@ export function useLocalStorageState<T>(
 
   // What the last committed render saw, for the setter and the sync listeners (both keyed on `key` alone).
   const latest = React.useRef({ value, read, codec });
-  React.useLayoutEffect(() => { latest.current = { value, read, codec }; });
+  React.useLayoutEffect(() => {
+    latest.current = { value, read, codec };
+  });
   const self = React.useRef<Subscriber | null>(null);
 
   React.useEffect(() => {
@@ -109,16 +121,22 @@ export function useLocalStorageState<T>(
     };
   }, [key, setValue]);
 
-  const setStored = React.useCallback<React.Dispatch<React.SetStateAction<T>>>((update) => {
-    const next = typeof update === "function" ? (update as (previous: T) => T)(latest.current.value) : update;
-    latest.current.value = next;
-    setValue(next);
-    if (key === undefined) return;
-    writeStorage(key, latest.current.codec.serialize(next));
-    for (const subscriber of subscribers) {
-      if (subscriber.key === key && subscriber !== self.current) subscriber.sync();
-    }
-  }, [key, setValue]);
+  const setStored = React.useCallback<React.Dispatch<React.SetStateAction<T>>>(
+    (update) => {
+      const next =
+        typeof update === "function"
+          ? (update as (previous: T) => T)(latest.current.value)
+          : update;
+      latest.current.value = next;
+      setValue(next);
+      if (key === undefined) return;
+      writeStorage(key, latest.current.codec.serialize(next));
+      for (const subscriber of subscribers) {
+        if (subscriber.key === key && subscriber !== self.current) subscriber.sync();
+      }
+    },
+    [key, setValue],
+  );
 
   return [value, setStored];
 }

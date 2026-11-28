@@ -51,7 +51,9 @@ describe("telegram verify", () => {
     const req = new Request("https://router.example/webhook/telegram", {
       headers: { "x-telegram-bot-api-secret-token": "webhook-secret" },
     });
-    expect(await telegramAdapter.verify(req, env({ TELEGRAM_SECRET_TOKEN: undefined }), NOW)).toBe(false);
+    expect(await telegramAdapter.verify(req, env({ TELEGRAM_SECRET_TOKEN: undefined }), NOW)).toBe(
+      false,
+    );
   });
 });
 
@@ -109,10 +111,11 @@ describe("telegram normalize", () => {
   });
 
   it("resolves a photo's largest size through getFile before forwarding", async () => {
-    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
-      new Response(JSON.stringify({ ok: true, result: { file_path: "photos/big.jpg" } }), {
-        headers: { "content-type": "application/json" },
-      }),
+    const fetchMock = vi.fn(
+      async (_url: string, _init?: RequestInit) =>
+        new Response(JSON.stringify({ ok: true, result: { file_path: "photos/big.jpg" } }), {
+          headers: { "content-type": "application/json" },
+        }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -128,9 +131,7 @@ describe("telegram normalize", () => {
     expect(messages[0].attachments).toEqual([
       { kind: "image", url: "https://api.telegram.org/file/botbot-token/photos/big.jpg" },
     ]);
-    expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining("getFile?file_id=big"),
-    );
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("getFile?file_id=big"));
   });
 
   it("gives a forum topic its own thread id", async () => {
@@ -147,7 +148,9 @@ describe("telegram normalize", () => {
 
 describe("telegram send", () => {
   it("posts to sendMessage with the bot token and chat id", async () => {
-    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response("{}", { status: 200 }));
+    const fetchMock = vi.fn(
+      async (_url: string, _init?: RequestInit) => new Response("{}", { status: 200 }),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     await telegramAdapter.send({ routingKey: "555", text: "hi there" }, { botToken: "bot-token" });
@@ -155,11 +158,17 @@ describe("telegram send", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
     const [calledUrl, init] = fetchMock.mock.calls[0];
     expect(calledUrl).toBe("https://api.telegram.org/botbot-token/sendMessage");
-    expect(JSON.parse((init as RequestInit).body as string)).toEqual({ chat_id: "555", text: "hi there" });
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({
+      chat_id: "555",
+      text: "hi there",
+    });
   });
 
   it("throws when telegram rejects the send", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response("bad", { status: 400 })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("bad", { status: 400 })),
+    );
     await expect(
       telegramAdapter.send({ routingKey: "555", text: "hi" }, { botToken: "bot-token" }),
     ).rejects.toThrow();
@@ -168,7 +177,9 @@ describe("telegram send", () => {
 
 describe("telegram setThinking", () => {
   it("sends a typing chat action for a bare chat thread", async () => {
-    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response("{}", { status: 200 }));
+    const fetchMock = vi.fn(
+      async (_url: string, _init?: RequestInit) => new Response("{}", { status: 200 }),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     await telegramAdapter.setThinking!("555", { botToken: "bot-token" }, "thinking…");
@@ -176,11 +187,16 @@ describe("telegram setThinking", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
     const [calledUrl, init] = fetchMock.mock.calls[0];
     expect(calledUrl).toBe("https://api.telegram.org/botbot-token/sendChatAction");
-    expect(JSON.parse((init as RequestInit).body as string)).toEqual({ chat_id: "555", action: "typing" });
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({
+      chat_id: "555",
+      action: "typing",
+    });
   });
 
   it("includes message_thread_id for a forum topic's thread key", async () => {
-    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response("{}", { status: 200 }));
+    const fetchMock = vi.fn(
+      async (_url: string, _init?: RequestInit) => new Response("{}", { status: 200 }),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     await telegramAdapter.setThinking!("555:7", { botToken: "bot-token" }, "thinking…");
@@ -201,7 +217,10 @@ describe("telegram setThinking", () => {
   });
 
   it("throws when telegram rejects the chat action", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response("bad", { status: 400 })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("bad", { status: 400 })),
+    );
     await expect(
       telegramAdapter.setThinking!("555", { botToken: "bot-token" }, "thinking…"),
     ).rejects.toThrow();

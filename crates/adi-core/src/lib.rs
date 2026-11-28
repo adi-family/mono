@@ -43,11 +43,6 @@ pub use adi_agents::launcher;
 /// rather than item by item: it is one coherent area (a backend, a chain, a hold, a probe) and a
 /// caller that needs any of it needs the vocabulary around it.
 pub use adi_agents::llm;
-/// The embedding backend registry — a named, configurable set of ways to turn text into a vector,
-/// parallel to [`llm`] but narrower (no holds, no prober).
-/// Re-exported whole under a clean name for the same reason `llm` is: a caller reaching for one
-/// part of it (`EmbeddingBackends`, `Runtime`, a `CONSUMER_*` name) needs the vocabulary around it.
-pub use adi_embeddings as embeddings;
 /// Bringing stored agent definitions up to the shape this build writes. Re-exported whole for the
 /// same reason as [`llm`]: a caller that runs one step needs the plan, the result and the version
 /// constants around it.
@@ -60,6 +55,11 @@ pub use adi_agents::{
     RunLifecycle, RunLimits, RunOverrides, SecretAttachment, Sent, SpawnPolicy, StoredAgent,
     StoredAgentManifest, UNVERSIONED, contains_json_null,
 };
+/// The embedding backend registry — a named, configurable set of ways to turn text into a vector,
+/// parallel to [`llm`] but narrower (no holds, no prober).
+/// Re-exported whole under a clean name for the same reason `llm` is: a caller reaching for one
+/// part of it (`EmbeddingBackends`, `Runtime`, a `CONSUMER_*` name) needs the vocabulary around it.
+pub use adi_embeddings as embeddings;
 
 /// The whole platform event catalog — task + agent + channel + workflow events. `adi-channels`
 /// is "the lowest crate that can see every producer" for task/agent/channel (see its own
@@ -124,8 +124,8 @@ pub use adi_triggers::{
     Error as TriggersError, Firing, HOOK_SECRET_EXTRA, HOOK_SECRET_REF_EXTRA, HookSecret,
     KIND_BACKGROUND, KIND_EVENT, KIND_WEBHOOK, MigrateError as HookSecretMigrateError,
     Migrated as HookSecretMigrated, RUNTIME_SH, RUNTIME_TS, RunState,
-    SUBSCRIBER as EVENT_DISPATCH_SUBSCRIBER, Trigger, TriggerManifest, Triggers,
-    clean_trigger_on, default_secret_name as default_hook_secret_name, presets as trigger_presets,
+    SUBSCRIBER as EVENT_DISPATCH_SUBSCRIBER, Trigger, TriggerManifest, Triggers, clean_trigger_on,
+    default_secret_name as default_hook_secret_name, presets as trigger_presets,
 };
 
 pub use adi_workflows::{

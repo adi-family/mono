@@ -1133,13 +1133,19 @@ mod windows {
         #[test]
         fn argv_quoting_follows_commandlinetoargvw() {
             assert_eq!(quote_argv("plain"), "plain");
-            assert_eq!(quote_argv(r"C:\adi\bin\adi-app.exe"), r"C:\adi\bin\adi-app.exe");
+            assert_eq!(
+                quote_argv(r"C:\adi\bin\adi-app.exe"),
+                r"C:\adi\bin\adi-app.exe"
+            );
             assert_eq!(
                 quote_argv(r"C:\Program Files\ADI\bin\adi-app.exe"),
                 "\"C:\\Program Files\\ADI\\bin\\adi-app.exe\""
             );
             // A trailing backslash must not escape the closing quote.
-            assert_eq!(quote_argv(r"C:\Program Files\ADI\"), "\"C:\\Program Files\\ADI\\\\\"");
+            assert_eq!(
+                quote_argv(r"C:\Program Files\ADI\"),
+                "\"C:\\Program Files\\ADI\\\\\""
+            );
             assert_eq!(quote_argv(r#"say "hi""#), r#""say \"hi\"""#);
             assert_eq!(quote_argv(""), "\"\"");
         }

@@ -22,7 +22,10 @@ test("remote bookmarks keep their paired machine and never become local chats", 
 });
 
 test("agent-only bookmarks retain their agent and machine without selecting a run", () => {
-  for (const [path, node] of [["/chat/reviewer%20%26%20writer", null], ["/chat/@studio/reviewer%20%26%20writer/", "studio"]] as const) {
+  for (const [path, node] of [
+    ["/chat/reviewer%20%26%20writer", null],
+    ["/chat/@studio/reviewer%20%26%20writer/", "studio"],
+  ] as const) {
     const params = new URL(legacyChatDestination(path)!, "http://app.adi").searchParams;
     assert.equal(params.get("agent"), "reviewer & writer");
     assert.equal(params.get("node"), node);
@@ -32,7 +35,12 @@ test("agent-only bookmarks retain their agent and machine without selecting a ru
 });
 
 test("unselected chat bookmarks retain their machine without auto-resuming history", () => {
-  for (const [path, node] of [["/chat", null], ["/chat/", null], ["/chat/@studio", "studio"], ["/chat/@studio/", "studio"]] as const) {
+  for (const [path, node] of [
+    ["/chat", null],
+    ["/chat/", null],
+    ["/chat/@studio", "studio"],
+    ["/chat/@studio/", "studio"],
+  ] as const) {
     const params = new URL(legacyChatDestination(path)!, "http://app.adi").searchParams;
     assert.equal(params.has("agent"), false);
     assert.equal(params.get("node"), node);
@@ -42,7 +50,17 @@ test("unselected chat bookmarks retain their machine without auto-resuming histo
 });
 
 test("malformed and unrelated bookmarks cannot launch or select a different chat", () => {
-  for (const path of ["/extended/settings", "/chatty", "/chat/a//b", "/chat/@", "/chat/@../a/b", "/chat/@Studio/a/b", "/chat/%E0%A4%A/b", "/chat/@studio/a/b/extra", "/chat/a/b/extra"]) {
+  for (const path of [
+    "/extended/settings",
+    "/chatty",
+    "/chat/a//b",
+    "/chat/@",
+    "/chat/@../a/b",
+    "/chat/@Studio/a/b",
+    "/chat/%E0%A4%A/b",
+    "/chat/@studio/a/b/extra",
+    "/chat/a/b/extra",
+  ]) {
     assert.equal(legacyChatDestination(path), null, path);
   }
 });

@@ -51,14 +51,24 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::InvalidCron(expr, detail) => {
-                write!(f, "{expr:?} is not a valid 5-field cron expression: {detail}")
+                write!(
+                    f,
+                    "{expr:?} is not a valid 5-field cron expression: {detail}"
+                )
             }
             Error::DuplicateRunKey(key) => write!(f, "run key {key:?} already exists"),
             Error::UnknownWorkflow(id) => write!(f, "no such workflow: {id:?}"),
-            Error::Describe(why) => write!(f, "couldn't read the workflow file's `on` export: {why}"),
-            Error::DuplicateStepKey(key) => write!(f, "step key {key:?} is already journaled for this run"),
+            Error::Describe(why) => {
+                write!(f, "couldn't read the workflow file's `on` export: {why}")
+            }
+            Error::DuplicateStepKey(key) => {
+                write!(f, "step key {key:?} is already journaled for this run")
+            }
             Error::JournalEntryTooLarge(key) => {
-                write!(f, "step {key:?}'s resolved value is too large for the journal")
+                write!(
+                    f,
+                    "step {key:?}'s resolved value is too large for the journal"
+                )
             }
             Error::AttemptFailed(why) => write!(f, "workflow attempt failed: {why}"),
             Error::AttemptGaveUp(why) => write!(f, "workflow run given up: {why}"),

@@ -168,14 +168,18 @@ class AdiComposer extends AdiElement {
   #drawTray(): void {
     const tray = this.$(".tray");
     if (!tray) return;
-    tray.replaceChildren(...this.#attachments.map((attachment) => this.#buildAttachment(attachment)));
+    tray.replaceChildren(
+      ...this.#attachments.map((attachment) => this.#buildAttachment(attachment)),
+    );
   }
 
   #buildAttachment(attachment: ComposerAttachment): HTMLDivElement {
     const thumbnail = document.createElement("div");
     thumbnail.className = `thumb ${attachment.state}`;
     thumbnail.setAttribute("role", "listitem");
-    thumbnail.title = attachment.error ? `${attachment.name} — ${attachment.error}` : attachment.name;
+    thumbnail.title = attachment.error
+      ? `${attachment.name} — ${attachment.error}`
+      : attachment.name;
 
     const name = esc(attachment.name);
     let preview = `<div class="file"><adi-icon name="paperclip" size="14" label="File"></adi-icon><span>${name}</span></div>`;

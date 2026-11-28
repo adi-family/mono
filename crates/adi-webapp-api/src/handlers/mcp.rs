@@ -89,7 +89,10 @@ fn to_dto(transport: Transport) -> McpTransportDto {
     match transport {
         Transport::Http { url, headers } => McpTransportDto::Http {
             url,
-            headers: headers.into_iter().map(|(k, v)| (k, value_to_dto(v))).collect(),
+            headers: headers
+                .into_iter()
+                .map(|(k, v)| (k, value_to_dto(v)))
+                .collect(),
         },
         Transport::Stdio { command, args, env } => McpTransportDto::Stdio {
             command,
@@ -110,12 +113,18 @@ fn from_dto(transport: McpTransportDto) -> Transport {
     match transport {
         McpTransportDto::Http { url, headers } => Transport::Http {
             url,
-            headers: headers.into_iter().map(|(k, v)| (k, value_from_dto(v))).collect(),
+            headers: headers
+                .into_iter()
+                .map(|(k, v)| (k, value_from_dto(v)))
+                .collect(),
         },
         McpTransportDto::Stdio { command, args, env } => Transport::Stdio {
             command,
             args,
-            env: env.into_iter().map(|(k, v)| (k, value_from_dto(v))).collect(),
+            env: env
+                .into_iter()
+                .map(|(k, v)| (k, value_from_dto(v)))
+                .collect(),
         },
     }
 }
@@ -177,7 +186,10 @@ mod tests {
         let headers: BTreeMap<String, McpValueDto> = match secret {
             Some(name) => BTreeMap::from([(
                 "Authorization".to_string(),
-                McpValueDto::Secret { secret: name.to_string(), prefix: String::new() },
+                McpValueDto::Secret {
+                    secret: name.to_string(),
+                    prefix: String::new(),
+                },
             )]),
             None => BTreeMap::new(),
         };
@@ -186,7 +198,10 @@ mod tests {
             name: String::new(),
             description: None,
             project: None,
-            transport: McpTransportDto::Http { url: url.to_string(), headers },
+            transport: McpTransportDto::Http {
+                url: url.to_string(),
+                headers,
+            },
         })
         .expect("serialize")
     }
@@ -207,14 +222,20 @@ mod tests {
         let store = scratch("bearer-prefix");
         let headers = BTreeMap::from([(
             "Authorization".to_string(),
-            McpValueDto::Secret { secret: "N8N_MCP_ACCESS_TOKEN".to_string(), prefix: "Bearer ".to_string() },
+            McpValueDto::Secret {
+                secret: "N8N_MCP_ACCESS_TOKEN".to_string(),
+                prefix: "Bearer ".to_string(),
+            },
         )]);
         let body = serde_json::to_vec(&SaveMcpServer {
             id: "n8n".to_string(),
             name: String::new(),
             description: None,
             project: None,
-            transport: McpTransportDto::Http { url: "http://n8n.adi/mcp-server/http".to_string(), headers },
+            transport: McpTransportDto::Http {
+                url: "http://n8n.adi/mcp-server/http".to_string(),
+                headers,
+            },
         })
         .expect("serialize");
         let saved = save_mcp_server(&store, &body);
@@ -232,18 +253,30 @@ mod tests {
                 prefix: "Bearer ".to_string()
             })
         );
-        assert_eq!(state.servers[0].required_secrets, vec!["N8N_MCP_ACCESS_TOKEN".to_string()]);
+        assert_eq!(
+            state.servers[0].required_secrets,
+            vec!["N8N_MCP_ACCESS_TOKEN".to_string()]
+        );
     }
 
     #[test]
     fn required_and_missing_secrets_are_read_fresh_not_stored() {
         let store = scratch("missing");
-        let _ = save_mcp_server(&store, &http_body("n8n", "http://n8n.adi/mcp/", Some("N8N_TOKEN")));
+        let _ = save_mcp_server(
+            &store,
+            &http_body("n8n", "http://n8n.adi/mcp/", Some("N8N_TOKEN")),
+        );
 
         let res = mcp_servers(&store);
         let state: McpServersState = serde_json::from_str(&res.body).expect("state");
-        assert_eq!(state.servers[0].required_secrets, vec!["N8N_TOKEN".to_string()]);
-        assert_eq!(state.servers[0].missing_secrets, vec!["N8N_TOKEN".to_string()]);
+        assert_eq!(
+            state.servers[0].required_secrets,
+            vec!["N8N_TOKEN".to_string()]
+        );
+        assert_eq!(
+            state.servers[0].missing_secrets,
+            vec!["N8N_TOKEN".to_string()]
+        );
 
         Secrets::with_config(store.config().clone())
             .set(None, "N8N_TOKEN", "sekret", None)
@@ -258,7 +291,10 @@ mod tests {
         let store = scratch("remove");
         let _ = save_mcp_server(&store, &http_body("n8n", "http://n8n.adi/mcp/", None));
 
-        let body = serde_json::to_vec(&McpServerRef { id: "n8n".to_string() }).expect("ser");
+        let body = serde_json::to_vec(&McpServerRef {
+            id: "n8n".to_string(),
+        })
+        .expect("ser");
         let res = remove_mcp_server(&store, &body);
         assert_eq!(res.status, 200, "{}", res.body);
         let state: McpServersState = serde_json::from_str(&res.body).expect("state");

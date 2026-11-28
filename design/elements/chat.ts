@@ -5,7 +5,17 @@
 // The host persists the location through attributes; each chat instance is independent.
 
 import { AdiElement, define, detail } from "./base.ts";
-import type { AdiTranscript, Call, CallRun, CallState, Note, NotePart, Picture, TranscriptEntry as Entry, TranscriptPart as Part } from "./transcript.ts";
+import type {
+  AdiTranscript,
+  Call,
+  CallRun,
+  CallState,
+  Note,
+  NotePart,
+  Picture,
+  TranscriptEntry as Entry,
+  TranscriptPart as Part,
+} from "./transcript.ts";
 import "./transcript.ts";
 import type { AdiComposer, ComposerAttachment } from "./composer.ts";
 import "./composer.ts";
@@ -59,7 +69,15 @@ type AgentStep =
   | { kind: "message"; text: string }
   | { kind: "thinking"; text: string }
   | { kind: "tool"; name: string; input: string; status: ToolStatus; output: string }
-  | { kind: "calls"; from: number; to: number; count: number; tools: string[]; preview: string; status: ToolStatus }
+  | {
+      kind: "calls";
+      from: number;
+      to: number;
+      count: number;
+      tools: string[];
+      preview: string;
+      status: ToolStatus;
+    }
   | { kind: "unknown" };
 
 type ToolStep = Extract<AgentStep, { kind: "tool" }>;
@@ -149,16 +167,23 @@ interface Source {
   agents: AgentDto[];
 }
 
-const TOOL_STATE: Record<ToolStatus, CallState> = { running: "running", ok: "ok", error: "failed", unanswered: "unanswered" };
+const TOOL_STATE: Record<ToolStatus, CallState> = {
+  running: "running",
+  ok: "ok",
+  error: "failed",
+  unanswered: "unanswered",
+};
 
 function paramsOf(input: string): [string, string][] {
   try {
     const value = JSON.parse(input);
     if (value && typeof value === "object" && !Array.isArray(value)) {
-      return Object.entries(value).map(([k, v]) => [k, typeof v === "string" ? v : JSON.stringify(v, null, 2)]);
+      return Object.entries(value).map(([k, v]) => [
+        k,
+        typeof v === "string" ? v : JSON.stringify(v, null, 2),
+      ]);
     }
-  } catch {
-  }
+  } catch {}
   return [["input", input]];
 }
 
@@ -183,7 +208,14 @@ function thinkingCall(text: string): Call {
 function loadedRun(id: string, calls: Call[]): CallRun {
   const tools = [...new Set(calls.map((c) => c.name))];
   const head = calls.find((c) => c.state === "running") ?? calls[calls.length - 1];
-  return { id, count: calls.length, tools, preview: head ? previewOf(head) : "", state: head?.state ?? "ok", calls };
+  return {
+    id,
+    count: calls.length,
+    tools,
+    preview: head ? previewOf(head) : "",
+    state: head?.state ?? "ok",
+    calls,
+  };
 }
 
 function runKey(turn: number, from: number, to: number, count: number, status: ToolStatus): string {
@@ -224,7 +256,11 @@ function platformNote(turn: AgentTurn): Note | null {
 
 function titleOf(run: AgentRunInfo | undefined): string {
   if (!run) return "Conversation";
-  const line = (run.title || run.message?.split("\n").find((l) => l.trim()) || "Conversation").trim();
+  const line = (
+    run.title ||
+    run.message?.split("\n").find((l) => l.trim()) ||
+    "Conversation"
+  ).trim();
   return line.length > 80 ? `${line.slice(0, 80)}…` : line;
 }
 
@@ -328,7 +364,8 @@ class AdiChat extends AdiElement {
     this.must(".list").addEventListener("scroll", () => this.#railScrolled());
     this.shadowRoot.addEventListener("click", () => (this.must(".menu").hidden = true));
     this.addEventListener("contextmenu", (ev) => {
-      if (!ev.composedPath().some((n) => n instanceof Element && n.classList.contains("row"))) this.must(".menu").hidden = true;
+      if (!ev.composedPath().some((n) => n instanceof Element && n.classList.contains("row")))
+        this.must(".menu").hidden = true;
     });
     const composer = this.must<AdiComposer>("adi-composer");
     composer.addEventListener("send", (e) => this.#say(detail<Said>(e).text, "regular"));
@@ -346,7 +383,9 @@ class AdiChat extends AdiElement {
       const index = Number((e.target as HTMLElement).dataset.place);
       if (Number.isInteger(index)) this.#unqueue(index);
     });
-    this.must<AdiAsk>("adi-ask").addEventListener("answer", (e) => this.#answer(detail<Answered>(e)));
+    this.must<AdiAsk>("adi-ask").addEventListener("answer", (e) =>
+      this.#answer(detail<Answered>(e)),
+    );
     this.must(".earlier").addEventListener("click", () => {
       this.#limit += PAGE;
       this.#tick();
@@ -356,7 +395,9 @@ class AdiChat extends AdiElement {
   override connectedCallback(): void {
     super.connectedCallback();
     this.#live = true;
-    this.#resize ??= new ResizeObserver(([entry]) => this.#checkWidth(entry?.contentRect.width ?? 0));
+    this.#resize ??= new ResizeObserver(([entry]) =>
+      this.#checkWidth(entry?.contentRect.width ?? 0),
+    );
     this.#resize.observe(this);
     this.#start();
   }
@@ -427,7 +468,8 @@ class AdiChat extends AdiElement {
     } catch {
       data = { error: text };
     }
-    if (!res.ok) throw new Error((data as { error?: string }).error || `${res.status} ${res.statusText}`);
+    if (!res.ok)
+      throw new Error((data as { error?: string }).error || `${res.status} ${res.statusText}`);
     return data as T;
   }
 
@@ -501,7 +543,9 @@ class AdiChat extends AdiElement {
           const at = this.#sources.findIndex((s) => s.node === node);
           if (at >= 0) this.#sources[at] = { node, agents };
           else this.#sources.push({ node, agents });
-          this.#sources.sort((a, b) => (a.node === null ? -1 : b.node === null ? 1 : a.node.localeCompare(b.node)));
+          this.#sources.sort((a, b) =>
+            a.node === null ? -1 : b.node === null ? 1 : a.node.localeCompare(b.node),
+          );
           this.#drawAgents();
         }),
     );
@@ -548,7 +592,11 @@ class AdiChat extends AdiElement {
     else hint.textContent = "";
   }
 
-  async #openAgent(name: string, run?: string | null, node: string | null = this.#node): Promise<void> {
+  async #openAgent(
+    name: string,
+    run?: string | null,
+    node: string | null = this.#node,
+  ): Promise<void> {
     this.#agent = name;
     this.#node = node ?? null;
     this.#railLimit = PAGE;
@@ -559,7 +607,9 @@ class AdiChat extends AdiElement {
       const res = await this.#call<{ runs?: AgentRunInfo[] }>("/agents/runs", { name });
       if (epoch !== this.#epoch) return;
       this.#runs = (res.runs ?? []).filter((r) => !r.hidden);
-      this.#runs.sort((a, b) => (b.last_activity || b.started_at) - (a.last_activity || a.started_at));
+      this.#runs.sort(
+        (a, b) => (b.last_activity || b.started_at) - (a.last_activity || a.started_at),
+      );
       this.#drawRuns();
     } catch (err) {
       this.#fail(err);
@@ -592,7 +642,9 @@ class AdiChat extends AdiElement {
     if (!list && !sidebar) {
       const run = this.#runs.find((r) => r.run_id === this.#run);
       this.must(".crumb .title").textContent = this.#run ? titleOf(run) : "New conversation";
-      this.must(".crumb .to").textContent = this.#node ? `${this.#agent} on ${this.#node}` : (this.#agent ?? "");
+      this.must(".crumb .to").textContent = this.#node
+        ? `${this.#agent} on ${this.#node}`
+        : (this.#agent ?? "");
     }
   }
 
@@ -612,7 +664,12 @@ class AdiChat extends AdiElement {
     this.#drawMode();
     this.#drawRuns();
     const shown = this.#runs.find((r) => r.run_id === run);
-    this.emit("place", { node: this.#node, agent: this.#agent, run, title: run ? titleOf(shown) : "" });
+    this.emit("place", {
+      node: this.#node,
+      agent: this.#agent,
+      run,
+      title: run ? titleOf(shown) : "",
+    });
     this.#draw();
     this.#tick();
   }
@@ -651,7 +708,9 @@ class AdiChat extends AdiElement {
       <span class="text"><span class="name"></span><span class="meta"></span></span>
       ${run.starred ? `<adi-icon class="star" name="star" size="14" label="Starred"></adi-icon>` : ""}`;
     row.querySelector(".name")!.textContent = titleOf(run);
-    row.querySelector(".meta")!.textContent = run.running ? "working" : ago(run.last_activity || run.started_at);
+    row.querySelector(".meta")!.textContent = run.running
+      ? "working"
+      : ago(run.last_activity || run.started_at);
     row.addEventListener("click", () => this.#openRun(run.run_id));
     row.addEventListener("contextmenu", (event) => {
       event.preventDefault();
@@ -674,7 +733,12 @@ class AdiChat extends AdiElement {
     item("Open", () => this.#openRun(run.run_id));
     if (this.hasAttribute("windows")) {
       item("Open in new window", () =>
-        this.emit("open-window", { node: this.#node, agent: this.#agent, run: run.run_id, title: titleOf(run) }),
+        this.emit("open-window", {
+          node: this.#node,
+          agent: this.#agent,
+          run: run.run_id,
+          title: titleOf(run),
+        }),
       );
     }
     // Position relative to this host because a blurred ancestor contains fixed descendants.
@@ -692,21 +756,31 @@ class AdiChat extends AdiElement {
     const epoch = this.#epoch;
     if ((this.#mode === "list" || this.hasAttribute("sidebar")) && this.#agent) {
       try {
-        const res = await this.#call<{ runs?: AgentRunInfo[] }>("/agents/runs", { name: this.#agent });
+        const res = await this.#call<{ runs?: AgentRunInfo[] }>("/agents/runs", {
+          name: this.#agent,
+        });
         if (epoch !== this.#epoch) return;
         this.#runs = (res.runs ?? []).filter((r) => !r.hidden);
-        this.#runs.sort((a, b) => (b.last_activity || b.started_at) - (a.last_activity || a.started_at));
+        this.#runs.sort(
+          (a, b) => (b.last_activity || b.started_at) - (a.last_activity || a.started_at),
+        );
         this.#drawRuns();
-      } catch {
-      }
+      } catch {}
     }
     if (this.#mode === "chat" && this.#run && this.#agent) {
       try {
-        const peek = await this.#call<AgentPeek>("/agents/run/peek", { name: this.#agent, run_id: this.#run, ...this.#view() });
+        const peek = await this.#call<AgentPeek>("/agents/run/peek", {
+          name: this.#agent,
+          run_id: this.#run,
+          ...this.#view(),
+        });
         if (epoch !== this.#epoch) return;
         // Non-conversation runs expose logs rather than turns.
         if (!peek.answerable && !peek.turns?.length) {
-          const whole = await this.#call<AgentPeek>("/agents/run/peek", { name: this.#agent, run_id: this.#run });
+          const whole = await this.#call<AgentPeek>("/agents/run/peek", {
+            name: this.#agent,
+            run_id: this.#run,
+          });
           if (epoch !== this.#epoch) return;
           peek.output = whole.output;
         }
@@ -754,13 +828,14 @@ class AdiChat extends AdiElement {
     this.#drawQueued(turns);
     this.must<AdiTranscript>("adi-transcript").entries = this.#entries(turns);
 
-    const oldest = turns.length ? (turns[0].seq || 0) : 0;
+    const oldest = turns.length ? turns[0].seq || 0 : 0;
     const earlier = this.must(".earlier");
     earlier.hidden = !(oldest > 0);
     earlier.textContent = oldest === 1 ? "1 earlier message" : `${oldest} earlier messages`;
 
     let empty = "";
-    if (fresh) empty = `A new conversation with ${this.#agent ?? "the agent"} starts with what you write above.`;
+    if (fresh)
+      empty = `A new conversation with ${this.#agent ?? "the agent"} starts with what you write above.`;
     else if (!peek) empty = "Loading…";
     else if (!turns.length && !peek.output) empty = peek.running ? "Working…" : "No output.";
     this.must(".empty").textContent = empty;
@@ -825,13 +900,21 @@ class AdiChat extends AdiElement {
   }
 
   #feedTurn(turnIndex: number, turn: AgentTurn): Entry[] {
-    const key = (partIndex: number) => (
-      partIndex === 0 ? `adi-turn-${turnIndex}` : `adi-turn-${turnIndex}-${partIndex}`
-    );
+    const key = (partIndex: number) =>
+      partIndex === 0 ? `adi-turn-${turnIndex}` : `adi-turn-${turnIndex}-${partIndex}`;
     if (turn.role === "user") {
       const note = platformNote(turn);
       if (note) return [{ key: key(0), kind: "note", note }];
-      return [{ key: key(0), kind: "said", role: "user", body: turn.text, images: this.#pictures(turn), by: senderOf(turn.markers) }];
+      return [
+        {
+          key: key(0),
+          kind: "said",
+          role: "user",
+          body: turn.text,
+          images: this.#pictures(turn),
+          by: senderOf(turn.markers),
+        },
+      ];
     }
 
     const parts: Part[] = [];
@@ -854,7 +937,9 @@ class AdiChat extends AdiElement {
         case "thinking":
         case "tool":
           if (!calls.length) firstCallIndex = stepIndex;
-          calls.push(step.kind === "tool" ? toolCall(turnIndex, stepIndex, step) : thinkingCall(step.text));
+          calls.push(
+            step.kind === "tool" ? toolCall(turnIndex, stepIndex, step) : thinkingCall(step.text),
+          );
           break;
         case "calls":
           finishCalls();
@@ -875,7 +960,8 @@ class AdiChat extends AdiElement {
     if (fetchedSteps) {
       calls = [];
       for (const [offset, fetchedStep] of fetchedSteps.entries()) {
-        if (fetchedStep.kind === "tool") calls.push(toolCall(turnIndex, step.from + offset, fetchedStep));
+        if (fetchedStep.kind === "tool")
+          calls.push(toolCall(turnIndex, step.from + offset, fetchedStep));
         else if (fetchedStep.kind === "thinking") calls.push(thinkingCall(fetchedStep.text));
       }
     }
@@ -902,7 +988,11 @@ class AdiChat extends AdiElement {
         const epoch = this.#epoch;
         try {
           const res = await this.#call<{ steps?: AgentStep[] }>("/agents/run/steps", {
-            name: this.#agent, run_id: this.#run, turn: at, from: step.from, to: step.to,
+            name: this.#agent,
+            run_id: this.#run,
+            turn: at,
+            from: step.from,
+            to: step.to,
           });
           if (epoch !== this.#epoch) return;
           this.#steps.set(k, res.steps ?? []);
@@ -925,14 +1015,22 @@ class AdiChat extends AdiElement {
     try {
       if (this.#run) {
         const peek = await this.#call<AgentPeek>("/agents/run/reply", {
-          name: this.#agent, run_id: this.#run, message: text, mode, attachments, ...this.#view(),
+          name: this.#agent,
+          run_id: this.#run,
+          message: text,
+          mode,
+          attachments,
+          ...this.#view(),
         });
         composer.value = "";
         this.#clearFiles();
         if (epoch === this.#epoch) this.#peek = peek;
       } else {
         const res = await this.#call<{ run_id?: string }>("/agents/run", {
-          name: this.#agent, message: text, attachments, launched_by: "human",
+          name: this.#agent,
+          message: text,
+          attachments,
+          launched_by: "human",
         });
         composer.value = "";
         this.#clearFiles();
@@ -966,7 +1064,10 @@ class AdiChat extends AdiElement {
   async #unqueue(index: number): Promise<void> {
     try {
       const peek = await this.#call<AgentPeek>("/agents/run/unqueue", {
-        name: this.#agent, run_id: this.#run, index, ...this.#view(),
+        name: this.#agent,
+        run_id: this.#run,
+        index,
+        ...this.#view(),
       });
       this.#peek = peek;
       this.#draw();
@@ -980,7 +1081,11 @@ class AdiChat extends AdiElement {
     this.#draw();
     try {
       const peek = await this.#call<AgentPeek>("/agents/run/answer", {
-        name: this.#agent, run_id: this.#run, ask: id, replies, ...this.#view(),
+        name: this.#agent,
+        run_id: this.#run,
+        ask: id,
+        replies,
+        ...this.#view(),
       });
       this.#peek = peek;
     } catch (err) {
@@ -997,7 +1102,10 @@ class AdiChat extends AdiElement {
     if (!this.#run || !this.#agent) return this.#drawGoals();
     const [epoch, run] = [this.#epoch, this.#run];
     try {
-      const res = await this.#call<{ goals?: AgentGoal[] }>("/agents/goals", { name: this.#agent, run_id: run });
+      const res = await this.#call<{ goals?: AgentGoal[] }>("/agents/goals", {
+        name: this.#agent,
+        run_id: run,
+      });
       if (epoch !== this.#epoch) return;
       this.#goals = res.goals ?? [];
       this.#drawGoals();
@@ -1073,8 +1181,11 @@ class AdiChat extends AdiElement {
     text.title = `${goal.text} — click to reword${setByAgent ? " (the agent set this itself)" : ""}`;
     text.addEventListener("click", () => this.#openGoalEditor(goal.id, goal.text));
     row.querySelector(".met")!.addEventListener("click", () => this.#closeGoal(goal.id, "met"));
-    row.querySelector(".gave")!.addEventListener("click", () => this.#closeGoal(goal.id, "given_up"));
-    for (const button of row.querySelectorAll<HTMLButtonElement>(".small")) button.disabled = this.#goalBusy;
+    row
+      .querySelector(".gave")!
+      .addEventListener("click", () => this.#closeGoal(goal.id, "given_up"));
+    for (const button of row.querySelectorAll<HTMLButtonElement>(".small"))
+      button.disabled = this.#goalBusy;
     return row;
   }
 
@@ -1106,7 +1217,10 @@ class AdiChat extends AdiElement {
     this.#goalButtons();
     try {
       const res = await this.#call<{ goals?: AgentGoal[] }>("/agents/goal/set", {
-        name: this.#agent, run_id: this.#run, text: editor.text, goal: editor.id,
+        name: this.#agent,
+        run_id: this.#run,
+        text: editor.text,
+        goal: editor.id,
       });
       this.#goals = res.goals ?? [];
       // Keep rejected goal text available for correction.
@@ -1124,7 +1238,11 @@ class AdiChat extends AdiElement {
     this.#goalBusy = true;
     this.#drawGoals();
     try {
-      const res = await this.#call<{ goals?: AgentGoal[] }>("/agents/goal/close", { goal, as_: as, note: "" });
+      const res = await this.#call<{ goals?: AgentGoal[] }>("/agents/goal/close", {
+        goal,
+        as_: as,
+        note: "",
+      });
       this.#goals = res.goals ?? [];
     } catch (err) {
       this.#fail(err);
@@ -1165,7 +1283,10 @@ class AdiChat extends AdiElement {
       const res = await fetch(`${this.#base()}/api/agents/attachment`, {
         method: "POST",
         // Headers require Latin-1; replace unsupported filename characters.
-        headers: { "content-type": type, "x-adi-filename": entry.name.replace(/[^\x20-\x7e]/g, "_") },
+        headers: {
+          "content-type": type,
+          "x-adi-filename": entry.name.replace(/[^\x20-\x7e]/g, "_"),
+        },
         body: file,
       });
       const data = (await res.json().catch(() => ({}))) as { id?: string; error?: string };
@@ -1173,7 +1294,9 @@ class AdiChat extends AdiElement {
       if (entry.preview) URL.revokeObjectURL(entry.preview);
       entry.state = "ready";
       entry.id = data.id;
-      entry.preview = entry.image ? `${this.#base()}/api/agents/attachment/${encodeURIComponent(data.id)}` : "";
+      entry.preview = entry.image
+        ? `${this.#base()}/api/agents/attachment/${encodeURIComponent(data.id)}`
+        : "";
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       entry.state = "failed";

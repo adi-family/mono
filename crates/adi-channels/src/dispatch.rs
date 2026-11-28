@@ -133,19 +133,11 @@ pub fn handle(
 /// is the best available proxy for "whoever completed the link": for Telegram (a DM) that is
 /// definitionally the same person who tapped the deep link, and for a group it is at least *a*
 /// member of it rather than nobody. Revisit if the router's `linked` frame ever gains a sender.
-fn is_allowed(
-    connections: &Connections,
-    connection: &Connection,
-    sender_id: &str,
-) -> Result<bool> {
+fn is_allowed(connections: &Connections, connection: &Connection, sender_id: &str) -> Result<bool> {
     if connection.manifest.owner_sender_id.is_empty()
         && connection.manifest.allowlist == crate::connection::Allowlist::OwnerOnly
     {
-        connections.mark_linked(
-            &connection.id,
-            &connection.manifest.routing_key,
-            sender_id,
-        )?;
+        connections.mark_linked(&connection.id, &connection.manifest.routing_key, sender_id)?;
         return Ok(true);
     }
     Ok(connection
@@ -356,7 +348,10 @@ mod tests {
             .expect("one request");
         assert!(body.contains("\"status\":\"thinking"), "got: {body}");
         assert!(body.contains("\"thread\":\"C1\""), "got: {body}");
-        assert!(body.contains(&format!("\"connection\":\"{}\"", created.id)), "got: {body}");
+        assert!(
+            body.contains(&format!("\"connection\":\"{}\"", created.id)),
+            "got: {body}"
+        );
     }
 
     #[test]

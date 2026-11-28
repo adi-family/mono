@@ -25,7 +25,9 @@ class AdiToolCall extends AdiElement {
   override update() {
     const calls = Number(this.attr("calls", "1")) || 1;
     const tool = this.attr("tool");
-    this.must(".what").textContent = [`${calls} call${calls === 1 ? "" : "s"}`, tool].filter(Boolean).join(" · ");
+    this.must(".what").textContent = [`${calls} call${calls === 1 ? "" : "s"}`, tool]
+      .filter(Boolean)
+      .join(" · ");
     this.must(".command").textContent = this.attr("command");
 
     const open = this.hasAttribute("open");

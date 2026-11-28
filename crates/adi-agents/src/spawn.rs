@@ -301,11 +301,14 @@ mod tests {
 
         let anything = agent("anything", None, &[]);
         let entries = spawned_by_via(&all, &anything);
-        assert_eq!(entries, vec![SpawnedByEntry {
-            caller: "w".into(),
-            via: "*".into(),
-            exact: false,
-        }]);
+        assert_eq!(
+            entries,
+            vec![SpawnedByEntry {
+                caller: "w".into(),
+                via: "*".into(),
+                exact: false,
+            }]
+        );
     }
 
     /// When a caller lists the target's exact name *and* a pattern that also reaches it, the exact
@@ -315,11 +318,14 @@ mod tests {
     fn an_exact_rule_ahead_of_a_covering_pattern_is_the_one_reported() {
         let all = vec![agent("a", None, &["b", "b-*"])];
         let b = agent("b", None, &[]);
-        assert_eq!(spawned_by_via(&all, &b), vec![SpawnedByEntry {
-            caller: "a".into(),
-            via: "b".into(),
-            exact: true,
-        }]);
+        assert_eq!(
+            spawned_by_via(&all, &b),
+            vec![SpawnedByEntry {
+                caller: "a".into(),
+                via: "b".into(),
+                exact: true,
+            }]
+        );
     }
 
     #[test]
@@ -335,7 +341,12 @@ mod tests {
         assert!(text.contains("# What you can launch"));
     }
 
-    fn launch<'a>(caller: &'a str, target: &'a str, project: Option<&'a str>, at: u64) -> Launch<'a> {
+    fn launch<'a>(
+        caller: &'a str,
+        target: &'a str,
+        project: Option<&'a str>,
+        at: u64,
+    ) -> Launch<'a> {
         Launch {
             caller,
             target,
@@ -357,12 +368,15 @@ mod tests {
     fn a_launch_outside_the_callers_rules_is_a_refusal() {
         let all = vec![agent("a", None, &[])];
         let refusals = refusals(&all, [launch("a", "b", None, 1)]);
-        assert_eq!(refusals, vec![Refusal {
-            caller: "a".into(),
-            target: "b".into(),
-            count: 1,
-            last_at: 1,
-        }]);
+        assert_eq!(
+            refusals,
+            vec![Refusal {
+                caller: "a".into(),
+                target: "b".into(),
+                count: 1,
+                last_at: 1,
+            }]
+        );
     }
 
     #[test]
@@ -370,14 +384,21 @@ mod tests {
         let all = vec![agent("a", None, &[])];
         let refusals = refusals(
             &all,
-            [launch("a", "b", None, 5), launch("a", "b", None, 20), launch("a", "b", None, 12)],
+            [
+                launch("a", "b", None, 5),
+                launch("a", "b", None, 20),
+                launch("a", "b", None, 12),
+            ],
         );
-        assert_eq!(refusals, vec![Refusal {
-            caller: "a".into(),
-            target: "b".into(),
-            count: 3,
-            last_at: 20,
-        }]);
+        assert_eq!(
+            refusals,
+            vec![Refusal {
+                caller: "a".into(),
+                target: "b".into(),
+                count: 3,
+                last_at: 20,
+            }]
+        );
     }
 
     /// A caller whose definition no longer exists reads as having no permissions of its own — the
@@ -394,19 +415,34 @@ mod tests {
     /// was filed under at launch time — the whole point of deriving rather than storing this.
     #[test]
     fn project_rules_are_matched_against_the_targets_current_project() {
-        let all = vec![agent("a", None, &["project:acme"]), agent("b", Some("acme"), &[])];
+        let all = vec![
+            agent("a", None, &["project:acme"]),
+            agent("b", Some("acme"), &[]),
+        ];
         assert!(refusals(&all, [launch("a", "b", Some("acme"), 1)]).is_empty());
 
-        let elsewhere = vec![agent("a", None, &["project:acme"]), agent("b", Some("other"), &[])];
-        assert_eq!(refusals(&elsewhere, [launch("a", "b", Some("other"), 1)]).len(), 1);
+        let elsewhere = vec![
+            agent("a", None, &["project:acme"]),
+            agent("b", Some("other"), &[]),
+        ];
+        assert_eq!(
+            refusals(&elsewhere, [launch("a", "b", Some("other"), 1)]).len(),
+            1
+        );
     }
 
     #[test]
     fn refusals_are_ordered_newest_first() {
         let all = vec![agent("a", None, &[]), agent("c", None, &[])];
-        let refusals = refusals(&all, [launch("a", "b", None, 5), launch("c", "d", None, 50)]);
+        let refusals = refusals(
+            &all,
+            [launch("a", "b", None, 5), launch("c", "d", None, 50)],
+        );
         assert_eq!(
-            refusals.iter().map(|r| r.caller.as_str()).collect::<Vec<_>>(),
+            refusals
+                .iter()
+                .map(|r| r.caller.as_str())
+                .collect::<Vec<_>>(),
             ["c", "a"],
         );
     }

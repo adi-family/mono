@@ -116,7 +116,12 @@ function HelpTooltip({
   if (props.as === "span") {
     const { as: _as, ...wrapperProps } = props;
     return (
-      <span data-slot="help-tooltip" data-position={position} className={wrapperClassName} {...wrapperProps}>
+      <span
+        data-slot="help-tooltip"
+        data-position={position}
+        className={wrapperClassName}
+        {...wrapperProps}
+      >
         {wrapperContent}
       </span>
     );
@@ -124,7 +129,12 @@ function HelpTooltip({
 
   const { as: _as, ...wrapperProps } = props;
   return (
-    <div data-slot="help-tooltip" data-position={position} className={wrapperClassName} {...wrapperProps}>
+    <div
+      data-slot="help-tooltip"
+      data-position={position}
+      className={wrapperClassName}
+      {...wrapperProps}
+    >
       {wrapperContent}
     </div>
   );

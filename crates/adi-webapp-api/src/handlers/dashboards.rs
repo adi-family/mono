@@ -113,7 +113,11 @@ pub fn create_dashboard(cfg: &Config, ports: &Ports, body: &[u8]) -> Response {
             400,
             &format!(
                 "unknown template {template_id:?}; valid templates are: {}",
-                available.iter().map(|t| t.id.as_str()).collect::<Vec<_>>().join(", ")
+                available
+                    .iter()
+                    .map(|t| t.id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ),
         );
     };
@@ -122,7 +126,10 @@ pub fn create_dashboard(cfg: &Config, ports: &Ports, body: &[u8]) -> Response {
     // `bash -c`'s cwd, so it has to exist before anything is spawned — unlike every other writer
     // in this file, which only ever has to create the one dashboard directory it is writing into.
     if let Err(e) = std::fs::create_dir_all(module.dir()) {
-        return error(500, &format!("could not create the dashboards directory: {e}"));
+        return error(
+            500,
+            &format!("could not create the dashboards directory: {e}"),
+        );
     }
     // The id is a slug of the name, not a UUID: it is the directory, the port-lease key, and what
     // a manifest would have to name to install this dashboard on another machine — and a UUID is
@@ -154,8 +161,10 @@ pub fn create_dashboard(cfg: &Config, ports: &Ports, body: &[u8]) -> Response {
         Ok(outcome) => outcome,
         // Refused before anything ran: the template or this machine can't do what was asked, not
         // a failure of the command itself — nothing to clean up.
-        Err(e @ (adi_templates::RunError::UnknownEngine(_)
-        | adi_templates::RunError::MissingRequires(_))) => {
+        Err(
+            e @ (adi_templates::RunError::UnknownEngine(_)
+            | adi_templates::RunError::MissingRequires(_)),
+        ) => {
             return error(400, &format!("could not create dashboard: {e}"));
         }
         Err(e) => {
@@ -183,7 +192,10 @@ pub fn create_dashboard(cfg: &Config, ports: &Ports, body: &[u8]) -> Response {
             }),
         },
     ) {
-        return error(500, &format!("the template ran, but writing config.toml failed: {e}"));
+        return error(
+            500,
+            &format!("the template ran, but writing config.toml failed: {e}"),
+        );
     }
 
     super::usage_events::dashboard_created(cfg, "blank");
@@ -526,7 +538,12 @@ fn migrate_widget_entry(dir: &Path) {
     }
     let entry = dir.join(WIDGET_DIR).join("index.ts");
     if entry.exists() {
-        restamp_entry_point(&entry, WIDGET_ENTRY_STAMP_PREFIX, WIDGET_ENTRY_STAMP, &WIDGET_INDEX_TS);
+        restamp_entry_point(
+            &entry,
+            WIDGET_ENTRY_STAMP_PREFIX,
+            WIDGET_ENTRY_STAMP,
+            &WIDGET_INDEX_TS,
+        );
     } else {
         let _ = std::fs::write(entry, WIDGET_INDEX_TS.as_str());
     }
@@ -1050,7 +1067,10 @@ mod tests {
         assert!(raw.contains("run: bun run frontend/index.ts"), "{raw}");
         assert!(raw.contains("run: bun run backend/index.ts"), "{raw}");
         assert!(raw.contains("working_dir: .\n"), "{raw}");
-        assert!(!raw.contains(&dir.display().to_string()), "no absolute path: {raw}");
+        assert!(
+            !raw.contains(&dir.display().to_string()),
+            "no absolute path: {raw}"
+        );
     }
 
     // MARK: the templates the browser gets
@@ -1140,7 +1160,8 @@ mod tests {
         // generation of the stamp is what keeps this file ours to restamp at all — see the next
         // assertion for the one way out of it.
         let entry = dir.join("frontend").join("index.ts");
-        std::fs::write(&entry, "// adi-frontend-entry: 0\n// mine now\n").expect("hand edit, stamp kept");
+        std::fs::write(&entry, "// adi-frontend-entry: 0\n// mine now\n")
+            .expect("hand edit, stamp kept");
         migrate(&dir, "Nosh");
         assert_eq!(
             std::fs::read_to_string(&entry).expect("entry point"),
@@ -1152,7 +1173,8 @@ mod tests {
         // (never stamped at all) from being clobbered (ADI-MONO-199/203). This is the deliberate
         // cost of that fix, not an oversight: "replaced, not preserved" above now means "replaced
         // unless you remove the one marker that says it's ours."
-        std::fs::write(&entry, "// mine now, and I deleted the marker\n").expect("hand edit, no stamp");
+        std::fs::write(&entry, "// mine now, and I deleted the marker\n")
+            .expect("hand edit, no stamp");
         migrate(&dir, "Nosh");
         assert_eq!(
             std::fs::read_to_string(&entry).expect("entry point"),
@@ -1357,10 +1379,16 @@ mod tests {
 
         let entry = std::fs::read_to_string(dir.join(WIDGET_DIR).join("index.ts")).expect("entry");
         assert!(entry.contains(WIDGET_ENTRY_STAMP), "{entry}");
-        assert!(!entry.contains("@adi-tokens"), "the tokens were not spliced in");
+        assert!(
+            !entry.contains("@adi-tokens"),
+            "the tokens were not spliced in"
+        );
         assert!(entry.contains("--accent"), "the tokens were not spliced in");
         let hive = hive_of(&dir);
-        let widget = hive.services["widget"].proxy.as_ref().expect("widget service");
+        let widget = hive.services["widget"]
+            .proxy
+            .as_ref()
+            .expect("widget service");
         assert_eq!(widget.host, host, "the widget keeps the dashboard's host");
         assert!(is_current(&dir, &hive));
         // The author's page is never touched.
@@ -1607,7 +1635,10 @@ mod tests {
         assert!(is_one_origin(&hive));
         let raw = std::fs::read_to_string(dir.join(".adi").join(HIVE_LIVE)).expect("hive");
         assert!(raw.contains("working_dir: .\n"), "{raw}");
-        assert!(!raw.contains(&dir.display().to_string()), "no absolute path: {raw}");
+        assert!(
+            !raw.contains(&dir.display().to_string()),
+            "no absolute path: {raw}"
+        );
         assert!(
             !raw.contains("transfer-from"),
             "no path from the sending machine: {raw}"
@@ -1995,7 +2026,11 @@ mod tests {
 
         let res = create_dashboard(&cfg, &ports, br#"{"name":"Nosh","template":"local"}"#);
         assert_eq!(res.status, 400, "{}", res.body);
-        assert!(res.body.contains("definitely-not-a-real-cli-xyz"), "{}", res.body);
+        assert!(
+            res.body.contains("definitely-not-a-real-cli-xyz"),
+            "{}",
+            res.body
+        );
         assert!(
             std::fs::read_dir(cfg.module("dashboards").dir())
                 .map(|mut e| e.next().is_none())
@@ -2035,13 +2070,15 @@ mod tests {
         let created: DashboardCreated = serde_json::from_str(&res.body).expect("DashboardCreated");
         assert_eq!(created.command, r#"mkdir -p "$ADI_DASHBOARD_DIR""#);
 
-        let raw = std::fs::read_to_string(
-            PathBuf::from(&created.dashboard.dir).join("config.toml"),
-        )
-        .expect("config.toml");
+        let raw =
+            std::fs::read_to_string(PathBuf::from(&created.dashboard.dir).join("config.toml"))
+                .expect("config.toml");
         assert!(raw.contains("[created_from]"), "{raw}");
         assert!(raw.contains("template = \"local\""), "{raw}");
-        assert!(raw.contains(r#"command = 'mkdir -p "$ADI_DASHBOARD_DIR"'"#), "{raw}");
+        assert!(
+            raw.contains(r#"command = 'mkdir -p "$ADI_DASHBOARD_DIR"'"#),
+            "{raw}"
+        );
     }
 
     #[test]
@@ -2061,7 +2098,11 @@ mod tests {
         let id = dir.file_name().expect("id").to_string_lossy().into_owned();
 
         let env = std::fs::read_to_string(dir.join("env.txt")).expect("env.txt");
-        assert_eq!(env, format!("{id}|nosh.adi"), "$ADI_DASHBOARD_ID and $ADI_DASHBOARD_HOST");
+        assert_eq!(
+            env,
+            format!("{id}|nosh.adi"),
+            "$ADI_DASHBOARD_ID and $ADI_DASHBOARD_HOST"
+        );
     }
 
     #[test]
@@ -2122,8 +2163,14 @@ mod tests {
         let dir = vite_react_shaped(&root, "nosh", "nosh.adi");
 
         let edits = [
-            (dir.join("backend").join("src").join("app.ts"), "// agent's own routing\n"),
-            (dir.join("frontend").join("package.json"), "{\"name\":\"agent-edited\"}\n"),
+            (
+                dir.join("backend").join("src").join("app.ts"),
+                "// agent's own routing\n",
+            ),
+            (
+                dir.join("frontend").join("package.json"),
+                "{\"name\":\"agent-edited\"}\n",
+            ),
             (
                 dir.join("backend").join("src").join("index.ts"),
                 "// some earlier generation\n",
@@ -2167,17 +2214,29 @@ mod tests {
         // it is no longer what this depends on.
         std::fs::create_dir_all(dir.join("scripts")).expect("scripts");
         std::fs::create_dir_all(dir.join(".adi")).expect("hive dir");
-        std::fs::write(dir.join("scripts").join("adi-init.ts"), "// writes .adi/hive.yaml\n")
-            .expect("init script");
+        std::fs::write(
+            dir.join("scripts").join("adi-init.ts"),
+            "// writes .adi/hive.yaml\n",
+        )
+        .expect("init script");
         let host = dashboard_host(&dir, "Nosh");
         std::fs::write(dir.join(".adi").join(HIVE_LIVE), hive_yaml(&dir, &host)).expect("hive");
 
         // Unstamped on purpose — exactly what the public repo ships, and exactly what used to look
         // "behind" to `restamp_entry_point`.
         let unstamped = [
-            (dir.join("frontend").join("index.ts"), "// the repo's own frontend entry\n"),
-            (dir.join("frontend").join("index.html"), "<!doctype html><html></html>\n"),
-            (dir.join("backend").join("index.ts"), "// the repo's own backend entry\n"),
+            (
+                dir.join("frontend").join("index.ts"),
+                "// the repo's own frontend entry\n",
+            ),
+            (
+                dir.join("frontend").join("index.html"),
+                "<!doctype html><html></html>\n",
+            ),
+            (
+                dir.join("backend").join("index.ts"),
+                "// the repo's own backend entry\n",
+            ),
         ];
         for (path, contents) in &unstamped {
             std::fs::write(path, contents).expect("write");
@@ -2205,8 +2264,11 @@ mod tests {
         let root = scratch("old-stamped-with-scripts-dir");
         let dir = legacy_dashboard(&root, "ffff", "Nosh");
         std::fs::create_dir_all(dir.join("scripts")).expect("an unrelated scripts dir");
-        std::fs::write(dir.join("scripts").join("backup.sh"), "#!/bin/sh\necho hi\n")
-            .expect("unrelated script");
+        std::fs::write(
+            dir.join("scripts").join("backup.sh"),
+            "#!/bin/sh\necho hi\n",
+        )
+        .expect("unrelated script");
 
         migrate(&dir, "Nosh");
 

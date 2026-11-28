@@ -29,14 +29,26 @@ export function acceptedToolExamples() {
   return (
     <>
       <ChatToolCall {...props} ref={rootRef} aria-label="Test execution">
-        <ChatToolOutput ref={outputRef} label="Test results" tabIndex={0}>All checks passed</ChatToolOutput>
+        <ChatToolOutput ref={outputRef} label="Test results" tabIndex={0}>
+          All checks passed
+        </ChatToolOutput>
       </ChatToolCall>
       <ToolWrapper {...props} />
-      <ChatToolCall title="Edit file" kind="edit" open onOpenChange={(_open: boolean) => {}} meta={<span>1 file</span>}>
+      <ChatToolCall
+        title="Edit file"
+        kind="edit"
+        open
+        onOpenChange={(_open: boolean) => {}}
+        meta={<span>1 file</span>}
+      >
         <ChatToolDiff ref={rootRef} file="chat.tsx" lines={lines} />
       </ChatToolCall>
       <ChatToolCall title="Generic lookup" />
-      <ChatToolCall title="Layout reviewer · Check chat layout" kind="agent" description="Started by Design System">
+      <ChatToolCall
+        title="Layout reviewer · Check chat layout"
+        kind="agent"
+        description="Started by Design System"
+      >
         <p>The compact activity row fits the conversation.</p>
       </ChatToolCall>
       <ToolWrapper
@@ -46,7 +58,10 @@ export function acceptedToolExamples() {
         linkProps={{
           target: "_blank",
           rel: "noopener",
-          onClick: (event) => { const anchor: HTMLAnchorElement = event.currentTarget; void anchor.href; },
+          onClick: (event) => {
+            const anchor: HTMLAnchorElement = event.currentTarget;
+            void anchor.href;
+          },
         }}
       />
       <ChatToolCall title="Failed command" status="error" />
@@ -77,9 +92,15 @@ export function rejectedToolExamples() {
   // @ts-expect-error The destination belongs to the row, so link props cannot override it.
   <ChatToolCall title="Agent chat" href="/agents/reviewer" linkProps={{ href: "/another-chat" }} />;
   // @ts-expect-error The row summary provides the link's children.
-  <ChatToolCall title="Agent chat" href="/agents/reviewer" linkProps={{ children: "Another title" }} />;
+  <ChatToolCall
+    title="Agent chat"
+    href="/agents/reviewer"
+    linkProps={{ children: "Another title" }}
+  />;
   // @ts-expect-error Output is a literal string, so a renderer cannot silently interpret markup.
-  <ChatToolOutput><strong>Output</strong></ChatToolOutput>;
+  <ChatToolOutput>
+    <strong>Output</strong>
+  </ChatToolOutput>;
   // @ts-expect-error A diff needs a file label.
   <ChatToolDiff lines={[]} />;
   // @ts-expect-error A diff needs explicit lines.

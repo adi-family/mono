@@ -114,10 +114,7 @@ impl UserSecretsPolicy {
     /// # Errors
     /// [`Error::Config`] if the file cannot be written.
     pub fn save(&self, config: &Config) -> Result<()> {
-        config
-            .module(SECRETS_MODULE)
-            .file(POLICY_FILE)
-            .save(self)?;
+        config.module(SECRETS_MODULE).file(POLICY_FILE).save(self)?;
         Ok(())
     }
 
@@ -126,7 +123,9 @@ impl UserSecretsPolicy {
     /// [`adi_config::parse_duration`]'s callers already make elsewhere.
     #[must_use]
     pub fn max_lease_secs(&self) -> Option<u64> {
-        self.max_lease.as_deref().and_then(adi_config::parse_duration)
+        self.max_lease
+            .as_deref()
+            .and_then(adi_config::parse_duration)
     }
 }
 
@@ -301,7 +300,10 @@ mod tests {
     #[test]
     fn a_missing_users_settings_file_has_no_preference() {
         let config = scratch("user-settings-missing");
-        assert_eq!(UserSettings::load(&config, "u-aaa"), UserSettings::default());
+        assert_eq!(
+            UserSettings::load(&config, "u-aaa"),
+            UserSettings::default()
+        );
         assert_eq!(UserSettings::load(&config, "u-aaa").missing, None);
     }
 
@@ -324,12 +326,19 @@ mod tests {
     #[test]
     fn a_corrupt_users_settings_file_defers_to_the_server_policy() {
         let config = scratch("user-settings-corrupt");
-        let dir = config.module(SECRETS_MODULE).dir().join(USERS_DIR).join("u-aaa");
+        let dir = config
+            .module(SECRETS_MODULE)
+            .dir()
+            .join(USERS_DIR)
+            .join("u-aaa");
         std::fs::create_dir_all(&dir).expect("mkdir");
         std::fs::write(dir.join(USER_SETTINGS_FILE), "not = [ toml").expect("write garbage");
 
         let settings = UserSettings::load(&config, "u-aaa");
-        assert_eq!(settings.missing, None, "§15 Q15: unreadable reads as no preference");
+        assert_eq!(
+            settings.missing, None,
+            "§15 Q15: unreadable reads as no preference"
+        );
     }
 
     #[test]

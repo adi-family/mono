@@ -186,7 +186,8 @@ mod tests {
         Config::with_root(root)
     }
 
-    const URL: &str = "https://raw.githubusercontent.com/adi-family/marketplace/main/apps/marketplace.json";
+    const URL: &str =
+        "https://raw.githubusercontent.com/adi-family/marketplace/main/apps/marketplace.json";
 
     /// A machine nobody has configured has the official marketplace and nothing else — that is
     /// the whole of "it is added by default".
@@ -194,7 +195,11 @@ mod tests {
     fn a_fresh_store_has_the_official_marketplace() {
         let cfg = config("official");
         assert_eq!(list(&cfg).expect("list"), vec![official()]);
-        assert_eq!(official().name, "store", "the word every address into it starts with");
+        assert_eq!(
+            official().name,
+            "store",
+            "the word every address into it starts with"
+        );
         assert!(!configured(&cfg), "and nothing has been written to say so");
         let _ = std::fs::remove_dir_all(cfg.root());
     }
@@ -206,7 +211,11 @@ mod tests {
     fn adding_a_second_marketplace_keeps_the_official_one() {
         let cfg = config("keeps");
         add(&cfg, "other", "https://other.example/m.json").expect("add");
-        let names: Vec<String> = list(&cfg).expect("list").into_iter().map(|s| s.name).collect();
+        let names: Vec<String> = list(&cfg)
+            .expect("list")
+            .into_iter()
+            .map(|s| s.name)
+            .collect();
         assert_eq!(names, vec!["store".to_string(), "other".to_string()]);
         let _ = std::fs::remove_dir_all(cfg.root());
     }
@@ -216,8 +225,14 @@ mod tests {
     fn removing_the_official_marketplace_is_final() {
         let cfg = config("final");
         assert!(remove(&cfg, "store").expect("remove"));
-        assert!(list(&cfg).expect("list").is_empty(), "it does not come back on the next read");
-        assert!(!remove(&cfg, "store").expect("remove again"), "and it is not there to remove twice");
+        assert!(
+            list(&cfg).expect("list").is_empty(),
+            "it does not come back on the next read"
+        );
+        assert!(
+            !remove(&cfg, "store").expect("remove again"),
+            "and it is not there to remove twice"
+        );
         let _ = std::fs::remove_dir_all(cfg.root());
     }
 

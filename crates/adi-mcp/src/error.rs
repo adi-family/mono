@@ -22,7 +22,9 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Config(e) => write!(f, "mcp store error: {e}"),
-            Self::InvalidId(id) => write!(f, "invalid mcp server id {id:?}: {}", adi_config::NAME_RULE),
+            Self::InvalidId(id) => {
+                write!(f, "invalid mcp server id {id:?}: {}", adi_config::NAME_RULE)
+            }
             Self::NotFound(id) => write!(f, "no such mcp server: {id}"),
         }
     }

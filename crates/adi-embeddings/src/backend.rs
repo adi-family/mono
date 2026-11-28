@@ -239,7 +239,11 @@ impl EmbeddingBackends {
     /// [`Error::InvalidName`] for an id that cannot be a filename, [`Error::Arguments`] when the
     /// definition is self-contradictory or names an invalid fallback, or [`Error::Config`] when
     /// it cannot be written.
-    pub fn save(&self, id: &str, mut manifest: EmbeddingBackendManifest) -> Result<EmbeddingBackend> {
+    pub fn save(
+        &self,
+        id: &str,
+        mut manifest: EmbeddingBackendManifest,
+    ) -> Result<EmbeddingBackend> {
         adi_config::validate_name(id, Error::InvalidName)?;
         self.validate(id, &manifest)?;
         let now = adi_config::now_unix();
@@ -278,7 +282,8 @@ impl EmbeddingBackends {
     fn validate(&self, id: &str, manifest: &EmbeddingBackendManifest) -> Result<()> {
         if manifest.model.trim().is_empty() {
             return Err(Error::Arguments(
-                "a backend needs a model name — every vector it makes is recorded against it".into(),
+                "a backend needs a model name — every vector it makes is recorded against it"
+                    .into(),
             ));
         }
         if manifest.dimensions == 0 {
@@ -351,7 +356,9 @@ impl EmbeddingBackends {
     /// `candle` feature, which is reported as [`EmbedError::Unavailable`], not fatal to the
     /// store).
     pub fn resolve(&self, id: &str) -> Result<Arc<dyn Embedder>> {
-        let primary = self.get(id)?.ok_or_else(|| Error::NotFound(id.to_string()))?;
+        let primary = self
+            .get(id)?
+            .ok_or_else(|| Error::NotFound(id.to_string()))?;
         let mut chain: Vec<Arc<dyn Embedder>> = Vec::new();
         let mut built_primary = None;
         match build_embedder(&self.config, &primary.manifest) {
@@ -384,16 +391,14 @@ impl EmbeddingBackends {
                 "embedding backend `{id}` and every one of its fallbacks failed to build"
             ))));
         }
-        let (dimensions, model) = built_primary.unwrap_or_else(|| {
-            (chain[0].dimensions(), chain[0].model_name().to_string())
-        });
+        let (dimensions, model) = built_primary
+            .unwrap_or_else(|| (chain[0].dimensions(), chain[0].model_name().to_string()));
         Ok(Arc::new(FailoverEmbedder {
             model,
             dimensions,
             chain,
         }))
     }
-
 }
 
 /// Build the concrete [`Embedder`] one manifest describes, with no fallback involved — what
@@ -543,9 +548,16 @@ mod tests {
                 },
             )
             .expect("save hash");
-        store.save("ollama", ollama_manifest()).expect("save ollama");
+        store
+            .save("ollama", ollama_manifest())
+            .expect("save ollama");
 
-        let ids: Vec<String> = store.list().expect("list").into_iter().map(|b| b.id).collect();
+        let ids: Vec<String> = store
+            .list()
+            .expect("list")
+            .into_iter()
+            .map(|b| b.id)
+            .collect();
         assert_eq!(ids, vec!["hash".to_string(), "ollama".to_string()]);
     }
 
@@ -592,7 +604,9 @@ mod tests {
     #[test]
     fn a_same_model_fallback_is_accepted() {
         let store = scratch("failover-accept");
-        store.save("ollama-local", ollama_manifest()).expect("save primary base");
+        store
+            .save("ollama-local", ollama_manifest())
+            .expect("save primary base");
         let primary = EmbeddingBackendManifest {
             fallbacks: vec!["ollama-local".into()],
             ..ollama_manifest()
@@ -705,7 +719,10 @@ mod tests {
         assert_eq!(Runtime::Candle.fixed_model(), Some(CANDLE_FIXED_MODEL));
         assert_eq!(
             Runtime::Hash.fixed_model(),
-            Some((crate::runtimes::hash::MODEL_NAME, crate::runtimes::hash::HASH_DIMENSIONS))
+            Some((
+                crate::runtimes::hash::MODEL_NAME,
+                crate::runtimes::hash::HASH_DIMENSIONS
+            ))
         );
         assert_eq!(Runtime::Ollama.fixed_model(), None);
         assert_eq!(Runtime::OpenAi.fixed_model(), None);
@@ -719,7 +736,10 @@ mod tests {
     fn the_candle_literal_matches_the_real_embedders_constants() {
         assert_eq!(
             CANDLE_FIXED_MODEL,
-            (adi_indexer::embed::CANDLE_MODEL_ID, adi_indexer::embed::CANDLE_DIMENSIONS)
+            (
+                adi_indexer::embed::CANDLE_MODEL_ID,
+                adi_indexer::embed::CANDLE_DIMENSIONS
+            )
         );
     }
 

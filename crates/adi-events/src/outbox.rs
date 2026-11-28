@@ -63,9 +63,8 @@ pub fn write(tx: &Connection, name: &str, payload: &str) -> Result<()> {
 /// # Errors
 /// [`Error::Sqlite`] on a read or write failure against `local`.
 pub fn relay(local: &Connection, log: &Events, source: &str, limit: usize) -> Result<usize> {
-    let mut stmt = local.prepare(
-        "SELECT id, name, payload, created_at FROM event_outbox ORDER BY id LIMIT ?1",
-    )?;
+    let mut stmt = local
+        .prepare("SELECT id, name, payload, created_at FROM event_outbox ORDER BY id LIMIT ?1")?;
     let pending: Vec<(i64, EventRecord)> = stmt
         .query_map([i64::try_from(limit).unwrap_or(i64::MAX)], |row| {
             Ok((
@@ -139,7 +138,8 @@ mod tests {
         let producer = producer_conn();
         let tx = producer.unchecked_transaction().expect("begin");
         write(&tx, "adi.tasks.created", "{}").expect("write");
-        tx.commit().expect("commit — simulates the process dying before it could relay");
+        tx.commit()
+            .expect("commit — simulates the process dying before it could relay");
 
         let log = scratch_events("downtime");
         assert!(log.catch_up("sub", 10).expect("nothing yet").is_empty());
@@ -172,7 +172,11 @@ mod tests {
         relay(&producer, &log, "tasks", 10).expect("second relay");
 
         let caught_up = log.catch_up("sub", 10).expect("catch up");
-        assert_eq!(caught_up.len(), 1, "the same fact must not become two events");
+        assert_eq!(
+            caught_up.len(),
+            1,
+            "the same fact must not become two events"
+        );
     }
 
     #[test]

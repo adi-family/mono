@@ -123,7 +123,9 @@ mod tests {
     fn a_project_workflow_file_is_id_qualified_by_its_project() {
         let config = scratch("project");
         write(
-            &config.projects_dir().join("demo/workflows/weekly-report.ts"),
+            &config
+                .projects_dir()
+                .join("demo/workflows/weekly-report.ts"),
             "export const on = [];",
         );
         let found = workflow_files(&config);
@@ -140,11 +142,15 @@ mod tests {
             "export const on = [];",
         );
         write(
-            &config.projects_dir().join("demo/workflows/weekly-report.ts"),
+            &config
+                .projects_dir()
+                .join("demo/workflows/weekly-report.ts"),
             "export const on = [];",
         );
         write(
-            &config.projects_dir().join("acme/workflows/weekly-report.ts"),
+            &config
+                .projects_dir()
+                .join("acme/workflows/weekly-report.ts"),
             "export const on = [];",
         );
         let ids: Vec<String> = workflow_files(&config).into_iter().map(|f| f.id).collect();

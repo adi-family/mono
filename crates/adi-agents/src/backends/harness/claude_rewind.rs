@@ -51,9 +51,14 @@ pub(crate) fn anchor(session_id: &str, before_ms: u64) -> Result<Option<String>>
         ))
     })?;
     let file = std::fs::File::open(&path).map_err(|e| {
-        Error::Unsupported(format!("can't rewind: couldn't read {}: {e}", path.display()))
+        Error::Unsupported(format!(
+            "can't rewind: couldn't read {}: {e}",
+            path.display()
+        ))
     })?;
-    let lines = BufReader::new(file).lines().map_while(std::result::Result::ok);
+    let lines = BufReader::new(file)
+        .lines()
+        .map_while(std::result::Result::ok);
     Ok(anchor_in(lines, before_ms))
 }
 
@@ -136,8 +141,14 @@ mod tests {
             entry("q2", Some("a1"), 10),
             entry("a2", Some("q2"), 11),
         ];
-        assert_eq!(anchor_in(lines.clone().into_iter(), at(9)).as_deref(), Some("a1"));
-        assert_eq!(anchor_in(lines.clone().into_iter(), at(60)).as_deref(), Some("a2"));
+        assert_eq!(
+            anchor_in(lines.clone().into_iter(), at(9)).as_deref(),
+            Some("a1")
+        );
+        assert_eq!(
+            anchor_in(lines.clone().into_iter(), at(60)).as_deref(),
+            Some("a2")
+        );
         assert_eq!(anchor_in(lines.into_iter(), at(1)), None);
     }
 
@@ -154,7 +165,10 @@ mod tests {
             entry("a2", Some("q2"), 21),
             entry("q3", Some("a2"), 30),
         ];
-        assert_eq!(anchor_in(lines.clone().into_iter(), at(29)).as_deref(), Some("a2"));
+        assert_eq!(
+            anchor_in(lines.clone().into_iter(), at(29)).as_deref(),
+            Some("a2")
+        );
         assert_eq!(anchor_in(lines.into_iter(), at(15)).as_deref(), Some("a1"));
     }
 
@@ -163,7 +177,11 @@ mod tests {
         let mut side: serde_json::Value =
             serde_json::from_str(&entry("side", Some("q1"), 5)).expect("json");
         side["isSidechain"] = true.into();
-        let lines = vec![entry("q1", None, 1), entry("a1", Some("q1"), 2), side.to_string()];
+        let lines = vec![
+            entry("q1", None, 1),
+            entry("a1", Some("q1"), 2),
+            side.to_string(),
+        ];
         assert_eq!(anchor_in(lines.into_iter(), at(60)).as_deref(), Some("a1"));
     }
 }

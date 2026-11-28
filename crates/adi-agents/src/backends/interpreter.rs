@@ -738,7 +738,15 @@ mod tests {
 
         fn run_for(&self, code: &str, timeout_ms: u64) -> Ran {
             self.code
-                .run(&self.shell, &self.home, code, timeout_ms, 32_000, false, None)
+                .run(
+                    &self.shell,
+                    &self.home,
+                    code,
+                    timeout_ms,
+                    32_000,
+                    false,
+                    None,
+                )
                 .expect("the interpreter runs the cell")
         }
 
@@ -1459,7 +1467,10 @@ console.log(JSON.stringify([process.cwd().endsWith('/sub'), process.env.FROM_DOL
             "the code moved with the command, and the next command starts there"
         );
         let seen = conv.bash("pwd; echo \"$FROM_DOLLAR\"");
-        assert!(seen.ends_with("/sub\ntwo words\n"), "and so does Bash: {seen}");
+        assert!(
+            seen.ends_with("/sub\ntwo words\n"),
+            "and so does Bash: {seen}"
+        );
 
         let ran = conv.run(
             r"await $`unset FROM_DOLLAR; cd ..`.quiet();
@@ -1573,12 +1584,20 @@ console.log(JSON.stringify([failed.code, failed.exitCode, failed.ok, failed.text
         conv.run("const kept = 'still here';");
 
         let began = Instant::now();
-        let ran = conv.run_for("await $`cd sub; echo partial; sleep 60`;\nconsole.log('never');", 400);
+        let ran = conv.run_for(
+            "await $`cd sub; echo partial; sleep 60`;\nconsole.log('never');",
+            400,
+        );
         assert_eq!(ran.ended, Ended::TimedOut, "{}", ran.output);
-        assert!(began.elapsed() < Duration::from_secs(10), "{:?}", began.elapsed());
+        assert!(
+            began.elapsed() < Duration::from_secs(10),
+            "{:?}",
+            began.elapsed()
+        );
         assert!(ran.output.starts_with("partial\n"), "{}", ran.output);
         assert!(
-            ran.output.contains("ShError: command was stopped") && ran.output.contains("cd sub; echo partial; sleep 60"),
+            ran.output.contains("ShError: command was stopped")
+                && ran.output.contains("cd sub; echo partial; sleep 60"),
             "named as it was written, not as the script that ran it: {}",
             ran.output
         );

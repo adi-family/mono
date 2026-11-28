@@ -196,20 +196,22 @@ pub(crate) fn overlay(
 /// Nothing, in the ADI app: its window carries this exact line in its own bar, above the tabs
 /// ([`crate::native`]), and the trigger it draws does not scroll away with the rail.
 pub(crate) fn brand(l: Launcher, place: &'static str) -> impl IntoView {
-    (!crate::native::in_app()).then(|| view! {
-        <button
-            type="button"
-            class=format!("adi-brand {place}")
-            title=format!("Menu — {}K", mod_glyph())
-            aria-label="Open the menu"
-            aria-haspopup="dialog"
-            aria-keyshortcuts="Meta+K Control+K"
-            on:click=move |_| l.show()
-        >
-            <Mark class="adi-brand__mark"/>
-            <span class="adi-brand__word">"adi"</span>
-            <Kbd class="adi-brand__kbd">{format!("{}K", mod_glyph())}</Kbd>
-        </button>
+    (!crate::native::in_app()).then(|| {
+        view! {
+            <button
+                type="button"
+                class=format!("adi-brand {place}")
+                title=format!("Menu — {}K", mod_glyph())
+                aria-label="Open the menu"
+                aria-haspopup="dialog"
+                aria-keyshortcuts="Meta+K Control+K"
+                on:click=move |_| l.show()
+            >
+                <Mark class="adi-brand__mark"/>
+                <span class="adi-brand__word">"adi"</span>
+                <Kbd class="adi-brand__kbd">{format!("{}K", mod_glyph())}</Kbd>
+            </button>
+        }
     })
 }
 
@@ -218,20 +220,22 @@ pub(crate) fn brand(l: Launcher, place: &'static str) -> impl IntoView {
 /// Nothing, in the ADI app, for the same reason [`brand`] is: the window's bar holds the trigger
 /// on every screen, so the corner mark would be the second one on the ones that have both.
 pub(crate) fn floating(l: Launcher) -> impl IntoView {
-    (!crate::native::in_app()).then(|| view! {
-        <button
-            type="button"
-            class="fixed z-40 flex size-11 cursor-pointer items-center justify-center \
-                   rounded-md border border-line-strong bg-side text-ink hover:bg-raise"
-            style=format!("left:{EDGE}px;bottom:{}px", l.floor)
-            title=format!("Menu — {}K", mod_glyph())
-            aria-label="Open the menu"
-            aria-haspopup="dialog"
-            aria-keyshortcuts="Meta+K Control+K"
-            on:click=move |_| l.show()
-        >
-            <Mark class="size-7"/>
-        </button>
+    (!crate::native::in_app()).then(|| {
+        view! {
+            <button
+                type="button"
+                class="fixed z-40 flex size-11 cursor-pointer items-center justify-center \
+                       rounded-md border border-line-strong bg-side text-ink hover:bg-raise"
+                style=format!("left:{EDGE}px;bottom:{}px", l.floor)
+                title=format!("Menu — {}K", mod_glyph())
+                aria-label="Open the menu"
+                aria-haspopup="dialog"
+                aria-keyshortcuts="Meta+K Control+K"
+                on:click=move |_| l.show()
+            >
+                <Mark class="size-7"/>
+            </button>
+        }
     })
 }
 

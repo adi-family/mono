@@ -969,8 +969,8 @@ mod tests {
 
     #[test]
     fn the_embeddings_group_is_reachable_from_the_top_level() {
-        let cli = Cli::try_parse_from(["adi-mono", "embeddings", "backends", "--json"])
-            .expect("parses");
+        let cli =
+            Cli::try_parse_from(["adi-mono", "embeddings", "backends", "--json"]).expect("parses");
         assert!(matches!(
             cli.command,
             Command::Embeddings {
@@ -999,8 +999,8 @@ mod tests {
     fn the_marketplace_group_is_reachable_from_the_top_level() {
         // Its own argv surface is tested in `marketplace.rs`; this pins the wiring — that
         // `adi-mono marketplace …` reaches it at all.
-        let cli = Cli::try_parse_from(["adi-mono", "marketplace", "install", "adi/crm"])
-            .expect("parses");
+        let cli =
+            Cli::try_parse_from(["adi-mono", "marketplace", "install", "adi/crm"]).expect("parses");
         assert!(matches!(
             cli.command,
             Command::Marketplace {

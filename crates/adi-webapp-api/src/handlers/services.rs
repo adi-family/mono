@@ -7,9 +7,8 @@ use adi_projects::Projects;
 use serde::Deserialize;
 
 use crate::types::{
-    FRONT_DOOR_READ_ONLY_REASON, FrontDoorStatus, HiveService, HiveState, NewService,
-    ProcessUsage, ProjectService, ServicePort, ServiceState, StartResult, StartService,
-    StopResult, UsedPort,
+    FRONT_DOOR_READ_ONLY_REASON, FrontDoorStatus, HiveService, HiveState, NewService, ProcessUsage,
+    ProjectService, ServicePort, ServiceState, StartResult, StartService, StopResult, UsedPort,
 };
 
 use super::projects::project_detail;
@@ -435,7 +434,9 @@ fn collect_hive_services(
 fn refuse_front_door_write(verb: &str, service: &str) -> Response {
     error(
         409,
-        &format!("can't {verb} `{service}` on the front door \u{2014} {FRONT_DOOR_READ_ONLY_REASON}"),
+        &format!(
+            "can't {verb} `{service}` on the front door \u{2014} {FRONT_DOOR_READ_ONLY_REASON}"
+        ),
     )
 }
 

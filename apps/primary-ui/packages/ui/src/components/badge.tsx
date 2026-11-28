@@ -34,8 +34,19 @@ const stateVariants = new Set(["success", "warning", "destructive", "muted"]);
 function Badge({ className, variant, dot, children, ...props }: BadgeProps) {
   const showDot = dot ?? stateVariants.has(variant ?? "");
   return (
-    <span data-slot="badge" data-variant={variant ?? "secondary"} className={cn(badgeVariants({ variant, className }))} {...props}>
-      {showDot && <span data-slot="badge-dot" aria-hidden="true" className="size-1.5 rounded-full bg-[var(--badge-dot,currentColor)]" />}
+    <span
+      data-slot="badge"
+      data-variant={variant ?? "secondary"}
+      className={cn(badgeVariants({ variant, className }))}
+      {...props}
+    >
+      {showDot && (
+        <span
+          data-slot="badge-dot"
+          aria-hidden="true"
+          className="size-1.5 rounded-full bg-[var(--badge-dot,currentColor)]"
+        />
+      )}
       {children}
     </span>
   );

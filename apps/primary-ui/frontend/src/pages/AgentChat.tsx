@@ -3,12 +3,7 @@ import { ArrowLeft } from "lucide-react";
 import { Link } from "react-router-dom";
 import { ChatMarkdown } from "../components/ChatMarkdown";
 
-import {
-  ChatMessage,
-  ChatMessageContent,
-  ChatMessageMeta,
-  ChatThread,
-} from "@design-system/ui";
+import { ChatMessage, ChatMessageContent, ChatMessageMeta, ChatThread } from "@design-system/ui";
 
 export function AgentChat() {
   useEffect(() => {
@@ -16,7 +11,11 @@ export function AgentChat() {
   }, []);
 
   return (
-    <main aria-labelledby="agent-chat-heading" data-demo="agent-conversation" className="mx-auto flex w-full max-w-3xl min-w-0 flex-col gap-4">
+    <main
+      aria-labelledby="agent-chat-heading"
+      data-demo="agent-conversation"
+      className="mx-auto flex w-full max-w-3xl min-w-0 flex-col gap-4"
+    >
       <Link
         to="/library#chat-thread-example"
         data-slot="agent-chat-back"
@@ -27,7 +26,9 @@ export function AgentChat() {
         Design conversation
       </Link>
       <div>
-        <h2 id="agent-chat-heading" className="text-base font-medium">Layout reviewer</h2>
+        <h2 id="agent-chat-heading" className="text-base font-medium">
+          Layout reviewer
+        </h2>
         <p className="text-muted-foreground mt-1 text-sm">Example agent conversation</p>
       </div>
       <ChatThread
@@ -39,13 +40,24 @@ export function AgentChat() {
         <ChatMessage from="user">
           <div className="min-w-0">
             <ChatMessageMeta>Design assistant</ChatMessageMeta>
-            <ChatMessageContent className="whitespace-normal"><ChatMarkdown>Check the chat spacing and scan the layout on narrow screens. Review keyboard navigation through the conversation and tool calls.</ChatMarkdown></ChatMessageContent>
+            <ChatMessageContent className="whitespace-normal">
+              <ChatMarkdown>
+                Check the chat spacing and scan the layout on narrow screens. Review keyboard
+                navigation through the conversation and tool calls.
+              </ChatMarkdown>
+            </ChatMessageContent>
           </div>
         </ChatMessage>
         <ChatMessage from="assistant">
           <div className="min-w-0">
             <ChatMessageMeta>Layout reviewer</ChatMessageMeta>
-            <ChatMessageContent className="whitespace-normal"><ChatMarkdown>{"The message spacing is consistent and the conversation fits mobile screens.\n\nKeyboard focus reaches the tool calls and composer in order. Expanded details stay within the conversation width.\n\nRun the browser checks again after the next spacing change:\n\n```sh\nbun run test:chat:browser\n```"}</ChatMarkdown></ChatMessageContent>
+            <ChatMessageContent className="whitespace-normal">
+              <ChatMarkdown>
+                {
+                  "The message spacing is consistent and the conversation fits mobile screens.\n\nKeyboard focus reaches the tool calls and composer in order. Expanded details stay within the conversation width.\n\nRun the browser checks again after the next spacing change:\n\n```sh\nbun run test:chat:browser\n```"
+                }
+              </ChatMarkdown>
+            </ChatMessageContent>
           </div>
         </ChatMessage>
       </ChatThread>

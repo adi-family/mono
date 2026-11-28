@@ -387,7 +387,10 @@ impl Runner for DetachedRunner {
                 // code-only agent's are never handed to an engine anyway: its scripts call them
                 // through the turn itself (see `backends::code_only`).
                 if !spec.code.only {
-                    crate::backends::mcp::refuse_unless_supported(&self.backend, &spec.mcp_servers)?;
+                    crate::backends::mcp::refuse_unless_supported(
+                        &self.backend,
+                        &spec.mcp_servers,
+                    )?;
                 }
                 harness::adi_loop::validate(&decode(&spec.arguments)?)
             }
@@ -628,22 +631,20 @@ impl Runner for DetachedRunner {
 
     fn emits(&self) -> EventKinds {
         match self.backend {
-            Backend::ProcessClaude
-            | Backend::HarnessClaudeSdk
-            | Backend::ProcessAntigravity => EventKinds {
-                message: true,
-                tool_call: true,
-                thinking: true,
-                metrics: true,
-            },
-            Backend::ProcessCodex | Backend::HarnessAdi => {
+            Backend::ProcessClaude | Backend::HarnessClaudeSdk | Backend::ProcessAntigravity => {
                 EventKinds {
                     message: true,
                     tool_call: true,
-                    thinking: false,
+                    thinking: true,
                     metrics: true,
                 }
             }
+            Backend::ProcessCodex | Backend::HarnessAdi => EventKinds {
+                message: true,
+                tool_call: true,
+                thinking: false,
+                metrics: true,
+            },
             _ => EventKinds::default(),
         }
     }
@@ -2570,7 +2571,11 @@ mod tests {
             },
         };
         let with = |arguments: Value, code: crate::CodeTools, servers: bool| RunSpec {
-            mcp_servers: if servers { vec![server.clone()] } else { Vec::new() },
+            mcp_servers: if servers {
+                vec![server.clone()]
+            } else {
+                Vec::new()
+            },
             code,
             ..spec(arguments)
         };
@@ -2583,12 +2588,17 @@ mod tests {
             .expect_err("no engine to hand the servers to");
         assert!(refused.to_string().contains("no MCP support"), "{refused}");
         assert!(
-            adi.check(&with(json!({ "provider": "ollama" }), only, true)).is_ok(),
+            adi.check(&with(json!({ "provider": "ollama" }), only, true))
+                .is_ok(),
             "a code-only agent's servers are reached from its code, through the turn itself"
         );
 
         for backend in [Backend::ProcessClaude, Backend::HarnessClaudeSdk] {
-            assert!(DetachedRunner::new(backend).check(&with(json!({}), only, true)).is_ok());
+            assert!(
+                DetachedRunner::new(backend)
+                    .check(&with(json!({}), only, true))
+                    .is_ok()
+            );
         }
 
         let codex = DetachedRunner::new(Backend::ProcessCodex);
@@ -2597,7 +2607,10 @@ mod tests {
             let refused = codex
                 .check(&with(json!({}), only, false))
                 .expect_err("codex cannot be code-only");
-            assert!(refused.to_string().contains("cannot run a code-only agent"), "{refused}");
+            assert!(
+                refused.to_string().contains("cannot run a code-only agent"),
+                "{refused}"
+            );
         }
     }
 
@@ -2632,13 +2645,27 @@ mod tests {
             // What it has instead is said where it will be read whole: in its prompt.
             if cfg!(unix) {
                 let told = after("--append-system-prompt");
-                assert!(told.contains("# What your code can call"), "{backend:?}: {told}");
-                assert!(told.contains("## `await Read({ path, limit?, offset? })`"), "{backend:?}: {told}");
+                assert!(
+                    told.contains("# What your code can call"),
+                    "{backend:?}: {told}"
+                );
+                assert!(
+                    told.contains("## `await Read({ path, limit?, offset? })`"),
+                    "{backend:?}: {told}"
+                );
                 assert!(told.contains("`mcp.n8n`"), "{backend:?}: {told}");
             }
             let config: Value = serde_json::from_str(after("--mcp-config")).expect("json");
-            let servers: Vec<&String> = config["mcpServers"].as_object().expect("servers").keys().collect();
-            assert_eq!(servers, ["adi"], "{backend:?}: the agent's own servers are not the engine's");
+            let servers: Vec<&String> = config["mcpServers"]
+                .as_object()
+                .expect("servers")
+                .keys()
+                .collect();
+            assert_eq!(
+                servers,
+                ["adi"],
+                "{backend:?}: the agent's own servers are not the engine's"
+            );
         }
     }
 
@@ -2973,7 +3000,8 @@ mod tests {
 
         let reason = codex_unverifiable_reason(&run);
         assert!(
-            reason.contains("codex-cli 0.170.0") && reason.contains("not a version ADI has verified for resume"),
+            reason.contains("codex-cli 0.170.0")
+                && reason.contains("not a version ADI has verified for resume"),
             "names the CLI version, not a generic can't-verify: {reason:?}",
         );
     }
@@ -3239,14 +3267,24 @@ mod tests {
         let home = session.log.parent().expect("scratch").join("codex-home");
         std::fs::create_dir_all(&home).unwrap();
         let mut run = spec(json!({}));
-        run.env.push(("CODEX_HOME".into(), home.to_string_lossy().into_owned()));
+        run.env
+            .push(("CODEX_HOME".into(), home.to_string_lossy().into_owned()));
         run.env.push(("CODEX_API_KEY".into(), "test-key".into()));
         let path = home.join("config.toml");
-        std::fs::write(&path, "approval_policy = 'on-request'\nsandbox_mode = 'read-only'\n").unwrap();
+        std::fs::write(
+            &path,
+            "approval_policy = 'on-request'\nsandbox_mode = 'read-only'\n",
+        )
+        .unwrap();
         let before = codex_auth_context(&run).expect("API key context");
-        std::fs::write(&path, "approval_policy = 'never'\nsandbox_mode = 'danger-full-access'\n").unwrap();
+        std::fs::write(
+            &path,
+            "approval_policy = 'never'\nsandbox_mode = 'danger-full-access'\n",
+        )
+        .unwrap();
         assert_eq!(codex_auth_context(&run).as_deref(), Some(before.as_str()));
-        run.env.push(("CODEX_API_KEY".into(), "different-key".into()));
+        run.env
+            .push(("CODEX_API_KEY".into(), "different-key".into()));
         assert_ne!(codex_auth_context(&run).as_deref(), Some(before.as_str()));
     }
 
@@ -3947,7 +3985,12 @@ mod tests {
             .started()
             .with_state(json!({ "resume_at": "entry-7" }));
 
-        let argv = argv_of(Backend::HarnessClaudeSdk, &spec(json!({})), &session, "again");
+        let argv = argv_of(
+            Backend::HarnessClaudeSdk,
+            &spec(json!({})),
+            &session,
+            "again",
+        );
         assert!(
             argv.windows(3)
                 .any(|w| w[0] == "--resume" && w[2] == "--resume-session-at")
@@ -3966,7 +4009,12 @@ mod tests {
             .rewind(&session, 0)
             .expect("rewind");
 
-        let argv = argv_of(Backend::HarnessClaudeSdk, &spec(json!({})), &session, "again");
+        let argv = argv_of(
+            Backend::HarnessClaudeSdk,
+            &spec(json!({})),
+            &session,
+            "again",
+        );
         assert!(argv.iter().any(|arg| arg == "--session-id"), "{argv:?}");
         assert!(!argv.iter().any(|arg| arg == "--resume"), "{argv:?}");
     }
@@ -5037,11 +5085,18 @@ mod tests {
         assert_eq!(first.last().map(String::as_str), Some("hello"));
 
         // Turn 2 on the same credential: resumes via session/load with the captured conversation id.
-        let resumed_session = FakeSession::new("agy-resume-2").started().with_state(json!({
-            "antigravity_conversation_id": "conv-abc-123",
-            "antigravity_credential": "runtime:process:antigravity",
-        }));
-        let second = argv_of(Backend::ProcessAntigravity, &run, &resumed_session, "follow up");
+        let resumed_session = FakeSession::new("agy-resume-2")
+            .started()
+            .with_state(json!({
+                "antigravity_conversation_id": "conv-abc-123",
+                "antigravity_credential": "runtime:process:antigravity",
+            }));
+        let second = argv_of(
+            Backend::ProcessAntigravity,
+            &run,
+            &resumed_session,
+            "follow up",
+        );
         let opts2: Value = serde_json::from_str(&second[4]).expect("options json");
         assert_eq!(opts2["conversation_id"], "conv-abc-123");
         assert_eq!(second.last().map(String::as_str), Some("follow up"));
@@ -5049,7 +5104,12 @@ mod tests {
         // Turn 3 after switching to a different credential: starts a fresh conversation rather
         // than handing another login's conversation id to `session/load`.
         run.credential = Some("secret:GEMINI_API_KEY".into());
-        let switched = argv_of(Backend::ProcessAntigravity, &run, &resumed_session, "after failover");
+        let switched = argv_of(
+            Backend::ProcessAntigravity,
+            &run,
+            &resumed_session,
+            "after failover",
+        );
         let opts3: Value = serde_json::from_str(&switched[4]).expect("options json");
         assert!(
             opts3.get("conversation_id").is_none(),
@@ -5075,16 +5135,24 @@ mod tests {
             },
         }];
 
-        runner.check(&run).expect("code_only + mcp_servers accepted on process:antigravity");
+        runner
+            .check(&run)
+            .expect("code_only + mcp_servers accepted on process:antigravity");
         let argv = argv_of(Backend::ProcessAntigravity, &run, &session, "run it");
         let opts: Value = serde_json::from_str(&argv[4]).expect("options json");
         assert_eq!(opts["code_only"], "TsCode");
-        let prompt = opts["system_prompt"].as_str().expect("composed system prompt");
+        let prompt = opts["system_prompt"]
+            .as_str()
+            .expect("composed system prompt");
         assert!(prompt.contains("Solve tasks with code."));
         assert!(prompt.contains("# What your code can call"), "{prompt}");
         assert!(prompt.contains("`mcp.n8n`"), "{prompt}");
         let mcps = opts["mcp_servers"].as_array().expect("mcp_servers");
-        assert_eq!(mcps.len(), 1, "code-only agent routes MCP servers through adi mcp-serve");
+        assert_eq!(
+            mcps.len(),
+            1,
+            "code-only agent routes MCP servers through adi mcp-serve"
+        );
         assert_eq!(mcps[0]["name"], "adi");
     }
 
@@ -5109,7 +5177,18 @@ mod tests {
         let runner = DetachedRunner::new(Backend::ProcessAntigravity);
         let batch = runner.events(&session, None).expect("events");
         assert!(batch.events.iter().any(|e| matches!(e, RunEvent::Step(crate::progress::Step::Tool { name, .. }) if name == "Bash")));
-        assert!(batch.events.iter().any(|e| matches!(e, RunEvent::Answer { text } if text == "All set.")));
-        assert!(batch.events.iter().any(|e| matches!(e, RunEvent::Finished { ok: true, error: None })));
+        assert!(
+            batch
+                .events
+                .iter()
+                .any(|e| matches!(e, RunEvent::Answer { text } if text == "All set."))
+        );
+        assert!(batch.events.iter().any(|e| matches!(
+            e,
+            RunEvent::Finished {
+                ok: true,
+                error: None
+            }
+        )));
     }
 }
