@@ -68,6 +68,7 @@ pub use transcript::{TranscriptPage, Turn, assistant_turn, user_turn, user_turn_
 /// The role a question carries — what the agent layer reads to tell an unanswered turn from a
 /// settled one before it commits an answer behind it.
 pub(crate) use transcript::ROLE_USER;
+pub(crate) use transcript::splice_events;
 // Only the tests read it back: nothing in the crate branches on a turn being the assistant's, it
 // only ever *writes* one through `assistant_turn`.
 #[cfg(test)]
@@ -1530,46 +1531,37 @@ impl SessionStore {
         self.read(|conn| transcript::one(conn, agent, id, seq))
     }
 
-    /// Record a platform event step for an in-flight turn (`turn_seq`), pinned at `after_step` in
-    /// the engine's step stream.
+    /// Record a platform event step onto a conversation: held for the answer still being written,
+    /// or appended to the newest turn when nothing is in flight. See [`transcript::record_event`].
     ///
     /// # Errors
-    /// Returns [`Error::NotFound`] when the session is gone, and database errors.
-    pub fn append_turn_event(
+    /// Returns [`Error::NotFound`] when the session is gone or has no turns, and database errors.
+    pub fn record_event(
         &self,
         agent: &str,
         id: &str,
-        turn_seq: usize,
         after_step: usize,
-        step: &crate::progress::Step,
-    ) -> Result<()> {
-        let conn = self.conn()?;
-        transcript::append_turn_event(&conn, agent, id, turn_seq, after_step, step)
-    }
-
-    /// Platform events recorded for turn `turn_seq`, ordered by `(after_step, seq)`.
-    #[must_use]
-    pub fn turn_events(
-        &self,
-        agent: &str,
-        id: &str,
-        turn_seq: usize,
-    ) -> Vec<(usize, crate::progress::Step)> {
-        self.read(|conn| transcript::load_turn_events(conn, agent, id, turn_seq))
-    }
-
-    /// Append one step onto the newest recorded turn when no live turn is in flight.
-    ///
-    /// # Errors
-    /// Returns [`Error::NotFound`] when the session has no turns, and database errors.
-    pub fn append_step_to_last_turn(
-        &self,
-        agent: &str,
-        id: &str,
         step: crate::progress::Step,
     ) -> Result<()> {
         let conn = self.conn()?;
-        transcript::append_step_to_last_turn(&conn, agent, id, step)
+        transcript::record_event(&conn, agent, id, after_step, step)
+    }
+
+    /// The platform events waiting for the answer still being written, ordered by
+    /// `(after_step, seq)`.
+    #[must_use]
+    pub fn live_events(&self, agent: &str, id: &str) -> Vec<(usize, crate::progress::Step)> {
+        self.read(|conn| transcript::live_events(conn, agent, id))
+    }
+
+    /// Record `turn` as the answer to the open question, atomically with checking that there is
+    /// one. `false` when the last turn was already an answer. See [`transcript::answer`].
+    ///
+    /// # Errors
+    /// Returns [`Error::NotFound`] when the session is gone, and database errors.
+    pub fn answer(&self, agent: &str, id: &str, turn: Turn) -> Result<bool> {
+        let conn = self.conn()?;
+        transcript::answer(&conn, agent, id, turn)
     }
 
     /// One page of that same view: the newest `limit` turns, or the `limit` turns before `before`.

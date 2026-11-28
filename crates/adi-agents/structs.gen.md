@@ -2865,6 +2865,8 @@ pub enum Step {
         #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
         metadata: serde_json::Value,
     },
+    #[serde(other)]
+    Unknown,
 }
 ```
 

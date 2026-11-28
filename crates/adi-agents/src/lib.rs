@@ -714,30 +714,7 @@ impl Agents {
         name: &str,
         manifest: AgentManifest<Args>,
     ) -> Result<Agent<Args>> {
-        let env_caller = awaits::caller();
-        let existed = self.agent_file(name).exists();
-        let saved = self.save_as(
-            name,
-            manifest,
-            env_caller
-                .as_ref()
-                .map(|who| format!("{}{}", launcher::AGENT_PREFIX, who.agent)),
-        )?;
-        if let Some(who) = env_caller {
-            let (event_type, verb) = if existed {
-                ("agent.updated", "updated")
-            } else {
-                ("agent.created", "created")
-            };
-            let _ = self.push_event(
-                &who.agent,
-                &who.conv,
-                format!("Agent {name} {verb}"),
-                event_type,
-                serde_json::json!({ "agent": name }),
-            );
-        }
-        Ok(saved)
+        self.save_as(name, manifest, launcher::by_caller())
     }
 
     /// [`Self::save`]'s whole body, taking who is calling as a parameter instead of reading
@@ -2177,10 +2154,11 @@ impl Agents {
 
     /// Record a platform event step onto a conversation's timeline (e.g. `"Agent reviewer started"`).
     ///
-    /// While the conversation is mid-turn (newest recorded turn is `"user"`), the event is stored
-    /// in `turn_events` pinned at the current live step count so it merges into `live_content` in
-    /// chronological position and settles with the turn. When no turn is in flight, it is appended
-    /// onto the newest recorded turn so late events are still visible.
+    /// Mid-turn, the event is held for the answer being written, pinned at how many steps the
+    /// engine has emitted so far, and lands inside that answer in place when it settles; with no
+    /// turn in flight it is appended to the newest turn. Which of the two is decided inside the
+    /// write's own transaction ([`SessionStore::record_event`](store::SessionStore::record_event)):
+    /// the position computed here is only *where*, never *whether*.
     ///
     /// # Errors
     /// Returns [`Error::NotFound`] when the conversation does not exist, and database errors.
@@ -2204,19 +2182,18 @@ impl Agents {
         let answering = store
             .last_turn(agent, conv_id)
             .is_some_and(|t| t.role == store::ROLE_USER);
-        if answering {
-            let turn_seq = store.turn_count(agent, conv_id);
-            let after_step = runner_of(&record).map_or(0, |runner| {
+        let after_step = if answering {
+            runner_of(&record).map_or(0, |runner| {
                 let session = store.session(agent, conv_id);
                 let running = Self::still_launching(&record) || runner.is_alive(&session);
-                engine_live_content(&self.config, runner.as_ref(), &session, running)
+                live_content(&self.config, runner.as_ref(), &session, running)
                     .steps
                     .len()
-            });
-            store.append_turn_event(agent, conv_id, turn_seq, after_step, &step)
+            })
         } else {
-            store.append_step_to_last_turn(agent, conv_id, step)
-        }
+            0
+        };
+        store.record_event(agent, conv_id, after_step, step)
     }
 
     /// [`push_event`](Self::push_event) targeting whichever conversation is running this process
@@ -2259,6 +2236,7 @@ impl Agents {
         if !running {
             settle(&store, &agent.name, conv_id, &live);
         }
+        let live = with_live_events(&store, &agent.name, conv_id, live, running);
         store.transcript(&agent.name, conv_id, Some(live), running)
     }
 
@@ -2294,6 +2272,7 @@ impl Agents {
         if !running {
             settle(&store, &agent.name, conv_id, &live);
         }
+        let live = with_live_events(&store, &agent.name, conv_id, live, running);
         store.transcript_page(&agent.name, conv_id, None, limit, Some(live), running)
     }
 
@@ -2328,7 +2307,12 @@ impl Agents {
         if !running {
             progress::close_open_calls(&mut live.steps);
         }
-        Some(live.steps)
+        let events = store.live_events(&agent.name, conv_id);
+        Some(if events.is_empty() {
+            live.steps
+        } else {
+            store::splice_events(live.steps, events)
+        })
     }
 
     /// Where one conversation ran — the directory pinned to it at creation and re-used by every turn
@@ -4517,8 +4501,11 @@ fn launch_lost_outcome(started_at: u64) -> store::RunOutcome {
 ///
 /// `running` only keys the memo — a runner reads a live log differently from a finished one, and
 /// the two answers must not be served for each other.
-/// Parse only the engine's own log, memoized on `(len, mtime)` without external turn events.
-fn engine_live_content(
+///
+/// Only the engine's own steps: the platform events held for this turn live in the database, are
+/// folded in by the transaction that settles it, and are added to a still-running view by
+/// [`with_live_events`].
+fn live_content(
     config: &adi_config::Config,
     runner: &dyn Runner,
     session: &SessionRef<'_>,
@@ -4544,39 +4531,23 @@ fn engine_live_content(
     (*content).clone()
 }
 
-fn live_content(
-    config: &adi_config::Config,
-    runner: &dyn Runner,
-    session: &SessionRef<'_>,
+/// `live`, with the platform events held for it spliced in — paid only while the turn is still
+/// running. Once it is not, [`settle`] has already folded them into the recorded answer, and the
+/// view no longer shows `live` at all.
+fn with_live_events(
+    store: &SessionStore,
+    agent: &str,
+    id: &str,
+    mut live: TurnContent,
     running: bool,
 ) -> TurnContent {
-    let mut content = engine_live_content(config, runner, session, running);
-    let store = session.store();
-    let turn_seq = store.turn_count(session.agent(), session.id());
-    let events = store.turn_events(session.agent(), session.id(), turn_seq);
-    if !events.is_empty() {
-        content.steps = splice_turn_events(content.steps, events);
-    }
-    content
-}
-
-/// Interleave external platform events at their recorded `after_step` positions in the engine's
-/// step sequence (clamped when the engine stream has fewer steps than recorded).
-fn splice_turn_events(engine_steps: Vec<Step>, events: Vec<(usize, Step)>) -> Vec<Step> {
-    let mut merged = Vec::with_capacity(engine_steps.len() + events.len());
-    let mut ev_iter = events.into_iter().peekable();
-    for (i, step) in engine_steps.into_iter().enumerate() {
-        while ev_iter.peek().is_some_and(|(at, _)| *at <= i) {
-            if let Some((_, ev)) = ev_iter.next() {
-                merged.push(ev);
-            }
+    if running {
+        let events = store.live_events(agent, id);
+        if !events.is_empty() {
+            live.steps = store::splice_events(live.steps, events);
         }
-        merged.push(step);
     }
-    for (_, ev) in ev_iter {
-        merged.push(ev);
-    }
-    merged
+    live
 }
 
 /// Commit `content` as this session's answer, if the last thing said was a question.
@@ -4608,7 +4579,7 @@ fn settle(store: &SessionStore, agent: &str, id: &str, content: &TurnContent) {
         let now = turn.at;
         turn.at = finished.max(question.at).min(now);
     }
-    let _ = store.append_turn(agent, id, turn);
+    let _ = store.answer(agent, id, turn);
 }
 
 /// When the engine last wrote to a session's log, as unix millis — how a turn that nobody watched
@@ -10897,6 +10868,8 @@ mod tests {
         );
     }
 
+    /// An event pushed while the parent's turn has run one tool settles pinned after that tool,
+    /// before the next one; an event pushed once the turn has settled is appended to it.
     #[test]
     fn push_event_splices_into_live_turn_and_settles_with_it() {
         let agents = scratch("push-event-live");
@@ -10912,7 +10885,6 @@ mod tests {
             .append_turn("parent", &record.id, store::user_turn("delegate work"))
             .expect("user turn");
 
-        // Simulate a running turn that has emitted one Bash tool call so far.
         let log_path = sessions.log_path("parent", &record.id);
         let first_tool = serde_json::json!({
             "kind": "tool", "id": "t1", "name": "Bash",
@@ -10930,7 +10902,6 @@ mod tests {
             )
             .expect("push event");
 
-        // Engine finishes the first tool, runs a second tool, and answers.
         let full_log = format!(
             "{first_tool}\n{}\n{}\n{}\n{}\n",
             serde_json::json!({"kind": "tool", "id": "t1", "name": "Bash", "status": "ok", "output": "started"}),
@@ -10940,7 +10911,6 @@ mod tests {
         );
         std::fs::write(&log_path, full_log).expect("write full log");
 
-        // Reading the finished conversation settles the turn with the event pinned between t1 and t2.
         let turns = agents.transcript(&stored, &record.id);
         assert_eq!(turns.len(), 2);
         let steps = &turns[1].steps;
@@ -10956,7 +10926,6 @@ mod tests {
         );
         assert!(matches!(&steps[2], Step::Tool { name, .. } if name == "Read"));
 
-        // A late event pushed after the turn settled lands on the newest recorded turn.
         agents
             .push_event(
                 "parent",

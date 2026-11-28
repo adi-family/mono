@@ -269,7 +269,17 @@ function metaStr(meta: Record<string, unknown> | undefined, key: string): string
   return trimmed ? trimmed : null;
 }
 
-function platformEvent(step: EventStep): PlatformEvent {
+/**
+ * An event step as a transcript row. `remote` is a transcript from another node: every `href`
+ * below is a page of this machine's panel, which would open a same-named agent or workflow that is
+ * not the one the event is about, so those rows lose their link there.
+ */
+function platformEvent(step: EventStep, remote: boolean): PlatformEvent {
+  const event = localPlatformEvent(step);
+  return remote ? { ...event, href: null } : event;
+}
+
+function localPlatformEvent(step: EventStep): PlatformEvent {
   const meta = step.metadata;
   switch (step.type) {
     case "agent.started": {
@@ -280,7 +290,8 @@ function platformEvent(step: EventStep): PlatformEvent {
         icon: "bot",
         name: step.name,
         detail: runId ?? session,
-        action: agent && runId ? `conv:${agent}\n${runId}` : null,
+        action:
+          agent && runId ? `conv:${agent}\n${runId}` : agent && session ? `pty:${agent}` : null,
         href: null,
       };
     }
@@ -1024,7 +1035,7 @@ class AdiChat extends AdiElement {
           break;
         case "event":
           finishCalls();
-          parts.push({ kind: "event", event: platformEvent(step) });
+          parts.push({ kind: "event", event: platformEvent(step, this.#node !== null) });
           break;
       }
     }
@@ -1058,6 +1069,11 @@ class AdiChat extends AdiElement {
   }
 
   #handleEventClick(action: string): void {
+    if (action.startsWith("pty:")) {
+      const agent = action.slice(4);
+      if (agent) this.#openAgent(agent, null, this.#node);
+      return;
+    }
     if (!action.startsWith("conv:")) return;
     const sep = action.indexOf("\n");
     if (sep < 0) return;

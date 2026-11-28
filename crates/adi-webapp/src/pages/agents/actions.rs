@@ -1381,7 +1381,25 @@ fn thinking_call(text: &str) -> adi_ui::ToolCall {
 
 /// Map a generic `AgentStep::Event` onto a UI [`PlatformEvent`], resolving its icon and optional
 /// click target from `event_type` + `metadata`.
+///
+/// `node` is where the transcript came from (`None` for this machine). Every `href` here is a page
+/// of *this* panel, so on another node's transcript it would open a same-named agent, workflow or
+/// task list that is not the one the event is about — those rows are drawn without a link. The
+/// in-app actions carry the node and stay.
 fn platform_event(
+    node: Option<&str>,
+    name: &str,
+    event_type: &str,
+    metadata: &serde_json::Value,
+) -> adi_ui::PlatformEvent {
+    let mut event = local_platform_event(name, event_type, metadata);
+    if node.is_some() {
+        event.href = None;
+    }
+    event
+}
+
+fn local_platform_event(
     name: &str,
     event_type: &str,
     metadata: &serde_json::Value,
@@ -1636,7 +1654,7 @@ fn feed_turn(
                     let calls = std::mem::take(&mut run);
                     out.push(T::Did(runs.loaded(at, run_from, calls)));
                 }
-                out.push(T::Event(platform_event(name, event_type, metadata)));
+                out.push(T::Event(platform_event(node, name, event_type, metadata)));
             }
             // A step kind this build cannot read. Skipped rather than drawn as an empty something:
             // it is one line of a run, and the rest of the transcript is unaffected.

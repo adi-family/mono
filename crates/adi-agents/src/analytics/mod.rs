@@ -303,7 +303,7 @@ fn segment_texts(turns: &[Turn]) -> impl DoubleEndedIterator<Item = (Site, &str)
                         Some((site(Some(s), Source::ToolInput, name), input.as_str())),
                         Some((site(Some(s), Source::ToolOutput, name), output.as_str())),
                     ],
-                    Step::Event { .. } => [None, None],
+                    Step::Event { .. } | Step::Unknown => [None, None],
                 })
                 .flatten();
             let source = if turn.role == "user" {

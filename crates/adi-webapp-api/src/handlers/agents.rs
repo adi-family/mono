@@ -2180,6 +2180,7 @@ fn agent_step(s: adi_agents::Step) -> AgentStep {
             event_type,
             metadata,
         },
+        adi_agents::Step::Unknown => AgentStep::Unknown,
     }
 }
 

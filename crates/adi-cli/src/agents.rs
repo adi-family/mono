@@ -784,7 +784,18 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
                 created_at: 0,
                 updated_at: 0,
             };
+            let existed = old.is_some();
             let agent = store.save(&name, manifest).map_err(|e| e.to_string())?;
+            let (event_type, verb) = if existed {
+                ("agent.updated", "updated")
+            } else {
+                ("agent.created", "created")
+            };
+            store.push_event_for_caller(
+                format!("Agent {} {verb}", agent.name),
+                event_type,
+                serde_json::json!({ "agent": agent.name }),
+            );
             if json {
                 print_json(&agent);
             } else {

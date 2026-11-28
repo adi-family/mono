@@ -67,6 +67,13 @@ pub enum Step {
         #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
         metadata: serde_json::Value,
     },
+    /// A step kind a newer build wrote that this one cannot read.
+    ///
+    /// Every reader decodes a whole [`Turn`](crate::store::Turn) or drops it, so without this one
+    /// unknown step hides the entire answer around it — which is exactly what [`Step::Event`] did
+    /// to every build older than it. Readers skip it; re-encoding it keeps only the tag.
+    #[serde(other)]
+    Unknown,
 }
 
 /// A tool step's lifecycle: still running, finished ok, failed — or never answered at all.
