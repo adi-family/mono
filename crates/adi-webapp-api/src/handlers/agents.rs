@@ -330,7 +330,7 @@ pub fn run_agent(
     sender: Option<FleetSender<'_>>,
     user: Option<String>,
 ) -> Response {
-    run_agent_as(store, body, sender, user, None)
+    run_agent_as(store, body, sender, user, None, None)
 }
 
 /// `POST /api/agents/run` forwarded from a child carrying `$ADI_LEASE`
@@ -352,12 +352,17 @@ pub fn run_agent_leased(store: &Agents, body: &[u8], capability: &str) -> Respon
     // claims (§11: "This also hardens ADI-MONO-113's `spawn_policy`, which today believes
     // whatever `ADI_AGENT` says").
     let forced_launched_by = format!("{}{}", adi_agents::launcher::AGENT_PREFIX, resolved.agent);
+    let caller = adi_agents::awaits::Caller {
+        agent: resolved.agent,
+        conv: resolved.run_id,
+    };
     run_agent_as(
         store,
         body,
         None,
         Some(resolved.user),
         Some(forced_launched_by),
+        Some(caller),
     )
 }
 
@@ -371,6 +376,7 @@ fn run_agent_as(
     sender: Option<FleetSender<'_>>,
     user: Option<String>,
     forced_launched_by: Option<String>,
+    caller: Option<adi_agents::awaits::Caller>,
 ) -> Response {
     let req = require!(body, RunAgent);
     let name = req.name.trim();
@@ -456,6 +462,7 @@ fn run_agent_as(
             start_at: start_at.as_ref(),
             only,
             lease,
+            caller,
         },
     );
     let launch = match launch {
@@ -2163,6 +2170,15 @@ fn agent_step(s: adi_agents::Step) -> AgentStep {
                 adi_agents::ToolStatus::Unanswered => AgentToolStatus::Unanswered,
             },
             output,
+        },
+        adi_agents::Step::Event {
+            name,
+            event_type,
+            metadata,
+        } => AgentStep::Event {
+            name,
+            event_type,
+            metadata,
         },
     }
 }
@@ -6194,7 +6210,7 @@ fn turn_text(turn: &AgentTurn) -> String {
             // Neither can reach here: this reads a transcript straight out of the store, and both
             // kinds exist only on the wire — one is a run this build folded on its way out, the
             // other a kind it could not read on the way in.
-            AgentStep::Calls { .. } | AgentStep::Unknown => {}
+            AgentStep::Event { .. } | AgentStep::Calls { .. } | AgentStep::Unknown => {}
         }
     }
     add(&turn.text);

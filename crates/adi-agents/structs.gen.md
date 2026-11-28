@@ -2858,6 +2858,13 @@ pub enum Step {
         #[serde(default, skip_serializing_if = "String::is_empty")]
         output: String,
     },
+    Event {
+        name: String,
+        #[serde(rename = "type")]
+        event_type: String,
+        #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+        metadata: serde_json::Value,
+    },
 }
 ```
 
@@ -3084,6 +3091,7 @@ pub struct LaunchOptions<'a> {
     pub start_at: Option<&'a crate::llm::StartAt>,
     pub only: Option<&'a str>,
     pub lease: Option<crate::LeaseRef>,
+    pub caller: Option<crate::awaits::Caller>,
 }
 ```
 

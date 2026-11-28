@@ -714,7 +714,30 @@ impl Agents {
         name: &str,
         manifest: AgentManifest<Args>,
     ) -> Result<Agent<Args>> {
-        self.save_as(name, manifest, launcher::by_caller())
+        let env_caller = awaits::caller();
+        let existed = self.agent_file(name).exists();
+        let saved = self.save_as(
+            name,
+            manifest,
+            env_caller
+                .as_ref()
+                .map(|who| format!("{}{}", launcher::AGENT_PREFIX, who.agent)),
+        )?;
+        if let Some(who) = env_caller {
+            let (event_type, verb) = if existed {
+                ("agent.updated", "updated")
+            } else {
+                ("agent.created", "created")
+            };
+            let _ = self.push_event(
+                &who.agent,
+                &who.conv,
+                format!("Agent {name} {verb}"),
+                event_type,
+                serde_json::json!({ "agent": name }),
+            );
+        }
+        Ok(saved)
     }
 
     /// [`Self::save`]'s whole body, taking who is calling as a parameter instead of reading
@@ -1441,6 +1464,7 @@ impl Agents {
             start_at,
             only,
             ref lease,
+            ref caller,
             ..
         } = *options;
         let stored = self
@@ -1687,6 +1711,25 @@ impl Agents {
             store.prune_old(&agent.name, |record| Self::session_is_alive(&store, record));
             Ok(((), Some(event)))
         })?;
+        if let Some(who) = caller {
+            let metadata = match &launch {
+                Launch::Process { run_id, .. } => serde_json::json!({
+                    "agent": agent.name,
+                    "run_id": run_id,
+                }),
+                Launch::Pty { session, .. } => serde_json::json!({
+                    "agent": agent.name,
+                    "session": session,
+                }),
+            };
+            let _ = self.push_event(
+                &who.agent,
+                &who.conv,
+                format!("Agent {} started", agent.name),
+                "agent.started",
+                metadata,
+            );
+        }
         Ok(launch)
     }
 
@@ -2130,6 +2173,63 @@ impl Agents {
             ))
         })?;
         Ok(Sent::Started(launch))
+    }
+
+    /// Record a platform event step onto a conversation's timeline (e.g. `"Agent reviewer started"`).
+    ///
+    /// While the conversation is mid-turn (newest recorded turn is `"user"`), the event is stored
+    /// in `turn_events` pinned at the current live step count so it merges into `live_content` in
+    /// chronological position and settles with the turn. When no turn is in flight, it is appended
+    /// onto the newest recorded turn so late events are still visible.
+    ///
+    /// # Errors
+    /// Returns [`Error::NotFound`] when the conversation does not exist, and database errors.
+    pub fn push_event(
+        &self,
+        agent: &str,
+        conv_id: &str,
+        name: impl Into<String>,
+        event_type: impl Into<String>,
+        metadata: serde_json::Value,
+    ) -> Result<()> {
+        let store = self.sessions();
+        let Some(record) = store.get(agent, conv_id) else {
+            return Err(Error::NotFound(format!("{agent}: no session {conv_id}")));
+        };
+        let step = Step::Event {
+            name: name.into(),
+            event_type: event_type.into(),
+            metadata,
+        };
+        let answering = store
+            .last_turn(agent, conv_id)
+            .is_some_and(|t| t.role == store::ROLE_USER);
+        if answering {
+            let turn_seq = store.turn_count(agent, conv_id);
+            let after_step = runner_of(&record).map_or(0, |runner| {
+                let session = store.session(agent, conv_id);
+                let running = Self::still_launching(&record) || runner.is_alive(&session);
+                engine_live_content(&self.config, runner.as_ref(), &session, running)
+                    .steps
+                    .len()
+            });
+            store.append_turn_event(agent, conv_id, turn_seq, after_step, &step)
+        } else {
+            store.append_step_to_last_turn(agent, conv_id, step)
+        }
+    }
+
+    /// [`push_event`](Self::push_event) targeting whichever conversation is running this process
+    /// (`$ADI_AGENT` / `$ADI_RUN_ID`). A quiet no-op when invoked outside an agent turn.
+    pub fn push_event_for_caller(
+        &self,
+        name: impl Into<String>,
+        event_type: impl Into<String>,
+        metadata: serde_json::Value,
+    ) {
+        if let Some(who) = awaits::caller() {
+            let _ = self.push_event(&who.agent, &who.conv, name, event_type, metadata);
+        }
     }
 
     /// A harness conversation's transcript, oldest first (empty for backends that keep no
@@ -4417,7 +4517,8 @@ fn launch_lost_outcome(started_at: u64) -> store::RunOutcome {
 ///
 /// `running` only keys the memo — a runner reads a live log differently from a finished one, and
 /// the two answers must not be served for each other.
-fn live_content(
+/// Parse only the engine's own log, memoized on `(len, mtime)` without external turn events.
+fn engine_live_content(
     config: &adi_config::Config,
     runner: &dyn Runner,
     session: &SessionRef<'_>,
@@ -4441,6 +4542,41 @@ fn live_content(
         content
     });
     (*content).clone()
+}
+
+fn live_content(
+    config: &adi_config::Config,
+    runner: &dyn Runner,
+    session: &SessionRef<'_>,
+    running: bool,
+) -> TurnContent {
+    let mut content = engine_live_content(config, runner, session, running);
+    let store = session.store();
+    let turn_seq = store.turn_count(session.agent(), session.id());
+    let events = store.turn_events(session.agent(), session.id(), turn_seq);
+    if !events.is_empty() {
+        content.steps = splice_turn_events(content.steps, events);
+    }
+    content
+}
+
+/// Interleave external platform events at their recorded `after_step` positions in the engine's
+/// step sequence (clamped when the engine stream has fewer steps than recorded).
+fn splice_turn_events(engine_steps: Vec<Step>, events: Vec<(usize, Step)>) -> Vec<Step> {
+    let mut merged = Vec::with_capacity(engine_steps.len() + events.len());
+    let mut ev_iter = events.into_iter().peekable();
+    for (i, step) in engine_steps.into_iter().enumerate() {
+        while ev_iter.peek().is_some_and(|(at, _)| *at <= i) {
+            if let Some((_, ev)) = ev_iter.next() {
+                merged.push(ev);
+            }
+        }
+        merged.push(step);
+    }
+    for (_, ev) in ev_iter {
+        merged.push(ev);
+    }
+    merged
 }
 
 /// Commit `content` as this session's answer, if the last thing said was a question.
@@ -10759,5 +10895,82 @@ mod tests {
             sessions.turn("chat", &id, 2).map(|t| t.text).as_deref(),
             Some("two, reworded")
         );
+    }
+
+    #[test]
+    fn push_event_splices_into_live_turn_and_settles_with_it() {
+        let agents = scratch("push-event-live");
+        agents
+            .save_as("parent", spec("harness:adi"), None)
+            .expect("save");
+        let stored = agents.get("parent").expect("get").expect("present");
+        let sessions = agents.sessions();
+        let record = sessions
+            .create("parent", Backend::HarnessAdi, "/tmp", "delegate work")
+            .expect("create");
+        sessions
+            .append_turn("parent", &record.id, store::user_turn("delegate work"))
+            .expect("user turn");
+
+        // Simulate a running turn that has emitted one Bash tool call so far.
+        let log_path = sessions.log_path("parent", &record.id);
+        let first_tool = serde_json::json!({
+            "kind": "tool", "id": "t1", "name": "Bash",
+            "input": "adi-mono agents run worker", "status": "running"
+        });
+        std::fs::write(&log_path, format!("{first_tool}\n")).expect("write log");
+
+        agents
+            .push_event(
+                "parent",
+                &record.id,
+                "Agent worker started",
+                "agent.started",
+                serde_json::json!({ "agent": "worker", "run_id": "run-child-1" }),
+            )
+            .expect("push event");
+
+        // Engine finishes the first tool, runs a second tool, and answers.
+        let full_log = format!(
+            "{first_tool}\n{}\n{}\n{}\n{}\n",
+            serde_json::json!({"kind": "tool", "id": "t1", "name": "Bash", "status": "ok", "output": "started"}),
+            serde_json::json!({"kind": "tool", "id": "t2", "name": "Read", "input": "a.rs", "status": "running"}),
+            serde_json::json!({"kind": "tool", "id": "t2", "name": "Read", "status": "ok", "output": "ok"}),
+            serde_json::json!({"kind": "answer", "text": "Done"}),
+        );
+        std::fs::write(&log_path, full_log).expect("write full log");
+
+        // Reading the finished conversation settles the turn with the event pinned between t1 and t2.
+        let turns = agents.transcript(&stored, &record.id);
+        assert_eq!(turns.len(), 2);
+        let steps = &turns[1].steps;
+        assert_eq!(steps.len(), 3, "t1, event, t2: {steps:?}");
+        assert!(matches!(&steps[0], Step::Tool { name, .. } if name == "Bash"));
+        assert_eq!(
+            steps[1],
+            Step::Event {
+                name: "Agent worker started".to_string(),
+                event_type: "agent.started".to_string(),
+                metadata: serde_json::json!({ "agent": "worker", "run_id": "run-child-1" }),
+            }
+        );
+        assert!(matches!(&steps[2], Step::Tool { name, .. } if name == "Read"));
+
+        // A late event pushed after the turn settled lands on the newest recorded turn.
+        agents
+            .push_event(
+                "parent",
+                &record.id,
+                "Task T-1 created",
+                "task.created",
+                serde_json::json!({ "id": "T-1" }),
+            )
+            .expect("push late event");
+        let settled = sessions.turns("parent", &record.id);
+        assert_eq!(settled[1].steps.len(), 4);
+        assert!(matches!(
+            &settled[1].steps[3],
+            Step::Event { event_type, .. } if event_type == "task.created"
+        ));
     }
 }

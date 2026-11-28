@@ -1530,6 +1530,48 @@ impl SessionStore {
         self.read(|conn| transcript::one(conn, agent, id, seq))
     }
 
+    /// Record a platform event step for an in-flight turn (`turn_seq`), pinned at `after_step` in
+    /// the engine's step stream.
+    ///
+    /// # Errors
+    /// Returns [`Error::NotFound`] when the session is gone, and database errors.
+    pub fn append_turn_event(
+        &self,
+        agent: &str,
+        id: &str,
+        turn_seq: usize,
+        after_step: usize,
+        step: &crate::progress::Step,
+    ) -> Result<()> {
+        let conn = self.conn()?;
+        transcript::append_turn_event(&conn, agent, id, turn_seq, after_step, step)
+    }
+
+    /// Platform events recorded for turn `turn_seq`, ordered by `(after_step, seq)`.
+    #[must_use]
+    pub fn turn_events(
+        &self,
+        agent: &str,
+        id: &str,
+        turn_seq: usize,
+    ) -> Vec<(usize, crate::progress::Step)> {
+        self.read(|conn| transcript::load_turn_events(conn, agent, id, turn_seq))
+    }
+
+    /// Append one step onto the newest recorded turn when no live turn is in flight.
+    ///
+    /// # Errors
+    /// Returns [`Error::NotFound`] when the session has no turns, and database errors.
+    pub fn append_step_to_last_turn(
+        &self,
+        agent: &str,
+        id: &str,
+        step: crate::progress::Step,
+    ) -> Result<()> {
+        let conn = self.conn()?;
+        transcript::append_step_to_last_turn(&conn, agent, id, step)
+    }
+
     /// One page of that same view: the newest `limit` turns, or the `limit` turns before `before`.
     ///
     /// The reason this exists rather than a caller cutting [`transcript`](Self::transcript) down: a

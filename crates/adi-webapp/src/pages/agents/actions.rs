@@ -1327,6 +1327,7 @@ fn feed_view(state: State, watch: AgentsWatch, answerable: bool, sourced: bool) 
             live=live
             foot=move || earlier_messages(watch)
             on_toggle=Callback::new(move |(id, open): (String, bool)| toggle_run(watch, id, open))
+            on_event=Callback::new(move |action: String| handle_platform_event(watch, &action))
         />
         {move || chat_placeholder(watch)}
     }
@@ -1376,6 +1377,104 @@ fn tool_call(
 /// knowing which of the two each step was.
 fn thinking_call(text: &str) -> adi_ui::ToolCall {
     adi_ui::ToolCall::new("thinking").param("text", text.to_string())
+}
+
+/// Map a generic `AgentStep::Event` onto a UI [`PlatformEvent`], resolving its icon and optional
+/// click target from `event_type` + `metadata`.
+fn platform_event(
+    name: &str,
+    event_type: &str,
+    metadata: &serde_json::Value,
+) -> adi_ui::PlatformEvent {
+    use adi_ui::{Lucide, PlatformEvent};
+    let meta_str = |key: &str| {
+        metadata
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToString::to_string)
+    };
+    match event_type {
+        "agent.started" => {
+            let agent = meta_str("agent");
+            let run_id = meta_str("run_id");
+            let session = meta_str("session");
+            let action = match (agent, run_id.as_ref()) {
+                (Some(agent), Some(run)) => Some(format!("conv:{agent}\n{run}")),
+                (Some(agent), None) if session.is_some() => Some(format!("pty:{agent}")),
+                _ => None,
+            };
+            PlatformEvent {
+                icon: Lucide::Bot,
+                name: name.to_string(),
+                detail: run_id.or(session),
+                action,
+                href: None,
+            }
+        }
+        "agent.created" | "agent.updated" => PlatformEvent {
+            icon: Lucide::Bot,
+            name: name.to_string(),
+            detail: None,
+            action: None,
+            href: meta_str("agent").map(|agent| agent_form_path(&agent)),
+        },
+        "workflow.started" | "workflow.created" => PlatformEvent {
+            icon: Lucide::Workflow,
+            name: name.to_string(),
+            detail: meta_str("run_key"),
+            action: None,
+            href: meta_str("workflow").map(|id| {
+                crate::routing::workflow_detail_path(&id, crate::routing::WorkflowTab::Runs)
+            }),
+        },
+        "task.created" => PlatformEvent {
+            icon: Lucide::ListTree,
+            name: name.to_string(),
+            detail: meta_str("id"),
+            action: None,
+            href: Some(Route::Tasks.path().to_string()),
+        },
+        _ => {
+            let href = meta_str("href").filter(|h| h.starts_with('/') && !h.starts_with("//"));
+            PlatformEvent {
+                icon: Lucide::Activity,
+                name: name.to_string(),
+                detail: None,
+                action: None,
+                href,
+            }
+        }
+    }
+}
+
+/// Handle an in-app click action produced by [`platform_event`].
+fn handle_platform_event(watch: AgentsWatch, action: &str) {
+    let node = watch.node.get_untracked();
+    if let Some(rest) = action.strip_prefix("conv:")
+        && let Some((agent, run_id)) = rest.split_once('\n')
+    {
+        point_conversation(
+            watch,
+            node,
+            agent.to_string(),
+            run_id.to_string(),
+            false,
+            Some(true),
+        );
+        return;
+    }
+    if let Some(agent) = action.strip_prefix("pty:") {
+        point_conversation(
+            watch,
+            node,
+            agent.to_string(),
+            String::new(),
+            true,
+            Some(false),
+        );
+    }
 }
 
 /// What names a folded run in the DOM — and, with its shape folded in, in the fetch cache.
@@ -1525,6 +1624,19 @@ fn feed_turn(
                 out.push(T::Did(
                     runs.folded(at, *from, *to, *count, tools, preview, *status),
                 ));
+            }
+            // A platform milestone recorded mid-turn — breaks out of any tool run so it stays
+            // visible and clickable right where it happened.
+            AgentStep::Event {
+                name,
+                event_type,
+                metadata,
+            } => {
+                if !run.is_empty() {
+                    let calls = std::mem::take(&mut run);
+                    out.push(T::Did(runs.loaded(at, run_from, calls)));
+                }
+                out.push(T::Event(platform_event(name, event_type, metadata)));
             }
             // A step kind this build cannot read. Skipped rather than drawn as an empty something:
             // it is one line of a run, and the rest of the transcript is unaffected.

@@ -2650,6 +2650,16 @@ pub enum AgentStep {
         #[serde(default)]
         output: String,
     },
+    /// A platform milestone recorded onto the turn — e.g. another agent started, an agent
+    /// definition created, a workflow started. Rendered outside folded tool runs; the client
+    /// inspects `event_type` and `metadata` to pick an icon and optional click navigation.
+    Event {
+        name: String,
+        #[serde(rename = "type")]
+        event_type: String,
+        #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+        metadata: serde_json::Value,
+    },
     /// **A run of calls, as its own receipt line** — the header of steps `from..to` instead of the
     /// steps themselves. Sent only to a reader that asked for it ([`RunRef::fold`]); the calls
     /// arrive from `POST /api/agents/run/steps` when one is opened.
@@ -3512,7 +3522,7 @@ impl AgentChatStats {
                             _ => {}
                         }
                     }
-                    AgentStep::Message { .. } | AgentStep::Unknown => {}
+                    AgentStep::Message { .. } | AgentStep::Event { .. } | AgentStep::Unknown => {}
                 }
             }
         }
@@ -6906,5 +6916,42 @@ mod tests {
                 "{raw} is advertised out of step with what enforces it"
             );
         }
+    }
+
+    #[test]
+    fn event_step_serializes_as_kind_event_and_breaks_tool_folds() {
+        let ev = AgentStep::Event {
+            name: "Agent reviewer started".into(),
+            event_type: "agent.started".into(),
+            metadata: serde_json::json!({ "agent": "reviewer", "run_id": "r1" }),
+        };
+        let wire = serde_json::to_value(&ev).expect("serialize");
+        assert_eq!(wire["kind"], "event");
+        assert_eq!(wire["name"], "Agent reviewer started");
+        assert_eq!(wire["type"], "agent.started");
+        assert_eq!(wire["metadata"]["agent"], "reviewer");
+        assert_eq!(wire["metadata"]["run_id"], "r1");
+        assert!(!ev.in_run(), "events must not collapse inside tool runs");
+
+        let steps = vec![
+            AgentStep::Tool {
+                name: "Bash".into(),
+                input: "adi-mono agents run reviewer".into(),
+                status: AgentToolStatus::Ok,
+                output: String::new(),
+            },
+            ev.clone(),
+            AgentStep::Tool {
+                name: "Read".into(),
+                input: "lib.rs".into(),
+                status: AgentToolStatus::Ok,
+                output: String::new(),
+            },
+        ];
+        let folded = fold_steps(steps);
+        assert_eq!(folded.len(), 3, "tool run, event, tool run: {folded:?}");
+        assert!(matches!(folded[0], AgentStep::Calls { count: 1, .. }));
+        assert_eq!(folded[1], ev);
+        assert!(matches!(folded[2], AgentStep::Calls { count: 1, .. }));
     }
 }

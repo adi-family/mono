@@ -104,6 +104,16 @@ CREATE TABLE IF NOT EXISTS turns (
     PRIMARY KEY (agent, session, seq),
     FOREIGN KEY (agent, session) REFERENCES sessions (agent, id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS turn_events (
+    agent      TEXT    NOT NULL,
+    session    TEXT    NOT NULL,
+    turn_seq   INTEGER NOT NULL,
+    seq        INTEGER NOT NULL,
+    after_step INTEGER NOT NULL DEFAULT 0,
+    json       TEXT    NOT NULL,
+    PRIMARY KEY (agent, session, turn_seq, seq),
+    FOREIGN KEY (agent, session) REFERENCES sessions (agent, id) ON DELETE CASCADE
+);
 CREATE TABLE IF NOT EXISTS queue (
     agent   TEXT    NOT NULL,
     session TEXT    NOT NULL,

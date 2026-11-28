@@ -165,6 +165,14 @@ pub(crate) fn run_tasks(adi: Adi, command: TasksCommand) -> Result<(), String> {
             let task = store
                 .create(title, details, project, tag, parent, cwd)
                 .map_err(|e| e.to_string())?;
+            adi.agents().push_event_for_caller(
+                format!("Task {} created", task.task.id),
+                "task.created",
+                serde_json::json!({
+                    "id": task.task.id,
+                    "title": task.task.title,
+                }),
+            );
             if json {
                 print_json(&task);
             } else {

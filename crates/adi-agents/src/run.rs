@@ -102,6 +102,10 @@ pub struct LaunchOptions<'a> {
     /// whose credential a run may spend and a body field a peer controls is exactly the thing
     /// that must not decide that (§5 Q6's forgery, one layer down).
     pub lease: Option<crate::LeaseRef>,
+    /// The parent conversation that asked for this launch, when launched from inside another
+    /// agent's turn (`$ADI_AGENT` / `$ADI_RUN_ID`, or a resolved lease capability). When present,
+    /// `launch_run` records an `agent.started` platform event onto that parent conversation.
+    pub caller: Option<crate::awaits::Caller>,
 }
 
 /// What became of a message said into a conversation. One turn runs at a time, so a message sent
