@@ -854,6 +854,7 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
                         pre_run: &pre_run,
                         launched_by: Some(&by),
                         overrides: (!overrides.is_empty()).then_some(&overrides),
+                        caller: awaits::caller(),
                         ..LaunchOptions::default()
                     },
                 )

@@ -19,6 +19,14 @@ export interface Note {
   body?: string;
 }
 
+export interface PlatformEvent {
+  icon?: string;
+  name: string;
+  detail?: string | null;
+  action?: string | null;
+  href?: string | null;
+}
+
 export type CallState = "running" | "ok" | "failed" | "unanswered";
 
 export interface Call {
@@ -49,11 +57,12 @@ export type TranscriptPart =
       by?: string | null;
     }
   | { kind: "did"; run: CallRun }
-  | { kind: "note"; note: Note };
+  | { kind: "note"; note: Note }
+  | { kind: "event"; event: PlatformEvent };
 
 export type TranscriptEntry = TranscriptPart & { key: string; id?: string };
 
-type TranscriptNode = AdiMessage | AdiToolRun | AdiNote;
+type TranscriptNode = AdiMessage | AdiToolRun | AdiNote | AdiEvent;
 
 interface KeptEntry {
   node: TranscriptNode;
@@ -205,6 +214,52 @@ class AdiNote extends AdiElement {
   }
 }
 
+class AdiEvent extends AdiElement {
+  #event: PlatformEvent | null = null;
+
+  get event(): PlatformEvent | null {
+    return this.#event;
+  }
+
+  set event(value: PlatformEvent | null) {
+    this.#event = value;
+    this.update();
+  }
+
+  override template(): string {
+    return `<div class="row"></div>`;
+  }
+
+  override update(): void {
+    const ev = this.#event;
+    if (!ev || !this.shadowRoot.firstElementChild) return;
+    const row = this.must(".row");
+    const icon = esc(ev.icon ?? "activity");
+    const detail = ev.detail ? `<span class="detail">${esc(ev.detail)}</span>` : "";
+    const arrow = `<adi-icon class="go" name="arrow-up-right" size="14"></adi-icon>`;
+    const inner = `<adi-icon class="ic" name="${icon}" size="14"></adi-icon><span class="name">${esc(ev.name)}</span>${detail}`;
+    if (ev.action) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "item clickable";
+      btn.innerHTML = `${inner}${arrow}`;
+      btn.addEventListener("click", () => this.emit("event-click", { action: ev.action }));
+      row.replaceChildren(btn);
+    } else if (ev.href) {
+      const link = document.createElement("a");
+      link.href = ev.href;
+      link.className = "item clickable";
+      link.innerHTML = `${inner}${arrow}`;
+      row.replaceChildren(link);
+    } else {
+      const box = document.createElement("div");
+      box.className = "item";
+      box.innerHTML = inner;
+      row.replaceChildren(box);
+    }
+  }
+}
+
 const RUN_NOTE: Partial<Record<CallState, [string, string]>> = {
   running: ["running", "var(--accent)"],
   unanswered: ["no result", "var(--warn)"],
@@ -327,7 +382,12 @@ function createCallBlock(call: Call): HTMLDivElement {
   return block;
 }
 
-const TAG = { said: "adi-message", did: "adi-tool-run", note: "adi-note" } as const;
+const TAG = {
+  said: "adi-message",
+  did: "adi-tool-run",
+  note: "adi-note",
+  event: "adi-event",
+} as const;
 
 function updateEntryNode(node: TranscriptNode, entry: TranscriptEntry): void {
   switch (entry.kind) {
@@ -346,6 +406,10 @@ function updateEntryNode(node: TranscriptNode, entry: TranscriptEntry): void {
     case "note":
       if (!(node instanceof AdiNote)) return;
       node.note = entry.note;
+      break;
+    case "event":
+      if (!(node instanceof AdiEvent)) return;
+      node.event = entry.event;
       break;
   }
 }
@@ -427,15 +491,17 @@ class AdiTranscript extends AdiElement {
 
 define("adi-message", AdiMessage);
 define("adi-note", AdiNote);
+define("adi-event", AdiEvent);
 define("adi-tool-run", AdiToolRun);
 define("adi-transcript", AdiTranscript);
 
-export { AdiMessage, AdiNote, AdiToolRun, AdiTranscript };
+export { AdiMessage, AdiNote, AdiEvent, AdiToolRun, AdiTranscript };
 
 declare global {
   interface HTMLElementTagNameMap {
     "adi-message": AdiMessage;
     "adi-note": AdiNote;
+    "adi-event": AdiEvent;
     "adi-tool-run": AdiToolRun;
     "adi-transcript": AdiTranscript;
   }

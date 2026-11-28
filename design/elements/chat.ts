@@ -13,6 +13,7 @@ import type {
   Note,
   NotePart,
   Picture,
+  PlatformEvent,
   TranscriptEntry as Entry,
   TranscriptPart as Part,
 } from "./transcript.ts";
@@ -78,10 +79,17 @@ type AgentStep =
       preview: string;
       status: ToolStatus;
     }
+  | {
+      kind: "event";
+      name: string;
+      type: string;
+      metadata?: Record<string, unknown>;
+    }
   | { kind: "unknown" };
 
 type ToolStep = Extract<AgentStep, { kind: "tool" }>;
 type FoldedCallsStep = Extract<AgentStep, { kind: "calls" }>;
+type EventStep = Extract<AgentStep, { kind: "event" }>;
 
 /** What the platform stamped on a turn — `TurnMarker`, tagged by `kind`. */
 type TurnMarker =
@@ -254,6 +262,72 @@ function platformNote(turn: AgentTurn): Note | null {
   return null;
 }
 
+function metaStr(meta: Record<string, unknown> | undefined, key: string): string | null {
+  const value = meta?.[key];
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function platformEvent(step: EventStep): PlatformEvent {
+  const meta = step.metadata;
+  switch (step.type) {
+    case "agent.started": {
+      const agent = metaStr(meta, "agent");
+      const runId = metaStr(meta, "run_id");
+      const session = metaStr(meta, "session");
+      return {
+        icon: "bot",
+        name: step.name,
+        detail: runId ?? session,
+        action: agent && runId ? `conv:${agent}\n${runId}` : null,
+        href: null,
+      };
+    }
+    case "agent.created":
+    case "agent.updated": {
+      const agent = metaStr(meta, "agent");
+      return {
+        icon: "bot",
+        name: step.name,
+        detail: null,
+        action: null,
+        href: agent ? `/extended/agents/${encodeURIComponent(agent)}/edit` : null,
+      };
+    }
+    case "workflow.started":
+    case "workflow.created": {
+      const workflow = metaStr(meta, "workflow");
+      return {
+        icon: "workflow",
+        name: step.name,
+        detail: metaStr(meta, "run_key"),
+        action: null,
+        href: workflow ? `/extended/workflows/${encodeURIComponent(workflow)}?tab=runs` : null,
+      };
+    }
+    case "task.created":
+      return {
+        icon: "list-tree",
+        name: step.name,
+        detail: metaStr(meta, "id"),
+        action: null,
+        href: "/extended/tasks",
+      };
+    default: {
+      const rawHref = metaStr(meta, "href");
+      const href = rawHref && rawHref.startsWith("/") && !rawHref.startsWith("//") ? rawHref : null;
+      return {
+        icon: "activity",
+        name: step.name,
+        detail: null,
+        action: null,
+        href,
+      };
+    }
+  }
+}
+
 function titleOf(run: AgentRunInfo | undefined): string {
   if (!run) return "Conversation";
   const line = (
@@ -379,6 +453,9 @@ class AdiChat extends AdiElement {
     });
     const transcript = this.must<AdiTranscript>("adi-transcript");
     transcript.addEventListener("toggle", (e) => this.#toggleRun(detail<Toggled>(e)));
+    transcript.addEventListener("event-click", (e) =>
+      this.#handleEventClick(detail<{ action?: string }>(e).action ?? ""),
+    );
     transcript.addEventListener("unqueue", (e) => {
       const index = Number((e.target as HTMLElement).dataset.place);
       if (Number.isInteger(index)) this.#unqueue(index);
@@ -945,6 +1022,10 @@ class AdiChat extends AdiElement {
           finishCalls();
           parts.push({ kind: "did", run: this.#foldedCallRun(turnIndex, step) });
           break;
+        case "event":
+          finishCalls();
+          parts.push({ kind: "event", event: platformEvent(step) });
+          break;
       }
     }
 
@@ -974,6 +1055,20 @@ class AdiChat extends AdiElement {
       state: TOOL_STATE[step.status] ?? "ok",
       calls,
     };
+  }
+
+  #handleEventClick(action: string): void {
+    if (!action.startsWith("conv:")) return;
+    const sep = action.indexOf("\n");
+    if (sep < 0) return;
+    const agent = action.slice(5, sep);
+    const run = action.slice(sep + 1);
+    if (!agent || !run) return;
+    if (this.hasAttribute("windows")) {
+      this.emit("open-window", { node: this.#node, agent, run, title: "" });
+    } else {
+      this.#openAgent(agent, run, this.#node);
+    }
   }
 
   /** A folded run was opened: fetch its calls, once per shape. */

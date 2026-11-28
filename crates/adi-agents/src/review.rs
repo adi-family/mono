@@ -209,7 +209,7 @@ fn totals(turns: &[Turn]) -> Totals {
                     t.tools += 1;
                     t.failed += usize::from(*status == ToolStatus::Error);
                 }
-                Step::Message { .. } => {}
+                Step::Message { .. } | Step::Event { .. } => {}
             }
         }
     }
@@ -926,6 +926,9 @@ fn turn_block(n: usize, turn: &Turn) -> String {
         match step {
             Step::Thinking { .. } => thinking += 1,
             Step::Message { .. } => {}
+            Step::Event { name, .. } => {
+                let _ = writeln!(out, "- *event*: {name}");
+            }
             Step::Tool {
                 name,
                 input,

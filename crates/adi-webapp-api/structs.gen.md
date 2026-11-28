@@ -2715,6 +2715,13 @@ pub enum AgentStep {
         #[serde(default)]
         output: String,
     },
+    Event {
+        name: String,
+        #[serde(rename = "type")]
+        event_type: String,
+        #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+        metadata: serde_json::Value,
+    },
     Calls {
         from: usize,
         to: usize,

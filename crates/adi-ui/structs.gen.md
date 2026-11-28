@@ -4,7 +4,7 @@
 
 > The adi UI component library: Leptos components styled with Tailwind over the adi design tokens, with a Trunk-served playground to develop them in.
 
-37 structs · 35 enums across 30 files.
+38 structs · 35 enums across 30 files.
 
 ## Index
 
@@ -13,7 +13,7 @@
 - [`src/attach.rs`](#srcattachrs) — `AttachState`, `Attached`, `AttachKind`, `Attaching`
 - [`src/badge.rs`](#srcbadgers) — `BadgeTone`, `DotTone`
 - [`src/button.rs`](#srcbuttonrs) — `ButtonVariant`, `ButtonSize`
-- [`src/chat.rs`](#srcchatrs) — `Role`, `ToolState`, `ToolCall`, `ToolRun`, `Attachment`, `AttachmentKind`, `Turn`, `Word`, `Note`, `Entry`
+- [`src/chat.rs`](#srcchatrs) — `Role`, `ToolState`, `ToolCall`, `ToolRun`, `Attachment`, `AttachmentKind`, `Turn`, `PlatformEvent`, `Word`, `Note`, `Entry`
 - [`src/code.rs`](#srccoders) — `CodeHeight`
 - [`src/faces.rs`](#srcfacesrs) — `FaceRing`, `Face`
 - [`src/facts.rs`](#srcfactsrs) — `NodeKind`, `Fact`, `Moved`, `Stale`, `Change`
@@ -334,6 +334,22 @@ pub enum Turn {
     },
     Did(ToolRun),
     Noted(Note),
+    Event(PlatformEvent),
+}
+```
+
+### struct `PlatformEvent`
+
+One platform milestone on a turn's timeline (`Step::Event`).
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlatformEvent {
+    pub icon: Lucide,
+    pub name: String,
+    pub detail: Option<String>,
+    pub action: Option<String>,
+    pub href: Option<String>,
 }
 ```
 

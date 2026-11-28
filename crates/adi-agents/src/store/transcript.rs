@@ -275,6 +275,11 @@ pub(super) fn truncate(conn: &Connection, agent: &str, id: &str, from: usize) ->
         )
         .map_err(|e| sql_err("rewind", e))?;
     tx.execute(
+        "DELETE FROM turn_events WHERE agent = ?1 AND session = ?2 AND turn_seq >= ?3",
+        rusqlite::params![agent, id, from],
+    )
+    .map_err(|e| sql_err("rewind", e))?;
+    tx.execute(
         "UPDATE sessions SET idle_notified_turn = NULL, lease_wait_notified_turn = NULL
          WHERE agent = ?1 AND id = ?2",
         [agent, id],
@@ -428,6 +433,130 @@ pub(super) fn count(conn: &Connection, agent: &str, id: &str) -> usize {
     )
     .map(|n| usize::try_from(n).unwrap_or(0))
     .unwrap_or(0)
+}
+
+/// Record one platform event step for an in-flight turn (`turn_seq` is the index the turn will
+/// take when it settles). `after_step` pins where in the engine's step stream it occurred.
+///
+/// # Errors
+/// Returns [`Error::NotFound`] when the session is gone, and database errors.
+pub(super) fn append_turn_event(
+    conn: &Connection,
+    agent: &str,
+    id: &str,
+    turn_seq: usize,
+    after_step: usize,
+    step: &Step,
+) -> Result<()> {
+    let turn_seq = i64::try_from(turn_seq).unwrap_or(i64::MAX);
+    let after_step = i64::try_from(after_step).unwrap_or(i64::MAX);
+    let json = serde_json::to_string(step)
+        .map_err(|e| Error::Session(format!("couldn't encode an event for session {id}: {e}")))?;
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| sql_err("record a turn event in", e))?;
+    let known: Option<i64> = tx
+        .query_row(
+            "SELECT 1 FROM sessions WHERE agent = ?1 AND id = ?2",
+            [agent, id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| sql_err("record a turn event in", e))?;
+    if known.is_none() {
+        return Err(Error::NotFound(format!("{agent}: no session {id}")));
+    }
+    let seq: i64 = tx
+        .query_row(
+            "SELECT COALESCE(MAX(seq), -1) + 1 FROM turn_events
+             WHERE agent = ?1 AND session = ?2 AND turn_seq = ?3",
+            rusqlite::params![agent, id, turn_seq],
+            |row| row.get(0),
+        )
+        .map_err(|e| sql_err("record a turn event in", e))?;
+    tx.execute(
+        "INSERT INTO turn_events (agent, session, turn_seq, seq, after_step, json)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![agent, id, turn_seq, seq, after_step, json],
+    )
+    .map_err(|e| sql_err("record a turn event in", e))?;
+    tx.commit()
+        .map_err(|e| sql_err("record a turn event in", e))?;
+    Ok(())
+}
+
+/// Platform events recorded for one turn, in insertion order (grouped by `after_step`).
+pub(super) fn load_turn_events(
+    conn: &Connection,
+    agent: &str,
+    id: &str,
+    turn_seq: usize,
+) -> Vec<(usize, Step)> {
+    let Ok(turn_seq) = i64::try_from(turn_seq) else {
+        return Vec::new();
+    };
+    let Ok(mut stmt) = conn.prepare_cached(
+        "SELECT after_step, json FROM turn_events
+         WHERE agent = ?1 AND session = ?2 AND turn_seq = ?3
+         ORDER BY after_step ASC, seq ASC",
+    ) else {
+        return Vec::new();
+    };
+    stmt.query_map(rusqlite::params![agent, id, turn_seq], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+    })
+    .map(|rows| {
+        rows.flatten()
+            .filter_map(|(after_step, json)| {
+                let step = serde_json::from_str::<Step>(&json).ok()?;
+                Some((usize::try_from(after_step).unwrap_or(0), step))
+            })
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
+/// Append one step onto the newest recorded turn when the turn has already settled (no live turn in
+/// flight).
+///
+/// # Errors
+/// Returns [`Error::NotFound`] when the session has no recorded turn, and database errors.
+pub(super) fn append_step_to_last_turn(
+    conn: &Connection,
+    agent: &str,
+    id: &str,
+    step: Step,
+) -> Result<()> {
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| sql_err("append a step to the last turn in", e))?;
+    let row: Option<(i64, String)> = tx
+        .query_row(
+            "SELECT seq, json FROM turns WHERE agent = ?1 AND session = ?2
+             ORDER BY seq DESC LIMIT 1",
+            [agent, id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|e| sql_err("append a step to the last turn in", e))?;
+    let Some((seq, json)) = row else {
+        return Err(Error::NotFound(format!(
+            "{agent}: no turns in session {id}"
+        )));
+    };
+    let mut turn: Turn = serde_json::from_str(&json)
+        .map_err(|e| Error::Session(format!("couldn't decode turn {seq} of session {id}: {e}")))?;
+    turn.steps.push(step);
+    let updated = serde_json::to_string(&turn)
+        .map_err(|e| Error::Session(format!("couldn't encode turn {seq} of session {id}: {e}")))?;
+    tx.execute(
+        "UPDATE turns SET json = ?4 WHERE agent = ?1 AND session = ?2 AND seq = ?3",
+        rusqlite::params![agent, id, seq, updated],
+    )
+    .map_err(|e| sql_err("append a step to the last turn in", e))?;
+    tx.commit()
+        .map_err(|e| sql_err("append a step to the last turn in", e))?;
+    Ok(())
 }
 
 /// [`view`], for a page: the same splice, over a window that may not reach the end of the

@@ -54,6 +54,19 @@ pub enum Step {
         #[serde(default, skip_serializing_if = "String::is_empty")]
         output: String,
     },
+    /// A platform milestone recorded onto the turn — e.g. another agent launched, an agent
+    /// definition created, a workflow started. Rendered visibly in the timeline outside folded
+    /// tool runs; the UI reads `event_type` and `metadata` to choose an icon and click target.
+    Event {
+        /// Human-readable label shown in the timeline, e.g. `"Agent reviewer started"`.
+        name: String,
+        /// Machine event kind deciding icon and click action, e.g. `"agent.started"`.
+        #[serde(rename = "type")]
+        event_type: String,
+        /// Generic type-specific payload (e.g. `{"agent": "reviewer", "run_id": "..."}`).
+        #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+        metadata: serde_json::Value,
+    },
 }
 
 /// A tool step's lifecycle: still running, finished ok, failed — or never answered at all.

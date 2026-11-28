@@ -324,6 +324,26 @@ pub enum Turn {
     /// Something the **platform** put into the conversation rather than either speaker — a
     /// wake, a settled question, a nudge. See [`Note`].
     Noted(Note),
+    /// A platform milestone recorded mid-turn (e.g. another agent launched, a workflow started).
+    /// Rendered outside folded tool runs; clickable when `action` or `href` is set.
+    Event(PlatformEvent),
+}
+
+/// One platform milestone on a turn's timeline (`Step::Event`).
+///
+/// Quiet by default; when [`action`](Self::action) or [`href`](Self::href) is set, the whole row
+/// is clickable with a trailing `arrow-up-right` affordance (`DESIGN.md` §8 — no repeated "Open"
+/// word per row).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlatformEvent {
+    pub icon: Lucide,
+    pub name: String,
+    /// Machine identifier beside the label (run id, task id, workflow run key), set in mono.
+    pub detail: Option<String>,
+    /// Opaque payload passed to [`Chat`]'s `on_event` callback for in-app navigation.
+    pub action: Option<String>,
+    /// Link destination when the event opens a page directly.
+    pub href: Option<String>,
 }
 
 /// One run of a [`Note`]'s header: human words, or a machine string.
@@ -489,6 +509,9 @@ pub fn Chat(
     /// caller that fetches them lazily hears that it is time.
     #[prop(optional, into)]
     on_toggle: Option<Callback<(String, bool)>>,
+    /// Told when a reader clicks a [`Turn::Event`] carrying an `action` payload.
+    #[prop(optional, into)]
+    on_event: Option<Callback<String>>,
     #[prop(optional, into)] class: String,
 ) -> impl IntoView {
     view! {
@@ -512,7 +535,7 @@ pub fn Chat(
                 let parts = live.get();
                 (!parts.is_empty()).then(|| view! {
                     <div class="flex shrink-0 flex-col-reverse gap-4">
-                        {parts.into_iter().map(|part| entry(part, on_toggle)).collect::<Vec<_>>()}
+                        {parts.into_iter().map(|part| entry(part, on_toggle, on_event)).collect::<Vec<_>>()}
                     </div>
                 })
             }}
@@ -525,7 +548,7 @@ pub fn Chat(
                 key=|entry: &Entry| entry.key.clone()
                 let:settled
             >
-                {entry(settled, on_toggle)}
+                {entry(settled, on_toggle, on_event)}
             </For>
             {foot.map(|foot| view! {
                 <div class="flex max-w-[80ch] shrink-0 flex-col gap-4">{foot.run()}</div>
@@ -535,7 +558,11 @@ pub fn Chat(
 }
 
 /// One entry, drawn at its own address — see [`Entry`] for why that is not always its key.
-fn entry(entry: Entry, on_toggle: Option<Callback<(String, bool)>>) -> AnyView {
+fn entry(
+    entry: Entry,
+    on_toggle: Option<Callback<(String, bool)>>,
+    on_event: Option<Callback<String>>,
+) -> AnyView {
     let Entry { id, turn, .. } = entry;
     match turn {
         Turn::Said {
@@ -547,7 +574,74 @@ fn entry(entry: Entry, on_toggle: Option<Callback<(String, bool)>>) -> AnyView {
         } => view! { <Said id=id role=role body=body images=images from=from by=by/> }.into_any(),
         Turn::Did(run) => view! { <Did id=id run=run on_toggle=on_toggle/> }.into_any(),
         Turn::Noted(note) => view! { <Noted id=id note=note/> }.into_any(),
+        Turn::Event(event) => view! { <EventRow id=id event=event on_event=on_event/> }.into_any(),
     }
+}
+
+/// A platform milestone recorded onto a turn — clickable when it carries an action or href.
+#[component]
+fn EventRow(id: String, event: PlatformEvent, on_event: Option<Callback<String>>) -> impl IntoView {
+    let PlatformEvent {
+        icon,
+        name,
+        detail,
+        action,
+        href,
+    } = event;
+    let body = move |clickable: bool| {
+        let detail = detail.clone();
+        let name = name.clone();
+        view! {
+            <Icon icon=icon size=IconSize::Sm class="shrink-0 text-ink-3"/>
+            <span class="truncate text-small text-ink-2 group-hover:text-ink">{name}</span>
+            {detail.map(|code| view! {
+                <span class="ml-auto shrink-0 pl-3 font-mono text-label text-code">{code}</span>
+            })}
+            {clickable.then(|| view! {
+                <Icon icon=Lucide::ArrowUpRight size=IconSize::Sm class="shrink-0 text-ink-3 group-hover:text-ink-2"/>
+            })}
+        }
+    };
+    if let (Some(action), Some(cb)) = (action, on_event) {
+        return view! {
+            <button
+                id=id
+                type="button"
+                class=format!(
+                    "{LAZY} group flex w-full items-center gap-2 rounded-r border-l-2 border-line-strong py-1.5 pl-[18px] pr-2 text-left transition-colors hover:bg-hover"
+                )
+                on:click=move |_| cb.run(action.clone())
+            >
+                {body(true)}
+            </button>
+        }
+        .into_any();
+    }
+    if let Some(href) = href {
+        return view! {
+            <a
+                id=id
+                href=href
+                class=format!(
+                    "{LAZY} group flex w-full items-center gap-2 rounded-r border-l-2 border-line-strong py-1.5 pl-[18px] pr-2 text-left no-underline transition-colors hover:bg-hover"
+                )
+            >
+                {body(true)}
+            </a>
+        }
+        .into_any();
+    }
+    view! {
+        <div
+            id=id
+            class=format!(
+                "{LAZY} flex items-center gap-2 border-l-2 border-line-strong py-1.5 pl-[18px] pr-2"
+            )
+        >
+            {body(false)}
+        </div>
+    }
+    .into_any()
 }
 
 /// A note the platform left in the conversation — see [`Note`] for what it is and why it looks

@@ -198,6 +198,14 @@ pub(crate) fn run_workflows(adi: Adi, command: WorkflowsCommand) -> Result<(), S
             let started = engine
                 .start_manual(&id, &input, &request_id)
                 .map_err(|e| e.to_string())?;
+            adi.agents().push_event_for_caller(
+                format!("Workflow {} started", started.workflow),
+                "workflow.started",
+                serde_json::json!({
+                    "workflow": started.workflow,
+                    "run_key": started.run_key,
+                }),
+            );
             if json {
                 print_json(&started);
             } else {
