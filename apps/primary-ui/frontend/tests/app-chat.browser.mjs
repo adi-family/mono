@@ -151,6 +151,7 @@ put(main, "Design the chat", [user("Mock main request", 0), assistant("Mock main
   { kind: "calls", from: 0, to: 1, count: 1, tools: ["functions.exec_command"], preview: "/bin/zsh -lc 'git status --short'", status: "ok" },
   { kind: "message", text: "Mock delegated check" },
   { kind: "tool", name: "Bash", input: JSON.stringify({ command: "adi-mono agents run layout-reviewer 'Check the chat layout'" }), status: "ok", output: "Started agent layout-reviewer as background process 1234.\n  run: review-run\n" },
+  { kind: "event", name: "Agent layout-reviewer started", type: "agent.started", metadata: { agent: "layout-reviewer", run_id: "review-run" } },
 ])]);
 put(other, "Another conversation", [user("Mock other request", 0), assistant("Mock other answer", 1)]);
 put(child, "Check the chat layout", [user("Mock review request", 0), assistant("Mock child answer", 1)]);
@@ -1160,10 +1161,11 @@ try {
     await open(main, "Mock main answer");
   });
 
-  await check("child-agent activity has a real conversation link and opens that chat", async () => {
-    const link = `${chat} [data-kind="agent"] [data-slot="chat-tool-call-link"]`;
-    assert.equal(await evaluate(`${q(link)}.getAttribute('href')`), `/interface?agent=${child.agent}&run=${child.runId}`);
-    await click(link);
+  await check("a launch stays its own call, and its agent.started row opens the child chat", async () => {
+    assert.equal(await evaluate(`document.querySelectorAll(${JSON.stringify(`${chat} [data-kind="agent"]`)}).length`), 0, "the Bash call is not redrawn as an agent card");
+    const row = `${chat} [data-slot="app-chat-event"][data-type="agent.started"]`;
+    assert.ok(await evaluate(`${q(row)}.textContent.includes("Agent layout-reviewer started")`));
+    await click(row);
     await until(() => activeIs(child), "child conversation route");
     await until(() => contains("Mock child answer"), "child conversation transcript");
   });

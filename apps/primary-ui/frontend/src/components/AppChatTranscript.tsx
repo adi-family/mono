@@ -348,6 +348,8 @@ function EventRow({
     return (
       <button
         type="button"
+        data-slot="app-chat-event"
+        data-type={step.type}
         className={`${baseClass} hover:bg-muted/50 hover:text-foreground focus-visible:ring-ring/50 rounded-r text-left transition-colors outline-none focus-visible:ring-2`}
         onClick={() => onOpenConversation(ref)}
       >
@@ -356,7 +358,11 @@ function EventRow({
     );
   }
 
-  return <div className={baseClass}>{content}</div>;
+  return (
+    <div data-slot="app-chat-event" data-type={step.type} className={baseClass}>
+      {content}
+    </div>
+  );
 }
 
 function Activity({ step, ...props }: ActivityProps & { step: AgentStep }) {

@@ -62,7 +62,10 @@ function put(ref, title, options = {}) {
   const sourceName = localName(ref.source);
   const steps = ref.runId === main.runId ? [
     { kind: "calls", from: 0, to: 1, count: 1, tools: ["functions.exec_command"], preview: "Read source fixture", status: "ok" },
-    ...(ref.source ? [{ kind: "tool", name: "Bash", input: JSON.stringify({ command: "adi-mono agents run layout-reviewer 'Check remote source'" }), status: "ok", output: "Started agent layout-reviewer as background process 1234.\n  run: child-run\n" }] : []),
+    ...(ref.source ? [
+      { kind: "tool", name: "Bash", input: JSON.stringify({ command: "adi-mono agents run layout-reviewer 'Check remote source'" }), status: "ok", output: "Started agent layout-reviewer as background process 1234.\n  run: child-run\n" },
+      { kind: "event", name: "Agent layout-reviewer started", type: "agent.started", metadata: { agent: "layout-reviewer", run_id: "child-run" } },
+    ] : []),
   ] : [];
   snapshots.set(idOf(ref), {
     name: ref.agent, run_id: ref.runId, running: false, answerable: true, interactive: false,
@@ -713,10 +716,8 @@ try {
     await open(remoteMain); await type(composer, "Remote sent reply"); await key("Enter");
     await until(() => contains("laptop-b reply accepted"), "remote reply accepted");
     assert.equal(requests.filter((request) => request.path === "/agents/run/reply").at(-1).source, remote);
-    const childLink = `${chat} [data-slot="chat-tool-call-link"]`;
-    const childHref = new URL(await evaluate(`${q(childLink)}.href`));
-    assert.equal(childHref.searchParams.get("node"), remote);
-    await click(childLink); await until(() => activeIs(child), "remote child route");
+    const childRow = `${chat} [data-slot="app-chat-event"][data-type="agent.started"]`;
+    await click(childRow); await until(() => activeIs(child), "remote child route");
     await until(() => contains("laptop-b fixture answer child-run"), "remote child transcript");
     const adiHref = new URL(await evaluate(`${q('[aria-label="Open in ADI"]')}.href`));
     assert.equal(adiHref.origin, apiBase === "/api" ? origin : "http://app.adi");
